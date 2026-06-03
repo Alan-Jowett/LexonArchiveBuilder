@@ -13,9 +13,9 @@ This document is layered on top of:
 
 - `docs/specs/lexonfabric-indexer/requirements.md`
 - `README.md`
-- `..\..\..\dev\LexonGraph\crates\lexongraph-indexer\src\lib.rs`
-- `..\..\..\dev\LexonGraph\crates\lexongraph-block-store\src\lib.rs`
-- `..\..\..\dev\LexonGraph\crates\lexongraph-embeddings-trait\src\lib.rs`
+- external LexonGraph crate reference: `crates/lexongraph-indexer/src/lib.rs`
+- external LexonGraph crate reference: `crates/lexongraph-block-store/src/lib.rs`
+- external LexonGraph crate reference: `crates/lexongraph-embeddings-trait/src/lib.rs`
 
 This document does not redefine the indexing protocol, block identity rules,
 the `BlockStore` contract, or the `EmbeddingProvider` contract. Those remain

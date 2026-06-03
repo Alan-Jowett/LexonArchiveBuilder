@@ -44,7 +44,7 @@ Exercise the LexonFabric content-resolution adapter with resolvable and
 unresolvable content references.
 
 **Pass condition:** successful resolution produces the `Content` shape expected
-by `lexongraph-indexer::ContentResolver<R>`, and failures surface through the
+by `lexongraph_indexer::ContentResolver<R>`, and failures surface through the
 delegated indexing error path rather than reporting success.
 
 **Traces to:** RQ-INDEXER-004, DSG-LFI-004
