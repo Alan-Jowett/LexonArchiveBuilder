@@ -128,7 +128,7 @@ That stack starts:
 
 - `stapi` at `http://localhost:8080`
 - the `lexonfabric-indexer` batch container
-- a named volume for the local block store at `examples/local/block-store`
+- a named Docker volume mounted into the batch container at `examples/local/block-store`
 
 After the batch completes, the summary output is written to
 `examples/local/output/summary.json`.

@@ -2,8 +2,8 @@
 
 ## Document Status
 
-- **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Draft revision pending approval for MVP implementation scope
+- **Phase:** Phase 4 - User Review of Specifications
+- **Status:** Approved specification baseline for the implemented MVP scope
 - **Scope:** LexonFabric indexer integration boundary and first in-repo MVP slice
 
 ## USER-REQUEST
@@ -218,4 +218,4 @@ LexonFabric SHALL keep content resolution, block storage, and embedding-provider
   - user clarification messages in this session specifying local-only executable MVP scope with production left pluggable
   - user clarification messages in this session specifying Docker Compose-based local dependency orchestration
 - **Excluded for now [KNOWN]:**
-  - Rust implementation file paths, crate manifests, and test artifacts within this repository, because no such repository files exist yet
+  - Detailed Rust implementation file paths, crate manifests, Docker assets, and test artifacts, because this requirements document captures the semantic contract and leaves implementation realization to downstream design, validation, and code-review artifacts

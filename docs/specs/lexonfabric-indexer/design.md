@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft specification patch revised for the approved MVP implementation scope in
+Approved specification baseline for the MVP implementation scope in
 `docs/specs/lexonfabric-indexer/requirements.md`.
 
 ## Scope
@@ -37,10 +37,10 @@ owned by LexonGraph and its subordinate crates.
 
 - `README.md`, which already describes the same local-versus-production split at
   the architecture level
-- future Rust crates, configuration, and test artifacts not yet present in this
-  repository
-- future Docker Compose, container, and local test-environment artifacts needed
-  to realize the approved MVP slice
+- Rust implementation, configuration, and test artifacts that realize the
+  approved MVP slice in this repository
+- Docker Compose, container, and local test-environment artifacts that realize
+  the approved MVP slice
 
 ### Unaffected artifacts
 

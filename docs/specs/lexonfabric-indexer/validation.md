@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft specification patch revised for the approved MVP implementation scope in
+Approved specification baseline for the MVP implementation scope in
 `docs/specs/lexonfabric-indexer/requirements.md` and
 `docs/specs/lexonfabric-indexer/design.md`.
 

@@ -118,8 +118,10 @@ impl LocalOpenAiEmbeddingProvider {
         };
 
         let max_attempts = self.max_retries + 1;
+        let mut attempts_made = 0;
         let mut last_error = String::new();
         for attempt in 1..=max_attempts {
+            attempts_made = attempt;
             let mut request = self.client.post(&endpoint).json(&request_body);
             if let Some(api_key) = &self.api_key {
                 request = request.bearer_auth(api_key);
@@ -163,7 +165,7 @@ impl LocalOpenAiEmbeddingProvider {
         }
 
         Err(ConfiguredEmbeddingProviderError::RequestFailed {
-            attempts: max_attempts,
+            attempts: attempts_made,
             message: last_error,
         })
     }
@@ -333,6 +335,45 @@ mod tests {
             error,
             ConfiguredEmbeddingProviderError::UnsupportedProduction
         ));
+    }
+
+    #[tokio::test]
+    async fn local_provider_reports_actual_attempt_count_on_non_retryable_failure() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let server = spawn_test_server(
+            vec![http_response(400, r#"{"error":"bad request"}"#)],
+            Arc::clone(&requests),
+        );
+        let provider = LocalOpenAiEmbeddingProvider::from_config(&LocalEmbeddingConfig {
+            base_url: server.base_url.clone(),
+            model: "all-MiniLM-L6-v2".into(),
+            api_key_env: None,
+            request_timeout_secs: 5,
+            max_retries: 10,
+            retry_delay_ms: 1,
+        })
+        .unwrap();
+
+        let error = provider
+            .embed_impl(
+                &EmbeddingInput {
+                    media_type: "text/plain".into(),
+                    body: b"bad request".to_vec(),
+                },
+                &EmbeddingSpec {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfiguredEmbeddingProviderError::RequestFailed { attempts: 1, .. }
+        ));
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        server.join();
     }
 
     struct TestServer {
