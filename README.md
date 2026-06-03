@@ -133,6 +133,74 @@ That stack starts:
 After the batch completes, the summary output is written to
 `examples/local/output/summary.json`.
 
+## MCP MVP
+
+The first `lexonfabric-mcp` MVP is now implemented as a Rust stdio MCP server
+in `crates/lexonfabric-mcp`.
+
+### Request contract
+
+The local MVP server reads a JSON config file that identifies:
+
+- the local filesystem-backed block store to search
+- the local OpenAI-compatible embedding endpoint to use for query embeddings
+- the index summary file that provides the current `root_id`
+- default `top_k` and traversal-width settings for chunk search
+
+See `examples/local/mcp.request.sample.json` for a complete local config.
+
+### Running locally
+
+First generate the local block store and summary:
+
+```powershell
+cargo run -p lexonfabric-indexer -- run --request examples\local\request.sample.json --summary-out examples\local\output\summary.json
+```
+
+The sample MCP config uses `http://stapi:8080` for the Docker Compose network.
+For a host-side `cargo run`, update `examples\local\mcp.request.sample.json` to
+use a host-reachable endpoint such as `http://localhost:8080` before starting
+the server.
+
+Then start the MCP server over stdio:
+
+```powershell
+cargo run -p lexonfabric-mcp -- serve --config examples\local\mcp.request.sample.json
+```
+
+The MVP exposes four MCP tools:
+
+- `search_chunks`
+- `get_document`
+- `get_email`
+- `get_thread`
+
+The search tool is executable end to end in the local profile. The named
+retrieval tools are present in the MVP surface and currently return an explicit
+`unsupported` outcome until LexonGraph exposes a delegated retrieval-by-name
+contract for those item classes.
+
+### Running with Docker Compose
+
+Use the local integration stack in three steps so STAPI stays available in the
+background, the one-shot indexer finishes writing
+`examples/local/output/summary.json`, and then the MCP server starts:
+
+```powershell
+docker compose up -d stapi
+docker compose run --rm --build --no-deps indexer
+docker compose run --rm -i --no-deps mcp
+```
+
+That workflow uses:
+
+- `stapi` published to the host at `http://localhost:8080` and reached from the
+  Compose network as `http://stapi:8080`
+- the `lexonfabric-indexer` batch container
+- the `lexonfabric-mcp` stdio server container
+- a named Docker volume mounted into both containers at
+  `examples/local/block-store`
+
 ## License
 
 This project is licensed under the MIT License. See [`LICENSE`](LICENSE).

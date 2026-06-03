@@ -2,9 +2,9 @@
 
 ## Document Status
 
-- **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved for specification propagation
-- **Scope:** `lexonfabric-mcp` search-serving integration boundary
+- **Phase:** Phase 4 - User Review of Specifications
+- **Status:** Approved specification baseline for the MVP implementation scope
+- **Scope:** `lexonfabric-mcp` search-serving integration boundary and first in-repo MVP slice
 
 ## USER-REQUEST
 
@@ -19,6 +19,9 @@
 - **UR-MCP-9 [KNOWN]:** Local and testing operations use local filesystem-backed content plus local embeddings, while production uses Azure Blob Storage plus Azure OpenAI-backed embeddings.
 - **UR-MCP-10 [KNOWN]:** LexonFabric serves search and retrieval through an MCP server and intends that surface to stay consistent across environments.
 - **UR-MCP-11 [KNOWN]:** The MCP server is intended to remain usable from both Linux and Windows environments.
+- **UR-MCP-12 [KNOWN]:** Implement the minimal viable product of `lexonfabric-mcp` using `docs/specs/lexonfabric-mcp/*` as the source of truth.
+- **UR-MCP-13 [KNOWN]:** The first MVP must be testable against a local filesystem-backed block store and a Docker-containerized local embedding service using the same local embedding engine profile as the indexer.
+- **UR-MCP-14 [KNOWN]:** Production storage and embedding integrations should remain pluggable through stable trait or adapter boundaries, but do not need an executable production realization in the first MVP.
 
 ## Change Manifest
 
@@ -29,6 +32,8 @@
 | CM-MCP-003 | Add | Define the required MCP-facing retrieval surface for chunk search and named retrieval of emails, threads, and documents | UR-MCP-3, UR-MCP-4, UR-MCP-5 |
 | CM-MCP-004 | Add | Define environment-specific dependency integration for block storage and related delegated search dependencies | UR-MCP-7, UR-MCP-9, UR-MCP-10 |
 | CM-MCP-005 | Add | Capture invariants around indexing/search separation, stable contracts, and future content-type extensibility | UR-MCP-6, UR-MCP-8, UR-MCP-10 |
+| CM-MCP-006 | Revise | Narrow the first in-repo MVP realization to an end-to-end local/testing profile while preserving production integration seams | UR-MCP-12, UR-MCP-14 |
+| CM-MCP-007 | Add | Require local MVP testability against filesystem-backed block access and the same Docker-containerized local embedding engine profile used by the indexer | UR-MCP-12, UR-MCP-13 |
 
 ## Before / After
 
@@ -51,6 +56,16 @@
 
 - **Before [KNOWN]:** Local-versus-production behavior was documented at the architecture level but not translated into MCP-specific requirements for delegated dependency selection.
 - **After [KNOWN]:** The requirements define environment-specific integration boundaries so `lexonfabric-mcp` can consume local/testing and production storage or embedding backends without changing the MCP contract.
+
+### BA-MCP-005
+
+- **Before [KNOWN]:** The requirements identified both local/testing and production environment targets, but did not identify which subset must be executable in the first in-repo MVP.
+- **After [KNOWN]:** The requirements define the first MVP as an end-to-end local/testing realization while preserving production storage and embedding integrations as stable extension seams.
+
+### BA-MCP-006
+
+- **Before [KNOWN]:** The requirements described local filesystem-backed content and local embeddings at the environment level, but did not require the MVP to be testable against a local filesystem-backed block store and the same Docker-containerized local embedding engine profile used by the indexer.
+- **After [KNOWN]:** The requirements explicitly bind the MVP's local/testing conformance surface to filesystem-backed block access and an indexer-aligned Docker-containerized local embedding service without changing the MCP contract.
 
 ## Requirements
 
@@ -92,25 +107,46 @@ When the delegated LexonGraph search result includes the originating source item
 
 `lexonfabric-mcp` SHALL expose retrieval operations that allow callers to request a specific email, thread, or document by name.
 
+- **MVP realization [KNOWN]:** When the delegated LexonGraph contract does not provide name-based retrieval for a requested item class, the first MVP may return an explicit unsupported or unavailable outcome rather than inventing repository-local fallback matching behavior.
 - **Clarification gap [UNKNOWN]:** The canonical meaning of "name" for each item class and the expected behavior when multiple items share that name have not yet been specified.
 - **Traceability:** UR-MCP-4
+
+#### RQ-MCP-005A - No repository-local named-retrieval fallback
+
+Until a delegated name-based retrieval contract exists for the requested item
+class, the first `lexonfabric-mcp` MVP SHALL surface an explicit unsupported or
+unavailable outcome for named retrieval requests rather than implementing
+repository-local metadata scanning or other fallback matching semantics.
+
+- **Rationale [KNOWN]:** The approved MCP boundary keeps actual search and retrieval semantics subordinate to delegated LexonGraph contracts.
+- **Traceability:** UR-MCP-4, UR-MCP-6, UR-MCP-12
 
 #### RQ-MCP-006 - Delegated dependency integrations
 
 `lexonfabric-mcp` SHALL provide the concrete trait plugins, adapters, or equivalent integrations required for the delegated LexonGraph search APIs to access repository-managed dependencies.
 
 - **Required initial dependency class [KNOWN]:** block storage
+- **MVP realization [KNOWN]:** The first in-repo implementation must include repository-local integrations sufficient for an executable local/testing profile using filesystem-backed block access.
 - **Extensibility [INFERRED]:** Additional delegated query-time dependencies should be integrated behind the same stable boundary rather than leaking backend-specific details into the MCP contract.
-- **Traceability:** UR-MCP-6, UR-MCP-7
+- **Traceability:** UR-MCP-6, UR-MCP-7, UR-MCP-12, UR-MCP-13
 
 #### RQ-MCP-007 - Environment-specific adapter selection
 
 `lexonfabric-mcp` SHALL select its delegated dependency integrations according to environment without changing the MCP-facing search or retrieval contract.
 
-- **Local/testing [KNOWN]:** local filesystem-backed content or block access, local embedding service where the delegated search APIs require embeddings
+- **Local/testing [KNOWN]:** local filesystem-backed content or block access, plus a local embedding service using the same Docker-containerized embedding engine profile as the indexer where the delegated search APIs require embeddings
 - **Production [KNOWN]:** Azure Blob Storage-backed content or block access, Azure OpenAI-backed embeddings where the delegated search APIs require embeddings
+- **MVP realization [KNOWN]:** Only the local/testing profile is required to execute end to end in the first MVP. The production profile must remain representable through the same adapter boundary and configuration model without requiring an executable Azure realization in this increment.
 - **Constraint [INFERRED]:** Environment-specific wiring must stay behind stable interfaces so clients do not need different MCP contracts per environment.
-- **Traceability:** UR-MCP-7, UR-MCP-9, UR-MCP-10
+- **Traceability:** UR-MCP-7, UR-MCP-9, UR-MCP-10, UR-MCP-13, UR-MCP-14
+
+#### RQ-MCP-007A - Local MVP testability
+
+The first `lexonfabric-mcp` MVP SHALL be testable end to end against a local filesystem-backed block store and a Docker-containerized local embedding service aligned with the indexer's local embedding profile.
+
+- **Constraint [KNOWN]:** This requirement fixes the MVP's executable local/testing conformance surface without changing the MCP-facing search or retrieval contract.
+- **Non-goal [KNOWN]:** The first MVP does not require an executable Azure-backed production realization.
+- **Traceability:** UR-MCP-12, UR-MCP-13, UR-MCP-14
 
 #### RQ-MCP-008 - Future content-type extensibility
 
@@ -151,8 +187,10 @@ LexonFabric SHALL keep environment-specific storage, embedding, and other delega
 ## Out of Scope
 
 - Defining repository-local search, ranking, chunking, or retrieval algorithms
+- Defining repository-local metadata-scanning fallback semantics for named retrieval in the first MVP
 - Redefining the public contracts owned by LexonGraph search APIs or their delegated dependency traits
 - Defining indexing-pipeline behavior already covered by `docs/specs/lexonfabric-indexer/*`
+- Requiring executable Azure production adapters in the first MCP MVP increment
 - Finalizing the exact canonical name format or duplicate-name resolution semantics for named retrieval until the user clarifies them
 - Finalizing exact deployment workflow details beyond the already documented local/testing and production environment split
 
@@ -162,8 +200,9 @@ LexonFabric SHALL keep environment-specific storage, embedding, and other delega
 |---|---|---|
 | Indexing remains separate from search serving | Preserved | Requirements explicitly constrain `lexonfabric-mcp` to the MCP search-serving boundary and delegated search integrations |
 | Actual search semantics remain owned by LexonGraph | Preserved | Requirements define delegation rather than an in-repo search engine |
-| Environment-specific storage and embedding behavior stays behind stable interfaces | Preserved | Requirements capture environment selection without changing the MCP contract |
+| Environment-specific storage and embedding behavior stays behind stable interfaces | Preserved | Requirements capture a local-only executable MVP while preserving production selection behind the same MCP contract |
 | Architecture remains extensible to future content types | Preserved | Requirements keep the surface centered on stable contracts instead of hard-coding only current item classes |
+| Local MVP remains aligned with the indexer's local embedding profile | Preserved | Requirements constrain the executable local/testing profile to the same Docker-containerized embedding engine family without coupling the MCP contract to deployment-specific details |
 
 ## Open Questions / Discovery Gaps
 
@@ -171,6 +210,8 @@ LexonFabric SHALL keep environment-specific storage, embedding, and other delega
 - **Q-MCP-002 [UNKNOWN]:** What should `lexonfabric-mcp` do when a caller-provided name matches multiple items of the same class?
 - **Q-MCP-003 [UNKNOWN]:** Should named retrieval require exact-match semantics, case-insensitive matching, or delegated matching behavior owned entirely by LexonGraph?
 - **Q-MCP-004 [UNKNOWN]:** Beyond block storage, which delegated query-time dependency traits must `lexonfabric-mcp` wire directly in-repo for the initial scope?
+- **Q-MCP-005 [UNKNOWN]:** Must the MCP local/testing profile reuse the indexer's exact Docker Compose topology, or is compatibility with the same Docker-containerized embedding engine profile sufficient for the first MVP?
+- **Q-MCP-006 [UNKNOWN]:** Which delegated LexonGraph contract will eventually own name-based retrieval for email, thread, and document items, and what unsuccessful outcome shape should LexonFabric preserve until then?
 
 ## Coverage Notes
 
@@ -180,6 +221,13 @@ LexonFabric SHALL keep environment-specific storage, embedding, and other delega
   - `README.md:42-49`
   - `README.md:51-59`
   - `README.md:61-80`
+  - `README.md:91-134`
+  - `docs/specs/lexonfabric-indexer/requirements.md:20-25`
+  - `docs/specs/lexonfabric-indexer/requirements.md:111-156`
+  - `docs/specs/lexonfabric-indexer/design.md:120-188`
+  - `docs/specs/lexonfabric-indexer/validation.md:30-84`
+  - external LexonGraph repository source (not vendored in LexonFabric):
+    `crates/lexongraph-search/src/lib.rs`
   - user request in this session
 - **Excluded for now [KNOWN]:**
   - Rust implementation file paths, crate manifests, and test artifacts for `lexonfabric-mcp`, because no repository-local crate or implementation files exist yet

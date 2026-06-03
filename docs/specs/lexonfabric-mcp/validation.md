@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft specification patch derived from
+Approved specification baseline for the MVP implementation scope in
 `docs/specs/lexonfabric-mcp/requirements.md` and
 `docs/specs/lexonfabric-mcp/design.md`.
 
@@ -53,9 +53,12 @@ Execute named retrieval requests for representative email, thread, and document
 items.
 
 **Pass condition:** each operation delegates retrieval for its item class and
-returns the requested item when the delegated lookup succeeds.
+returns the requested item when the delegated lookup succeeds. When no
+delegated name-based retrieval contract exists for the requested item class in
+the first MVP, the operation returns an explicit unsupported or unavailable
+outcome rather than a success-shaped fallback result.
 
-**Traces to:** RQ-MCP-005, DSG-LFM-004
+**Traces to:** RQ-MCP-005, RQ-MCP-005A, DSG-LFM-004
 
 ### VAL-LFM-005
 
@@ -63,39 +66,55 @@ Execute named retrieval requests that do not resolve successfully through the
 delegated retrieval flow.
 
 **Pass condition:** `lexonfabric-mcp` surfaces the delegated unsuccessful
-lookup outcome rather than returning a success-shaped response or inventing a
-repository-local fallback result.
+lookup outcome, or an explicit unsupported or unavailable outcome when no
+delegated name-based retrieval contract exists, rather than returning a
+success-shaped response or inventing a repository-local fallback result.
 
-**Traces to:** RQ-MCP-005, RQ-MCP-011, DSG-LFM-004, DSG-LFM-009
+**Traces to:** RQ-MCP-005, RQ-MCP-005A, RQ-MCP-011, DSG-LFM-004, DSG-LFM-009
 
 ### VAL-LFM-006
 
 Run the local/testing environment profile.
 
 **Pass condition:** `lexonfabric-mcp` selects local filesystem-backed storage
-or block access and the local embedding service when the delegated search flow
-requires embeddings, without changing the MCP contract.
+or block access and the same Docker-containerized local embedding engine
+profile used by the indexer when the delegated search flow requires embeddings,
+without changing the MCP contract.
 
-**Traces to:** RQ-MCP-006, RQ-MCP-007, DSG-LFM-005, DSG-LFM-006, DSG-LFM-007
+**Traces to:** RQ-MCP-006, RQ-MCP-007, DSG-LFM-005, DSG-LFM-006, DSG-LFM-006A,
+DSG-LFM-007
+
+### VAL-LFM-006A
+
+Exercise the first-MVP local/testing conformance surface.
+
+**Pass condition:** `lexonfabric-mcp` is testable end to end against a local
+filesystem-backed block store and a Docker-containerized local embedding
+service aligned with the indexer's local embedding profile, without requiring
+an executable Azure-backed production setup.
+
+**Traces to:** RQ-MCP-007A, DSG-LFM-006A, DSG-LFM-011
 
 ### VAL-LFM-007
 
-Run the production environment profile.
+Inspect the preserved production environment profile boundary.
 
-**Pass condition:** `lexonfabric-mcp` selects Azure Blob Storage-backed access
-or block access and Azure OpenAI when the delegated search flow requires
-embeddings, without changing the MCP contract.
+**Pass condition:** production-specific storage and embedding identifiers remain
+behind the same adapter-selection boundary as the executable local/testing
+profile, and no local-only assumptions leak into the MCP contract or delegated
+search orchestration boundary.
 
 **Traces to:** RQ-MCP-006, RQ-MCP-007, DSG-LFM-005, DSG-LFM-006, DSG-LFM-007
 
 ### VAL-LFM-008
 
-Run the same logical MCP interactions once in local/testing mode and once in
-production mode.
+Inspect the executable local/testing profile against the preserved production
+profile boundary for the same logical MCP interactions.
 
 **Pass condition:** the operation families, response categories, and delegated
 search ownership model remain the same while only environment-specific adapter
-realizations differ.
+realizations differ, even though only the local/testing profile is executable
+in the first MVP.
 
 **Traces to:** RQ-MCP-007, RQ-MCP-012, DSG-LFM-006, DSG-LFM-007
 
