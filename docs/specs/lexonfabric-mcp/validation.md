@@ -82,7 +82,7 @@ requires embeddings, without changing the MCP contract.
 
 Run the production environment profile.
 
-**Pass condition:** `lexonfabric-mcp` selects Azure Blob Storage-backed storage
+**Pass condition:** `lexonfabric-mcp` selects Azure Blob Storage-backed access
 or block access and Azure OpenAI when the delegated search flow requires
 embeddings, without changing the MCP contract.
 

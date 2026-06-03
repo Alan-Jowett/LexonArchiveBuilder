@@ -16,7 +16,7 @@
 - **UR-MCP-6 [KNOWN]:** All actual searching belongs to the underlying `lexongraph` crate rather than to `lexonfabric-mcp`.
 - **UR-MCP-7 [KNOWN]:** `lexonfabric-mcp` provides the appropriate trait plugins or adapters for block storage and similar delegated dependencies, analogous to `lexonfabric-indexer`.
 - **UR-MCP-8 [KNOWN]:** The architecture must remain extensible to future content types beyond the initial email and document focus.
-- **UR-MCP-9 [KNOWN]:** Local and testing operation use local filesystem-backed content plus local embeddings, while production uses Azure Blob Storage plus Azure OpenAI-backed embeddings.
+- **UR-MCP-9 [KNOWN]:** Local and testing operations use local filesystem-backed content plus local embeddings, while production uses Azure Blob Storage plus Azure OpenAI-backed embeddings.
 - **UR-MCP-10 [KNOWN]:** LexonFabric serves search and retrieval through an MCP server and intends that surface to stay consistent across environments.
 - **UR-MCP-11 [KNOWN]:** The MCP server is intended to remain usable from both Linux and Windows environments.
 
