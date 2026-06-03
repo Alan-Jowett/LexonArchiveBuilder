@@ -181,17 +181,17 @@ LexonFabric SHALL preserve chained provenance from each indexed email chunk to i
 - **Boundary [KNOWN]:** The provenance chain does not require clients to parse the mailbox artifact for ordinary retrieval.
 - **Traceability:** UR-18, UR-23
 
-#### RQ-INDEXER-004E - Stable chunk identity
+#### RQ-INDEXER-004E - Stable chunk locator
 
-LexonFabric SHALL assign each delegated email chunk item a stable chunk identity
+LexonFabric SHALL assign each delegated email chunk item a stable chunk locator
 that makes it possible to determine which chunk is being processed or returned.
 
-- **Required property [KNOWN]:** The chunk identity must be derivable from the
+- **Required property [KNOWN]:** The chunk locator must be derivable from the
   normalized email artifact reference plus chunk-local identity such as ordinal
   position and remain stable under a stable normalization and chunking policy.
 - **Integration boundary [KNOWN]:** Because `lexongraph-indexer` accepts
   `metadata` plus an opaque `content_ref` rather than a first-class item-name
-  field, LexonFabric owns how this chunk identity is represented.
+  field, LexonFabric owns how this chunk locator is represented.
 - **Traceability:** UR-17, UR-23
 
 #### RQ-INDEXER-005 - Block storage integration
