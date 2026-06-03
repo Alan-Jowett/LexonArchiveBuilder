@@ -59,7 +59,7 @@ pub async fn run_request(
     request: BatchRequest,
 ) -> Result<BatchSummary, RuntimeError> {
     let items = request.to_index_items(request_dir)?;
-    let _ = request.environment.local_embedding()?;
+    request.environment.local_embedding()?;
     let embedding_provider = ConfiguredEmbeddingProvider::from_environment(&request.environment)?;
     let block_store = ConfiguredBlockStore::from_environment(request_dir, &request.environment);
     let indexer = Indexer::with_defaults(LocalFilesystemContentResolver, embedding_provider);
@@ -230,10 +230,15 @@ mod tests {
         let seen = Arc::new(AtomicUsize::new(0));
         let seen_for_thread = Arc::clone(&seen);
         let handle = thread::spawn(move || {
+            let idle_after_expected = Duration::from_millis(200);
             let deadline = Instant::now() + Duration::from_secs(5);
-            while seen_for_thread.load(Ordering::SeqCst) < expected_requests
-                && Instant::now() < deadline
-            {
+            let mut last_activity = Instant::now();
+            while Instant::now() < deadline {
+                if seen_for_thread.load(Ordering::SeqCst) >= expected_requests
+                    && Instant::now().duration_since(last_activity) >= idle_after_expected
+                {
+                    break;
+                }
                 let (mut stream, _) = match listener.accept() {
                     Ok(pair) => pair,
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -242,6 +247,7 @@ mod tests {
                     }
                     Err(error) => panic!("failed to accept runtime test connection: {error}"),
                 };
+                last_activity = Instant::now();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();

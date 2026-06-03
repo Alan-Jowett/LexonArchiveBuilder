@@ -69,9 +69,12 @@ fn resolve_file(
         path: path.clone(),
         source,
     })?;
-    let body = String::from_utf8_lossy(&raw_bytes)
-        .into_owned()
-        .into_bytes();
+    let body = match String::from_utf8(raw_bytes) {
+        Ok(text) => text.into_bytes(),
+        Err(error) => String::from_utf8_lossy(&error.into_bytes())
+            .into_owned()
+            .into_bytes(),
+    };
 
     Ok(Content {
         media_type: media_type.to_string(),
