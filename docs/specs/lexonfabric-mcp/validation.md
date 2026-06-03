@@ -97,7 +97,7 @@ production mode.
 search ownership model remain the same while only environment-specific adapter
 realizations differ.
 
-**Traces to:** RQ-MCP-007, RQ-MCP-009, RQ-MCP-012, DSG-LFM-006, DSG-LFM-007
+**Traces to:** RQ-MCP-007, RQ-MCP-012, DSG-LFM-006, DSG-LFM-007
 
 ### VAL-LFM-009
 
@@ -129,3 +129,14 @@ delegated routing and result projection without redefining the core chunk-search
 contract or the environment-selection contract.
 
 **Traces to:** RQ-MCP-008, RQ-MCP-012, DSG-LFM-010
+
+### VAL-LFM-012
+
+Exercise representative `lexonfabric-mcp` interactions from both Linux and
+Windows client environments.
+
+**Pass condition:** both environments consume the same MCP operation families
+and response contracts without requiring OS-specific request semantics or
+response interpretation.
+
+**Traces to:** RQ-MCP-009, DSG-LFM-007

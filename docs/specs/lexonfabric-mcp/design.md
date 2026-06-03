@@ -138,6 +138,10 @@ Local/testing and production environments differ only in adapter realization
 and provider configuration, not in the MCP operation families, chunk-oriented
 response shape, or delegated search ownership model.
 
+The MCP boundary remains OS-agnostic at the contract level so Linux and
+Windows clients consume the same search and retrieval surface regardless of the
+host operating system.
+
 **Traces to:** RQ-MCP-007, RQ-MCP-009, RQ-MCP-012
 
 ## Invariant Design
