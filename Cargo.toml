@@ -1,0 +1,25 @@
+[workspace]
+members = ["crates/lexonfabric-indexer"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+version = "0.1.0"
+
+[workspace.dependencies]
+anyhow = "1.0.100"
+ciborium = "0.2.2"
+clap = { version = "4.5.53", features = ["derive"] }
+half = "2.7.1"
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tempfile = "3.23.0"
+thiserror = "2.0.17"
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "time"] }
+
+lexongraph-block = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "2d4e1e2a3ca229f49dde0a1df2db3b308cad0383", package = "lexongraph-block" }
+lexongraph-block-store = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "2d4e1e2a3ca229f49dde0a1df2db3b308cad0383", package = "lexongraph-block-store" }
+lexongraph-embeddings-trait = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "2d4e1e2a3ca229f49dde0a1df2db3b308cad0383", package = "lexongraph-embeddings-trait" }
+lexongraph-indexer = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "2d4e1e2a3ca229f49dde0a1df2db3b308cad0383", package = "lexongraph-indexer" }

@@ -1,0 +1,7 @@
+.git
+target
+**/target
+**/debug
+**/release
+**/*.pdb
+**/mutants.out*

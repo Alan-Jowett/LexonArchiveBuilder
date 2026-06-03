@@ -2,7 +2,8 @@
 
 ## Status
 
-Draft specification patch derived from `docs/specs/lexonfabric-indexer/requirements.md`.
+Approved specification baseline for the MVP implementation scope in
+`docs/specs/lexonfabric-indexer/requirements.md`.
 
 ## Scope
 
@@ -36,8 +37,10 @@ owned by LexonGraph and its subordinate crates.
 
 - `README.md`, which already describes the same local-versus-production split at
   the architecture level
-- future Rust crates, configuration, and test artifacts not yet present in this
-  repository
+- Rust implementation, configuration, and test artifacts that realize the
+  approved MVP slice in this repository
+- Docker Compose, container, and local test-environment artifacts that realize
+  the approved MVP slice
 
 ### Unaffected artifacts
 
@@ -52,6 +55,7 @@ The LexonFabric indexer design is intended to be:
 - an orchestration layer around `lexongraph-indexer`
 - explicit about ownership boundaries
 - stable across local and production environments
+- minimal and fully executable in the local/testing profile first
 - extensible to future content types
 - compatible with a Linux batch-container runtime
 
@@ -76,6 +80,10 @@ caller-supplied collection of items.
 At the container boundary, the batch contract is collection-oriented rather than
 backend-specific so the same invocation shape can be reused for mail archives,
 RFC sets, and future content classes.
+
+The first MVP realization covers both mailbox and document-collection items
+through this one contract rather than splitting the batch surface by content
+class.
 
 **Traces to:** RQ-INDEXER-001, RQ-INDEXER-002
 
@@ -104,6 +112,9 @@ The resolver owns source-specific retrieval logic for initially supported item
 classes such as mailboxes and document collections, while preserving one stable
 batch contract at the container boundary.
 
+The first MVP realization implements both initial source classes through this
+resolver boundary.
+
 **Traces to:** RQ-INDEXER-002, RQ-INDEXER-004, RQ-INDEXER-010
 
 ### DSG-LFI-005 `Block storage adapter boundary`
@@ -118,6 +129,10 @@ The rest of the LexonFabric indexing flow consumes only the backend-neutral
 `BlockStore` contract and does not depend on filesystem paths or Azure-specific
 blob layout details.
 
+For the first MVP, only the local/testing block-store realization must be
+executable. The production storage profile remains a preserved adapter seam and
+configuration target rather than an implemented runtime path in this increment.
+
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-007, RQ-INDEXER-010
 
 ### DSG-LFI-006 `Embedding provider adapter boundary`
@@ -131,6 +146,11 @@ satisfy `lexongraph_embeddings_trait::EmbeddingProvider`.
 Provider-specific HTTP request construction, authentication, and endpoint
 selection remain behind this adapter boundary and do not alter the batch input
 contract or the delegated indexer contract.
+
+For the first MVP, only the local/testing embedding realization must be
+executable. The production embedding profile remains a preserved adapter seam
+and configuration target rather than an implemented runtime path in this
+increment.
 
 **Traces to:** RQ-INDEXER-006, RQ-INDEXER-007, RQ-INDEXER-010
 
@@ -149,13 +169,33 @@ environment profile:
 This selection is configuration-driven and preserves one stable delegated
 indexing flow independent of environment.
 
+For the approved MVP slice, the local/testing profile is the only profile that
+must execute end to end. The production profile remains represented at this
+design layer so future adapters can plug into the same orchestration contract.
+
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-007
+
+### DSG-LFI-007A `Local compose topology`
+
+The local/testing profile includes a Docker Compose topology that brings up the
+batch container and the local dependencies it needs for integration-style
+execution as one unit.
+
+This composition layer may provision mounts, volumes, and the local embedding
+service, but it does not introduce a separate indexing control plane or alter
+the batch-container runtime shape.
+
+**Traces to:** RQ-INDEXER-001, RQ-INDEXER-008A
 
 ### DSG-LFI-008 `Local and production parity boundary`
 
 Local/testing and production environments differ only in adapter realization and
 provider configuration, not in the container's batch contract, content item
 shape, or the delegated `lexongraph-indexer` orchestration contract.
+
+The MVP realizes this parity boundary by keeping the core orchestration and item
+model environment-neutral even though only the local/testing profile executes in
+the first increment.
 
 **Traces to:** RQ-INDEXER-007, RQ-INDEXER-010
 
@@ -187,9 +227,11 @@ LexonFabric-owned verification artifacts validate:
 - correct selection and use of content-resolution, block-store, and
   embedding-provider adapters
 - preservation of stable batch contracts across environments
+- Docker Compose-based realization of the local/testing integration topology
 
 LexonFabric-owned verification artifacts do not attempt to revalidate
 LexonGraph's own block-store or embedding-trait contracts beyond proving that
 LexonFabric consumes them correctly.
 
-**Traces to:** RQ-INDEXER-010A, RQ-INDEXER-010
+**Traces to:** RQ-INDEXER-008A, RQ-INDEXER-010A, RQ-INDEXER-010,
+DSG-LFI-007A

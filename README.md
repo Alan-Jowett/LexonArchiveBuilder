@@ -88,6 +88,51 @@ Conceptually, LexonFabric is used in two stages:
 
 Concrete commands and operational examples can be added as the executable surface of the repository stabilizes.
 
+## Indexer MVP
+
+The first `lexonfabric-indexer` MVP is now implemented as a Rust batch runtime in
+`crates/lexonfabric-indexer`.
+
+### Request contract
+
+The MVP request format is JSON and remains collection-oriented across both
+supported content classes:
+
+- **mailbox** items point at per-month `.mbox` files
+- **document** items point at `.txt` files
+
+See `examples/local/request.sample.json` for a complete local request that
+indexes one mailbox file and one document file.
+
+### Running locally
+
+Build and run the batch directly:
+
+```powershell
+cargo run -p lexonfabric-indexer -- run --request examples\local\request.sample.json
+```
+
+The sample request assumes the embedding endpoint is available at
+`http://stapi:8080`. For manual testing against an already-running STAPI
+container, update the request file's `base_url` to match that endpoint.
+
+### Running with Docker Compose
+
+The repository includes a local integration stack:
+
+```powershell
+docker compose up --build indexer
+```
+
+That stack starts:
+
+- `stapi` at `http://localhost:8080`
+- the `lexonfabric-indexer` batch container
+- a named Docker volume mounted into the batch container at `examples/local/block-store`
+
+After the batch completes, the summary output is written to
+`examples/local/output/summary.json`.
+
 ## License
 
 This project is licensed under the MIT License. See [`LICENSE`](LICENSE).

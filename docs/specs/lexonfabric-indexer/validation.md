@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft specification patch derived from
+Approved specification baseline for the MVP implementation scope in
 `docs/specs/lexonfabric-indexer/requirements.md` and
 `docs/specs/lexonfabric-indexer/design.md`.
 
@@ -26,6 +26,16 @@ Inspect the containerized indexer entrypoint contract.
 a collection-oriented indexing request rather than a single hard-coded source.
 
 **Traces to:** RQ-INDEXER-001, RQ-INDEXER-002, DSG-LFI-002
+
+### VAL-LFI-001A
+
+Inspect the local Docker Compose topology for the MVP profile.
+
+**Pass condition:** the Compose topology brings up the batch container together
+with the local embedding service and required local storage mounts or volumes
+without introducing a separate long-lived indexing control-plane service.
+
+**Traces to:** RQ-INDEXER-001, RQ-INDEXER-008A, DSG-LFI-007A
 
 ### VAL-LFI-002
 
@@ -51,12 +61,13 @@ delegated indexing error path rather than reporting success.
 
 ### VAL-LFI-004
 
-Run the same logical batch once in local/testing mode and once in production
-mode using environment-appropriate storage and embedding adapters.
+Inspect environment-selection wiring for both the executable local/testing
+profile and the preserved production profile boundary.
 
-**Pass condition:** the batch contract and delegation flow remain the same while
-only the `BlockStore` and `EmbeddingProvider` realizations differ by
-environment.
+**Pass condition:** the batch contract and delegation flow remain environment
+neutral, the local/testing profile is executable end to end, and the production
+profile remains representable through the same adapter-selection boundary
+without requiring Azure-specific execution in the first MVP.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-007, DSG-LFI-005,
 DSG-LFI-006, DSG-LFI-007, DSG-LFI-008
@@ -74,11 +85,12 @@ DSG-LFI-006, DSG-LFI-007
 
 ### VAL-LFI-006
 
-Run the production environment profile.
+Inspect the preserved production environment profile boundary.
 
-**Pass condition:** LexonFabric selects an Azure Blob-backed `BlockStore` and an
-Azure OpenAI-backed `EmbeddingProvider` without changing the collection input
-contract or the delegated indexer contract.
+**Pass condition:** production-specific storage and embedding identifiers remain
+behind the same `BlockStore` and `EmbeddingProvider` selection boundary as the
+local/testing profile, and no local-only assumptions leak into the core batch
+contract or content-model abstractions.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-007, DSG-LFI-005,
 DSG-LFI-006, DSG-LFI-007

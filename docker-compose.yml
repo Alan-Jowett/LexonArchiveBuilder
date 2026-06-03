@@ -1,0 +1,27 @@
+services:
+  stapi:
+    image: ghcr.io/substratusai/stapi:v2.2.2-3
+    ports:
+      - "8080:8080"
+
+  indexer:
+    build:
+      context: .
+      dockerfile: crates/lexonfabric-indexer/Dockerfile
+    depends_on:
+      - stapi
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - lexonfabric-block-store:/workspace/examples/local/block-store
+    command:
+      [
+        "run",
+        "--request",
+        "/workspace/examples/local/request.sample.json",
+        "--summary-out",
+        "/workspace/examples/local/output/summary.json"
+      ]
+
+volumes:
+  lexonfabric-block-store:

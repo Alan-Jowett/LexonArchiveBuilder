@@ -1,0 +1,34 @@
+{
+  "environment": {
+    "kind": "local",
+    "block_store_root": "block-store",
+    "embedding": {
+      "base_url": "http://stapi:8080",
+      "model": "all-MiniLM-L6-v2",
+      "request_timeout_secs": 30,
+      "max_retries": 10,
+      "retry_delay_ms": 1000
+    }
+  },
+  "embedding_spec": {
+    "dims": 384,
+    "encoding": "f32le"
+  },
+  "block_size_target": 65536,
+  "items": [
+    {
+      "kind": "mailbox",
+      "path": "data/mail/2026-01.mbox",
+      "metadata": {
+        "month": "2026-01"
+      }
+    },
+    {
+      "kind": "document",
+      "path": "data/documents/overview.txt",
+      "metadata": {
+        "collection": "docs"
+      }
+    }
+  ]
+}
