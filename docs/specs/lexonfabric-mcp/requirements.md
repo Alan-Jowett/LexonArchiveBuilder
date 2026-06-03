@@ -61,7 +61,7 @@
 LexonFabric SHALL provide an MCP server boundary for `lexonfabric-mcp` that exposes search and retrieval over indexed knowledge.
 
 - **Rationale [KNOWN]:** `README.md` describes LexonFabric as serving search and retrieval through an MCP server.
-- **Traceability:** UR-MCP-1, UR-MCP-2, UR-MCP-10
+- **Traceability:** UR-MCP-2, UR-MCP-10
 
 #### RQ-MCP-002 - Delegated search execution
 
@@ -86,7 +86,7 @@ When the delegated LexonGraph search result includes the originating source item
   - threads
   - documents
 - **Constraint [KNOWN]:** This requirement preserves delegated metadata; it does not require `lexonfabric-mcp` to invent a source name that the delegated search API does not provide.
-- **Traceability:** UR-MCP-4, UR-MCP-5, UR-MCP-6
+- **Traceability:** UR-MCP-5, UR-MCP-6
 
 #### RQ-MCP-005 - Named retrieval operations
 
