@@ -23,5 +23,23 @@ services:
         "/workspace/examples/local/output/summary.json"
       ]
 
+  mcp:
+    build:
+      context: .
+      dockerfile: crates/lexonfabric-mcp/Dockerfile
+    depends_on:
+      - stapi
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - lexonfabric-block-store:/workspace/examples/local/block-store
+    stdin_open: true
+    command:
+      [
+        "serve",
+        "--config",
+        "/workspace/examples/local/mcp.request.sample.json"
+      ]
+
 volumes:
   lexonfabric-block-store:

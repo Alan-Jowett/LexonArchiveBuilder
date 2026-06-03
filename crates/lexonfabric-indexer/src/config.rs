@@ -90,7 +90,7 @@ pub enum BatchItemConfig {
     },
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BatchSummary {
     pub root_id: String,
     pub block_ids: Vec<String>,

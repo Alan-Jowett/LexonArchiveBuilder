@@ -251,8 +251,25 @@ mod tests {
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();
+                let mut request = Vec::new();
                 let mut buffer = [0u8; 1024];
-                let _ = stream.read(&mut buffer);
+                loop {
+                    match stream.read(&mut buffer) {
+                        Ok(0) => break,
+                        Ok(read) => {
+                            request.extend_from_slice(&buffer[..read]);
+                        }
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                            ) =>
+                        {
+                            break;
+                        }
+                        Err(error) => panic!("failed to read runtime test request: {error}"),
+                    }
+                }
                 let body = r#"{"data":[{"embedding":[0.25,0.75]}]}"#;
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -263,6 +280,7 @@ mod tests {
                 seen_for_thread.fetch_add(1, Ordering::SeqCst);
             }
         });
+        thread::sleep(Duration::from_millis(25));
 
         TestServer {
             base_url: format!("http://{}", address),
