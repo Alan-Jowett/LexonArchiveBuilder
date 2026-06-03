@@ -2,9 +2,9 @@
 
 ## Document Status
 
-- **Phase:** Phase 4 - User Review of Specifications
-- **Status:** Approved specification baseline for the implemented MVP scope
-- **Scope:** LexonFabric indexer integration boundary and first in-repo MVP slice
+- **Phase:** Phase 2 - Specification Changes
+- **Status:** Approved requirements patch being propagated into design and validation
+- **Scope:** LexonFabric indexer integration boundary plus incremental email-artifact and chunk-indexing evolution
 
 ## USER-REQUEST
 
@@ -22,6 +22,17 @@
 - **UR-12 [KNOWN]:** The first MVP implementation only needs an executable local/testing profile using local filesystem storage and a local embedding service.
 - **UR-13 [KNOWN]:** Production storage and embedding integrations should remain pluggable through stable trait and configuration boundaries, but do not need an executable production realization in the first MVP.
 - **UR-14 [KNOWN]:** Local/testing should be deployable as a single Docker Compose unit that brings up the indexer runtime and its local dependencies, including volumes/storage and the embedding engine, for integration-style testing.
+- **UR-15 [KNOWN]:** Email indexing should stop embedding whole mailbox files and instead extract and normalize email messages, derive chunk-level retrieval units, and embed those chunks.
+- **UR-16 [KNOWN]:** The canonical email artifact identity should be based on the normalized email artifact rather than the raw mailbox bytes.
+- **UR-17 [KNOWN]:** Indexed email chunks should carry only minimal search-serving metadata plus a reference to the normalized email artifact so clients can use the chunk directly or retrieve the full normalized email.
+- **UR-18 [KNOWN]:** LexonFabric should reuse its hash-addressed storage approach for normalized email artifacts and, when useful, raw mailbox provenance artifacts instead of forcing clients to reconstruct emails from mailbox blobs.
+- **UR-19 [KNOWN]:** This change applies to email ingestion now and must not preclude future document-specific chunking and metadata handling.
+- **UR-20 [KNOWN]:** Email normalization should derive a meaningful message body for embedding while best-effort excluding common non-semantic content when practical.
+- **UR-21 [KNOWN]:** Indexed email chunks should duplicate enough message metadata to satisfy the common retrieval/rendering path without always dereferencing the normalized email artifact.
+- **UR-22 [KNOWN]:** Normalized email artifacts and mailbox provenance artifacts should reuse the same environment-selected `BlockStore` abstraction family as indexed LexonGraph blocks rather than introducing a second storage abstraction stack.
+- **UR-23 [KNOWN]:** Email provenance should be chainable from indexed chunk to normalized email artifact to source mailbox artifact.
+- **UR-24 [KNOWN]:** The first email chunking baseline may be sentence-aware and implementation-simple, but the indexing design must preserve a seam for future tokenizer-driven or more semantic chunking strategies.
+- **UR-25 [KNOWN]:** Mailbox artifacts should be retained as first-class provenance artifacts so LexonFabric can support re-normalization, re-chunking, and re-ingestion from the original source material.
 
 ## Change Manifest
 
@@ -34,6 +45,10 @@
 | CM-INDEXER-005 | Revise | Narrow the first in-repo MVP realization to an end-to-end local/testing profile while preserving production extensibility boundaries | UR-10, UR-12, UR-13 |
 | CM-INDEXER-006 | Revise | Require the first MVP implementation to cover both mailbox and document-collection batch items | UR-10, UR-11 |
 | CM-INDEXER-007 | Add | Require Docker Compose-based local dependency orchestration for repeatable integration testing of the batch container | UR-12, UR-14 |
+| CM-INDEXER-008 | Revise | Refine email ingestion so mailbox inputs expand into normalized email artifacts and chunk-level embedding units instead of whole-mailbox embeddings | UR-15, UR-19 |
+| CM-INDEXER-009 | Add | Require normalized email artifacts to be hash-addressed, retrievable by reference from indexed chunks, and anchored in LexonFabric-owned storage rather than client-side mailbox parsing | UR-16, UR-17, UR-18 |
+| CM-INDEXER-010 | Add | Define email-body normalization, common-case chunk metadata duplication, shared storage abstractions, and chained provenance for email indexing artifacts | UR-20, UR-21, UR-22, UR-23 |
+| CM-INDEXER-011 | Add | Establish a simple sentence-aware email chunking baseline while requiring retained mailbox provenance and future chunking extensibility | UR-24, UR-25 |
 
 ## Before / After
 
@@ -72,6 +87,26 @@
 - **Before [KNOWN]:** The requirements described Linux Docker batch execution, but did not require a repository-local composition layer for exercising dependencies together during testing.
 - **After [KNOWN]:** The requirements now require a Docker Compose deployment shape for the local/testing profile so the batch runtime and its local dependencies can be brought up as one integration test unit.
 
+### BA-INDEXER-008
+
+- **Before [KNOWN]:** A mailbox batch item was understood as one embedding unit, which implied embedding the entire `.mbox` body as one vector through the delegated indexer contract.
+- **After [KNOWN]:** The requirements define mailbox inputs as ingestion sources that LexonFabric expands into normalized email artifacts and chunk-level embedding units before delegating indexing to `lexongraph-indexer`.
+
+### BA-INDEXER-009
+
+- **Before [KNOWN]:** The requirements did not define a canonical normalized email artifact or a stable retrieval reference from indexed chunks back to full-message content.
+- **After [KNOWN]:** The requirements define normalized email artifacts as hash-addressed retrieval targets referenced from indexed chunks, allowing clients to use chunk text directly or follow the artifact reference to the full normalized email without reparsing mailbox blobs.
+
+### BA-INDEXER-010
+
+- **Before [KNOWN]:** The requirements did not define how much email normalization should shape the embedded body, how much metadata should be duplicated onto chunk hits, whether email artifacts should reuse the repository storage abstraction, or how provenance should chain back to the mailbox source.
+- **After [KNOWN]:** The requirements define best-effort email-body normalization for embedding, enough duplicated chunk metadata for the common retrieval path, reuse of the environment-selected `BlockStore` abstraction family for email artifacts, and explicit chained provenance from chunk to normalized email artifact to mailbox artifact.
+
+### BA-INDEXER-011
+
+- **Before [KNOWN]:** The requirements did not define whether mailbox provenance retention was mandatory or whether the first email chunking strategy should stay simple while preserving room for more semantic chunking later.
+- **After [KNOWN]:** The requirements make mailbox artifact retention mandatory for reprocessing scenarios and define the first email chunking strategy as a simple sentence-aware baseline that preserves a seam for future tokenizer-driven or more semantic chunking policies.
+
 ## Requirements
 
 ### Functional Requirements
@@ -91,8 +126,10 @@ The batch indexer SHALL accept a collection of items to index rather than a sing
   - mailboxes / mail archives
   - document collections such as RFCs
 - **MVP realization [KNOWN]:** The first in-repo implementation must support both initial item classes rather than deferring either one to a later increment.
+- **Email ingestion refinement [KNOWN]:** A mailbox item remains a valid batch input, but it is an ingestion source rather than the final embedding unit; LexonFabric expands mailbox content into normalized email artifacts and chunk-level index items before delegated embedding.
+- **Document scope boundary [KNOWN]:** Document collections remain valid batch inputs in this increment, but this change does not require document chunking to match email handling. Future document-specific chunking and metadata handling must remain possible through the same collection-oriented contract.
 - **Extensibility [INFERRED]:** The accepted collection model should permit future content types without redefining the external batch contract.
-- **Traceability:** UR-5, UR-11
+- **Traceability:** UR-5, UR-11, UR-15, UR-19
 
 #### RQ-INDEXER-003 - Delegated indexing engine
 
@@ -106,7 +143,56 @@ LexonFabric SHALL delegate indexing and index creation to the `lexongraph-indexe
 LexonFabric SHALL provide a concrete implementation of `lexongraph_indexer::ContentResolver<R>`.
 
 - **Constraint [KNOWN]:** This integration is responsible for resolving requested source content for the batch's collection items.
-- **Traceability:** UR-3, UR-5, UR-9
+- **Email refinement [KNOWN]:** For mailbox-driven email indexing, LexonFabric-owned preprocessing may materialize additional logical items such as normalized emails and chunks before the delegated resolver hands final embedding content to `lexongraph-indexer`.
+- **Traceability:** UR-3, UR-5, UR-9, UR-15
+
+#### RQ-INDEXER-004A - Normalized email artifact derivation
+
+LexonFabric SHALL extract and normalize individual email messages from mailbox inputs before delegated indexing of email content.
+
+- **Required result [KNOWN]:** The normalization step produces a canonical email artifact suitable for full-message retrieval and for derivation of chunk-level embedding units.
+- **Identity rule [KNOWN]:** The canonical identity of the normalized email artifact is based on the normalized artifact content rather than the raw mailbox bytes.
+- **Body normalization rule [KNOWN]:** The normalization step derives a meaningful email body for embedding while best-effort excluding common non-semantic content when practical.
+- **Boundary [KNOWN]:** This requirement applies to email ingestion in this increment and does not require the same normalization shape for document collections.
+- **Traceability:** UR-15, UR-16, UR-19, UR-20
+
+#### RQ-INDEXER-004B - Chunk-level email embedding units
+
+LexonFabric SHALL embed email-derived chunk content rather than whole mailbox files.
+
+- **Required property [KNOWN]:** Each delegated email indexing item must represent a chunk-sized retrieval unit derived from a normalized email artifact.
+- **Baseline policy [KNOWN]:** The first email chunking realization may use a sentence-aware baseline strategy, provided the surrounding design preserves room for future tokenizer-driven or more semantic chunking policies.
+- **Non-goal [KNOWN]:** This requirement does not redefine LexonGraph's embedding contract or require LexonGraph itself to implement chunking.
+- **Traceability:** UR-15, UR-19, UR-24
+
+#### RQ-INDEXER-004C - Chunk-to-email provenance
+
+LexonFabric SHALL preserve a stable reference from each indexed email chunk back to its normalized email artifact.
+
+- **Required property [KNOWN]:** Indexed email chunks must carry enough provenance metadata to support full-message retrieval without requiring clients to reparse raw mailbox blobs.
+- **Metadata discipline [KNOWN]:** Search-serving metadata duplicated onto the indexed chunk should remain lean, but it must be sufficient for the common retrieval/rendering path without always dereferencing the normalized email artifact.
+- **Traceability:** UR-17, UR-18, UR-21
+
+#### RQ-INDEXER-004D - Chained email provenance
+
+LexonFabric SHALL preserve chained provenance from each indexed email chunk to its normalized email artifact and from that normalized email artifact to its source mailbox artifact.
+
+- **Required property [KNOWN]:** The provenance chain must allow retrieval flows to move from a chunk hit to the full normalized email and then, when needed, to the mailbox-level source artifact.
+- **Boundary [KNOWN]:** The provenance chain does not require clients to parse the mailbox artifact for ordinary retrieval.
+- **Traceability:** UR-18, UR-23
+
+#### RQ-INDEXER-004E - Stable chunk locator
+
+LexonFabric SHALL assign each delegated email chunk item a stable chunk locator
+that makes it possible to determine which chunk is being processed or returned.
+
+- **Required property [KNOWN]:** The chunk locator must be derivable from the
+  normalized email artifact reference plus chunk-local identity such as ordinal
+  position and remain stable under a stable normalization and chunking policy.
+- **Integration boundary [KNOWN]:** Because `lexongraph-indexer` accepts
+  `metadata` plus an opaque `content_ref` rather than a first-class item-name
+  field, LexonFabric owns how this chunk locator is represented.
+- **Traceability:** UR-17, UR-23
 
 #### RQ-INDEXER-005 - Block storage integration
 
@@ -116,7 +202,9 @@ LexonFabric SHALL provide a concrete implementation of `lexongraph_block_store::
   - local filesystem for local/testing operation
   - Azure Blob Storage for production operation
 - **MVP realization [KNOWN]:** The first in-repo implementation must execute end-to-end against the local filesystem profile. Azure Blob Storage remains a required future profile boundary, but not a required executable realization for the first MVP.
-- **Traceability:** UR-3, UR-6, UR-9, UR-12, UR-13
+- **Artifact reuse [KNOWN]:** The same environment-selected `BlockStore` abstraction family SHALL also be used for normalized email artifacts and mailbox provenance artifacts, provided indexing contracts and retrieval references remain explicit.
+- **Mailbox retention [KNOWN]:** Mailbox provenance artifacts SHALL be retained so the original source material remains available for re-normalization, re-chunking, and re-ingestion flows.
+- **Traceability:** UR-3, UR-6, UR-9, UR-12, UR-13, UR-18, UR-22, UR-25
 
 #### RQ-INDEXER-006 - Embedding provider integration
 
@@ -145,7 +233,8 @@ LexonFabric SHALL preserve idempotent rerun behavior for repeated indexing of th
 
 - **Mechanism owner [KNOWN]:** The underlying LexonGraph API owns batch and recovery semantics.
 - **Required property [KNOWN]:** Produced blocks are immutable and identified by hash, so reruns must not create distinct logical outputs for unchanged content.
-- **Traceability:** UR-8
+- **Email artifact implication [INFERRED]:** Repeated normalization of semantically unchanged email content should resolve to the same normalized email artifact identity and the same derived chunk identities under a stable normalization and chunking policy.
+- **Traceability:** UR-8, UR-16
 
 #### RQ-INDEXER-008A - Local integration composition
 
@@ -176,7 +265,8 @@ LexonFabric SHALL remain subordinate to the public contracts owned by `lexongrap
 LexonFabric SHALL keep content resolution, block storage, and embedding-provider variation behind stable integration boundaries so future content types and provider swaps do not require redefinition of the core indexing contract.
 
 - **MVP implication [KNOWN]:** The first MVP may ship only the local/testing realizations, but it must preserve storage and embedding seams so production adapters can be added without changing the batch contract or content-model abstractions.
-- **Traceability:** UR-3, UR-6, UR-7, UR-13
+- **Email evolution implication [KNOWN]:** Email-specific normalization, artifact storage, and chunk derivation must not preclude future document-specific policies, metadata, or artifact shapes.
+- **Traceability:** UR-3, UR-6, UR-7, UR-13, UR-19, UR-22
 
 ## Out of Scope
 
@@ -186,6 +276,7 @@ LexonFabric SHALL keep content resolution, block storage, and embedding-provider
 - Re-specifying LexonGraph API batch recovery internals
 - Finalizing exact production deployment workflow beyond the batch-container shape already described
 - Requiring executable Azure production adapters in the first MVP increment
+- Requiring document collections to adopt the same normalization or chunking policy as email in this increment
 
 ## Invariant Impact Assessment
 
@@ -193,9 +284,11 @@ LexonFabric SHALL keep content resolution, block storage, and embedding-provider
 |---|---|---|
 | Indexing remains separate from search serving | Preserved | Requirements explicitly constrain scope to indexing-time orchestration and integrations |
 | Environment-specific storage and embedding behavior stays behind stable interfaces | Preserved | MVP scope is narrowed to local/testing execution while production remains preserved behind the same adapter boundaries |
-| Architecture remains extensible to future content types | Preserved | Collection-oriented input still covers both mailbox and document collections while keeping future types behind stable boundaries |
-| Idempotence and recoverability stay aligned with underlying immutable block semantics | Preserved | Requirements adopt LexonGraph API ownership instead of duplicating conflicting logic in LexonFabric |
+| Architecture remains extensible to future content types | Preserved | Collection-oriented input still covers both mailbox and document collections while allowing email-specific normalization and future document-specific handling behind the same contract |
+| Idempotence and recoverability stay aligned with underlying immutable block semantics | Preserved | Requirements extend hash-addressed identity expectations to normalized email artifacts without redefining LexonGraph recovery ownership |
 | Local development remains self-contained and batch-oriented | Preserved | Docker Compose is constrained to compose local dependencies around the batch container rather than changing the runtime model |
+| Clients are not forced to parse raw mailbox blobs for ordinary retrieval | Preserved | Indexed chunks must reference normalized email artifacts so retrieval can stay at chunk level or expand to full normalized email through repository-owned artifacts |
+| Storage abstraction count stays bounded across environments | Preserved | Requirements now reuse the environment-selected `BlockStore` abstraction family for indexed blocks, normalized email artifacts, and mailbox provenance artifacts rather than introducing a second storage stack |
 
 ## Coverage Notes
 
@@ -217,5 +310,13 @@ LexonFabric SHALL keep content resolution, block storage, and embedding-provider
   - user clarification messages in this session specifying both mailbox and document-collection MVP coverage
   - user clarification messages in this session specifying local-only executable MVP scope with production left pluggable
   - user clarification messages in this session specifying Docker Compose-based local dependency orchestration
+  - user clarification message in this session: "Lets do email now, but don't preculde docs. Docs will need different handling as they have different meta-data"
+  - user discussion in this session specifying normalized email artifacts, chunk-level email embeddings, minimal indexed metadata, and full-email retrieval by artifact reference
+  - user clarification message in this session: "I think we have a reasonable understand of what an email body is. The goal is to have something meaningful for embedding while not containing common data (if possible). May be best effort."
+  - user clarification message in this session: "We should duplicate enough so that the 80% case can be satisfied with just the block"
+  - user clarification message in this session: "I think they should. We don't really want two azure blob store, s3 store, local filesystem, etc, abstractions."
+  - user clarification message in this session: "I think we can chain the provenance. Chunk -> mail block -> mbox."
+  - user clarification message in this session: "Can we use the text_splitter crate for now, with the option to use huggingface tokenizer later for semantic chunking? Agree to the rest"
 - **Excluded for now [KNOWN]:**
   - Detailed Rust implementation file paths, crate manifests, Docker assets, and test artifacts, because this requirements document captures the semantic contract and leaves implementation realization to downstream design, validation, and code-review artifacts
+  - Exact normalized email CBOR schema, exact duplicated chunk metadata list, and the specific chunking library choice, because those belong to downstream design and validation artifacts rather than requirements

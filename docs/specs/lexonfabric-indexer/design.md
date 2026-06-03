@@ -2,13 +2,14 @@
 
 ## Status
 
-Approved specification baseline for the MVP implementation scope in
-`docs/specs/lexonfabric-indexer/requirements.md`.
+Phase 2 specification patch for the approved email-artifact and chunk-level
+indexing evolution in `docs/specs/lexonfabric-indexer/requirements.md`.
 
 ## Scope
 
 This document specifies the LexonFabric-owned design for realizing the approved
-indexer requirements.
+indexer requirements, including the email-ingestion refinement from mailbox
+sources to normalized email artifacts and chunk-level embedding units.
 
 This document is layered on top of:
 
@@ -47,6 +48,8 @@ owned by LexonGraph and its subordinate crates.
 - MCP server search semantics
 - LexonGraph indexing internals
 - LexonGraph block encoding and block identity contracts
+- document-specific normalization and chunking policy details beyond preserving
+  a future extension seam
 
 ## Design Goals
 
@@ -58,6 +61,8 @@ The LexonFabric indexer design is intended to be:
 - minimal and fully executable in the local/testing profile first
 - extensible to future content types
 - compatible with a Linux batch-container runtime
+- chunk-first for email retrieval while preserving full-message and source
+  provenance artifacts
 
 ## Boundary Design
 
@@ -85,6 +90,10 @@ The first MVP realization covers both mailbox and document-collection items
 through this one contract rather than splitting the batch surface by content
 class.
 
+For email, a mailbox item is a source container that LexonFabric expands into
+stored mailbox and normalized email artifacts plus chunk-sized delegated index
+items before invoking `lexongraph-indexer`.
+
 **Traces to:** RQ-INDEXER-001, RQ-INDEXER-002
 
 ### DSG-LFI-003 `Collection item normalization`
@@ -98,7 +107,31 @@ can be transformed into a `lexongraph_indexer::IndexItem<R>` with:
 The content reference stays opaque to the delegated indexer and is interpreted
 only by the LexonFabric `ContentResolver<R>` implementation.
 
+For document collections, this transformation may remain direct from batch item
+to delegated item.
+
+For mailbox inputs, LexonFabric first expands one source item into additional
+application-owned artifacts and derived delegated items while preserving one
+stable collection-oriented batch contract at the container boundary.
+
 **Traces to:** RQ-INDEXER-002, RQ-INDEXER-004, RQ-INDEXER-010
+
+### DSG-LFI-003A `Email ingestion expansion`
+
+LexonFabric realizes mailbox-driven email indexing as a staged pipeline:
+
+1. persist the mailbox source as a mailbox provenance artifact
+2. parse the mailbox into individual email messages
+3. normalize each message into a canonical CBOR email artifact
+4. derive email-core text from the normalized email artifact
+5. split the email core into chunk-sized delegated index items
+6. delegate chunk indexing to `lexongraph-indexer`
+
+This expansion is LexonFabric-owned orchestration and does not require changes
+to LexonGraph public contracts.
+
+**Traces to:** RQ-INDEXER-002, RQ-INDEXER-004, RQ-INDEXER-004A,
+RQ-INDEXER-004B, RQ-INDEXER-004D, RQ-INDEXER-005
 
 ## Adapter Design
 
@@ -112,10 +145,102 @@ The resolver owns source-specific retrieval logic for initially supported item
 classes such as mailboxes and document collections, while preserving one stable
 batch contract at the container boundary.
 
-The first MVP realization implements both initial source classes through this
-resolver boundary.
+For document collections, the resolver may continue to read final delegated
+content directly from the document source.
+
+For mailbox-driven email indexing, LexonFabric preprocessing materializes final
+chunk items before the resolver hands chunk text to the delegated indexer.
 
 **Traces to:** RQ-INDEXER-002, RQ-INDEXER-004, RQ-INDEXER-010
+
+### DSG-LFI-004A `Normalized email artifact shape`
+
+The canonical normalized email artifact is a versioned CBOR structure stored as
+a first-class hash-addressed artifact.
+
+The artifact carries:
+
+- normalized body material suitable for deriving embedding chunks
+- ordered email header name/value pairs so repeated headers and header order are
+  preserved
+- extracted convenience fields for common access patterns
+- provenance to the source mailbox artifact
+
+The canonical artifact identity is derived from the canonical serialized
+artifact bytes rather than from raw mailbox bytes.
+
+**Traces to:** RQ-INDEXER-004A, RQ-INDEXER-005, RQ-INDEXER-008
+
+### DSG-LFI-004B `Email core derivation`
+
+LexonFabric derives an email-core text representation from the normalized email
+artifact for retrieval and embedding.
+
+The email core is intended to capture the meaningful message body while
+best-effort excluding common non-semantic material when practical. The design
+does not require perfect suppression of boilerplate or quoted material in the
+first realization, but the normalization policy must be explicit and stable.
+
+**Traces to:** RQ-INDEXER-004A, RQ-INDEXER-004B, RQ-INDEXER-008
+
+### DSG-LFI-004C `Email chunk derivation baseline`
+
+The first email chunking realization uses a sentence-aware baseline over the
+derived email core. The baseline may be implemented with the `text_splitter`
+crate.
+
+The chunking boundary remains a LexonFabric-owned policy seam so later
+realizations may adopt tokenizer-driven or more semantic chunking without
+changing the batch input contract, the `BlockStore` contract, or the delegated
+LexonGraph contract.
+
+**Traces to:** RQ-INDEXER-004B, RQ-INDEXER-010
+
+### DSG-LFI-004D `Chunk metadata duplication`
+
+Each delegated email chunk item carries:
+
+- the chunk text as primary embedded content
+- a stable reference to the normalized email artifact
+- enough duplicated message metadata to satisfy the common retrieval/rendering
+  path without mandatory dereference of the full email artifact
+
+The duplicated metadata is intentionally lean. The first design baseline keeps
+message subject plus recipient or list context on the chunk item, while richer
+message structure remains on the normalized email artifact.
+
+**Traces to:** RQ-INDEXER-004C, RQ-INDEXER-010
+
+### DSG-LFI-004E `Chained provenance model`
+
+LexonFabric preserves explicit chained provenance:
+
+- chunk item -> normalized email artifact
+- normalized email artifact -> mailbox provenance artifact
+
+This chain allows the common search hit path to remain chunk-first while
+preserving full-message expansion and source-level reprocessing.
+
+**Traces to:** RQ-INDEXER-004D, RQ-INDEXER-005
+
+### DSG-LFI-004F `Chunk locator representation`
+
+LexonFabric represents chunk identity as a LexonFabric-owned locator rather
+than relying on a first-class upstream item-name field.
+
+The locator is attached through the delegated item's `metadata`, `content_ref`,
+or both, and is sufficient to tell which chunk is being processed or returned.
+The first design baseline composes this locator from:
+
+- the normalized email artifact reference
+- chunk-local identity such as ordinal position
+- any needed policy/version discriminator when chunk-identity stability depends
+  on the active chunking policy
+
+This representation remains internal to LexonFabric's item model and does not
+change the public LexonGraph contract.
+
+**Traces to:** RQ-INDEXER-004E, RQ-INDEXER-010
 
 ### DSG-LFI-005 `Block storage adapter boundary`
 
@@ -124,6 +249,12 @@ implementations or adapters selected by environment.
 
 - local/testing selects a filesystem-backed block store
 - production selects an Azure Blob-backed block store
+
+The same environment-selected `BlockStore` abstraction family is reused for:
+
+- delegated LexonGraph index blocks
+- normalized email artifacts
+- mailbox provenance artifacts
 
 The rest of the LexonFabric indexing flow consumes only the backend-neutral
 `BlockStore` contract and does not depend on filesystem paths or Azure-specific
@@ -147,6 +278,9 @@ Provider-specific HTTP request construction, authentication, and endpoint
 selection remain behind this adapter boundary and do not alter the batch input
 contract or the delegated indexer contract.
 
+For mailbox-driven email indexing, the embedding provider consumes chunk-sized
+email-core content rather than full mailbox content.
+
 For the first MVP, only the local/testing embedding realization must be
 executable. The production embedding profile remains a preserved adapter seam
 and configuration target rather than an implemented runtime path in this
@@ -167,7 +301,8 @@ environment profile:
 | production | Azure Blob Storage | Azure OpenAI |
 
 This selection is configuration-driven and preserves one stable delegated
-indexing flow independent of environment.
+indexing flow independent of environment across indexed blocks, normalized email
+artifacts, and mailbox provenance artifacts.
 
 For the approved MVP slice, the local/testing profile is the only profile that
 must execute end to end. The production profile remains represented at this
@@ -190,8 +325,9 @@ the batch-container runtime shape.
 ### DSG-LFI-008 `Local and production parity boundary`
 
 Local/testing and production environments differ only in adapter realization and
-provider configuration, not in the container's batch contract, content item
-shape, or the delegated `lexongraph-indexer` orchestration contract.
+provider configuration, not in the container's batch contract, the staged email
+artifact model, content item shape, or the delegated
+`lexongraph-indexer` orchestration contract.
 
 The MVP realizes this parity boundary by keeping the core orchestration and item
 model environment-neutral even though only the local/testing profile executes in
@@ -215,6 +351,10 @@ LexonFabric relies on the underlying immutable, hash-addressed block model for
 rerun idempotence and does not introduce repository-local batch-recovery or
 duplicate-suppression semantics that could conflict with LexonGraph ownership.
 
+Under a stable normalization and chunking policy, unchanged mailbox content is
+expected to produce the same mailbox artifact, normalized email artifact, and
+derived chunk identities on repeated runs.
+
 **Traces to:** RQ-INDEXER-008, RQ-INDEXER-010A
 
 ## Verification Realization
@@ -226,6 +366,9 @@ LexonFabric-owned verification artifacts validate:
 - correct delegation to `lexongraph-indexer`
 - correct selection and use of content-resolution, block-store, and
   embedding-provider adapters
+- correct mailbox retention, normalized email artifact derivation, and chained
+  provenance
+- correct shaping of chunk-sized delegated email items
 - preservation of stable batch contracts across environments
 - Docker Compose-based realization of the local/testing integration topology
 
