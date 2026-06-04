@@ -10,6 +10,7 @@ use crate::block_store::ConfiguredBlockStore;
 use crate::config::{BatchItemConfig, BatchRequest, BatchSummary, ConfigError};
 use crate::embedding::{ConfiguredEmbeddingProvider, ConfiguredEmbeddingProviderError};
 use crate::mailbox::{MailboxExpansionError, expand_mailbox_item_with_stats};
+use crate::paths::resolve_path;
 use crate::resolver::LocalFilesystemContentResolver;
 
 #[derive(Debug, Error)]
@@ -137,7 +138,7 @@ where
         }
     }
 
-    let mut current_layer = unique_serialized_blocks_by_hash(&staged_blocks);
+    let mut current_layer = unique_serialized_blocks_by_hash(staged_blocks);
     while current_layer.len() > 1 {
         let input_count = current_layer.len();
         let staged = indexer.build_parent_blocks(
@@ -146,11 +147,12 @@ where
             request.block_size_target,
         )?;
         persist_staged_blocks(&staged.blocks, &block_store)?;
-        let next_layer = unique_serialized_blocks_by_hash(&staged.blocks);
+        let blocks_produced = staged.blocks.len();
+        let next_layer = unique_serialized_blocks_by_hash(staged.blocks);
         progress(format!(
             "Indexed {} staged block(s) into {} parent block(s); {} staged block(s) remain",
             input_count,
-            staged.blocks.len(),
+            blocks_produced,
             next_layer.len()
         ));
         staged_block_ids.extend(staged.block_ids.iter().copied());
@@ -195,19 +197,10 @@ fn persist_staged_blocks(
     Ok(())
 }
 
-fn unique_serialized_blocks_by_hash(blocks: &[SerializedBlock]) -> Vec<SerializedBlock> {
-    let mut blocks = blocks.to_vec();
+fn unique_serialized_blocks_by_hash(mut blocks: Vec<SerializedBlock>) -> Vec<SerializedBlock> {
     blocks.sort_by(|left, right| left.hash.as_bytes().cmp(right.hash.as_bytes()));
     blocks.dedup_by(|left, right| left.hash == right.hash);
     blocks
-}
-
-fn resolve_path(request_dir: &Path, candidate: &Path) -> std::path::PathBuf {
-    if candidate.is_absolute() {
-        candidate.to_path_buf()
-    } else {
-        request_dir.join(candidate)
-    }
 }
 
 pub fn write_summary_file(path: &Path, summary: &BatchSummary) -> Result<(), RuntimeError> {
@@ -229,6 +222,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::mpsc;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -436,7 +430,9 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let seen = Arc::new(AtomicUsize::new(0));
         let seen_for_thread = Arc::clone(&seen);
+        let (ready_tx, ready_rx) = mpsc::channel();
         let handle = thread::spawn(move || {
+            ready_tx.send(()).unwrap();
             let idle_after_expected = Duration::from_millis(200);
             let deadline = Instant::now() + Duration::from_secs(5);
             let mut last_activity = Instant::now();
@@ -487,7 +483,7 @@ mod tests {
                 seen_for_thread.fetch_add(1, Ordering::SeqCst);
             }
         });
-        thread::sleep(Duration::from_millis(25));
+        ready_rx.recv().unwrap();
 
         TestServer {
             base_url: format!("http://{}", address),

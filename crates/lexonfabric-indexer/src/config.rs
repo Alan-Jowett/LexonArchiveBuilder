@@ -7,6 +7,7 @@ use lexongraph_indexer::{IndexItem, Metadata};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::paths::resolve_path;
 use crate::resolver::ContentRef;
 
 const DEFAULT_BLOCK_SIZE_TARGET: usize = 65_536;
@@ -202,14 +203,6 @@ pub(crate) fn metadata_to_lexongraph(
     }
 
     result
-}
-
-fn resolve_path(request_dir: &Path, candidate: &Path) -> PathBuf {
-    if candidate.is_absolute() {
-        candidate.to_path_buf()
-    } else {
-        request_dir.join(candidate)
-    }
 }
 
 fn default_block_size_target() -> usize {

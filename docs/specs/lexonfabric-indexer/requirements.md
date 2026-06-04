@@ -2,7 +2,7 @@
 
 ## Document Status
 
-- **Phase:** Phase 1 - Requirements Discovery
+- **Phase:** Phase 2 - Design and Validation
 - **Status:** Approved requirements patch being propagated into design and validation
 - **Scope:** LexonFabric indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, incremental delegated indexing, and batch-progress observability evolution
 
@@ -366,7 +366,7 @@ LexonFabric SHALL keep content resolution, block storage, and embedding-provider
 ## Coverage Notes
 
 - **Covered sources [KNOWN]:**
-  - user request in this session: "LexonGraph indexer has updated it's apis to allow for incremental indexing. Switch LexonFabric over to use the new APIs and also log as mailboxes are processed and items are indexed (so we can tell it is making progress rather than hung)."
+  - user request in this session to adopt LexonGraph's incremental indexing APIs and emit visible mailbox/indexing progress during batch execution
   - user request in this session: "make it so this can work with .mail as well as .mbox"
   - user clarification in this session selecting: "Exactly `.mail` and `.mbox`"
   - user request in this session: "remove LocalFilesystemBlockStore and replace with the lexongraph-block-store-fs crate from lexongraph. Our custom store is breaking lexongraph-block-inspect because it uses a totally different naming scheme"

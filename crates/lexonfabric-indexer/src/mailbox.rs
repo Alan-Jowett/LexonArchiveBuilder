@@ -13,6 +13,7 @@ use mailparse::{MailHeaderMap, ParsedMail, parse_mail};
 use thiserror::Error;
 
 use crate::config::{BatchItemConfig, BatchRequest, metadata_to_lexongraph};
+use crate::paths::resolve_path;
 use crate::resolver::ContentRef;
 
 const ARTIFACT_EMBEDDING_ENCODING: &str = "f32le";
@@ -651,14 +652,6 @@ fn decoded_body_lossy(parsed: &ParsedMail<'_>) -> Option<String> {
             .get_body_raw()
             .ok()
             .map(|body| String::from_utf8_lossy(&body).into_owned()),
-    }
-}
-
-fn resolve_path(request_dir: &Path, candidate: &Path) -> PathBuf {
-    if candidate.is_absolute() {
-        candidate.to_path_buf()
-    } else {
-        request_dir.join(candidate)
     }
 }
 

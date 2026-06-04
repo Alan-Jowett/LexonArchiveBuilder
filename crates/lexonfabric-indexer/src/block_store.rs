@@ -1,10 +1,11 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use lexongraph_block::{Block, BlockHash};
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_block_store_fs::FilesystemBlockStore;
 
 use crate::config::EnvironmentConfig;
+use crate::paths::resolve_path;
 
 #[derive(Clone, Debug)]
 pub struct AzureBlobBlockStoreStub;
@@ -67,14 +68,6 @@ impl BlockStore for ConfiguredBlockStore {
             Self::Local(store) => store.get(block_id),
             Self::AzureBlob(store) => store.get(block_id),
         }
-    }
-}
-
-fn resolve_path(request_dir: &Path, candidate: &Path) -> PathBuf {
-    if candidate.is_absolute() {
-        candidate.to_path_buf()
-    } else {
-        request_dir.join(candidate)
     }
 }
 
