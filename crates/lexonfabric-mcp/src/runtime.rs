@@ -441,6 +441,107 @@ mod tests {
         server.join();
     }
 
+    #[tokio::test]
+    async fn search_chunks_surfaces_email_chunk_provenance_metadata() {
+        let temp = tempdir().unwrap();
+        let mailbox_path = temp.path().join("2026-01.mbox");
+        fs::write(
+            &mailbox_path,
+            concat!(
+                "From alan@example.com Sat Jan 03 10:00:00 2026\n",
+                "Subject: LexonFabric mail chunk\n",
+                "From: Alan Example <alan@example.com>\n",
+                "To: team@example.com\n",
+                "Message-ID: <chunk-1@example.com>\n",
+                "\n",
+                "This searchable email body should surface provenance metadata.\n"
+            ),
+        )
+        .unwrap();
+
+        let server = spawn_embedding_server(2);
+        let batch_request = BatchRequest {
+            environment: EnvironmentConfig::Local {
+                block_store_root: PathBuf::from("block-store"),
+                embedding: LocalEmbeddingConfig {
+                    base_url: server.base_url.clone(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 5,
+                    retry_delay_ms: 1,
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            block_size_target: 65_536,
+            items: vec![BatchItemConfig::Mailbox {
+                path: mailbox_path
+                    .strip_prefix(temp.path())
+                    .unwrap()
+                    .to_path_buf(),
+                metadata: BTreeMap::from([("month".into(), "2026-01".into())]),
+            }],
+        };
+        let summary = run_request(temp.path(), batch_request).await.unwrap();
+        let summary_path = temp.path().join("summary.json");
+        write_summary_file(&summary_path, &summary).unwrap();
+
+        let runtime = McpRuntime::new(
+            temp.path().to_path_buf(),
+            McpConfig {
+                environment: EnvironmentConfig::Local {
+                    block_store_root: PathBuf::from("block-store"),
+                    embedding: LocalEmbeddingConfig {
+                        base_url: server.base_url.clone(),
+                        model: "all-MiniLM-L6-v2".into(),
+                        api_key_env: None,
+                        request_timeout_secs: 5,
+                        max_retries: 5,
+                        retry_delay_ms: 1,
+                    },
+                },
+                embedding_spec: EmbeddingSpecConfig {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                index: IndexConfig::SummaryFile {
+                    path: PathBuf::from("summary.json"),
+                },
+                top_k: 3,
+                traversal_width: 2,
+            },
+        )
+        .unwrap();
+
+        let response = runtime
+            .search_chunks(SearchChunksRequest {
+                query: "searchable provenance".into(),
+                top_k: None,
+                traversal_width: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(response.root_id, summary.root_id);
+        let hit = response
+            .results
+            .iter()
+            .find(|hit| hit.text.contains("searchable email body"))
+            .expect("expected mailbox-derived chunk hit");
+        assert_eq!(hit.source_kind.as_deref(), Some("email"));
+        assert!(hit.metadata.contains_key("email_artifact_ref"));
+        assert!(hit.metadata.contains_key("mailbox_artifact_ref"));
+        assert!(hit.metadata.contains_key("chunk_locator"));
+        assert_eq!(
+            hit.metadata.get("email_subject"),
+            Some(&"LexonFabric mail chunk".to_string())
+        );
+        server.join();
+    }
+
     #[test]
     fn named_retrieval_operations_return_explicit_unsupported_outcome() {
         let runtime = McpRuntime::new(

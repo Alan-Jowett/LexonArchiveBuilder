@@ -439,6 +439,7 @@ mod tests {
                 stream.flush().unwrap();
             }
         });
+        thread::sleep(Duration::from_millis(25));
 
         TestServer {
             base_url: format!("http://{}", address),

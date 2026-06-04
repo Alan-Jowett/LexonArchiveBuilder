@@ -13,6 +13,7 @@ lexongraph-block.workspace = true
 lexongraph-block-store.workspace = true
 lexongraph-embeddings-trait.workspace = true
 lexongraph-indexer.workspace = true
+mailparse = "0.16.1"
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

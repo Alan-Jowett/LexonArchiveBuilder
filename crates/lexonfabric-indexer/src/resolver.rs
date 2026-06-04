@@ -6,8 +6,8 @@ use thiserror::Error;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ContentRef {
-    Mailbox { path: PathBuf },
     Document { path: PathBuf },
+    Inline { media_type: String, body: Vec<u8> },
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -37,8 +37,11 @@ impl ContentResolver<ContentRef> for LocalFilesystemContentResolver {
 
     fn resolve(&self, content_ref: &ContentRef) -> Result<Content, Self::Error> {
         match content_ref {
-            ContentRef::Mailbox { path } => resolve_file(path, "mbox", "application/mbox"),
             ContentRef::Document { path } => resolve_file(path, "txt", "text/plain"),
+            ContentRef::Inline { media_type, body } => Ok(Content {
+                media_type: media_type.clone(),
+                body: body.clone(),
+            }),
         }
     }
 }
@@ -163,16 +166,15 @@ mod tests {
     }
 
     #[test]
-    fn mailbox_resolver_passes_conformance_suite() {
-        let dir = tempdir().unwrap();
-        let mailbox_path = dir.path().join("2026-01.mbox");
-        let body = b"From user@example.com Sat Jan 01 00:00:00 2026\nSubject: Hello\n\nBody\n";
-        fs::write(&mailbox_path, body).unwrap();
+    fn inline_resolver_passes_conformance_suite() {
         let harness = ResolverHarness {
-            content_ref: ContentRef::Mailbox { path: mailbox_path },
+            content_ref: ContentRef::Inline {
+                media_type: "text/plain".into(),
+                body: b"Inline email chunk".to_vec(),
+            },
             expected_content: Content {
-                media_type: "application/mbox".into(),
-                body: body.to_vec(),
+                media_type: "text/plain".into(),
+                body: b"Inline email chunk".to_vec(),
             },
         };
 
@@ -218,16 +220,14 @@ mod tests {
     }
 
     #[test]
-    fn mailbox_resolver_normalizes_non_utf8_bytes_for_embedding() {
-        let dir = tempdir().unwrap();
-        let mailbox_path = dir.path().join("2026-02.mbox");
-        fs::write(&mailbox_path, [0x66, 0x6f, 0x80, 0x6f]).unwrap();
-
+    fn inline_resolver_preserves_provided_bytes() {
         let content = LocalFilesystemContentResolver
-            .resolve(&ContentRef::Mailbox { path: mailbox_path })
+            .resolve(&ContentRef::Inline {
+                media_type: "text/plain".into(),
+                body: vec![0x66, 0x6f, 0x80, 0x6f],
+            })
             .unwrap();
 
-        let normalized = String::from_utf8(content.body).unwrap();
-        assert_eq!(normalized, "fo\u{fffd}o");
+        assert_eq!(content.body, vec![0x66, 0x6f, 0x80, 0x6f]);
     }
 }

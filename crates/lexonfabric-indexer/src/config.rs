@@ -106,19 +106,18 @@ pub enum ConfigError {
 }
 
 impl BatchRequest {
-    pub fn to_index_items(
-        &self,
-        request_dir: &Path,
-    ) -> Result<Vec<IndexItem<ContentRef>>, ConfigError> {
+    pub fn validate(&self) -> Result<(), ConfigError> {
         if self.items.is_empty() {
             return Err(ConfigError::EmptyItems);
         }
+        Ok(())
+    }
 
-        Ok(self
-            .items
+    pub fn to_document_index_items(&self, request_dir: &Path) -> Vec<IndexItem<ContentRef>> {
+        self.items
             .iter()
-            .map(|item| item.to_index_item(request_dir))
-            .collect::<Vec<_>>())
+            .filter_map(|item| item.to_document_index_item(request_dir))
+            .collect::<Vec<_>>()
     }
 
     pub fn to_embedding_spec(&self) -> EmbeddingSpec {
@@ -151,22 +150,16 @@ impl EnvironmentConfig {
 }
 
 impl BatchItemConfig {
-    fn to_index_item(&self, request_dir: &Path) -> IndexItem<ContentRef> {
+    fn to_document_index_item(&self, request_dir: &Path) -> Option<IndexItem<ContentRef>> {
         match self {
-            Self::Mailbox { path, metadata } => {
-                let resolved = resolve_path(request_dir, path);
-                IndexItem {
-                    metadata: metadata_to_lexongraph(metadata, "mailbox", &resolved),
-                    content_ref: ContentRef::Mailbox { path: resolved },
-                }
-            }
             Self::Document { path, metadata } => {
                 let resolved = resolve_path(request_dir, path);
-                IndexItem {
+                Some(IndexItem {
                     metadata: metadata_to_lexongraph(metadata, "document", &resolved),
                     content_ref: ContentRef::Document { path: resolved },
-                }
+                })
             }
+            Self::Mailbox { .. } => None,
         }
     }
 }
@@ -189,7 +182,7 @@ impl From<&EmbeddingSpecConfig> for EmbeddingSpec {
     }
 }
 
-fn metadata_to_lexongraph(
+pub(crate) fn metadata_to_lexongraph(
     metadata: &BTreeMap<String, String>,
     source_kind: &str,
     path: &Path,
@@ -274,13 +267,13 @@ mod tests {
             }],
         };
 
-        let items = request.to_index_items(&request_root).unwrap();
+        let items = request.to_document_index_items(&request_root);
 
         match &items[0].content_ref {
             ContentRef::Document { path } => {
                 assert_eq!(path, &request_root.join(relative_document_path));
             }
-            ContentRef::Mailbox { .. } => panic!("expected a document content ref"),
+            ContentRef::Inline { .. } => panic!("expected a document content ref"),
         }
     }
 }
