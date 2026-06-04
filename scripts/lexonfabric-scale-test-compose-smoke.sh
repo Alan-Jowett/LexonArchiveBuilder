@@ -17,7 +17,7 @@ FIXTURE_DIR="${RUN_DIR}/fixtures"
 CONTAINER_SOURCES_FILE="/workspace/examples/local/scale-test/runs/${RUN_NAME}/fixtures/sources.txt"
 
 mkdir -p "${FIXTURE_DIR}/source-one" "${FIXTURE_DIR}/source-two"
-cp "$FIXTURE_MAILBOX" "${FIXTURE_DIR}/source-one/2026-01.mbox"
+cp "$FIXTURE_MAILBOX" "${FIXTURE_DIR}/source-one/2026-01.mail"
 cp "$FIXTURE_MAILBOX" "${FIXTURE_DIR}/source-two/2026-02.mbox"
 
 cat >"${FIXTURE_DIR}/sources.txt" <<EOF
@@ -39,5 +39,7 @@ if [[ "$MAILBOX_ITEM_COUNT" -lt 2 ]]; then
   printf 'error: expected at least 2 mailbox items in generated request, found %s\n' "$MAILBOX_ITEM_COUNT" >&2
   exit 1
 fi
+grep -q '"month": "2026-01"' "$REQUEST_PATH" || { printf 'error: request missing normalized month for .mail source\n' >&2; exit 1; }
+grep -q '"month": "2026-02"' "$REQUEST_PATH" || { printf 'error: request missing normalized month for .mbox source\n' >&2; exit 1; }
 
 printf 'Compose smoke test passed: %s\n' "${RUN_DIR#${REPO_ROOT}/}"

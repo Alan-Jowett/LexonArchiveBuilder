@@ -98,7 +98,7 @@ The first `lexonfabric-indexer` MVP is now implemented as a Rust batch runtime i
 The MVP request format is JSON and remains collection-oriented across both
 supported content classes:
 
-- **mailbox** items point at per-month `.mbox` files
+- **mailbox** items point at per-month `.mbox` or `.mail` files
 - **document** items point at `.txt` files
 
 See `examples/local/request.sample.json` for a complete local request that
@@ -137,7 +137,7 @@ After the batch completes, the summary output is written to
 
 For large local mailbox stress tests, the repository also includes a lightweight
 wrapper script that fetches one or more rsync-backed mailbox archives, discovers
-`.mbox` files, generates an indexer request, and runs the existing
+`.mail` and `.mbox` files, generates an indexer request, and runs the existing
 `lexonfabric-indexer` batch to produce a block tree and summary/root handoff
 artifact.
 

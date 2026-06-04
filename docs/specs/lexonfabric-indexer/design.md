@@ -9,10 +9,10 @@ indexing, and local filesystem block-store interoperability evolution in
 ## Scope
 
 This document specifies the LexonFabric-owned design for realizing the approved
-indexer requirements, including the email-ingestion refinement from mailbox
-sources to normalized email artifacts and chunk-level embedding units plus the
-local filesystem block-store interoperability correction for the local/testing
-profile.
+indexer requirements, including the email-ingestion refinement from `.mail` and
+`.mbox` mailbox sources to normalized email artifacts and chunk-level embedding
+units plus the local filesystem block-store interoperability correction for the
+local/testing profile.
 
 This document is layered on top of:
 
@@ -120,7 +120,7 @@ For mailbox inputs, LexonFabric first expands one source item into additional
 application-owned artifacts and derived delegated items while preserving one
 stable collection-oriented batch contract at the container boundary.
 
-**Traces to:** RQ-INDEXER-002, RQ-INDEXER-004, RQ-INDEXER-010
+**Traces to:** RQ-INDEXER-002, RQ-INDEXER-004, RQ-INDEXER-004A, RQ-INDEXER-010
 
 ### DSG-LFI-003A `Email ingestion expansion`
 
@@ -135,6 +135,10 @@ LexonFabric realizes mailbox-driven email indexing as a staged pipeline:
 
 This expansion is LexonFabric-owned orchestration and does not require changes
 to LexonGraph public contracts.
+
+The first design baseline accepts mailbox source files ending in `.mail` or
+`.mbox` and treats broader mailbox archive extension support as out of scope
+for this increment.
 
 **Traces to:** RQ-INDEXER-002, RQ-INDEXER-004, RQ-INDEXER-004A,
 RQ-INDEXER-004B, RQ-INDEXER-004D, RQ-INDEXER-005
@@ -156,6 +160,11 @@ content directly from the document source.
 
 For mailbox-driven email indexing, LexonFabric preprocessing materializes final
 chunk items before the resolver hands chunk text to the delegated indexer.
+
+Within that mailbox-driven path, LexonFabric treats source files ending in
+`.mail` or `.mbox` as equivalent mailbox containers for normalization and
+chunk derivation, without widening the first increment to arbitrary mailbox
+archive extensions.
 
 **Traces to:** RQ-INDEXER-002, RQ-INDEXER-004, RQ-INDEXER-010
 

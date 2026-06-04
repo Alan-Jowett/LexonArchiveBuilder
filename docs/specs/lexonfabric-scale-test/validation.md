@@ -85,6 +85,17 @@ handoff stages without requiring host bash on Windows.
 **Traces to:** RQ-SCALE-003B, RQ-SCALE-003D, RQ-SCALE-009B, DSG-LST-002A,
 DSG-LST-003, DSG-LST-008
 
+### VAL-LST-003B
+
+Inspect mailbox discovery against representative fetched mirror content that
+contains mailbox files ending in `.mail` and `.mbox`.
+
+**Pass condition:** the wrapper treats both `.mail` and `.mbox` files as
+eligible mailbox discoveries for generated request materialization and does not
+require broader mailbox extension support in this increment.
+
+**Traces to:** RQ-SCALE-005, DSG-LST-005, DSG-LST-011
+
 ### VAL-LST-004
 
 Inspect the generated request/config artifact produced from discovered mailbox

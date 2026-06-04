@@ -36,6 +36,8 @@
 - **UR-26 [KNOWN]:** Remove the repository-local `LocalFilesystemBlockStore` and replace it with the LexonGraph `lexongraph-block-store-fs` crate for the local/testing filesystem-backed block-store realization.
 - **UR-27 [KNOWN]:** The current repository-local filesystem store breaks `lexongraph-block-inspect` interoperability because it uses a different on-disk naming scheme than LexonGraph's filesystem block-store tools expect.
 - **UR-28 [KNOWN]:** It is acceptable for this change to require a fresh or rebuilt local block store; continued read compatibility with blocks written by the superseded custom local layout is not required.
+- **UR-29 [KNOWN]:** Mailbox batch inputs must accept mailbox source files ending in `.mail` as well as `.mbox`.
+- **UR-30 [KNOWN]:** For this increment, mailbox source compatibility should be limited to exactly `.mail` and `.mbox` rather than broadened to arbitrary mailbox archive extensions.
 
 ## Change Manifest
 
@@ -54,6 +56,7 @@
 | CM-INDEXER-011 | Add | Establish a simple sentence-aware email chunking baseline while requiring retained mailbox provenance and future chunking extensibility | UR-24, UR-25 |
 | CM-INDEXER-012 | Revise | Require the local/testing filesystem-backed block-store realization to stay interoperable with LexonGraph filesystem store tooling and naming/layout expectations | UR-26, UR-27 |
 | CM-INDEXER-013 | Add | Explicitly allow the local/testing filesystem store transition to require a fresh or rebuilt local store rather than preserving reads from the superseded custom layout | UR-28 |
+| CM-INDEXER-014 | Revise | Expand mailbox source compatibility so mailbox batch items may reference `.mail` or `.mbox` files without widening the first increment to arbitrary archive extensions | UR-29, UR-30 |
 
 ## Before / After
 
@@ -122,6 +125,11 @@
 - **Before [KNOWN]:** The requirements did not state whether the local filesystem block-store transition had to preserve reads from the superseded custom layout.
 - **After [KNOWN]:** The requirements now allow this interoperability fix to require a fresh or rebuilt local store, avoiding a hidden backward-compatibility obligation for the old repository-local layout.
 
+### BA-INDEXER-014
+
+- **Before [KNOWN]:** Mailbox batch-item compatibility implicitly assumed `.mbox` mailbox source files and did not define whether `.mail` files were valid mailbox inputs.
+- **After [KNOWN]:** Mailbox batch-item compatibility explicitly accepts source files ending in `.mail` or `.mbox`, while broader mailbox archive extension support remains out of scope for this increment.
+
 ## Requirements
 
 ### Functional Requirements
@@ -142,9 +150,10 @@ The batch indexer SHALL accept a collection of items to index rather than a sing
   - document collections such as RFCs
 - **MVP realization [KNOWN]:** The first in-repo implementation must support both initial item classes rather than deferring either one to a later increment.
 - **Email ingestion refinement [KNOWN]:** A mailbox item remains a valid batch input, but it is an ingestion source rather than the final embedding unit; LexonFabric expands mailbox content into normalized email artifacts and chunk-level index items before delegated embedding.
+- **Mailbox source compatibility [KNOWN]:** In this increment, mailbox batch items may reference source files ending in `.mail` or `.mbox`.
 - **Document scope boundary [KNOWN]:** Document collections remain valid batch inputs in this increment, but this change does not require document chunking to match email handling. Future document-specific chunking and metadata handling must remain possible through the same collection-oriented contract.
 - **Extensibility [INFERRED]:** The accepted collection model should permit future content types without redefining the external batch contract.
-- **Traceability:** UR-5, UR-11, UR-15, UR-19
+- **Traceability:** UR-5, UR-11, UR-15, UR-19, UR-29, UR-30
 
 #### RQ-INDEXER-003 - Delegated indexing engine
 
@@ -167,9 +176,10 @@ LexonFabric SHALL extract and normalize individual email messages from mailbox i
 
 - **Required result [KNOWN]:** The normalization step produces a canonical email artifact suitable for full-message retrieval and for derivation of chunk-level embedding units.
 - **Identity rule [KNOWN]:** The canonical identity of the normalized email artifact is based on the normalized artifact content rather than the raw mailbox bytes.
+- **Mailbox source compatibility [KNOWN]:** The normalization step SHALL accept mailbox source files ending in `.mail` or `.mbox` and SHALL NOT require broader mailbox extension support in this increment.
 - **Body normalization rule [KNOWN]:** The normalization step derives a meaningful email body for embedding while best-effort excluding common non-semantic content when practical.
 - **Boundary [KNOWN]:** This requirement applies to email ingestion in this increment and does not require the same normalization shape for document collections.
-- **Traceability:** UR-15, UR-16, UR-19, UR-20
+- **Traceability:** UR-15, UR-16, UR-19, UR-20, UR-29, UR-30
 
 #### RQ-INDEXER-004B - Chunk-level email embedding units
 
@@ -303,6 +313,7 @@ LexonFabric SHALL keep content resolution, block storage, and embedding-provider
 - Finalizing exact production deployment workflow beyond the batch-container shape already described
 - Requiring executable Azure production adapters in the first MVP increment
 - Requiring document collections to adopt the same normalization or chunking policy as email in this increment
+- Broadening mailbox source compatibility beyond the approved `.mail` and `.mbox` extension set in this increment
 
 ## Invariant Impact Assessment
 
@@ -320,12 +331,16 @@ LexonFabric SHALL keep content resolution, block storage, and embedding-provider
 ## Coverage Notes
 
 - **Covered sources [KNOWN]:**
+  - user request in this session: "make it so this can work with .mail as well as .mbox"
+  - user clarification in this session selecting: "Exactly `.mail` and `.mbox`"
   - user request in this session: "remove LocalFilesystemBlockStore and replace with the lexongraph-block-store-fs crate from lexongraph. Our custom store is breaking lexongraph-block-inspect because it uses a totally different naming scheme"
   - user clarification in this session selecting: "Fresh/rebuilt local store is acceptable"
   - `README.md:18-27`
   - `README.md:42-49`
   - `README.md:51-59`
   - `README.md:61-80`
+  - `crates/lexonfabric-indexer/src/mailbox.rs:24-31`
+  - `crates/lexonfabric-indexer/src/mailbox.rs:157-176`
   - external LexonGraph repository source (not vendored in LexonFabric):
     `crates/lexongraph-indexer/src/lib.rs:24-26`
   - external LexonGraph repository source (not vendored in LexonFabric):

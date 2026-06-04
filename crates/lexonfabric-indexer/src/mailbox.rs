@@ -4,7 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ciborium::Value;
-use lexongraph_block::{Block, BlockHash, Content, EmbeddingSpec, LeafEntry, VERSION_1, build_leaf_block};
+use lexongraph_block::{
+    Block, BlockHash, Content, EmbeddingSpec, LeafEntry, VERSION_1, build_leaf_block,
+};
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_indexer::{IndexItem, Metadata};
 use mailparse::{MailHeaderMap, ParsedMail, parse_mail};
@@ -27,7 +29,7 @@ pub enum MailboxExpansionError {
     Missing { path: PathBuf },
     #[error("mailbox source {path} is not a file")]
     NotAFile { path: PathBuf },
-    #[error("mailbox source {path} must use the .mbox extension")]
+    #[error("mailbox source {path} must use the .mail or .mbox extension")]
     WrongExtension { path: PathBuf },
     #[error("failed to read mailbox source {path}: {source}")]
     ReadMailbox {
@@ -121,14 +123,14 @@ fn expand_mailbox_item(
             message_index,
             source,
         })?;
-        let normalized = normalize_email(
-            &parsed,
-            mailbox_artifact_ref.to_string(),
-            message_index,
-        );
+        let normalized = normalize_email(&parsed, mailbox_artifact_ref.to_string(), message_index);
         let normalized_bytes = render_normalized_email(path, &normalized)?;
-        let email_artifact_ref =
-            store_artifact_block(store, path, ARTIFACT_MEDIA_TYPE_NORMALIZED_EMAIL, normalized_bytes)?;
+        let email_artifact_ref = store_artifact_block(
+            store,
+            path,
+            ARTIFACT_MEDIA_TYPE_NORMALIZED_EMAIL,
+            normalized_bytes,
+        )?;
         let chunks = chunk_email_core(&normalized.body);
         for (chunk_index, chunk) in chunks.into_iter().enumerate() {
             let chunk_locator = format!("{email_artifact_ref}:{chunk_index}");
@@ -169,12 +171,16 @@ fn validate_mailbox_path(path: &Path) -> Result<(), MailboxExpansionError> {
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or_default();
-    if !extension.eq_ignore_ascii_case("mbox") {
+    if !is_supported_mailbox_extension(extension) {
         return Err(MailboxExpansionError::WrongExtension {
             path: path.to_path_buf(),
         });
     }
     Ok(())
+}
+
+fn is_supported_mailbox_extension(extension: &str) -> bool {
+    extension.eq_ignore_ascii_case("mail") || extension.eq_ignore_ascii_case("mbox")
 }
 
 fn normalize_email(
@@ -378,7 +384,10 @@ fn build_chunk_metadata(
     chunk_locator: &str,
 ) -> Metadata {
     let mut metadata = base_metadata.clone();
-    metadata.insert("mailbox_artifact_ref".into(), mailbox_artifact_ref.to_string());
+    metadata.insert(
+        "mailbox_artifact_ref".into(),
+        mailbox_artifact_ref.to_string(),
+    );
     metadata.insert("email_artifact_ref".into(), email_artifact_ref.to_string());
     metadata.insert(
         "mailbox_message_index".into(),
@@ -471,7 +480,10 @@ fn render_normalized_email(
                     .map(|header| {
                         Value::Map(vec![
                             (Value::Text("name".into()), Value::Text(header.name.clone())),
-                            (Value::Text("value".into()), Value::Text(header.value.clone())),
+                            (
+                                Value::Text("value".into()),
+                                Value::Text(header.value.clone()),
+                            ),
                         ])
                     })
                     .collect(),
@@ -482,7 +494,10 @@ fn render_normalized_email(
         option_text_field("recipient_context", artifact.recipient_context.as_ref()),
         option_text_field("date", artifact.date.as_ref()),
         option_text_field("message_id", artifact.message_id.as_ref()),
-        (Value::Text("body".into()), Value::Text(artifact.body.clone())),
+        (
+            Value::Text("body".into()),
+            Value::Text(artifact.body.clone()),
+        ),
     ]))
     .map_err(|message| MailboxExpansionError::EncodeArtifact {
         path: path.to_path_buf(),
@@ -527,9 +542,8 @@ fn canonicalize_value(value: Value) -> Result<Value, String> {
                 .into_iter()
                 .map(|(key, value)| Ok((canonicalize_value(key)?, canonicalize_value(value)?)))
                 .collect::<Result<Vec<_>, String>>()?;
-            normalized.sort_by(|(left_key, _), (right_key, _)| {
-                canonical_value_cmp(left_key, right_key)
-            });
+            normalized
+                .sort_by(|(left_key, _), (right_key, _)| canonical_value_cmp(left_key, right_key));
             for pair in normalized.windows(2) {
                 if canonical_value_cmp(&pair[0].0, &pair[1].0) == Ordering::Equal {
                     return Err("duplicate keys are not permitted in canonicalized CBOR".into());
@@ -667,7 +681,10 @@ mod tests {
         assert_eq!(items.len(), 1);
         let metadata = metadata_to_text_map(&items[0].metadata);
         assert_eq!(metadata.get("source_kind"), Some(&"email".to_string()));
-        assert_eq!(metadata.get("email_subject"), Some(&"LexonFabric MVP".to_string()));
+        assert_eq!(
+            metadata.get("email_subject"),
+            Some(&"LexonFabric MVP".to_string())
+        );
         assert_eq!(
             metadata.get("email_recipient_context"),
             Some(&"team@example.com".to_string())
@@ -686,6 +703,60 @@ mod tests {
             other => panic!("expected inline email content, got {other:?}"),
         }
         assert_eq!(count_files_recursively(&dir.path().join("blocks")), 2);
+    }
+
+    #[test]
+    fn mailbox_expansion_accepts_mail_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let mailbox_path = dir.path().join("2026-01.mail");
+        fs::write(
+            &mailbox_path,
+            concat!(
+                "From alan@example.com Sat Jan 03 10:00:00 2026\n",
+                "Subject: Mail Extension\n",
+                "From: Alan Example <alan@example.com>\n",
+                "To: team@example.com\n",
+                "\n",
+                "Mail extension body.\n"
+            ),
+        )
+        .unwrap();
+        let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
+
+        let items = expand_mailbox_item(&mailbox_path, &BTreeMap::new(), &store).unwrap();
+
+        assert_eq!(items.len(), 1);
+        let metadata = metadata_to_text_map(&items[0].metadata);
+        assert_eq!(
+            metadata.get("email_subject"),
+            Some(&"Mail Extension".to_string())
+        );
+        assert!(metadata.contains_key("mailbox_artifact_ref"));
+        assert!(metadata.contains_key("email_artifact_ref"));
+    }
+
+    #[test]
+    fn mailbox_expansion_rejects_unsupported_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let mailbox_path = dir.path().join("2026-01.eml");
+        fs::write(
+            &mailbox_path,
+            concat!(
+                "From alan@example.com Sat Jan 03 10:00:00 2026\n",
+                "Subject: Wrong Extension\n",
+                "\n",
+                "Body.\n"
+            ),
+        )
+        .unwrap();
+        let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
+
+        let error = expand_mailbox_item(&mailbox_path, &BTreeMap::new(), &store).unwrap_err();
+
+        assert!(matches!(
+            error,
+            MailboxExpansionError::WrongExtension { path } if path == mailbox_path
+        ));
     }
 
     #[test]
@@ -757,10 +828,7 @@ mod tests {
             block_size_target: 65_536,
             items: vec![
                 BatchItemConfig::Mailbox {
-                    path: mailbox_path
-                        .strip_prefix(dir.path())
-                        .unwrap()
-                        .to_path_buf(),
+                    path: mailbox_path.strip_prefix(dir.path()).unwrap().to_path_buf(),
                     metadata: BTreeMap::new(),
                 },
                 BatchItemConfig::Document {

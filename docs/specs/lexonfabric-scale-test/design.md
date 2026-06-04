@@ -9,10 +9,10 @@ wrapper in `docs/specs/lexonfabric-scale-test/requirements.md`.
 
 This document specifies the LexonFabric-owned design for realizing
 `lexonfabric-scale-test` as a lightweight local wrapper that fetches mailbox
-archives from rsync, discovers mailbox inputs, generates an indexer-compatible
-request/config artifact, and delegates block-tree generation to existing
-LexonFabric indexing behavior through one shared local workflow with both direct
-shell and Docker Compose entrypoints.
+archives from rsync, discovers `.mail` and `.mbox` mailbox inputs, generates an
+indexer-compatible request/config artifact, and delegates block-tree generation
+to existing LexonFabric indexing behavior through one shared local workflow
+with both direct shell and Docker Compose entrypoints.
 
 This document is layered on top of:
 
@@ -140,12 +140,17 @@ directly.
 ### DSG-LST-005 `Mailbox discovery and deterministic request generation`
 
 After rsync acquisition, the wrapper walks the fetched local mirror set,
-discovers mailbox files, and translates them into an indexer-compatible request
-artifact.
+discovers mailbox files ending in `.mail` or `.mbox`, and translates them into
+an indexer-compatible request artifact.
 
 The design keeps discovery and request generation wrapper-owned so downstream
 indexer contracts continue to receive ordinary mailbox items rather than a new
 rsync-specific input mode.
+
+The first design baseline constrains mailbox discovery compatibility to the
+explicit `.mail` and `.mbox` extension allowlist. This keeps the wrapper's
+behavior deterministic and aligned with the approved mailbox contract without
+requiring broader extension heuristics or content sniffing in this increment.
 
 For repeatable local stress-test runs, the first design baseline expects the
 wrapper to generate mailbox items in a deterministic order when the discovered
@@ -246,9 +251,10 @@ discovery, generated request materialization, delegated execution, and run
 artifact publication so future stress-test modes can extend discovery policy
 without redefining the wrapper boundary.
 
-The first focus remains rsync-backed mailbox acquisition, but future
-document-oriented or other content-oriented discovery flows may be added behind
-the same wrapper-owned stages.
+The first focus remains rsync-backed mailbox acquisition, with mailbox
+discovery compatibility limited to `.mail` and `.mbox` in this increment.
+Future document-oriented, broader mailbox-oriented, or other content-oriented
+discovery flows may be added behind the same wrapper-owned stages.
 
 **Traces to:** RQ-SCALE-005, RQ-SCALE-014
 

@@ -26,6 +26,8 @@
 - **UR-SCALE-16 [KNOWN]:** The motivation for the Compose wrapper is Windows developer usability because the development box does not support bash.
 - **UR-SCALE-17 [KNOWN]:** Linux users should be able to use either the direct bash entrypoint or the Docker Compose entrypoint, while Windows users should use Docker Compose.
 - **UR-SCALE-18 [INFERRED]:** Docker Compose must be a supported user-facing entrypoint for the same local stress-test workflow rather than a second divergent workflow.
+- **UR-SCALE-19 [KNOWN]:** Mailbox discovery for fetched rsync mirrors must work when the mirrored archive exposes mailbox files with the `.mail` extension as well as the `.mbox` extension.
+- **UR-SCALE-20 [KNOWN]:** For this increment, mailbox discovery compatibility should be limited to exactly `.mail` and `.mbox` rather than broadened to arbitrary mailbox archive extensions.
 
 ## Change Manifest
 
@@ -41,6 +43,7 @@
 | CM-SCALE-008 | Revise | Expand the first realization from bash-capable local operation to dual entrypoint local operation supporting both direct shell use and Docker Compose | UR-SCALE-12, UR-SCALE-15, UR-SCALE-17 |
 | CM-SCALE-009 | Add | Require a Docker Compose user entrypoint suitable for Windows-hosted local usage | UR-SCALE-15, UR-SCALE-16, UR-SCALE-17 |
 | CM-SCALE-010 | Add | Preserve one shared workflow and artifact model across the bash and Docker Compose entrypoints | UR-SCALE-17, UR-SCALE-18 |
+| CM-SCALE-011 | Revise | Expand mailbox discovery compatibility so fetched rsync mirrors may contribute mailbox files ending in `.mail` or `.mbox` without widening the first increment beyond those two extensions | UR-SCALE-19, UR-SCALE-20 |
 
 ## Before / After
 
@@ -78,6 +81,11 @@
 
 - **Before [KNOWN]:** The wrapper requirements described one local workflow but did not distinguish between workflow semantics and the user-facing entrypoint used to launch that workflow.
 - **After [KNOWN]:** The requirements define one wrapper workflow with dual supported local entrypoints: direct bash on Linux and Docker Compose on Linux or Windows.
+
+### BA-SCALE-008
+
+- **Before [KNOWN]:** Mailbox discovery compatibility was not explicit, so the documented rsync-driven workflow could implicitly assume only `.mbox` mailbox files even when fetched mirrors exposed `.mail` files.
+- **After [KNOWN]:** Mailbox discovery compatibility is explicit: the first increment accepts mailbox files ending in `.mail` or `.mbox` from fetched rsync mirrors, while broader extension support remains out of scope.
 
 ## Requirements
 
@@ -151,11 +159,13 @@ The bash and Docker Compose entrypoints SHALL preserve the same wrapper-owned wo
 
 #### RQ-SCALE-005 - Mailbox discovery expansion
 
-For fetched rsync mirrors, `lexonfabric-scale-test` SHALL discover mailbox files and translate the discovered set into indexer-compatible mailbox batch items.
+For fetched rsync mirrors, `lexonfabric-scale-test` SHALL discover mailbox files ending in `.mail` or `.mbox` and translate the discovered set into indexer-compatible mailbox batch items.
 
+- **Accepted compatibility set [KNOWN]:** The first increment accepts exactly `.mail` and `.mbox` mailbox files.
 - **Extensibility [KNOWN]:** This must not preclude future wrapper support for documents or other content classes with different metadata handling.
-- **Filtering gap [UNKNOWN]:** Exact mailbox eligibility and include/exclude rules are not yet specified.
-- **Traceability:** UR-SCALE-6
+- **Boundary [KNOWN]:** This increment does not require broader mailbox extension support or content sniffing beyond the approved `.mail` and `.mbox` compatibility set.
+- **Residual gap [UNKNOWN]:** Include/exclude rules beyond the explicit `.mail` and `.mbox` extension allowlist are not yet specified.
+- **Traceability:** UR-SCALE-6, UR-SCALE-19, UR-SCALE-20
 
 #### RQ-SCALE-006 - Block-tree output
 
@@ -252,7 +262,8 @@ When multiple rsync URLs are provided in one run, `lexonfabric-scale-test` SHALL
 - Defining MCP server behavior or generating MCP configuration artifacts
 - Defining the production ARM/Bicep plus Azure Functions workflow
 - Requiring a dedicated Rust crate or service for the first wrapper realization
-- Finalizing exact mailbox eligibility or include/exclude filtering policy
+- Broadening mailbox discovery beyond the approved `.mail` and `.mbox` compatibility set in this increment
+- Finalizing include/exclude filtering policy beyond the approved `.mail` and `.mbox` extension allowlist
 
 ## Invariant Impact Assessment
 
@@ -267,7 +278,7 @@ When multiple rsync URLs are provided in one run, `lexonfabric-scale-test` SHALL
 
 ## Open Questions / Discovery Gaps
 
-- **Q-SCALE-001 [UNKNOWN]:** What exact mailbox file patterns qualify for discovery from fetched rsync mirrors?
+- **Q-SCALE-001 [UNKNOWN]:** Beyond the approved `.mail` and `.mbox` compatibility set, what additional mailbox file patterns, if any, should future increments qualify for discovery from fetched rsync mirrors?
 - **Q-SCALE-002 [UNKNOWN]:** Should the generated request/config artifact be persisted as a durable fixture, ephemeral run output, or both?
 - **Q-SCALE-003 [UNKNOWN]:** What metadata from the rsync source URL, if any, must be preserved in generated mailbox batch items?
 - **Q-SCALE-004 [UNKNOWN]:** If one rsync source is unreachable during a multi-source run, should the wrapper fail the whole run or allow partial stress-test completion?
@@ -281,11 +292,14 @@ When multiple rsync URLs are provided in one run, `lexonfabric-scale-test` SHALL
   - `README.md:183-203`
   - `docker-compose.yml:1-45`
   - `examples/local/request.sample.json:1-34`
+  - `examples/local/scale-test/rsync.sources.sample.txt:1-4`
+  - `scripts/lexonfabric-scale-test.sh:223-235`
   - user clarification in this session: "I don't want this to be part of the lexonfabric indexer. This is a wrapper / test tool built on top of it"
   - user clarification in this session: "This tool is just a way to run a local stress test on the LexonFabric parser and produce a block tree. Feel free to name it lexonfabric-scale-test or something along those lines."
   - user clarification in this session selecting block tree/root handoff only rather than MCP config output
   - user clarification in this session: "This could be as simple as a Linux bash script, no need for anything fancy here."
   - user clarification in this session: "Support both. When running on Linux people can use either. On Windows they use docker compose"
+  - user clarification in this session selecting: "Exactly `.mail` and `.mbox`"
 - **Excluded for now [KNOWN]:**
   - Exact generated file locations and directory layout
   - Specific script flags, shell ergonomics, and Docker Compose command lines

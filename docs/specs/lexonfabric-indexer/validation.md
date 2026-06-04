@@ -94,6 +94,17 @@ processing and retrieval.
 **Traces to:** RQ-INDEXER-004C, RQ-INDEXER-004D, RQ-INDEXER-004E, DSG-LFI-004D,
 DSG-LFI-004E, DSG-LFI-004F
 
+### VAL-LFI-002D
+
+Submit representative mailbox batch inputs that reference one `.mail` source
+file and one `.mbox` source file.
+
+**Pass condition:** LexonFabric accepts both source files as mailbox inputs for
+the same normalization and chunk-derivation pipeline, and conformance does not
+depend on broader mailbox archive extension support in this increment.
+
+**Traces to:** RQ-INDEXER-002, RQ-INDEXER-004A, DSG-LFI-003A, DSG-LFI-004
+
 ### VAL-LFI-003
 
 Exercise the LexonFabric content-resolution adapter with resolvable and

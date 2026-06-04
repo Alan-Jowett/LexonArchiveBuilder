@@ -13,7 +13,7 @@ Examples:
 
 This script:
   1. fetches mailbox content from one or more rsync URLs
-  2. discovers .mbox files in the fetched mirrors
+  2. discovers .mail and .mbox files in the fetched mirrors
   3. generates an indexer request file in the run directory
   4. runs the existing indexer directly or via docker compose
   5. leaves summary/root handoff output in the run directory
@@ -226,13 +226,24 @@ for index in "${!RSYNC_URLS[@]}"; do
     rel_to_run="${mailbox_path#${RUN_ROOT}/}"
     MAILBOX_PATHS+=("$rel_to_run")
     filename="$(basename "$mailbox_path")"
-    month="${filename%.mbox}"
+    case "$filename" in
+      *.mbox)
+        month="${filename%.mbox}"
+        ;;
+      *.mail)
+        month="${filename%.mail}"
+        ;;
+      *)
+        printf 'error: discovered mailbox with unsupported extension: %s\n' "$filename" >&2
+        exit 1
+        ;;
+    esac
     DISCOVERED_MONTHS+=("$month")
-  done < <(find "$source_dir" -type f -name '*.mbox' | LC_ALL=C sort)
+  done < <(find "$source_dir" -type f \( -name '*.mail' -o -name '*.mbox' \) | LC_ALL=C sort)
 done
 
 if [[ ${#MAILBOX_PATHS[@]} -eq 0 ]]; then
-  printf 'error: no .mbox files were discovered in fetched rsync mirrors\n' >&2
+  printf 'error: no .mail or .mbox files were discovered in fetched rsync mirrors\n' >&2
   exit 1
 fi
 

@@ -21,7 +21,7 @@ RUN_NAME="smoke-$(date -u '+%Y%m%dT%H%M%SZ')"
 RUN_DIR="${REPO_ROOT}/examples/local/scale-test/runs/${RUN_NAME}"
 
 mkdir -p "$SOURCE_ONE" "$SOURCE_TWO"
-cp "$FIXTURE_MAILBOX" "${SOURCE_ONE}/2026-01.mbox"
+cp "$FIXTURE_MAILBOX" "${SOURCE_ONE}/2026-01.mail"
 cp "$FIXTURE_MAILBOX" "${SOURCE_TWO}/2026-02.mbox"
 
 bash "$SCALE_TEST_SCRIPT" --run-name "$RUN_NAME" "$SOURCE_ONE" "$SOURCE_TWO"
@@ -38,5 +38,7 @@ if [[ "$MAILBOX_ITEM_COUNT" -lt 2 ]]; then
   printf 'error: expected at least 2 mailbox items in generated request, found %s\n' "$MAILBOX_ITEM_COUNT" >&2
   exit 1
 fi
+grep -q '"month": "2026-01"' "$REQUEST_PATH" || { printf 'error: request missing normalized month for .mail source\n' >&2; exit 1; }
+grep -q '"month": "2026-02"' "$REQUEST_PATH" || { printf 'error: request missing normalized month for .mbox source\n' >&2; exit 1; }
 
 printf 'Smoke test passed: %s\n' "${RUN_DIR#${REPO_ROOT}/}"
