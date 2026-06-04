@@ -2,6 +2,7 @@ pub mod block_store;
 pub mod config;
 pub mod embedding;
 pub mod mailbox;
+mod paths;
 pub mod resolver;
 pub mod runtime;
 

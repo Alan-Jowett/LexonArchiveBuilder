@@ -3,7 +3,8 @@
 ## Status
 
 Phase 2 specification patch for the approved email-artifact, chunk-level
-indexing, and local filesystem block-store interoperability evolution in
+indexing, local filesystem block-store interoperability, incremental
+delegated indexing, and batch-progress observability evolution in
 `docs/specs/lexonfabric-indexer/requirements.md`.
 
 ## Scope
@@ -11,8 +12,9 @@ indexing, and local filesystem block-store interoperability evolution in
 This document specifies the LexonFabric-owned design for realizing the approved
 indexer requirements, including the email-ingestion refinement from `.mail` and
 `.mbox` mailbox sources to normalized email artifacts and chunk-level embedding
-units plus the local filesystem block-store interoperability correction for the
-local/testing profile.
+units plus the local filesystem block-store interoperability correction,
+incremental delegated indexing adoption, and batch-progress observability for
+the local/testing profile.
 
 This document is layered on top of:
 
@@ -67,6 +69,8 @@ The LexonFabric indexer design is intended to be:
 - extensible to future content types
 - compatible with a Linux batch-container runtime
 - interoperable with LexonGraph-owned local block-store tooling
+- incremental-friendly at the delegated indexing boundary
+- observable during long-running mailbox batches
 - chunk-first for email retrieval while preserving full-message and source
   provenance artifacts
 
@@ -82,6 +86,22 @@ batch recovery semantics internal to the delegated LexonGraph stack.
 
 **Traces to:** RQ-INDEXER-001, RQ-INDEXER-003, RQ-INDEXER-008,
 RQ-INDEXER-010A
+
+### DSG-LFI-001A `Incremental delegated indexing seam`
+
+LexonFabric realizes delegated indexing as a staged handoff to
+`lexongraph-indexer`'s incremental construction APIs rather than as a single
+terminal indexing call.
+
+LexonFabric still owns mailbox expansion, artifact storage, and item shaping.
+The delegated indexer still owns block construction semantics, canonical block
+bytes, and branch-shaping behavior.
+
+The design permits LexonFabric to persist delegated leaf and parent blocks as
+work becomes available, while leaving final root determination to the upstream
+LexonGraph contract.
+
+**Traces to:** RQ-INDEXER-003A, RQ-INDEXER-008, RQ-INDEXER-010A
 
 ### DSG-LFI-002 `Batch runtime shape`
 
@@ -100,7 +120,28 @@ For email, a mailbox item is a source container that LexonFabric expands into
 stored mailbox and normalized email artifacts plus chunk-sized delegated index
 items before invoking `lexongraph-indexer`.
 
-**Traces to:** RQ-INDEXER-001, RQ-INDEXER-002
+Within that runtime shape, mailbox-driven batches may advance mailbox by
+mailbox through the incremental delegated indexing seam rather than waiting for
+all delegated work to accumulate behind one final indexer call.
+
+**Traces to:** RQ-INDEXER-001, RQ-INDEXER-002, RQ-INDEXER-003A
+
+### DSG-LFI-002A `Batch progress signaling`
+
+The batch runtime emits progress signals on its normal logging/output surface
+as mailbox-driven work advances.
+
+The first design baseline reports at least:
+
+- mailbox-processing start or completion boundaries
+- delegated indexing progress after additional chunk items or constructed
+  blocks have been advanced
+
+This signaling remains part of the short-lived batch runtime and does not
+introduce a separate progress API, control-plane service, or MCP-visible
+surface.
+
+**Traces to:** RQ-INDEXER-001, RQ-INDEXER-008B
 
 ### DSG-LFI-003 `Collection item normalization`
 
@@ -402,6 +443,7 @@ derived chunk identities on repeated runs.
 LexonFabric-owned verification artifacts validate:
 
 - correct delegation to `lexongraph-indexer`
+- correct use of the incremental delegated indexing seam
 - correct selection and use of content-resolution, block-store, and
   embedding-provider adapters
 - correct interoperability of the local filesystem-backed block-store profile
@@ -409,6 +451,7 @@ LexonFabric-owned verification artifacts validate:
 - correct mailbox retention, normalized email artifact derivation, and chained
   provenance
 - correct shaping of chunk-sized delegated email items
+- correct progress visibility during long-running mailbox batches
 - preservation of stable batch contracts across environments
 - Docker Compose-based realization of the local/testing integration topology
 
@@ -416,5 +459,6 @@ LexonFabric-owned verification artifacts do not attempt to revalidate
 LexonGraph's own block-store or embedding-trait contracts beyond proving that
 LexonFabric consumes them correctly.
 
-**Traces to:** RQ-INDEXER-008A, RQ-INDEXER-010A, RQ-INDEXER-010B,
-RQ-INDEXER-010, DSG-LFI-007A, DSG-LFI-005A
+**Traces to:** RQ-INDEXER-003A, RQ-INDEXER-008A, RQ-INDEXER-008B,
+RQ-INDEXER-010A, RQ-INDEXER-010B, RQ-INDEXER-010, DSG-LFI-001A,
+DSG-LFI-002A, DSG-LFI-007A, DSG-LFI-005A

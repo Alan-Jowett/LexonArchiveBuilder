@@ -890,7 +890,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=2d4e1e2a3ca229f49dde0a1df2db3b308cad0383#2d4e1e2a3ca229f49dde0a1df2db3b308cad0383"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=f7cd840d28f803bcfa8cc19c51ab597090ea9be8#f7cd840d28f803bcfa8cc19c51ab597090ea9be8"
 dependencies = [
  "ciborium",
  "sha2",
@@ -899,7 +899,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=2d4e1e2a3ca229f49dde0a1df2db3b308cad0383#2d4e1e2a3ca229f49dde0a1df2db3b308cad0383"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=f7cd840d28f803bcfa8cc19c51ab597090ea9be8#f7cd840d28f803bcfa8cc19c51ab597090ea9be8"
 dependencies = [
  "lexongraph-block",
 ]
@@ -907,7 +907,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store-fs"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=2d4e1e2a3ca229f49dde0a1df2db3b308cad0383#2d4e1e2a3ca229f49dde0a1df2db3b308cad0383"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=f7cd840d28f803bcfa8cc19c51ab597090ea9be8#f7cd840d28f803bcfa8cc19c51ab597090ea9be8"
 dependencies = [
  "lexongraph-block",
  "lexongraph-block-store",
@@ -917,12 +917,12 @@ dependencies = [
 [[package]]
 name = "lexongraph-dcbc"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=2d4e1e2a3ca229f49dde0a1df2db3b308cad0383#2d4e1e2a3ca229f49dde0a1df2db3b308cad0383"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=f7cd840d28f803bcfa8cc19c51ab597090ea9be8#f7cd840d28f803bcfa8cc19c51ab597090ea9be8"
 
 [[package]]
 name = "lexongraph-embeddings-trait"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=2d4e1e2a3ca229f49dde0a1df2db3b308cad0383#2d4e1e2a3ca229f49dde0a1df2db3b308cad0383"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=f7cd840d28f803bcfa8cc19c51ab597090ea9be8#f7cd840d28f803bcfa8cc19c51ab597090ea9be8"
 dependencies = [
  "lexongraph-block",
  "pollster",
@@ -931,7 +931,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-indexer"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=2d4e1e2a3ca229f49dde0a1df2db3b308cad0383#2d4e1e2a3ca229f49dde0a1df2db3b308cad0383"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=f7cd840d28f803bcfa8cc19c51ab597090ea9be8#f7cd840d28f803bcfa8cc19c51ab597090ea9be8"
 dependencies = [
  "half",
  "lexongraph-block",
@@ -944,7 +944,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-search"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=2d4e1e2a3ca229f49dde0a1df2db3b308cad0383#2d4e1e2a3ca229f49dde0a1df2db3b308cad0383"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=f7cd840d28f803bcfa8cc19c51ab597090ea9be8#f7cd840d28f803bcfa8cc19c51ab597090ea9be8"
 dependencies = [
  "lexongraph-block",
  "lexongraph-block-store",

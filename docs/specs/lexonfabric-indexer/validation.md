@@ -3,7 +3,8 @@
 ## Status
 
 Phase 2 validation patch for the approved email-artifact, chunk-level
-indexing, and local filesystem block-store interoperability evolution in
+indexing, local filesystem block-store interoperability, incremental
+delegated indexing, and batch-progress observability evolution in
 `docs/specs/lexonfabric-indexer/requirements.md` and
 `docs/specs/lexonfabric-indexer/design.md`.
 
@@ -11,7 +12,8 @@ indexing, and local filesystem block-store interoperability evolution in
 
 These validation entries define the expected conformance surface for the
 LexonFabric-owned indexer boundary, including local filesystem block-store
-interoperability in the local/testing profile.
+interoperability, incremental delegated indexing, and batch-progress
+observability in the local/testing profile.
 
 This package validates LexonFabric's batch contract, adapter selection, and
 delegated use of LexonGraph interfaces. It does not redefine validation already
@@ -52,6 +54,18 @@ compatible with the same collection-oriented batch contract.
 
 **Traces to:** RQ-INDEXER-002, RQ-INDEXER-003, RQ-INDEXER-004, DSG-LFI-001,
 DSG-LFI-003, DSG-LFI-004
+
+### VAL-LFI-002E
+
+Inspect the delegated indexing orchestration for a representative mailbox
+batch.
+
+**Pass condition:** LexonFabric uses the upstream incremental delegated
+indexing path to construct and persist delegated indexing output as work
+advances, rather than depending exclusively on a single terminal one-shot
+indexing call after all mailbox expansion completes.
+
+**Traces to:** RQ-INDEXER-003A, DSG-LFI-001A
 
 ### VAL-LFI-002A
 
@@ -182,6 +196,18 @@ and chunking policy, unchanged mailbox input reproduces the same mailbox
 artifact, normalized email artifact, and derived chunk identities.
 
 **Traces to:** RQ-INDEXER-008, DSG-LFI-010
+
+### VAL-LFI-007A
+
+Run a mailbox batch that is large enough to produce multiple observable
+mailbox-processing and delegated-indexing steps.
+
+**Pass condition:** the normal batch log stream reports forward progress before
+the final summary, including mailbox-processing visibility plus delegated
+indexing visibility, so an operator can distinguish an active run from a hung
+run without consulting a separate control-plane service.
+
+**Traces to:** RQ-INDEXER-008B, DSG-LFI-002A
 
 ### VAL-LFI-008
 

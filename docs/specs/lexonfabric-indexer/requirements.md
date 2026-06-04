@@ -2,9 +2,9 @@
 
 ## Document Status
 
-- **Phase:** Phase 2 - Specification Changes
+- **Phase:** Phase 2 - Design and Validation
 - **Status:** Approved requirements patch being propagated into design and validation
-- **Scope:** LexonFabric indexer integration boundary plus incremental email-artifact, chunk-indexing, and local block-store interoperability evolution
+- **Scope:** LexonFabric indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, incremental delegated indexing, and batch-progress observability evolution
 
 ## USER-REQUEST
 
@@ -38,6 +38,9 @@
 - **UR-28 [KNOWN]:** It is acceptable for this change to require a fresh or rebuilt local block store; continued read compatibility with blocks written by the superseded custom local layout is not required.
 - **UR-29 [KNOWN]:** Mailbox batch inputs must accept mailbox source files ending in `.mail` as well as `.mbox`.
 - **UR-30 [KNOWN]:** For this increment, mailbox source compatibility should be limited to exactly `.mail` and `.mbox` rather than broadened to arbitrary mailbox archive extensions.
+- **UR-31 [KNOWN]:** LexonGraph indexer APIs have been updated to support incremental indexing, and LexonFabric should switch from the current one-shot delegated indexing path to those incremental APIs.
+- **UR-32 [KNOWN]:** LexonFabric should emit visible progress logs while mailboxes are processed and delegated items are indexed so operators can distinguish forward progress from a hung batch.
+- **UR-33 [INFERRED]:** Progress reporting should stay on the existing batch-runtime logging surface rather than introducing a separate control-plane or telemetry service for this increment.
 
 ## Change Manifest
 
@@ -57,6 +60,8 @@
 | CM-INDEXER-012 | Revise | Require the local/testing filesystem-backed block-store realization to stay interoperable with LexonGraph filesystem store tooling and naming/layout expectations | UR-26, UR-27 |
 | CM-INDEXER-013 | Add | Explicitly allow the local/testing filesystem store transition to require a fresh or rebuilt local store rather than preserving reads from the superseded custom layout | UR-28 |
 | CM-INDEXER-014 | Revise | Expand mailbox source compatibility so mailbox batch items may reference `.mail` or `.mbox` files without widening the first increment to arbitrary archive extensions | UR-29, UR-30 |
+| CM-INDEXER-015 | Revise | Require LexonFabric to adopt LexonGraph's incremental delegated indexing APIs instead of relying only on the one-shot indexing call | UR-31 |
+| CM-INDEXER-016 | Add | Require observable batch-progress logging for mailbox expansion and delegated indexing progress without introducing a new control-plane surface | UR-32, UR-33 |
 
 ## Before / After
 
@@ -130,6 +135,16 @@
 - **Before [KNOWN]:** Mailbox batch-item compatibility implicitly assumed `.mbox` mailbox source files and did not define whether `.mail` files were valid mailbox inputs.
 - **After [KNOWN]:** Mailbox batch-item compatibility explicitly accepts source files ending in `.mail` or `.mbox`, while broader mailbox archive extension support remains out of scope for this increment.
 
+### BA-INDEXER-015
+
+- **Before [KNOWN]:** LexonFabric delegated indexing through a single `lexongraph-indexer` one-shot batch call after fully expanding the request, so the repository requirements did not capture use of LexonGraph's newer incremental indexing APIs.
+- **After [KNOWN]:** The requirements now define incremental delegated indexing as the preferred LexonGraph integration path so LexonFabric can hand off work progressively while remaining subordinate to upstream indexing contracts.
+
+### BA-INDEXER-016
+
+- **Before [KNOWN]:** Batch visibility was limited to terminal success or failure plus the final summary output, so long-running mailbox expansion and indexing work could appear hung.
+- **After [KNOWN]:** The requirements now define runtime-visible progress logging for mailbox processing and delegated indexing progress on the normal batch log surface.
+
 ## Requirements
 
 ### Functional Requirements
@@ -161,6 +176,15 @@ LexonFabric SHALL delegate indexing and index creation to the `lexongraph-indexe
 
 - **Non-goal [KNOWN]:** LexonFabric does not define or implement its own indexing algorithm in this scope.
 - **Traceability:** UR-3
+
+#### RQ-INDEXER-003A - Incremental delegated indexing
+
+LexonFabric SHALL adopt the incremental indexing APIs exposed by `lexongraph-indexer` when they satisfy the approved batch contract.
+
+- **Required property [KNOWN]:** The delegated indexing flow must be able to hand off indexing work incrementally rather than depending exclusively on a single one-shot indexing call after the entire batch has been expanded.
+- **Boundary [KNOWN]:** LexonFabric still does not own index-construction semantics; it consumes upstream incremental APIs rather than reimplementing indexing behavior in-repo.
+- **Idempotence constraint [INFERRED]:** Adopting incremental delegated indexing must preserve the existing immutable, hash-addressed rerun expectations for unchanged content.
+- **Traceability:** UR-3, UR-8, UR-31
 
 #### RQ-INDEXER-004 - Content resolution integration
 
@@ -272,6 +296,15 @@ LexonFabric SHALL provide a Docker Compose topology for the local/testing profil
 - **Constraint [KNOWN]:** The Compose topology must preserve the Linux batch-container runtime shape rather than introducing a separate long-lived control-plane service for indexing.
 - **Traceability:** UR-4, UR-12, UR-14
 
+#### RQ-INDEXER-008B - Observable indexing progress
+
+LexonFabric SHALL emit progress logs during batch execution that make forward progress visible while mailbox items are processed and delegated indexing work advances.
+
+- **Minimum visibility [KNOWN]:** Progress output must include mailbox-processing visibility and indexed-item visibility so operators can tell that work is continuing before the final summary is emitted.
+- **Surface [INFERRED]:** Progress output should be emitted on the normal batch-runtime log stream so local runs, Compose runs, and containerized production-style runs observe the same signal shape.
+- **Non-goal [KNOWN]:** This requirement does not introduce a separate control-plane, metrics backend, or MCP-surface change.
+- **Traceability:** UR-32, UR-33
+
 ### Boundary and Invariant Requirements
 
 #### RQ-INDEXER-009 - Search-serving separation
@@ -314,6 +347,7 @@ LexonFabric SHALL keep content resolution, block storage, and embedding-provider
 - Requiring executable Azure production adapters in the first MVP increment
 - Requiring document collections to adopt the same normalization or chunking policy as email in this increment
 - Broadening mailbox source compatibility beyond the approved `.mail` and `.mbox` extension set in this increment
+- Introducing a dedicated telemetry service, long-lived progress daemon, or MCP-visible progress API for indexing in this increment
 
 ## Invariant Impact Assessment
 
@@ -324,6 +358,7 @@ LexonFabric SHALL keep content resolution, block storage, and embedding-provider
 | Architecture remains extensible to future content types | Preserved | Collection-oriented input still covers both mailbox and document collections while allowing email-specific normalization and future document-specific handling behind the same contract |
 | Idempotence and recoverability stay aligned with underlying immutable block semantics | Preserved | Requirements extend hash-addressed identity expectations to normalized email artifacts without redefining LexonGraph recovery ownership |
 | Local development remains self-contained and batch-oriented | Preserved | Docker Compose is constrained to compose local dependencies around the batch container rather than changing the runtime model |
+| Long-running batches remain observable without adding a control plane | Preserved | Progress reporting is constrained to the existing batch-runtime log surface for mailbox processing and delegated indexing visibility |
 | Clients are not forced to parse raw mailbox blobs for ordinary retrieval | Preserved | Indexed chunks must reference normalized email artifacts so retrieval can stay at chunk level or expand to full normalized email through repository-owned artifacts |
 | Storage abstraction count stays bounded across environments | Preserved | Requirements now reuse the environment-selected `BlockStore` abstraction family for indexed blocks, normalized email artifacts, and mailbox provenance artifacts rather than introducing a second storage stack |
 | Local filesystem block stores remain interoperable with LexonGraph tooling | Preserved | The local/testing profile is now constrained to LexonGraph's filesystem naming/layout contract so inspection tools can consume repository-produced local stores |
@@ -331,6 +366,7 @@ LexonFabric SHALL keep content resolution, block storage, and embedding-provider
 ## Coverage Notes
 
 - **Covered sources [KNOWN]:**
+  - user request in this session to adopt LexonGraph's incremental indexing APIs and emit visible mailbox/indexing progress during batch execution
   - user request in this session: "make it so this can work with .mail as well as .mbox"
   - user clarification in this session selecting: "Exactly `.mail` and `.mbox`"
   - user request in this session: "remove LocalFilesystemBlockStore and replace with the lexongraph-block-store-fs crate from lexongraph. Our custom store is breaking lexongraph-block-inspect because it uses a totally different naming scheme"
@@ -348,6 +384,8 @@ LexonFabric SHALL keep content resolution, block storage, and embedding-provider
   - external LexonGraph repository source (not vendored in LexonFabric):
     `crates/lexongraph-indexer/src/lib.rs:104-107`
   - external LexonGraph repository source (not vendored in LexonFabric):
+    `crates/lexongraph-indexer/src/lib.rs:292-349`
+  - external LexonGraph repository source (not vendored in LexonFabric):
     `crates/lexongraph-block-store/src/lib.rs:28-32`
   - external LexonGraph repository source (not vendored in LexonFabric):
     `crates/lexongraph-block-store-fs/src/lib.rs:89-103`
@@ -357,6 +395,9 @@ LexonFabric SHALL keep content resolution, block storage, and embedding-provider
     `crates/lexongraph-embeddings-trait/src/lib.rs:20-33`
   - `crates/lexonfabric-indexer/src/block_store.rs:11-31`
   - `crates/lexonfabric-indexer/src/block_store.rs:56-82`
+  - `crates/lexonfabric-indexer/src/runtime.rs:63-90`
+  - `crates/lexonfabric-indexer/src/mailbox.rs:85-155`
+  - `crates/lexonfabric-indexer/src/main.rs:33-41`
   - user clarification messages in this session specifying both mailbox and document-collection MVP coverage
   - user clarification messages in this session specifying local-only executable MVP scope with production left pluggable
   - user clarification messages in this session specifying Docker Compose-based local dependency orchestration
@@ -370,3 +411,4 @@ LexonFabric SHALL keep content resolution, block storage, and embedding-provider
 - **Excluded for now [KNOWN]:**
   - Detailed Rust implementation file paths, crate manifests, Docker assets, and test artifacts, because this requirements document captures the semantic contract and leaves implementation realization to downstream design, validation, and code-review artifacts
   - Exact normalized email CBOR schema, exact duplicated chunk metadata list, and the specific chunking library choice, because those belong to downstream design and validation artifacts rather than requirements
+  - The precise log-line schema, sink configuration, and per-item verbosity throttling policy for progress output, because those belong to downstream design and validation artifacts rather than requirements
