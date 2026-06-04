@@ -12,6 +12,7 @@ anyhow = "1.0.100"
 ciborium = "0.2.2"
 clap = { version = "4.5.53", features = ["derive"] }
 half = "2.7.1"
+num_cpus = "1.17.0"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 rmcp = { version = "1.7.0", features = ["server", "macros", "schemars", "transport-io"] }
 serde = { version = "1.0.228", features = ["derive"] }
@@ -21,9 +22,9 @@ thiserror = "2.0.17"
 tokio = { version = "1.52.3", features = ["io-std", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
 
 lexonfabric-indexer = { path = "crates/lexonfabric-indexer" }
-lexongraph-block = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "f7cd840d28f803bcfa8cc19c51ab597090ea9be8", package = "lexongraph-block" }
-lexongraph-block-store = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "f7cd840d28f803bcfa8cc19c51ab597090ea9be8", package = "lexongraph-block-store" }
-lexongraph-block-store-fs = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "f7cd840d28f803bcfa8cc19c51ab597090ea9be8", package = "lexongraph-block-store-fs" }
-lexongraph-embeddings-trait = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "f7cd840d28f803bcfa8cc19c51ab597090ea9be8", package = "lexongraph-embeddings-trait" }
-lexongraph-indexer = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "f7cd840d28f803bcfa8cc19c51ab597090ea9be8", package = "lexongraph-indexer" }
-lexongraph-search = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "f7cd840d28f803bcfa8cc19c51ab597090ea9be8", package = "lexongraph-search" }
+lexongraph-block = { git = "https://github.com/Alan-Jowett/LexonGraph", branch = "main", package = "lexongraph-block" }
+lexongraph-block-store = { git = "https://github.com/Alan-Jowett/LexonGraph", branch = "main", package = "lexongraph-block-store" }
+lexongraph-block-store-fs = { git = "https://github.com/Alan-Jowett/LexonGraph", branch = "main", package = "lexongraph-block-store-fs" }
+lexongraph-embeddings-trait = { git = "https://github.com/Alan-Jowett/LexonGraph", branch = "main", package = "lexongraph-embeddings-trait" }
+lexongraph-indexer = { git = "https://github.com/Alan-Jowett/LexonGraph", branch = "main", package = "lexongraph-indexer" }
+lexongraph-search = { git = "https://github.com/Alan-Jowett/LexonGraph", branch = "main", package = "lexongraph-search" }

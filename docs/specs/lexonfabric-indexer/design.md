@@ -4,7 +4,8 @@
 
 Phase 2 specification patch for the approved email-artifact, chunk-level
 indexing, local filesystem block-store interoperability, incremental
-delegated indexing, and batch-progress observability evolution in
+delegated indexing, batch-progress observability, and layer-parallel
+block-construction evolution in
 `docs/specs/lexonfabric-indexer/requirements.md`.
 
 ## Scope
@@ -13,8 +14,8 @@ This document specifies the LexonFabric-owned design for realizing the approved
 indexer requirements, including the email-ingestion refinement from `.mail` and
 `.mbox` mailbox sources to normalized email artifacts and chunk-level embedding
 units plus the local filesystem block-store interoperability correction,
-incremental delegated indexing adoption, and batch-progress observability for
-the local/testing profile.
+incremental delegated indexing adoption, batch-progress observability, and
+layer-parallel delegated block construction for the local/testing profile.
 
 This document is layered on top of:
 
@@ -70,6 +71,8 @@ The LexonFabric indexer design is intended to be:
 - compatible with a Linux batch-container runtime
 - interoperable with LexonGraph-owned local block-store tooling
 - incremental-friendly at the delegated indexing boundary
+- layer-parallel within one delegated construction layer
+- bounded by an administrator-controlled concurrency budget
 - observable during long-running mailbox batches
 - chunk-first for email retrieval while preserving full-message and source
   provenance artifacts
@@ -102,6 +105,43 @@ work becomes available, while leaving final root determination to the upstream
 LexonGraph contract.
 
 **Traces to:** RQ-INDEXER-003A, RQ-INDEXER-008, RQ-INDEXER-010A
+
+### DSG-LFI-001B `Leaf-layer scheduling discipline`
+
+LexonFabric realizes incremental delegated indexing with a layer-aware
+scheduler.
+
+Within the delegated leaf construction layer, ready leaf work items may
+execute concurrently. The scheduler treats completion of that leaf layer as the
+boundary that must be crossed before higher-layer parent construction begins.
+
+Higher-layer parent construction remains a single delegated
+`build_parent_blocks(...)` call per layer at the current public upstream API
+surface.
+
+This preserves the delegated LexonGraph ownership of canonical block bytes,
+parent-child structure, and final root determination while allowing LexonFabric
+to overlap independent leaf work.
+
+**Traces to:** RQ-INDEXER-003B, RQ-INDEXER-008, RQ-INDEXER-010A
+
+### DSG-LFI-001C `Concurrency budget application`
+
+LexonFabric applies one runtime concurrency budget to the layer-aware scheduler.
+
+That budget limits the number of same-layer delegated leaf tasks that may be in
+flight at once.
+
+The budget constrains scheduling only. It does not require CPU pinning, change
+the batch contract, or expose internal LexonGraph layering details on the MCP
+surface.
+
+The current design does not apply this budget to higher-layer parent
+construction because the upstream delegated indexing surface does not expose a
+public per-group parent-construction seam. Higher-layer concurrency is tracked
+as future work rather than approximated in-repo.
+
+**Traces to:** RQ-INDEXER-003B, RQ-INDEXER-003C, RQ-INDEXER-009
 
 ### DSG-LFI-002 `Batch runtime shape`
 
@@ -401,11 +441,37 @@ the batch-container runtime shape.
 
 **Traces to:** RQ-INDEXER-001, RQ-INDEXER-008A
 
+### DSG-LFI-007B `Concurrency configuration surface`
+
+The administrator-defined concurrency budget is supplied on the same
+batch-request configuration surface as other runtime tuning inputs.
+
+The design adds an optional top-level request field:
+
+- `max_concurrency`: maximum number of same-layer delegated leaf tasks allowed
+  in flight at once
+
+If `max_concurrency` is omitted, LexonFabric derives the runtime budget as:
+
+`max(1, floor(detected_physical_cpu_count / 2))`
+
+For containerized or quota-constrained deployments where direct physical-core
+detection is unavailable or unreliable, the runtime may fall back to the best
+available host-visible CPU-count signal, provided the default remains bounded,
+documented, and never drops below one.
+
+This configuration surface remains environment-neutral: local/testing and the
+preserved production profile use the same request shape and scheduler contract.
+Higher-layer parent construction remains serial at the LexonFabric layer until
+the upstream delegated indexing API exposes a compatible concurrency seam.
+
+**Traces to:** RQ-INDEXER-003C, RQ-INDEXER-007, RQ-INDEXER-010
+
 ### DSG-LFI-008 `Local and production parity boundary`
 
 Local/testing and production environments differ only in adapter realization and
 provider configuration, not in the container's batch contract, the staged email
-artifact model, content item shape, or the delegated
+artifact model, content item shape, the concurrency-configuration surface, or the delegated
 `lexongraph-indexer` orchestration contract.
 
 The MVP realizes this parity boundary by keeping the core orchestration and item
@@ -434,7 +500,13 @@ Under a stable normalization and chunking policy, unchanged mailbox content is
 expected to produce the same mailbox artifact, normalized email artifact, and
 derived chunk identities on repeated runs.
 
-**Traces to:** RQ-INDEXER-008, RQ-INDEXER-010A
+Leaf-layer scheduling is therefore required to be semantically transparent:
+changing the concurrency budget may change throughput, but it does not change
+the logical block set or final root produced for unchanged input under the same
+delegated LexonGraph contract.
+
+**Traces to:** RQ-INDEXER-003B, RQ-INDEXER-003C, RQ-INDEXER-008,
+RQ-INDEXER-010A
 
 ## Verification Realization
 
@@ -444,6 +516,7 @@ LexonFabric-owned verification artifacts validate:
 
 - correct delegation to `lexongraph-indexer`
 - correct use of the incremental delegated indexing seam
+- correct leaf-layer concurrency scheduling with cross-layer barriers
 - correct selection and use of content-resolution, block-store, and
   embedding-provider adapters
 - correct interoperability of the local filesystem-backed block-store profile
@@ -452,13 +525,18 @@ LexonFabric-owned verification artifacts validate:
   provenance
 - correct shaping of chunk-sized delegated email items
 - correct progress visibility during long-running mailbox batches
+- correct application and defaulting of the administrator-defined concurrency
+  budget
 - preservation of stable batch contracts across environments
+- explicit preservation of higher-layer parent construction as future work at
+  the current upstream API boundary
 - Docker Compose-based realization of the local/testing integration topology
 
 LexonFabric-owned verification artifacts do not attempt to revalidate
 LexonGraph's own block-store or embedding-trait contracts beyond proving that
 LexonFabric consumes them correctly.
 
-**Traces to:** RQ-INDEXER-003A, RQ-INDEXER-008A, RQ-INDEXER-008B,
-RQ-INDEXER-010A, RQ-INDEXER-010B, RQ-INDEXER-010, DSG-LFI-001A,
-DSG-LFI-002A, DSG-LFI-007A, DSG-LFI-005A
+**Traces to:** RQ-INDEXER-003A, RQ-INDEXER-003B, RQ-INDEXER-003C,
+RQ-INDEXER-008A, RQ-INDEXER-008B, RQ-INDEXER-010A, RQ-INDEXER-010B,
+RQ-INDEXER-010, DSG-LFI-001A, DSG-LFI-001B, DSG-LFI-001C, DSG-LFI-002A,
+DSG-LFI-005A, DSG-LFI-007A, DSG-LFI-007B

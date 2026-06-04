@@ -4,7 +4,8 @@
 
 Phase 2 validation patch for the approved email-artifact, chunk-level
 indexing, local filesystem block-store interoperability, incremental
-delegated indexing, and batch-progress observability evolution in
+delegated indexing, batch-progress observability, and layer-parallel
+block-construction evolution in
 `docs/specs/lexonfabric-indexer/requirements.md` and
 `docs/specs/lexonfabric-indexer/design.md`.
 
@@ -12,8 +13,9 @@ delegated indexing, and batch-progress observability evolution in
 
 These validation entries define the expected conformance surface for the
 LexonFabric-owned indexer boundary, including local filesystem block-store
-interoperability, incremental delegated indexing, and batch-progress
-observability in the local/testing profile.
+interoperability, incremental delegated indexing, batch-progress
+observability, and leaf-layer parallel block scheduling in the local/testing
+profile.
 
 This package validates LexonFabric's batch contract, adapter selection, and
 delegated use of LexonGraph interfaces. It does not redefine validation already
@@ -66,6 +68,19 @@ advances, rather than depending exclusively on a single terminal one-shot
 indexing call after all mailbox expansion completes.
 
 **Traces to:** RQ-INDEXER-003A, DSG-LFI-001A
+
+### VAL-LFI-002F
+
+Inspect delegated leaf scheduling for a batch that produces more than one ready
+leaf work item.
+
+**Pass condition:** LexonFabric permits independent leaf work from the same
+construction layer to execute concurrently, it does not begin higher-layer
+parent construction until that leaf work has completed, and the repository does
+not claim in-repo higher-layer concurrency that the delegated upstream surface
+does not expose.
+
+**Traces to:** RQ-INDEXER-003B, DSG-LFI-001B, DSG-LFI-001C
 
 ### VAL-LFI-002A
 
@@ -145,6 +160,19 @@ share the same `BlockStore` abstraction family.
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-007, DSG-LFI-005,
 DSG-LFI-006, DSG-LFI-007, DSG-LFI-008
 
+### VAL-LFI-004A
+
+Inspect the batch-request runtime tuning surface for local/testing and the
+preserved production profile boundary.
+
+**Pass condition:** both profiles use the same optional `max_concurrency`
+request field, an explicit value caps same-layer delegated leaf work, and an
+omitted value defaults to one half of detected physical CPUs with a minimum of
+one worker slot. Any fallback used when direct physical-core detection is not
+available remains documented and does not change the request shape.
+
+**Traces to:** RQ-INDEXER-003C, RQ-INDEXER-007, DSG-LFI-007B, DSG-LFI-008
+
 ### VAL-LFI-005
 
 Run the local/testing environment profile.
@@ -193,9 +221,10 @@ dependency behavior.
 immutable, hash-addressed block semantics and does not require LexonFabric to
 implement separate duplicate-suppression logic. Under a stable normalization
 and chunking policy, unchanged mailbox input reproduces the same mailbox
-artifact, normalized email artifact, and derived chunk identities.
+artifact, normalized email artifact, derived chunk identities, logical block
+set, and final root even when the concurrency budget changes between runs.
 
-**Traces to:** RQ-INDEXER-008, DSG-LFI-010
+**Traces to:** RQ-INDEXER-003B, RQ-INDEXER-003C, RQ-INDEXER-008, DSG-LFI-010
 
 ### VAL-LFI-007A
 

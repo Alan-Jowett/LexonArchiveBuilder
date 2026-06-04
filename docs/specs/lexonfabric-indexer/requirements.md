@@ -4,7 +4,7 @@
 
 - **Phase:** Phase 2 - Design and Validation
 - **Status:** Approved requirements patch being propagated into design and validation
-- **Scope:** LexonFabric indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, incremental delegated indexing, and batch-progress observability evolution
+- **Scope:** LexonFabric indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, incremental delegated indexing, batch-progress observability, and layer-parallel block-construction evolution
 
 ## USER-REQUEST
 
@@ -41,6 +41,10 @@
 - **UR-31 [KNOWN]:** LexonGraph indexer APIs have been updated to support incremental indexing, and LexonFabric should switch from the current one-shot delegated indexing path to those incremental APIs.
 - **UR-32 [KNOWN]:** LexonFabric should emit visible progress logs while mailboxes are processed and delegated items are indexed so operators can distinguish forward progress from a hung batch.
 - **UR-33 [INFERRED]:** Progress reporting should stay on the existing batch-runtime logging surface rather than introducing a separate control-plane or telemetry service for this increment.
+- **UR-34 [KNOWN]:** Processing of both leaf and node blocks may occur concurrently within a construction layer; synchronization is only required across layers.
+- **UR-35 [KNOWN]:** LexonFabric should use up to an administrator-defined number of cores for this work, with the default set to one half of the number of physical CPUs.
+- **UR-36 [INFERRED]:** Introducing layer-parallel block processing must preserve the existing indexing contract, including stable logical outputs and search-serving separation.
+- **UR-37 [KNOWN]:** Limit the current implementation scope to leaf-layer concurrency for now because that is where the expensive embedding generation occurs; higher-layer concurrency remains future work.
 
 ## Change Manifest
 
@@ -62,6 +66,8 @@
 | CM-INDEXER-014 | Revise | Expand mailbox source compatibility so mailbox batch items may reference `.mail` or `.mbox` files without widening the first increment to arbitrary archive extensions | UR-29, UR-30 |
 | CM-INDEXER-015 | Revise | Require LexonFabric to adopt LexonGraph's incremental delegated indexing APIs instead of relying only on the one-shot indexing call | UR-31 |
 | CM-INDEXER-016 | Add | Require observable batch-progress logging for mailbox expansion and delegated indexing progress without introducing a new control-plane surface | UR-32, UR-33 |
+| CM-INDEXER-017 | Revise | Allow delegated leaf-block work to proceed concurrently within the same construction layer while preserving cross-layer synchronization and recording higher-layer concurrency as future work | UR-34, UR-36, UR-37 |
+| CM-INDEXER-018 | Add | Require an administrator-defined concurrency budget for layer-parallel block processing, defaulting to one half of detected physical CPUs with a minimum of one core | UR-35 |
 
 ## Before / After
 
@@ -145,6 +151,21 @@
 - **Before [KNOWN]:** Batch visibility was limited to terminal success or failure plus the final summary output, so long-running mailbox expansion and indexing work could appear hung.
 - **After [KNOWN]:** The requirements now define runtime-visible progress logging for mailbox processing and delegated indexing progress on the normal batch log surface.
 
+### BA-INDEXER-017
+
+- **Before [KNOWN]:** Incremental delegated indexing was required, but the requirements did not state whether leaf and parent or node blocks within the same construction layer could be processed concurrently.
+- **After [KNOWN]:** The requirements now allow same-layer block work to execute concurrently while requiring synchronization only at cross-layer boundaries.
+
+### BA-INDEXER-018
+
+- **Before [KNOWN]:** The requirements did not define an operator-visible concurrency budget or default CPU-allocation rule for delegated block construction work.
+- **After [KNOWN]:** The requirements now require an administrator-defined concurrency cap for same-layer block work and define the default as one half of detected physical CPUs, floored at one core.
+
+### BA-INDEXER-019
+
+- **Before [KNOWN]:** The proposed concurrency change treated leaf and higher-layer parent or node block construction as equally in scope for this increment.
+- **After [KNOWN]:** The current increment now narrows executable concurrency to the leaf layer, where embedding work is concentrated, and records higher-layer concurrency as future work rather than an approved implementation obligation.
+
 ## Requirements
 
 ### Functional Requirements
@@ -185,6 +206,44 @@ LexonFabric SHALL adopt the incremental indexing APIs exposed by `lexongraph-ind
 - **Boundary [KNOWN]:** LexonFabric still does not own index-construction semantics; it consumes upstream incremental APIs rather than reimplementing indexing behavior in-repo.
 - **Idempotence constraint [INFERRED]:** Adopting incremental delegated indexing must preserve the existing immutable, hash-addressed rerun expectations for unchanged content.
 - **Traceability:** UR-3, UR-8, UR-31
+
+#### RQ-INDEXER-003B - Layer-parallel delegated block processing
+
+LexonFabric SHALL permit delegated leaf-block processing to proceed
+concurrently within the leaf construction layer.
+
+- **Required property [KNOWN]:** Leaf work items that belong to the same
+  delegated construction layer may execute independently up to the configured
+  concurrency budget.
+- **Synchronization boundary [KNOWN]:** Higher construction layers SHALL NOT
+  begin until the leaf layer they depend on has completed the block work needed
+  for parent construction.
+- **Non-goal [INFERRED]:** This requirement does not redefine LexonGraph's
+  block-construction semantics, parent-child relationships, or final root
+  determination.
+- **Future work [KNOWN]:** Concurrency for higher construction layers remains a
+  future enhancement and is not required in the current increment.
+- **Traceability:** UR-31, UR-34, UR-36, UR-37
+
+#### RQ-INDEXER-003C - Administrator-defined concurrency budget
+
+LexonFabric SHALL expose an administrator-defined maximum concurrency budget for
+layer-parallel block processing.
+
+- **Default [KNOWN]:** When the administrator does not supply an explicit cap,
+  the runtime default SHALL be `max(1, floor(physical_cpu_count / 2))`.
+- **Scope [KNOWN]:** The current increment applies this concurrency budget to
+  same-layer leaf work without changing the external batch contract or the
+  environment-selection boundary.
+- **Execution bound [INFERRED]:** The runtime may use fewer workers than the
+  configured cap when a layer has fewer ready block tasks or when upstream
+  constraints limit available parallelism.
+- **[UNKNOWN: physical CPU detection rule inside containerized deployments and
+  CPU-quota-constrained environments]**
+- **Future work [KNOWN]:** Reusing or extending this budget for higher-layer
+  block construction depends on future upstream API support and is not required
+  in the current increment.
+- **Traceability:** UR-34, UR-35, UR-37
 
 #### RQ-INDEXER-004 - Content resolution integration
 
@@ -286,7 +345,8 @@ LexonFabric SHALL preserve idempotent rerun behavior for repeated indexing of th
 - **Mechanism owner [KNOWN]:** The underlying LexonGraph API owns batch and recovery semantics.
 - **Required property [KNOWN]:** Produced blocks are immutable and identified by hash, so reruns must not create distinct logical outputs for unchanged content.
 - **Email artifact implication [INFERRED]:** Repeated normalization of semantically unchanged email content should resolve to the same normalized email artifact identity and the same derived chunk identities under a stable normalization and chunking policy.
-- **Traceability:** UR-8, UR-16
+- **Concurrency implication [INFERRED]:** Same-layer leaf scheduling must not change the logical block set or final root produced for unchanged input relative to the approved delegated indexing contract.
+- **Traceability:** UR-8, UR-16, UR-36
 
 #### RQ-INDEXER-008A - Local integration composition
 
@@ -348,6 +408,7 @@ LexonFabric SHALL keep content resolution, block storage, and embedding-provider
 - Requiring document collections to adopt the same normalization or chunking policy as email in this increment
 - Broadening mailbox source compatibility beyond the approved `.mail` and `.mbox` extension set in this increment
 - Introducing a dedicated telemetry service, long-lived progress daemon, or MCP-visible progress API for indexing in this increment
+- Requiring higher-layer parent or node block concurrency in the current increment before the upstream delegated indexing surface exposes a compatible implementation seam
 
 ## Invariant Impact Assessment
 
@@ -362,6 +423,7 @@ LexonFabric SHALL keep content resolution, block storage, and embedding-provider
 | Clients are not forced to parse raw mailbox blobs for ordinary retrieval | Preserved | Indexed chunks must reference normalized email artifacts so retrieval can stay at chunk level or expand to full normalized email through repository-owned artifacts |
 | Storage abstraction count stays bounded across environments | Preserved | Requirements now reuse the environment-selected `BlockStore` abstraction family for indexed blocks, normalized email artifacts, and mailbox provenance artifacts rather than introducing a second storage stack |
 | Local filesystem block stores remain interoperable with LexonGraph tooling | Preserved | The local/testing profile is now constrained to LexonGraph's filesystem naming/layout contract so inspection tools can consume repository-produced local stores |
+| Parallel execution does not weaken deterministic indexing semantics | Preserved | Leaf-layer concurrency is constrained by cross-layer barriers and idempotence requirements so scheduling policy does not become a semantic contract change |
 
 ## Coverage Notes
 
@@ -408,7 +470,11 @@ LexonFabric SHALL keep content resolution, block storage, and embedding-provider
   - user clarification message in this session: "I think they should. We don't really want two azure blob store, s3 store, local filesystem, etc, abstractions."
   - user clarification message in this session: "I think we can chain the provenance. Chunk -> mail block -> mbox."
   - user clarification message in this session: "Can we use the text_splitter crate for now, with the option to use huggingface tokenizer later for semantic chunking? Agree to the rest"
+  - user request in this session: "Processing of blocks (both leaf and node) can occur conccurently within a layer. Only synchronization required is cross layer."
+  - user request in this session: "Can we modify the indexer to use up to a admin defined number of cores, with default being 1/2 the number of physical cpus?"
+  - user clarification in this session: "Limit concurrency to the leaf layer for now (it is what is doing the expensive embedding generation anyway). Make note that higher layer concurrency is a future work item."
 - **Excluded for now [KNOWN]:**
   - Detailed Rust implementation file paths, crate manifests, Docker assets, and test artifacts, because this requirements document captures the semantic contract and leaves implementation realization to downstream design, validation, and code-review artifacts
   - Exact normalized email CBOR schema, exact duplicated chunk metadata list, and the specific chunking library choice, because those belong to downstream design and validation artifacts rather than requirements
   - The precise log-line schema, sink configuration, and per-item verbosity throttling policy for progress output, because those belong to downstream design and validation artifacts rather than requirements
+  - The exact configuration surface for the administrator-defined concurrency cap and the exact physical-CPU detection algorithm in containerized or quota-constrained environments, because those belong to downstream design and validation artifacts rather than requirements

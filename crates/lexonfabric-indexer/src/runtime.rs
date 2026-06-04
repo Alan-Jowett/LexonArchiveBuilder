@@ -1,17 +1,22 @@
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
-use lexongraph_block::{BlockError, SerializedBlock, deserialize_block};
+use lexongraph_block::{BlockError, EmbeddingSpec, SerializedBlock, deserialize_block};
 use lexongraph_block_store::BlockStoreError;
-use lexongraph_indexer::{Indexer, IndexerError};
+use lexongraph_indexer::{ConstructedBlocks, IndexItem, Indexer, IndexerError};
 use thiserror::Error;
+use tokio::sync::Semaphore;
+use tokio::task::{JoinError, JoinSet};
 
 use crate::block_store::ConfiguredBlockStore;
 use crate::config::{BatchItemConfig, BatchRequest, BatchSummary, ConfigError};
 use crate::embedding::{ConfiguredEmbeddingProvider, ConfiguredEmbeddingProviderError};
 use crate::mailbox::{MailboxExpansionError, expand_mailbox_item_with_stats};
 use crate::paths::resolve_path;
-use crate::resolver::LocalFilesystemContentResolver;
+use crate::resolver::{ContentRef, LocalFilesystemContentResolver};
+
+type RuntimeIndexer = Indexer<LocalFilesystemContentResolver, ConfiguredEmbeddingProvider>;
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
@@ -47,6 +52,8 @@ pub enum RuntimeError {
     Indexer(#[from] IndexerError),
     #[error("delegated indexing produced no blocks")]
     EmptyDelegatedOutput,
+    #[error("leaf-indexing worker task failed: {0}")]
+    LeafTaskJoin(#[from] JoinError),
     #[error("failed to write batch summary {path}: {source}")]
     WriteSummary {
         path: String,
@@ -93,18 +100,24 @@ where
     let block_store = ConfiguredBlockStore::from_environment(request_dir, &request.environment)?;
     let indexer = Indexer::with_defaults(LocalFilesystemContentResolver, embedding_provider);
     let embedding_spec = request.to_embedding_spec();
+    let max_concurrency = request.effective_max_concurrency();
     let document_items = request.to_document_index_items(request_dir);
     let mut staged_blocks = Vec::new();
     let mut staged_block_ids = Vec::new();
 
     if !document_items.is_empty() {
         progress(format!(
-            "Indexing {} document item(s)",
-            document_items.len()
+            "Indexing {} document item(s) with up to {} concurrent leaf worker(s)",
+            document_items.len(),
+            max_concurrency
         ));
-        let staged = indexer
-            .build_leaf_blocks(&document_items, embedding_spec.clone())
-            .await?;
+        let staged = build_leaf_blocks_concurrently(
+            &indexer,
+            &document_items,
+            &embedding_spec,
+            max_concurrency,
+        )
+        .await?;
         persist_staged_blocks(&staged.blocks, &block_store)?;
         progress(format!(
             "Indexed {} document item(s) into {} leaf block(s)",
@@ -126,9 +139,13 @@ where
                 expansion.message_count,
                 expansion.items.len()
             ));
-            let staged = indexer
-                .build_leaf_blocks(&expansion.items, embedding_spec.clone())
-                .await?;
+            let staged = build_leaf_blocks_concurrently(
+                &indexer,
+                &expansion.items,
+                &embedding_spec,
+                max_concurrency,
+            )
+            .await?;
             persist_staged_blocks(&staged.blocks, &block_store)?;
             progress(format!(
                 "Indexed {} delegated item(s) from mailbox {} into {} leaf block(s)",
@@ -176,6 +193,56 @@ where
             .map(|block_id| block_id.to_string())
             .collect(),
     })
+}
+
+async fn build_leaf_blocks_concurrently(
+    indexer: &RuntimeIndexer,
+    items: &[IndexItem<ContentRef>],
+    embedding_spec: &EmbeddingSpec,
+    max_concurrency: usize,
+) -> Result<ConstructedBlocks, RuntimeError> {
+    if items.is_empty() {
+        return Ok(ConstructedBlocks {
+            block_ids: Vec::new(),
+            blocks: Vec::new(),
+        });
+    }
+
+    let concurrency = max_concurrency.max(1).min(items.len());
+    let batch_size = items.len().div_ceil(concurrency);
+    let batch_count = items.len().div_ceil(batch_size);
+    let semaphore = Arc::new(Semaphore::new(concurrency));
+    let mut join_set = JoinSet::new();
+    for (batch_index, chunk) in items.chunks(batch_size).enumerate() {
+        let permit = semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("semaphore closed unexpectedly");
+        let indexer = indexer.clone();
+        let embedding_spec = embedding_spec.clone();
+        let batch_items = chunk.to_vec();
+        join_set.spawn(async move {
+            let _permit = permit;
+            let constructed = indexer.build_leaf_blocks(&batch_items, embedding_spec).await?;
+            Ok::<(usize, ConstructedBlocks), IndexerError>((batch_index, constructed))
+        });
+    }
+
+    let mut completed = vec![None; batch_count];
+    while let Some(result) = join_set.join_next().await {
+        let (batch_index, constructed) = result??;
+        completed[batch_index] = Some(constructed);
+    }
+
+    let mut block_ids = Vec::with_capacity(items.len());
+    let mut blocks = Vec::with_capacity(items.len());
+    for constructed in completed.into_iter().flatten() {
+        block_ids.extend(constructed.block_ids);
+        blocks.extend(constructed.blocks);
+    }
+
+    Ok(ConstructedBlocks { block_ids, blocks })
 }
 
 fn persist_staged_blocks(
@@ -271,6 +338,7 @@ mod tests {
                 encoding: "f32le".into(),
             },
             block_size_target: 65_536,
+            max_concurrency: None,
             items: vec![
                 BatchItemConfig::Mailbox {
                     path: mailbox_path
@@ -323,6 +391,7 @@ mod tests {
                 encoding: "f32le".into(),
             },
             block_size_target: 65_536,
+            max_concurrency: None,
             items: vec![BatchItemConfig::Document {
                 path: Path::new("doc.txt").to_path_buf(),
                 metadata: BTreeMap::new(),
@@ -369,6 +438,7 @@ mod tests {
                 encoding: "f32le".into(),
             },
             block_size_target: 65_536,
+            max_concurrency: None,
             items: vec![
                 BatchItemConfig::Mailbox {
                     path: mailbox_path
@@ -422,14 +492,195 @@ mod tests {
         server.join();
     }
 
+    #[tokio::test]
+    async fn higher_leaf_concurrency_preserves_outputs() {
+        let temp = tempdir().unwrap();
+        let document_a = temp.path().join("alpha.txt");
+        let document_b = temp.path().join("beta.txt");
+        let document_c = temp.path().join("gamma.txt");
+        fs::write(&document_a, b"alpha\n").unwrap();
+        fs::write(&document_b, b"beta\n").unwrap();
+        fs::write(&document_c, b"gamma\n").unwrap();
+
+        let server = spawn_embedding_server_with_delay(4, Duration::from_millis(10));
+        let base_request = BatchRequest {
+            environment: EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: server.base_url.clone(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            block_size_target: 65_536,
+            max_concurrency: Some(1),
+            items: vec![
+                BatchItemConfig::Document {
+                    path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
+                    metadata: BTreeMap::new(),
+                },
+                BatchItemConfig::Document {
+                    path: document_b.strip_prefix(temp.path()).unwrap().to_path_buf(),
+                    metadata: BTreeMap::new(),
+                },
+                BatchItemConfig::Document {
+                    path: document_c.strip_prefix(temp.path()).unwrap().to_path_buf(),
+                    metadata: BTreeMap::new(),
+                },
+            ],
+        };
+
+        let serial = run_request(temp.path(), base_request.clone()).await.unwrap();
+        let parallel = run_request(
+            temp.path(),
+            BatchRequest {
+                max_concurrency: Some(3),
+                ..base_request
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(serial.root_id, parallel.root_id);
+        assert_eq!(serial.block_ids, parallel.block_ids);
+        server.join();
+    }
+
+    #[tokio::test]
+    async fn higher_leaf_concurrency_preserves_mailbox_outputs() {
+        let temp = tempdir().unwrap();
+        let mailbox_path = temp.path().join("2026-05.mbox");
+        fs::write(
+            &mailbox_path,
+            concat!(
+                "From alan@example.com Sat Jan 03 10:00:00 2026\n",
+                "Subject: One\n",
+                "\n",
+                "First body.\n",
+                "From alan@example.com Sat Jan 03 10:05:00 2026\n",
+                "Subject: Two\n",
+                "\n",
+                "Second body.\n",
+                "From alan@example.com Sat Jan 03 10:10:00 2026\n",
+                "Subject: Three\n",
+                "\n",
+                "Third body.\n"
+            ),
+        )
+        .unwrap();
+
+        let server = spawn_embedding_server_with_delay(4, Duration::from_millis(10));
+        let base_request = BatchRequest {
+            environment: EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: server.base_url.clone(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            block_size_target: 65_536,
+            max_concurrency: Some(1),
+            items: vec![BatchItemConfig::Mailbox {
+                path: mailbox_path.strip_prefix(temp.path()).unwrap().to_path_buf(),
+                metadata: BTreeMap::new(),
+            }],
+        };
+
+        let serial = run_request(temp.path(), base_request.clone()).await.unwrap();
+        let parallel = run_request(
+            temp.path(),
+            BatchRequest {
+                max_concurrency: Some(3),
+                ..base_request
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(serial.root_id, parallel.root_id);
+        assert_eq!(serial.block_ids, parallel.block_ids);
+        server.join();
+    }
+
+    #[tokio::test]
+    async fn max_concurrency_allows_multiple_leaf_embeddings_in_flight() {
+        let temp = tempdir().unwrap();
+        let document_a = temp.path().join("alpha.txt");
+        let document_b = temp.path().join("beta.txt");
+        let document_c = temp.path().join("gamma.txt");
+        fs::write(&document_a, b"alpha\n").unwrap();
+        fs::write(&document_b, b"beta\n").unwrap();
+        fs::write(&document_c, b"gamma\n").unwrap();
+
+        let server = spawn_embedding_server_with_delay(3, Duration::from_millis(75));
+        let request = BatchRequest {
+            environment: EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: server.base_url.clone(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            block_size_target: 65_536,
+            max_concurrency: Some(3),
+            items: vec![
+                BatchItemConfig::Document {
+                    path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
+                    metadata: BTreeMap::new(),
+                },
+                BatchItemConfig::Document {
+                    path: document_b.strip_prefix(temp.path()).unwrap().to_path_buf(),
+                    metadata: BTreeMap::new(),
+                },
+                BatchItemConfig::Document {
+                    path: document_c.strip_prefix(temp.path()).unwrap().to_path_buf(),
+                    metadata: BTreeMap::new(),
+                },
+            ],
+        };
+
+        let summary = run_request(temp.path(), request).await.unwrap();
+        assert!(!summary.block_ids.is_empty());
+        assert!(server.max_in_flight() > 1);
+        server.join();
+    }
+
     struct TestServer {
         base_url: String,
         handle: thread::JoinHandle<()>,
+        max_in_flight: Arc<AtomicUsize>,
     }
 
     impl TestServer {
         fn join(self) {
             self.handle.join().unwrap();
+        }
+
+        fn max_in_flight(&self) -> usize {
+            self.max_in_flight.load(Ordering::SeqCst)
         }
     }
 
@@ -469,11 +720,22 @@ mod tests {
     }
 
     fn spawn_embedding_server(expected_requests: usize) -> TestServer {
+        spawn_embedding_server_with_delay(expected_requests, Duration::ZERO)
+    }
+
+    fn spawn_embedding_server_with_delay(
+        expected_requests: usize,
+        response_delay: Duration,
+    ) -> TestServer {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
         let seen = Arc::new(AtomicUsize::new(0));
         let seen_for_thread = Arc::clone(&seen);
+        let current_in_flight = Arc::new(AtomicUsize::new(0));
+        let current_in_flight_for_thread = Arc::clone(&current_in_flight);
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let max_in_flight_for_thread = Arc::clone(&max_in_flight);
         let (ready_tx, ready_rx) = mpsc::channel();
         let handle = thread::spawn(move || {
             ready_tx.send(()).unwrap();
@@ -482,6 +744,7 @@ mod tests {
             let mut last_activity = Instant::now();
             while Instant::now() < deadline {
                 if seen_for_thread.load(Ordering::SeqCst) >= expected_requests
+                    && current_in_flight_for_thread.load(Ordering::SeqCst) == 0
                     && Instant::now().duration_since(last_activity) >= idle_after_expected
                 {
                     break;
@@ -495,39 +758,68 @@ mod tests {
                     Err(error) => panic!("failed to accept runtime test connection: {error}"),
                 };
                 last_activity = Instant::now();
-                stream.set_nonblocking(true).unwrap();
-                let mut request = Vec::new();
-                let mut buffer = [0u8; 1024];
-                let request_deadline = Instant::now() + Duration::from_secs(5);
-                loop {
-                    if request_is_complete(&request) {
-                        break;
-                    }
-                    if Instant::now() >= request_deadline {
-                        panic!("timed out waiting for runtime test request body");
-                    }
-                    match stream.read(&mut buffer) {
-                        Ok(0) => break,
-                        Ok(read) => {
-                            request.extend_from_slice(&buffer[..read]);
+                let seen_for_connection = Arc::clone(&seen_for_thread);
+                let current_in_flight_for_connection = Arc::clone(&current_in_flight_for_thread);
+                let max_in_flight_for_connection = Arc::clone(&max_in_flight_for_thread);
+                thread::spawn(move || {
+                    let current =
+                        current_in_flight_for_connection.fetch_add(1, Ordering::SeqCst) + 1;
+                    loop {
+                        let previous_max = max_in_flight_for_connection.load(Ordering::SeqCst);
+                        if current <= previous_max {
+                            break;
                         }
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            thread::sleep(Duration::from_millis(10));
+                        if max_in_flight_for_connection
+                            .compare_exchange(
+                                previous_max,
+                                current,
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
+                            )
+                            .is_ok()
+                        {
+                            break;
                         }
-                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => break,
-                        Err(error) => panic!("failed to read runtime test request: {error}"),
                     }
-                }
-                stream.set_nonblocking(false).unwrap();
-                let body = r#"{"data":[{"embedding":[0.25,0.75]}]}"#;
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                stream.write_all(response.as_bytes()).unwrap();
-                stream.flush().unwrap();
-                seen_for_thread.fetch_add(1, Ordering::SeqCst);
+
+                    stream.set_nonblocking(true).unwrap();
+                    let mut request = Vec::new();
+                    let mut buffer = [0u8; 1024];
+                    let request_deadline = Instant::now() + Duration::from_secs(5);
+                    loop {
+                        if request_is_complete(&request) {
+                            break;
+                        }
+                        if Instant::now() >= request_deadline {
+                            panic!("timed out waiting for runtime test request body");
+                        }
+                        match stream.read(&mut buffer) {
+                            Ok(0) => break,
+                            Ok(read) => {
+                                request.extend_from_slice(&buffer[..read]);
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                                thread::sleep(Duration::from_millis(10));
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => break,
+                            Err(error) => panic!("failed to read runtime test request: {error}"),
+                        }
+                    }
+                    stream.set_nonblocking(false).unwrap();
+                    if !response_delay.is_zero() {
+                        thread::sleep(response_delay);
+                    }
+                    let body = r#"{"data":[{"embedding":[0.25,0.75]}]}"#;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    stream.write_all(response.as_bytes()).unwrap();
+                    stream.flush().unwrap();
+                    seen_for_connection.fetch_add(1, Ordering::SeqCst);
+                    current_in_flight_for_connection.fetch_sub(1, Ordering::SeqCst);
+                });
             }
         });
         ready_rx.recv().unwrap();
@@ -535,6 +827,7 @@ mod tests {
         TestServer {
             base_url: format!("http://{}", address),
             handle,
+            max_in_flight,
         }
     }
 }

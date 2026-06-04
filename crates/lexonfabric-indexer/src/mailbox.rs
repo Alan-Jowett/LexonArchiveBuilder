@@ -836,6 +836,7 @@ mod tests {
                 encoding: "f32le".into(),
             },
             block_size_target: 65_536,
+            max_concurrency: None,
             items: vec![
                 BatchItemConfig::Mailbox {
                     path: mailbox_path.strip_prefix(dir.path()).unwrap().to_path_buf(),

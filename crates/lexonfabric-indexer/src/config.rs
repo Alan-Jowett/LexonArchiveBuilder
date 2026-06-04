@@ -14,6 +14,7 @@ const DEFAULT_BLOCK_SIZE_TARGET: usize = 65_536;
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_MAX_RETRIES: u32 = 5;
 const DEFAULT_RETRY_DELAY_MS: u64 = 1_000;
+const MIN_MAX_CONCURRENCY: usize = 1;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct BatchRequest {
@@ -21,6 +22,8 @@ pub struct BatchRequest {
     pub embedding_spec: EmbeddingSpecConfig,
     #[serde(default = "default_block_size_target")]
     pub block_size_target: usize,
+    #[serde(default)]
+    pub max_concurrency: Option<usize>,
     pub items: Vec<BatchItemConfig>,
 }
 
@@ -102,6 +105,8 @@ pub struct BatchSummary {
 pub enum ConfigError {
     #[error("batch request must contain at least one item")]
     EmptyItems,
+    #[error("max_concurrency must be at least 1 when specified")]
+    InvalidMaxConcurrency,
     #[error("local embedding base_url must not be empty")]
     MissingLocalEmbeddingBaseUrl,
 }
@@ -110,6 +115,9 @@ impl BatchRequest {
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.items.is_empty() {
             return Err(ConfigError::EmptyItems);
+        }
+        if matches!(self.max_concurrency, Some(0)) {
+            return Err(ConfigError::InvalidMaxConcurrency);
         }
         Ok(())
     }
@@ -123,6 +131,10 @@ impl BatchRequest {
 
     pub fn to_embedding_spec(&self) -> EmbeddingSpec {
         self.embedding_spec.clone().into()
+    }
+
+    pub fn effective_max_concurrency(&self) -> usize {
+        self.max_concurrency.unwrap_or_else(default_max_concurrency)
     }
 }
 
@@ -225,6 +237,29 @@ fn default_retry_delay_ms() -> u64 {
     DEFAULT_RETRY_DELAY_MS
 }
 
+fn default_max_concurrency() -> usize {
+    derive_default_max_concurrency(detected_cpu_count_for_default())
+}
+
+fn detected_cpu_count_for_default() -> usize {
+    let physical = num_cpus::get_physical();
+    if physical > 0 {
+        return physical;
+    }
+
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(MIN_MAX_CONCURRENCY)
+}
+
+fn derive_default_max_concurrency(cpu_count: usize) -> usize {
+    if cpu_count <= 1 {
+        return MIN_MAX_CONCURRENCY;
+    }
+
+    (cpu_count / 2).max(MIN_MAX_CONCURRENCY)
+}
+
 fn default_azure_api_version() -> String {
     "2024-02-01".to_string()
 }
@@ -254,6 +289,7 @@ mod tests {
                 encoding: "f32le".into(),
             },
             block_size_target: default_block_size_target(),
+            max_concurrency: None,
             items: vec![BatchItemConfig::Document {
                 path: relative_document_path.clone(),
                 metadata: BTreeMap::new(),
@@ -268,5 +304,76 @@ mod tests {
             }
             ContentRef::Inline { .. } => panic!("expected a document content ref"),
         }
+    }
+
+    #[test]
+    fn explicit_max_concurrency_must_be_positive() {
+        let request = BatchRequest {
+            environment: EnvironmentConfig::Local {
+                block_store_root: PathBuf::from("blocks"),
+                embedding: LocalEmbeddingConfig {
+                    base_url: "http://localhost:8080".into(),
+                    model: default_local_model(),
+                    api_key_env: None,
+                    request_timeout_secs: default_request_timeout_secs(),
+                    max_retries: default_max_retries(),
+                    retry_delay_ms: default_retry_delay_ms(),
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 384,
+                encoding: "f32le".into(),
+            },
+            block_size_target: default_block_size_target(),
+            max_concurrency: Some(0),
+            items: vec![BatchItemConfig::Document {
+                path: PathBuf::from("docs").join("sample.txt"),
+                metadata: BTreeMap::new(),
+            }],
+        };
+
+        assert!(matches!(
+            request.validate(),
+            Err(ConfigError::InvalidMaxConcurrency)
+        ));
+    }
+
+    #[test]
+    fn explicit_max_concurrency_overrides_default() {
+        let request = BatchRequest {
+            environment: EnvironmentConfig::Local {
+                block_store_root: PathBuf::from("blocks"),
+                embedding: LocalEmbeddingConfig {
+                    base_url: "http://localhost:8080".into(),
+                    model: default_local_model(),
+                    api_key_env: None,
+                    request_timeout_secs: default_request_timeout_secs(),
+                    max_retries: default_max_retries(),
+                    retry_delay_ms: default_retry_delay_ms(),
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 384,
+                encoding: "f32le".into(),
+            },
+            block_size_target: default_block_size_target(),
+            max_concurrency: Some(7),
+            items: vec![BatchItemConfig::Document {
+                path: PathBuf::from("docs").join("sample.txt"),
+                metadata: BTreeMap::new(),
+            }],
+        };
+
+        assert_eq!(request.effective_max_concurrency(), 7);
+    }
+
+    #[test]
+    fn derived_default_max_concurrency_uses_half_the_detected_cpu_count() {
+        assert_eq!(derive_default_max_concurrency(0), 1);
+        assert_eq!(derive_default_max_concurrency(1), 1);
+        assert_eq!(derive_default_max_concurrency(2), 1);
+        assert_eq!(derive_default_max_concurrency(3), 1);
+        assert_eq!(derive_default_max_concurrency(4), 2);
+        assert_eq!(derive_default_max_concurrency(8), 4);
     }
 }
