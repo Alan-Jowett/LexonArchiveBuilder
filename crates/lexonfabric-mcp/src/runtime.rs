@@ -3,10 +3,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ciborium::Value;
+use lexonfabric_indexer::BatchSummary;
 use lexonfabric_indexer::block_store::ConfiguredBlockStore;
 use lexonfabric_indexer::config::ConfigError as IndexerConfigError;
 use lexonfabric_indexer::embedding::ConfiguredEmbeddingProvider;
-use lexonfabric_indexer::BatchSummary;
 use lexongraph_block::{BlockHash, EmbeddingSpec};
 use lexongraph_block_store::BlockStoreError;
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
@@ -270,13 +270,9 @@ fn search_with_partial_retry(
         Ok(result) => Ok(result),
         Err(SearchError::Exhausted {
             reachable_leaves, ..
-        }) if reachable_leaves > 0 => searcher.search(
-            root_id,
-            target,
-            traversal_width,
-            reachable_leaves,
-            store,
-        ),
+        }) if reachable_leaves > 0 => {
+            searcher.search(root_id, target, traversal_width, reachable_leaves, store)
+        }
         Err(error) => Err(error),
     }
 }
@@ -292,15 +288,18 @@ fn metadata_to_text_map(metadata: &[(Value, Value)]) -> BTreeMap<String, String>
 }
 
 fn source_name_from_metadata(metadata: &BTreeMap<String, String>) -> Option<String> {
-    ["source_name", "document_name", "email_name", "thread_name", "name"]
-        .iter()
-        .find_map(|key| metadata.get(*key).cloned())
+    [
+        "source_name",
+        "document_name",
+        "email_name",
+        "thread_name",
+        "name",
+    ]
+    .iter()
+    .find_map(|key| metadata.get(*key).cloned())
 }
 
-fn unsupported_named_retrieval(
-    kind: NamedItemKind,
-    name: String,
-) -> NamedRetrievalResponse {
+fn unsupported_named_retrieval(kind: NamedItemKind, name: String) -> NamedRetrievalResponse {
     NamedRetrievalResponse {
         kind,
         name,
@@ -346,8 +345,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use lexonfabric_indexer::config::{
-        BatchItemConfig, BatchRequest, EmbeddingSpecConfig, EnvironmentConfig,
-        LocalEmbeddingConfig,
+        BatchItemConfig, BatchRequest, EmbeddingSpecConfig, EnvironmentConfig, LocalEmbeddingConfig,
     };
     use lexonfabric_indexer::{run_request, write_summary_file};
     use tempfile::tempdir;
@@ -430,17 +428,17 @@ mod tests {
         assert_eq!(response.root_id, summary.root_id);
         assert_eq!(response.top_k, 5);
         assert!(!response.results.is_empty());
-        assert!(response
-            .results
-            .iter()
-            .any(|hit| hit.text.contains("LexonFabric MCP runtime document body")));
-        assert!(response
-            .results
-            .iter()
-            .any(|hit| hit
-                .source_path
+        assert!(
+            response
+                .results
+                .iter()
+                .any(|hit| hit.text.contains("LexonFabric MCP runtime document body"))
+        );
+        assert!(response.results.iter().any(|hit| {
+            hit.source_path
                 .as_deref()
-                .is_some_and(|path| path.ends_with("overview.txt"))));
+                .is_some_and(|path| path.ends_with("overview.txt"))
+        }));
         server.join();
     }
 
@@ -566,7 +564,8 @@ mod tests {
                     encoding: "f32le".into(),
                 },
                 index: IndexConfig::RootId {
-                    root_id: "4c33a6fc7cac4679c0a1f57d40203a28e997c3a92783abf4dc0f7162d36f856e".into(),
+                    root_id: "4c33a6fc7cac4679c0a1f57d40203a28e997c3a92783abf4dc0f7162d36f856e"
+                        .into(),
                 },
                 top_k: 1,
                 traversal_width: 1,
@@ -610,7 +609,8 @@ mod tests {
                     encoding: "f32le".into(),
                 },
                 index: IndexConfig::RootId {
-                    root_id: "4c33a6fc7cac4679c0a1f57d40203a28e997c3a92783abf4dc0f7162d36f856e".into(),
+                    root_id: "4c33a6fc7cac4679c0a1f57d40203a28e997c3a92783abf4dc0f7162d36f856e"
+                        .into(),
                 },
                 top_k: 1,
                 traversal_width: 1,

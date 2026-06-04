@@ -113,7 +113,10 @@ mod tests {
 
         assert_eq!(
             resolved,
-            Path::new("examples").join("local").join("output").join("summary.json")
+            Path::new("examples")
+                .join("local")
+                .join("output")
+                .join("summary.json")
         );
     }
 }

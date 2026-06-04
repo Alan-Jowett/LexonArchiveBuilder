@@ -387,6 +387,27 @@ mod tests {
         }
     }
 
+    fn request_is_complete(request: &[u8]) -> bool {
+        let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+            return false;
+        };
+        let body_start = header_end + 4;
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        let content_length = headers.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.eq_ignore_ascii_case("content-length") {
+                value.trim().parse::<usize>().ok()
+            } else {
+                None
+            }
+        });
+
+        match content_length {
+            Some(length) => request.len() >= body_start + length,
+            None => true,
+        }
+    }
+
     fn spawn_test_server(responses: Vec<String>, requests: Arc<Mutex<Vec<String>>>) -> TestServer {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -394,7 +415,7 @@ mod tests {
         let (ready_tx, ready_rx) = mpsc::channel();
         let handle = thread::spawn(move || {
             ready_tx.send(()).unwrap();
-            let deadline = Instant::now() + Duration::from_secs(5);
+            let deadline = Instant::now() + Duration::from_secs(15);
             let mut response_iter = responses.into_iter();
             while Instant::now() < deadline {
                 let Some(response) = response_iter.next() else {
@@ -412,23 +433,27 @@ mod tests {
                     }
                     Err(error) => panic!("failed to accept embedding test connection: {error}"),
                 };
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
+                stream.set_nonblocking(true).unwrap();
                 let mut request = Vec::new();
                 let mut buffer = [0u8; 1024];
+                let request_deadline = Instant::now() + Duration::from_secs(5);
                 loop {
+                    if request_is_complete(&request) {
+                        break;
+                    }
+                    if Instant::now() >= request_deadline {
+                        panic!("timed out waiting for embedding test request body");
+                    }
                     match stream.read(&mut buffer) {
                         Ok(0) => break,
                         Ok(read) => {
                             request.extend_from_slice(&buffer[..read]);
                         }
-                        Err(error)
-                            if matches!(
-                                error.kind(),
-                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                            ) =>
-                        {
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
                             break;
                         }
                         Err(error) => panic!("failed to read test request: {error}"),

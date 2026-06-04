@@ -98,7 +98,10 @@ where
     let mut staged_block_ids = Vec::new();
 
     if !document_items.is_empty() {
-        progress(format!("Indexing {} document item(s)", document_items.len()));
+        progress(format!(
+            "Indexing {} document item(s)",
+            document_items.len()
+        ));
         let staged = indexer
             .build_leaf_blocks(&document_items, embedding_spec.clone())
             .await?;
@@ -293,7 +296,10 @@ mod tests {
 
         assert_eq!(first.root_id, second.root_id);
         assert_eq!(first.block_ids, second.block_ids);
-        assert_eq!(stored_block_count_after_first, stored_block_count_after_second);
+        assert_eq!(
+            stored_block_count_after_first,
+            stored_block_count_after_second
+        );
         assert!(stored_block_count_after_second > first.block_count);
         server.join();
     }
@@ -382,20 +388,37 @@ mod tests {
         };
 
         let mut progress = Vec::new();
-        let summary = run_request_with_progress(temp.path(), request, |message| progress.push(message))
-            .await
-            .unwrap();
+        let summary =
+            run_request_with_progress(temp.path(), request, |message| progress.push(message))
+                .await
+                .unwrap();
 
         assert!(!summary.block_ids.is_empty());
-        assert!(progress.iter().any(|line| line.contains("Indexing 1 document item(s)")));
-        assert!(progress.iter().any(|line| line.contains("Processing mailbox")));
-        assert!(progress.iter().any(|line| line.contains("Processed mailbox")));
-        assert!(progress
-            .iter()
-            .any(|line| line.contains("Indexed 1 delegated item(s) from mailbox")));
-        assert!(progress
-            .iter()
-            .any(|line| line.contains("parent block(s); 1 staged block(s) remain")));
+        assert!(
+            progress
+                .iter()
+                .any(|line| line.contains("Indexing 1 document item(s)"))
+        );
+        assert!(
+            progress
+                .iter()
+                .any(|line| line.contains("Processing mailbox"))
+        );
+        assert!(
+            progress
+                .iter()
+                .any(|line| line.contains("Processed mailbox"))
+        );
+        assert!(
+            progress
+                .iter()
+                .any(|line| line.contains("Indexed 1 delegated item(s) from mailbox"))
+        );
+        assert!(
+            progress
+                .iter()
+                .any(|line| line.contains("parent block(s); 1 staged block(s) remain"))
+        );
         server.join();
     }
 
@@ -407,6 +430,27 @@ mod tests {
     impl TestServer {
         fn join(self) {
             self.handle.join().unwrap();
+        }
+    }
+
+    fn request_is_complete(request: &[u8]) -> bool {
+        let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+            return false;
+        };
+        let body_start = header_end + 4;
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        let content_length = headers.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.eq_ignore_ascii_case("content-length") {
+                value.trim().parse::<usize>().ok()
+            } else {
+                None
+            }
+        });
+
+        match content_length {
+            Some(length) => request.len() >= body_start + length,
+            None => true,
         }
     }
 
@@ -434,7 +478,7 @@ mod tests {
         let handle = thread::spawn(move || {
             ready_tx.send(()).unwrap();
             let idle_after_expected = Duration::from_millis(200);
-            let deadline = Instant::now() + Duration::from_secs(5);
+            let deadline = Instant::now() + Duration::from_secs(15);
             let mut last_activity = Instant::now();
             while Instant::now() < deadline {
                 if seen_for_thread.load(Ordering::SeqCst) >= expected_requests
@@ -451,25 +495,27 @@ mod tests {
                     Err(error) => panic!("failed to accept runtime test connection: {error}"),
                 };
                 last_activity = Instant::now();
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
+                stream.set_nonblocking(true).unwrap();
                 let mut request = Vec::new();
                 let mut buffer = [0u8; 1024];
+                let request_deadline = Instant::now() + Duration::from_secs(5);
                 loop {
+                    if request_is_complete(&request) {
+                        break;
+                    }
+                    if Instant::now() >= request_deadline {
+                        panic!("timed out waiting for runtime test request body");
+                    }
                     match stream.read(&mut buffer) {
                         Ok(0) => break,
                         Ok(read) => {
                             request.extend_from_slice(&buffer[..read]);
                         }
-                        Err(error)
-                            if matches!(
-                                error.kind(),
-                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                            ) =>
-                        {
-                            break;
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(10));
                         }
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => break,
                         Err(error) => panic!("failed to read runtime test request: {error}"),
                     }
                 }
