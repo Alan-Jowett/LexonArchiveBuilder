@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use lexongraph_block::{Block, BlockHash};
-use lexongraph_block_store::{BlockStore, BlockStoreError};
+use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
 use lexongraph_block_store_fs::FilesystemBlockStore;
 
 use crate::config::EnvironmentConfig;
@@ -50,6 +50,10 @@ impl BlockStore for AzureBlobBlockStoreStub {
     ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
         Err(Self::not_implemented())
     }
+
+    fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
+        Err(Self::not_implemented())
+    }
 }
 
 impl BlockStore for ConfiguredBlockStore {
@@ -67,6 +71,13 @@ impl BlockStore for ConfiguredBlockStore {
         match self {
             Self::Local(store) => store.get(block_id),
             Self::AzureBlob(store) => store.get(block_id),
+        }
+    }
+
+    fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
+        match self {
+            Self::Local(store) => store.iter_block_ids(),
+            Self::AzureBlob(store) => store.iter_block_ids(),
         }
     }
 }
@@ -100,6 +111,7 @@ mod tests {
         let store = ConfiguredBlockStore::AzureBlob(AzureBlobBlockStoreStub);
         let block = Block::Leaf(LeafBlock {
             version: VERSION_1,
+            level: 0,
             embedding_spec: EmbeddingSpec {
                 dims: 2,
                 encoding: "f32le".into(),
@@ -122,6 +134,7 @@ mod tests {
     fn sample_block() -> Block {
         Block::Leaf(LeafBlock {
             version: VERSION_1,
+            level: 0,
             embedding_spec: EmbeddingSpec {
                 dims: 2,
                 encoding: "f32le".into(),
