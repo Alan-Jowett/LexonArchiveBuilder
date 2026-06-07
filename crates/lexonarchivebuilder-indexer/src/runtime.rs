@@ -248,7 +248,6 @@ where
 {
     let progress: ProgressReporter = Arc::new(progress);
     request.validate()?;
-    clustering_overrides.validate()?;
     let clustering = clustering_overrides.to_built_in_clustering()?;
     let stage = request.stage;
     let block_store = ConfiguredBlockStore::from_environment(request_dir, &request.environment)?;
