@@ -163,6 +163,23 @@ scripts/lexonarchivebuilder-scale-test.sh \
   --sources-file examples/local/scale-test/rsync.sources.sample.txt
 ```
 
+The wrapper also exposes the existing indexer clustering flags as first-class
+script arguments. For example:
+
+```bash
+scripts/lexonarchivebuilder-scale-test.sh \
+  --clustering-algorithm directional-pca \
+  --clustering-cluster-count 3 \
+  --clustering-random-seed 7 \
+  --clustering-retained-dimension-count 1 \
+  --clustering-variance-exponent 1.5 \
+  --clustering-temperature 0.75 \
+  --clustering-min-input-count 2 \
+  --clustering-min-effective-rank 1 \
+  --clustering-min-cumulative-variance 0.25 \
+  rsync.ietf.org::mailman-archive/ipsec/
+```
+
 On Linux, you can also launch the same workflow through Docker Compose:
 
 ```bash
@@ -179,6 +196,15 @@ To point the Compose entrypoint at a different sources file in the repository:
 
 ```powershell
 docker compose run --rm scale-test --sources-file /workspace/examples/local/scale-test/rsync.sources.sample.txt
+```
+
+The same clustering flags can be passed through the Docker Compose entrypoint:
+
+```powershell
+docker compose run --rm scale-test `
+  --clustering-algorithm dcbc `
+  --clustering-cluster-count 2 `
+  --clustering-random-seed 11
 ```
 
 Each run writes its generated request, fetched mailbox mirror, block store, and

@@ -3,7 +3,8 @@
 ## Status
 
 Phase 2 validation patch for the approved local rsync-driven stress-test
-wrapper in `docs/specs/lexonarchivebuilder-scale-test/requirements.md` and
+wrapper and caller-selectable delegated clustering configuration in
+`docs/specs/lexonarchivebuilder-scale-test/requirements.md` and
 `docs/specs/lexonarchivebuilder-scale-test/design.md`.
 
 ## Validation Scope
@@ -12,9 +13,9 @@ These validation entries define the expected conformance surface for the
 LexonArchiveBuilder-owned `lexonarchivebuilder-scale-test` boundary.
 
 This package validates wrapper-owned orchestration, generated request
-compatibility, delegated execution, and root handoff output. It does not
-redefine validation already owned by `lexonarchivebuilder-indexer`, LexonGraph, or
-`lexonarchivebuilder-mcp`.
+compatibility, delegated clustering-control forwarding, delegated execution,
+and root handoff output. It does not redefine validation already owned by
+`lexonarchivebuilder-indexer`, LexonGraph, or `lexonarchivebuilder-mcp`.
 
 ## Validation Entries
 
@@ -60,6 +61,30 @@ creating divergent `lexonarchivebuilder-scale-test` behaviors.
 **Traces to:** RQ-SCALE-003C, RQ-SCALE-003D, RQ-SCALE-010, DSG-LST-003,
 DSG-LST-005, DSG-LST-010
 
+### VAL-LST-002C
+
+Inspect the caller-facing delegated clustering control surface for
+`lexonarchivebuilder-scale-test`.
+
+**Pass condition:** the wrapper exposes one explicit delegated clustering-
+algorithm selector plus the approved shared and algorithm-specific delegated
+clustering option families, aligned to the downstream indexer contract, and
+does not rely on a generic opaque extra-argument passthrough surface.
+
+**Traces to:** RQ-SCALE-003E, RQ-SCALE-003F, DSG-LST-005B, DSG-LST-010A
+
+### VAL-LST-002D
+
+Inspect the delegated clustering control surface across the supported bash and
+Docker Compose entrypoints.
+
+**Pass condition:** both entrypoints preserve the same delegated clustering
+selector and option family, with the same downstream meaning for one logical
+run, rather than introducing entrypoint-specific clustering behavior.
+
+**Traces to:** RQ-SCALE-003D, RQ-SCALE-003E, RQ-SCALE-003F, RQ-SCALE-010A,
+DSG-LST-005B, DSG-LST-006A, DSG-LST-010A
+
 ### VAL-LST-003
 
 Execute a representative local run with one rsync URL.
@@ -96,6 +121,19 @@ require broader mailbox extension support in this increment.
 
 **Traces to:** RQ-SCALE-005, DSG-LST-005, DSG-LST-011
 
+### VAL-LST-003C
+
+Execute a representative local run with explicit delegated clustering
+selection.
+
+**Pass condition:** the wrapper accepts the selected delegated clustering
+algorithm and supported delegated clustering options while preserving the
+approved rsync -> discovery -> generated request/config -> delegated
+parser/indexer -> root handoff stage order.
+
+**Traces to:** RQ-SCALE-003E, RQ-SCALE-003F, RQ-SCALE-004A, DSG-LST-003,
+DSG-LST-005B, DSG-LST-006A
+
 ### VAL-LST-004
 
 Inspect the generated request/config artifact produced from discovered mailbox
@@ -107,6 +145,19 @@ directly.
 
 **Traces to:** RQ-SCALE-004, RQ-SCALE-005, RQ-SCALE-010, DSG-LST-005,
 DSG-LST-006, DSG-LST-010
+
+### VAL-LST-004A
+
+Inspect wrapper-owned request materialization and delegated invocation when
+delegated clustering inputs are supplied.
+
+**Pass condition:** the generated request artifact remains compatible with the
+existing local indexer request contract, while the selected delegated
+clustering configuration is forwarded through the downstream invocation rather
+than being serialized into a wrapper-local clustering protocol.
+
+**Traces to:** RQ-SCALE-003F, RQ-SCALE-004A, RQ-SCALE-010A, DSG-LST-005B,
+DSG-LST-006A, DSG-LST-010A
 
 ### VAL-LST-005
 

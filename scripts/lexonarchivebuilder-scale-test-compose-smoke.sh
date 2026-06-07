@@ -25,7 +25,12 @@ cat >"${FIXTURE_DIR}/sources.txt" <<EOF
 /workspace/examples/local/scale-test/runs/${RUN_NAME}/fixtures/source-two
 EOF
 
-(cd "$REPO_ROOT" && COMPOSE_PROJECT_NAME=lexonarchivebuilder docker compose run --rm scale-test --run-name "$RUN_NAME" --sources-file "$CONTAINER_SOURCES_FILE")
+(cd "$REPO_ROOT" && COMPOSE_PROJECT_NAME=lexonarchivebuilder docker compose run --rm scale-test \
+  --run-name "$RUN_NAME" \
+  --sources-file "$CONTAINER_SOURCES_FILE" \
+  --clustering-algorithm dcbc \
+  --clustering-cluster-count 2 \
+  --clustering-random-seed 11)
 
 REQUEST_PATH="${RUN_DIR}/request.json"
 SUMMARY_PATH="${RUN_DIR}/summary.json"

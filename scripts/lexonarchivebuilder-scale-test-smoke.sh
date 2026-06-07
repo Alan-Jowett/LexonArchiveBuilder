@@ -24,7 +24,12 @@ mkdir -p "$SOURCE_ONE" "$SOURCE_TWO"
 cp "$FIXTURE_MAILBOX" "${SOURCE_ONE}/2026-01.mail"
 cp "$FIXTURE_MAILBOX" "${SOURCE_TWO}/2026-02.mbox"
 
-bash "$SCALE_TEST_SCRIPT" --run-name "$RUN_NAME" "$SOURCE_ONE" "$SOURCE_TWO"
+bash "$SCALE_TEST_SCRIPT" \
+  --run-name "$RUN_NAME" \
+  --clustering-algorithm dcbc \
+  --clustering-cluster-count 2 \
+  --clustering-random-seed 7 \
+  "$SOURCE_ONE" "$SOURCE_TWO"
 
 REQUEST_PATH="${RUN_DIR}/request.json"
 SUMMARY_PATH="${RUN_DIR}/summary.json"

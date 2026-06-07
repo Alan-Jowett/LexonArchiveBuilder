@@ -5,18 +5,34 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/lexonarchivebuilder-scale-test.sh [--run-name NAME] [--sources-file PATH] [RSYNC_URL ...]
+  scripts/lexonarchivebuilder-scale-test.sh [--run-name NAME] [--sources-file PATH] [CLUSTERING_OPTION ...] [RSYNC_URL ...]
 
 Examples:
   scripts/lexonarchivebuilder-scale-test.sh rsync.ietf.org::mailman-archive/ipsec/
   scripts/lexonarchivebuilder-scale-test.sh --sources-file examples/local/scale-test/rsync.sources.sample.txt
+  scripts/lexonarchivebuilder-scale-test.sh --clustering-algorithm directional-pca --clustering-cluster-count 3 rsync.ietf.org::mailman-archive/ipsec/
 
 This script:
   1. fetches mailbox content from one or more rsync URLs
   2. discovers .mail and .mbox files in the fetched mirrors
   3. generates an indexer request file in the run directory
-  4. runs the existing indexer directly or via docker compose
+  4. forwards supported clustering flags to the existing indexer directly or via docker compose
   5. leaves summary/root handoff output in the run directory
+
+Supported clustering flags:
+  --clustering-algorithm
+  --clustering-cluster-count
+  --clustering-random-seed
+  --clustering-min-cluster-occupancy
+  --clustering-max-cluster-occupancy
+  --clustering-max-cluster-size-ratio
+  --clustering-soft-balance-penalty
+  --clustering-retained-dimension-count
+  --clustering-variance-exponent
+  --clustering-temperature
+  --clustering-min-input-count
+  --clustering-min-effective-rank
+  --clustering-min-cumulative-variance
 EOF
 }
 
@@ -93,6 +109,12 @@ validate_run_name() {
   fi
 }
 
+append_indexer_option() {
+  local option_name="$1"
+  local option_value="$2"
+  INDEXER_ARGS+=("$option_name" "$option_value")
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SCALE_TEST_COMPOSE_PROJECT_NAME="${SCALE_TEST_COMPOSE_PROJECT_NAME:-lexonarchivebuilder}"
@@ -132,6 +154,7 @@ fi
 SOURCES_FILE=""
 RUN_NAME=""
 declare -a RSYNC_URLS=()
+declare -a INDEXER_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -143,6 +166,23 @@ while [[ $# -gt 0 ]]; do
     --run-name)
       [[ $# -ge 2 ]] || { printf 'error: --run-name requires a value\n' >&2; exit 1; }
       RUN_NAME="$2"
+      shift 2
+      ;;
+    --clustering-algorithm|\
+    --clustering-cluster-count|\
+    --clustering-random-seed|\
+    --clustering-min-cluster-occupancy|\
+    --clustering-max-cluster-occupancy|\
+    --clustering-max-cluster-size-ratio|\
+    --clustering-soft-balance-penalty|\
+    --clustering-retained-dimension-count|\
+    --clustering-variance-exponent|\
+    --clustering-temperature|\
+    --clustering-min-input-count|\
+    --clustering-min-effective-rank|\
+    --clustering-min-cumulative-variance)
+      [[ $# -ge 2 ]] || { printf 'error: %s requires a value\n' "$1" >&2; exit 1; }
+      append_indexer_option "$1" "$2"
       shift 2
       ;;
     --help|-h)
@@ -289,6 +329,13 @@ fi
 
 printf 'Discovered %d mailbox files\n' "${#MAILBOX_PATHS[@]}"
 printf 'Generated request: %s\n' "${REQUEST_PATH#${REPO_ROOT}/}"
+if [[ ${#INDEXER_ARGS[@]} -gt 0 ]]; then
+  printf 'Forwarding delegated clustering flags to indexer:'
+  for indexer_arg in "${INDEXER_ARGS[@]}"; do
+    printf ' %q' "$indexer_arg"
+  done
+  printf '\n'
+fi
 
 if [[ "$SCALE_TEST_INDEXER_MODE" == "docker-compose" ]]; then
   (cd "$REPO_ROOT" && COMPOSE_PROJECT_NAME="$SCALE_TEST_COMPOSE_PROJECT_NAME" docker compose up -d stapi)
@@ -297,9 +344,9 @@ fi
 wait_for_tcp_port "$SCALE_TEST_WAIT_HOST" "$SCALE_TEST_WAIT_PORT" "$SCALE_TEST_WAIT_TIMEOUT_SECS"
 
 if [[ "$SCALE_TEST_INDEXER_MODE" == "docker-compose" ]]; then
-  (cd "$REPO_ROOT" && COMPOSE_PROJECT_NAME="$SCALE_TEST_COMPOSE_PROJECT_NAME" docker compose run --build --rm --no-deps indexer run --request "$CONTAINER_REQUEST" --summary-out "$CONTAINER_SUMMARY")
+  (cd "$REPO_ROOT" && COMPOSE_PROJECT_NAME="$SCALE_TEST_COMPOSE_PROJECT_NAME" docker compose run --build --rm --no-deps indexer run --request "$CONTAINER_REQUEST" --summary-out "$CONTAINER_SUMMARY" "${INDEXER_ARGS[@]}")
 else
-  lexonarchivebuilder-indexer run --request "$REQUEST_PATH" --summary-out "$SUMMARY_PATH"
+  lexonarchivebuilder-indexer run --request "$REQUEST_PATH" --summary-out "$SUMMARY_PATH" "${INDEXER_ARGS[@]}"
 fi
 
 printf 'Summary written to: %s\n' "${SUMMARY_PATH#${REPO_ROOT}/}"

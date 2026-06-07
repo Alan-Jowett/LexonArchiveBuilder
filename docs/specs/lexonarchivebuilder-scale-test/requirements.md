@@ -2,9 +2,9 @@
 
 ## Document Status
 
-- **Phase:** Phase 2 - Specification Changes
-- **Status:** Approved requirements patch being propagated into design and validation
-- **Scope:** `lexonarchivebuilder-scale-test` local stress-test wrapper for rsync-backed mailbox acquisition and delegated block-tree generation
+- **Phase:** Phase 1 - Requirements Discovery
+- **Status:** Pending user approval for caller-selectable delegated clustering configuration
+- **Scope:** `lexonarchivebuilder-scale-test` local stress-test wrapper for rsync-backed mailbox acquisition, caller-selected delegated clustering configuration, and delegated block-tree generation
 
 ## USER-REQUEST
 
@@ -28,6 +28,11 @@
 - **UR-SCALE-18 [INFERRED]:** Docker Compose must be a supported user-facing entrypoint for the same local stress-test workflow rather than a second divergent workflow.
 - **UR-SCALE-19 [KNOWN]:** Mailbox discovery for fetched rsync mirrors must work when the mirrored archive exposes mailbox files with the `.mail` extension as well as the `.mbox` extension.
 - **UR-SCALE-20 [KNOWN]:** For this increment, mailbox discovery compatibility should be limited to exactly `.mail` and `.mbox` rather than broadened to arbitrary mailbox archive extensions.
+- **UR-SCALE-21 [KNOWN]:** Update the scale test so the caller can select the indexing algorithm used by the delegated indexer.
+- **UR-SCALE-22 [KNOWN]:** Update the scale test so the caller can pass indexing options into the delegated indexer.
+- **UR-SCALE-23 [KNOWN]:** The scale-test caller contract should expose the existing indexer clustering controls as first-class wrapper flags and pass them through to the delegated indexer.
+- **UR-SCALE-24 [INFERRED]:** The scale-test wrapper should reuse the delegated indexer's supported clustering algorithm names and option meanings rather than inventing wrapper-local clustering semantics.
+- **UR-SCALE-25 [KNOWN]:** Generic arbitrary extra indexer argument passthrough is not the approved caller contract for this increment.
 
 ## Change Manifest
 
@@ -44,6 +49,9 @@
 | CM-SCALE-009 | Add | Require a Docker Compose user entrypoint suitable for Windows-hosted local usage | UR-SCALE-15, UR-SCALE-16, UR-SCALE-17 |
 | CM-SCALE-010 | Add | Preserve one shared workflow and artifact model across the bash and Docker Compose entrypoints | UR-SCALE-17, UR-SCALE-18 |
 | CM-SCALE-011 | Revise | Expand mailbox discovery compatibility so fetched rsync mirrors may contribute mailbox files ending in `.mail` or `.mbox` without widening the first increment beyond those two extensions | UR-SCALE-19, UR-SCALE-20 |
+| CM-SCALE-012 | Add | Require the wrapper caller contract to expose delegated clustering-algorithm selection for scale-test runs that include clustering | UR-SCALE-21, UR-SCALE-23, UR-SCALE-24 |
+| CM-SCALE-013 | Add | Require first-class wrapper exposure of supported delegated clustering options rather than arbitrary opaque extra-argument passthrough | UR-SCALE-22, UR-SCALE-23, UR-SCALE-25 |
+| CM-SCALE-014 | Add | Preserve one explicit delegated clustering configuration across the bash and Docker Compose entrypoints for reproducible local stress-test runs | UR-SCALE-21, UR-SCALE-22, UR-SCALE-23, UR-SCALE-24 |
 
 ## Before / After
 
@@ -86,6 +94,21 @@
 
 - **Before [KNOWN]:** Mailbox discovery compatibility was not explicit, so the documented rsync-driven workflow could implicitly assume only `.mbox` mailbox files even when fetched mirrors exposed `.mail` files.
 - **After [KNOWN]:** Mailbox discovery compatibility is explicit: the first increment accepts mailbox files ending in `.mail` or `.mbox` from fetched rsync mirrors, while broader extension support remains out of scope.
+
+### BA-SCALE-009
+
+- **Before [KNOWN]:** The wrapper caller contract did not define any way for a scale-test operator to choose the delegated clustering algorithm.
+- **After [KNOWN]:** The wrapper caller contract explicitly allows the operator to select the delegated clustering algorithm for runs that include clustering.
+
+### BA-SCALE-010
+
+- **Before [KNOWN]:** The wrapper did not define how scale-test callers could provide delegated clustering options, which left the request shape and CLI surface effectively fixed at repository defaults.
+- **After [KNOWN]:** The wrapper requirements explicitly allow scale-test callers to provide supported delegated clustering options through first-class wrapper inputs.
+
+### BA-SCALE-011
+
+- **Before [KNOWN]:** The wrapper could have grown a generic opaque downstream-argument passthrough that diverged between direct shell and Docker Compose launch paths.
+- **After [KNOWN]:** The wrapper requirements constrain this increment to one explicit, first-class delegated clustering surface that remains consistent across both supported entrypoints.
 
 ## Requirements
 
@@ -150,12 +173,42 @@ The bash and Docker Compose entrypoints SHALL preserve the same wrapper-owned wo
 - **Constraint [INFERRED]:** Docker Compose must not introduce a second, divergent `lexonarchivebuilder-scale-test` contract.
 - **Traceability:** UR-SCALE-17, UR-SCALE-18
 
+#### RQ-SCALE-003E - Caller-selectable delegated clustering algorithm
+
+For any `lexonarchivebuilder-scale-test` run that includes delegated clustering,
+the wrapper SHALL allow the caller to select the delegated clustering algorithm.
+
+- **Approved algorithm family [KNOWN]:** The wrapper surface for this increment follows the existing delegated indexer clustering choices rather than inventing a wrapper-local algorithm taxonomy.
+- **Entry-point parity [KNOWN]:** The same algorithm-selection contract applies to both the direct shell and Docker Compose entrypoints.
+- **Traceability:** UR-SCALE-21, UR-SCALE-23, UR-SCALE-24
+
+#### RQ-SCALE-003F - First-class delegated clustering option exposure
+
+`lexonarchivebuilder-scale-test` SHALL expose supported delegated clustering
+options as first-class wrapper inputs.
+
+- **Approved caller contract [KNOWN]:** This increment uses named wrapper inputs for delegated clustering controls rather than a generic arbitrary downstream-argument passthrough.
+- **Defaulting [KNOWN]:** Omitted delegated clustering options may continue to rely on the downstream indexer's approved defaults.
+- **Boundary [INFERRED]:** The supported option set should track the delegated indexer's supported clustering controls for the selected algorithm.
+- **Traceability:** UR-SCALE-22, UR-SCALE-23, UR-SCALE-24, UR-SCALE-25
+
 #### RQ-SCALE-004 - Delegated parser/indexer use
 
 `lexonarchivebuilder-scale-test` SHALL invoke the existing LexonArchiveBuilder batch contract as a downstream dependency rather than moving this workflow into `lexonarchivebuilder-indexer`.
 
 - **Required property [KNOWN]:** The tool stress-tests existing parser/indexer behavior through generated inputs.
 - **Traceability:** UR-SCALE-2, UR-SCALE-6, UR-SCALE-7, UR-SCALE-13
+
+#### RQ-SCALE-004A - Delegated clustering configuration pass-through
+
+When the caller selects a delegated clustering algorithm or provides supported
+delegated clustering options, `lexonarchivebuilder-scale-test` SHALL pass that
+configuration through to the existing LexonArchiveBuilder indexer entrypoint
+without redefining clustering semantics in the wrapper.
+
+- **Authority boundary [KNOWN]:** The downstream indexer remains the authority for delegated clustering validation, defaulting, and execution semantics.
+- **Constraint [INFERRED]:** The wrapper remains responsible only for exposing and forwarding the approved caller inputs coherently across its supported entrypoints.
+- **Traceability:** UR-SCALE-21, UR-SCALE-22, UR-SCALE-23, UR-SCALE-24
 
 #### RQ-SCALE-005 - Mailbox discovery expansion
 
@@ -224,6 +277,16 @@ The addition of Docker Compose support SHALL NOT remove the direct Linux shell e
 - **Constraint [INFERRED]:** The wrapper should compose existing shapes rather than inventing a parallel protocol without need.
 - **Traceability:** UR-SCALE-13
 
+#### RQ-SCALE-010A - Reproducible delegated clustering contract
+
+`lexonarchivebuilder-scale-test` SHALL preserve one explicit effective
+delegated clustering configuration per run across its supported local
+entrypoints.
+
+- **Rationale [INFERRED]:** Comparable stress-test runs require the delegated algorithm choice and supported option values to remain stable for the lifetime of one wrapper invocation.
+- **Boundary [KNOWN]:** This requirement constrains wrapper contract consistency; it does not redefine how the downstream indexer serializes or internally applies clustering settings.
+- **Traceability:** UR-SCALE-21, UR-SCALE-22, UR-SCALE-23, UR-SCALE-24
+
 #### RQ-SCALE-011 - Combined run output
 
 When multiple rsync URLs are provided in one run, `lexonarchivebuilder-scale-test` SHALL produce one coherent output set for that run.
@@ -259,6 +322,8 @@ When multiple rsync URLs are provided in one run, `lexonarchivebuilder-scale-tes
 
 - Moving this workflow into `lexonarchivebuilder-indexer`
 - Defining repository-local indexing, parser, block-construction, or embedding algorithms
+- Inventing wrapper-local clustering semantics or algorithm names distinct from the delegated indexer contract
+- Providing generic arbitrary downstream indexer argument passthrough beyond the approved first-class delegated clustering inputs
 - Defining MCP server behavior or generating MCP configuration artifacts
 - Defining the production ARM/Bicep plus Azure Functions workflow
 - Requiring a dedicated Rust crate or service for the first wrapper realization
@@ -272,6 +337,7 @@ When multiple rsync URLs are provided in one run, `lexonarchivebuilder-scale-tes
 | Indexing remains separate from search serving | Preserved | The wrapper is limited to local orchestration and delegated execution |
 | `lexonarchivebuilder-indexer` remains focused on indexing contracts | Preserved | The rsync stress-test flow is explicitly outside the indexer boundary |
 | Local/testing remains self-contained and batch-oriented | Preserved | The wrapper remains stage-ordered and container-oriented while supporting both direct Linux shell use and Docker Compose launch |
+| Entry-point parity remains intact | Preserved | The delegated clustering caller contract is required to stay consistent across shell and Docker Compose launch modes |
 | Production seams remain open | Preserved | Production orchestration remains a separate future workflow |
 | Future content extensibility remains intact | Preserved | The wrapper adds mailbox stress testing now without closing off later document handling |
 | LexonArchiveBuilder remains subordinate to LexonGraph contracts | Preserved | The wrapper drives existing downstream flows rather than redefining block construction |
@@ -284,6 +350,7 @@ When multiple rsync URLs are provided in one run, `lexonarchivebuilder-scale-tes
 - **Q-SCALE-004 [UNKNOWN]:** If one rsync source is unreachable during a multi-source run, should the wrapper fail the whole run or allow partial stress-test completion?
 - **Q-SCALE-005 [UNKNOWN]:** Should the Docker Compose entrypoint wrap the existing bash implementation inside a Linux container, or should Compose invoke a dedicated container command path that reproduces the same workflow semantics without host bash?
 - **Q-SCALE-006 [UNKNOWN]:** How should rsync source inputs be passed into the Docker Compose entrypoint for Windows users: a mounted sources file, inline environment variables, or both?
+- **Q-SCALE-007 [UNKNOWN]:** Should the effective delegated clustering algorithm and option values be persisted in a dedicated machine-consumable run artifact in addition to the existing generated request and summary outputs?
 
 ## Coverage Notes
 
@@ -293,14 +360,20 @@ When multiple rsync URLs are provided in one run, `lexonarchivebuilder-scale-tes
   - `docker-compose.yml:1-45`
   - `examples/local/request.sample.json:1-34`
   - `examples/local/scale-test/rsync.sources.sample.txt:1-4`
+  - `crates/lexonarchivebuilder-indexer/src/main.rs:16-27`
+  - `crates/lexonarchivebuilder-indexer/src/main.rs:79-124`
+  - `crates/lexonarchivebuilder-indexer/src/config.rs:50-100`
+  - `crates/lexonarchivebuilder-indexer/src/config.rs:102-216`
   - `scripts/lexonarchivebuilder-scale-test.sh:223-235`
+  - `scripts/lexonarchivebuilder-scale-test.sh:293-303`
   - user clarification in this session: "I don't want this to be part of the lexonfabric indexer. This is a wrapper / test tool built on top of it"
   - user clarification in this session: "This tool is just a way to run a local stress test on the LexonFabric parser and produce a block tree. Feel free to name it lexonfabric-scale-test or something along those lines."
   - user clarification in this session selecting block tree/root handoff only rather than MCP config output
   - user clarification in this session: "This could be as simple as a Linux bash script, no need for anything fancy here."
   - user clarification in this session: "Support both. When running on Linux people can use either. On Windows they use docker compose"
   - user clarification in this session selecting: "Exactly `.mail` and `.mbox`"
+  - user clarification in this session selecting: "First-class clustering flags passed through to the indexer (Recommended)"
 - **Excluded for now [KNOWN]:**
   - Exact generated file locations and directory layout
-  - Specific script flags, shell ergonomics, and Docker Compose command lines
+  - Specific script flag spellings, shell ergonomics, and Docker Compose command lines
   - Rust implementation files, tests, and operational assets

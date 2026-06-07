@@ -3,16 +3,19 @@
 ## Status
 
 Phase 2 specification patch for the approved local rsync-driven stress-test
-wrapper in `docs/specs/lexonarchivebuilder-scale-test/requirements.md`.
+wrapper with caller-selectable delegated clustering configuration in
+`docs/specs/lexonarchivebuilder-scale-test/requirements.md`.
 
 ## Scope
 
 This document specifies the LexonArchiveBuilder-owned design for realizing
-`lexonarchivebuilder-scale-test` as a lightweight local wrapper that fetches mailbox
-archives from rsync, discovers `.mail` and `.mbox` mailbox inputs, generates an
-indexer-compatible request/config artifact, and delegates block-tree generation
-to existing LexonArchiveBuilder indexing behavior through one shared local workflow
-with both direct shell and Docker Compose entrypoints.
+`lexonarchivebuilder-scale-test` as a lightweight local wrapper that fetches
+mailbox archives from rsync, discovers `.mail` and `.mbox` mailbox inputs,
+generates an indexer-compatible request/config artifact, derives one explicit
+delegated clustering configuration from caller-selected wrapper inputs when
+needed, and delegates block-tree generation to existing
+LexonArchiveBuilder indexing behavior through one shared local workflow with both
+direct shell and Docker Compose entrypoints.
 
 This document is layered on top of:
 
@@ -57,6 +60,7 @@ The `lexonarchivebuilder-scale-test` design is intended to be:
 - Windows-friendly through Docker Compose while preserving Linux bash use
 - suitable for large-scale parser stress testing
 - deterministic enough for repeatable local runs
+- aligned with the delegated indexer clustering contract
 - extensible to future content-discovery classes
 
 ## Boundary Design
@@ -111,15 +115,16 @@ The wrapper realizes one run as a staged pipeline:
 1. acquire rsync-backed mailbox content
 2. discover mailbox files from the fetched mirror set
 3. generate an indexer-compatible request/config artifact
-4. invoke the existing LexonArchiveBuilder batch/indexer entrypoint
+4. invoke the existing LexonArchiveBuilder batch/indexer entrypoint with any
+   caller-selected delegated clustering configuration
 5. capture and publish root handoff output for the resulting block tree
 
 The wrapper remains batch-oriented and does not introduce a long-lived control
 plane. The same staged pipeline is preserved regardless of whether the user
 launches it through direct bash or Docker Compose.
 
-**Traces to:** RQ-SCALE-003, RQ-SCALE-003D, RQ-SCALE-004, RQ-SCALE-006,
-RQ-SCALE-007
+**Traces to:** RQ-SCALE-003, RQ-SCALE-003D, RQ-SCALE-003E, RQ-SCALE-004,
+RQ-SCALE-006, RQ-SCALE-007
 
 ## Input and Artifact Design
 
@@ -172,6 +177,27 @@ independent index tree per rsync source in the first increment.
 
 **Traces to:** RQ-SCALE-011
 
+### DSG-LST-005B `Wrapper-owned delegated clustering control surface`
+
+`lexonarchivebuilder-scale-test` exposes one first-class wrapper input family
+for delegated clustering configuration rather than a generic opaque downstream-
+argument passthrough.
+
+The wrapper-owned delegated clustering control surface is aligned to the
+existing delegated indexer clustering surface and is limited to:
+
+- one delegated clustering algorithm selector using the downstream-supported
+  algorithm names
+- the shared delegated clustering controls supported by the downstream indexer
+- the approved algorithm-specific delegated clustering option families
+
+The generated request artifact remains focused on discovered mailbox items,
+environment configuration, and other existing indexer-request concerns. This
+increment does not define a second wrapper-local clustering schema inside the
+generated request artifact.
+
+**Traces to:** RQ-SCALE-003E, RQ-SCALE-003F, RQ-SCALE-004A, RQ-SCALE-010A
+
 ## Downstream Integration Design
 
 ### DSG-LST-006 `Delegated indexer invocation`
@@ -187,7 +213,27 @@ local indexing.
 This preserves the wrapper as a stress-test harness over existing behavior
 instead of creating a second indexing surface.
 
-**Traces to:** RQ-SCALE-004, RQ-SCALE-010, RQ-SCALE-012, RQ-SCALE-013
+**Traces to:** RQ-SCALE-004, RQ-SCALE-004A, RQ-SCALE-010, RQ-SCALE-012,
+RQ-SCALE-013
+
+### DSG-LST-006A `Explicit delegated clustering forwarding`
+
+When the caller supplies delegated clustering selections, the wrapper forwards
+those selections to the existing LexonArchiveBuilder indexer entrypoint using the
+same algorithm names and option meanings already owned by the downstream
+indexer contract.
+
+The wrapper does not reinterpret algorithm-specific settings, synthesize a new
+wrapper-local clustering policy, or redefine downstream validation rules for
+unsupported option combinations. Downstream indexer validation and defaulting
+remain authoritative.
+
+For one logical wrapper run, the same effective delegated clustering
+configuration is forwarded regardless of whether the user launches through the
+direct shell entrypoint or the Docker Compose entrypoint.
+
+**Traces to:** RQ-SCALE-003D, RQ-SCALE-003E, RQ-SCALE-003F, RQ-SCALE-004A,
+RQ-SCALE-010A
 
 ### DSG-LST-007 `Root handoff artifact`
 
@@ -244,6 +290,19 @@ and minimizes the surface area that future changes must keep in sync.
 
 **Traces to:** RQ-SCALE-003D, RQ-SCALE-010, RQ-SCALE-013
 
+### DSG-LST-010A `No wrapper-local clustering protocol`
+
+The wrapper reuses the delegated indexer's clustering-control vocabulary and
+effective defaulting behavior rather than introducing a scale-test-specific
+clustering protocol or a generic extra-argument escape hatch.
+
+This keeps the wrapper subordinate to the delegated indexer contract and
+preserves reproducible stress-test behavior across the approved local
+entrypoints.
+
+**Traces to:** RQ-SCALE-003E, RQ-SCALE-003F, RQ-SCALE-004A, RQ-SCALE-010A,
+RQ-SCALE-013
+
 ### DSG-LST-011 `Future discovery extensibility`
 
 The wrapper keeps its top-level contract centered on source acquisition,
@@ -267,6 +326,7 @@ LexonArchiveBuilder-owned verification artifacts validate:
 - wrapper-owned rsync acquisition and mailbox discovery behavior
 - equivalent workflow semantics across the bash and Docker Compose entrypoints
 - generated request/config compatibility with the downstream indexer contract
+- caller-selectable delegated clustering controls and their forwarding contract
 - delegated execution of the existing parser/indexer path
 - production of a machine-consumable root handoff artifact
 - local-only execution plus the approved Linux and Docker Compose entrypoints
@@ -277,4 +337,5 @@ indexing, block-store, embedding, or MCP semantics already covered by other
 repository or upstream boundaries.
 
 **Traces to:** RQ-SCALE-003A, RQ-SCALE-003B, RQ-SCALE-003C, RQ-SCALE-003D,
-RQ-SCALE-007, RQ-SCALE-008, RQ-SCALE-012, RQ-SCALE-013
+RQ-SCALE-003E, RQ-SCALE-003F, RQ-SCALE-007, RQ-SCALE-008, RQ-SCALE-012,
+RQ-SCALE-013
