@@ -349,10 +349,10 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use lexonarchivebuilder_indexer::config::{
         BatchItemConfig, BatchRequest, EmbeddingSpecConfig, EnvironmentConfig, ExecutionStage,
@@ -690,12 +690,22 @@ mod tests {
 
     struct TestServer {
         base_url: String,
+        expected_requests: usize,
+        seen: Arc<AtomicUsize>,
+        shutdown: Arc<AtomicBool>,
         handle: thread::JoinHandle<()>,
     }
 
     impl TestServer {
         fn join(self) {
+            self.shutdown.store(true, Ordering::SeqCst);
             self.handle.join().unwrap();
+            assert!(
+                self.seen.load(Ordering::SeqCst) >= self.expected_requests,
+                "expected at least {} embedding request(s), saw {}",
+                self.expected_requests,
+                self.seen.load(Ordering::SeqCst)
+            );
         }
     }
 
@@ -704,17 +714,11 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
         let seen = Arc::new(AtomicUsize::new(0));
+        let shutdown = Arc::new(AtomicBool::new(false));
         let seen_for_thread = Arc::clone(&seen);
+        let shutdown_for_thread = Arc::clone(&shutdown);
         let handle = thread::spawn(move || {
-            let idle_after_expected = Duration::from_millis(200);
-            let deadline = Instant::now() + Duration::from_secs(5);
-            let mut last_activity = Instant::now();
-            while Instant::now() < deadline {
-                if seen_for_thread.load(Ordering::SeqCst) >= expected_requests
-                    && Instant::now().duration_since(last_activity) >= idle_after_expected
-                {
-                    break;
-                }
+            while !shutdown_for_thread.load(Ordering::SeqCst) {
                 let (mut stream, _) = match listener.accept() {
                     Ok(pair) => pair,
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -723,17 +727,32 @@ mod tests {
                     }
                     Err(error) => panic!("failed to accept MCP runtime test connection: {error}"),
                 };
-                last_activity = Instant::now();
                 stream
-                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .set_read_timeout(Some(Duration::from_millis(200)))
                     .unwrap();
                 let mut request = Vec::new();
                 let mut buffer = [0u8; 1024];
-                loop {
+                let expected_len = loop {
                     match stream.read(&mut buffer) {
-                        Ok(0) => break,
+                        Ok(0) => break None,
                         Ok(read) => {
                             request.extend_from_slice(&buffer[..read]);
+                            if let Some(header_end) = request
+                                .windows(4)
+                                .position(|window| window == b"\r\n\r\n")
+                                .map(|index| index + 4)
+                            {
+                                let header_text =
+                                    String::from_utf8_lossy(&request[..header_end]).to_lowercase();
+                                let content_length = header_text
+                                    .lines()
+                                    .find_map(|line| {
+                                        line.strip_prefix("content-length:")
+                                            .and_then(|value| value.trim().parse::<usize>().ok())
+                                    })
+                                    .unwrap_or(0);
+                                break Some(header_end + content_length);
+                            }
                         }
                         Err(error)
                             if matches!(
@@ -741,10 +760,31 @@ mod tests {
                                 std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                             ) =>
                         {
-                            break;
+                            break None;
                         }
                         Err(error) => panic!("failed to read MCP runtime test request: {error}"),
                     }
+                };
+                let Some(expected_len) = expected_len else {
+                    continue;
+                };
+                while request.len() < expected_len {
+                    match stream.read(&mut buffer) {
+                        Ok(0) => break,
+                        Ok(read) => request.extend_from_slice(&buffer[..read]),
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                            ) =>
+                        {
+                            panic!("timed out before receiving the full MCP runtime test request")
+                        }
+                        Err(error) => panic!("failed to read MCP runtime test request: {error}"),
+                    }
+                }
+                if request.len() < expected_len {
+                    break;
                 }
                 let body = r#"{"data":[{"embedding":[0.25,0.75]}]}"#;
                 let response = format!(
@@ -759,6 +799,9 @@ mod tests {
 
         TestServer {
             base_url: format!("http://{}", address),
+            expected_requests,
+            seen,
+            shutdown,
             handle,
         }
     }

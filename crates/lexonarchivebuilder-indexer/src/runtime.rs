@@ -453,7 +453,7 @@ async fn construct_leaf_block_batch(
     .map_err(RuntimeError::Provider)?;
 
     let mut constructed = ConstructedBlocks::default();
-    for ((item, content), embedding) in items.iter().zip(contents.into_iter()).zip(embeddings) {
+    for ((item, content), embedding) in items.iter().zip(contents).zip(embeddings) {
         let block = build_leaf_block(
             VERSION_1,
             embedding_spec.clone(),
