@@ -1,0 +1,24 @@
+[package]
+name = "lexonarchivebuilder-mcp"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+ciborium.workspace = true
+clap.workspace = true
+lexonarchivebuilder-indexer.workspace = true
+lexongraph-block.workspace = true
+lexongraph-block-store.workspace = true
+lexongraph-embeddings-trait.workspace = true
+lexongraph-search.workspace = true
+rmcp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true

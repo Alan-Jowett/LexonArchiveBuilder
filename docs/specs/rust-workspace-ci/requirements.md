@@ -4,24 +4,24 @@
 
 - **Phase:** Phase 2 - Design and Validation
 - **Status:** Approved requirements patch being propagated into design and validation
-- **Scope:** Repository-level GitHub Actions quality gates for the current Rust workspace in LexonFabric, using LexonGraph's `docs/specs/rust-workspace-ci` package as a guide rather than as a verbatim template
+- **Scope:** Repository-level GitHub Actions quality gates for the current Rust workspace in LexonArchiveBuilder, using LexonGraph's `docs/specs/rust-workspace-ci` package as a guide rather than as a verbatim template
 
 ## USER-REQUEST
 
 - **UR-CI-1 [KNOWN]:** Build a CI workflow for this repository.
 - **UR-CI-2 [KNOWN]:** Use `https://github.com/Alan-Jowett/LexonGraph/tree/main/docs/specs/rust-workspace-ci` as a guide.
-- **UR-CI-3 [KNOWN]:** LexonFabric is a Rust workspace rooted at `Cargo.toml` with the member crates `crates/lexonfabric-indexer` and `crates/lexonfabric-mcp`.
+- **UR-CI-3 [KNOWN]:** LexonArchiveBuilder is a Rust workspace rooted at `Cargo.toml` with the member crates `crates/lexonarchivebuilder-indexer` and `crates/lexonarchivebuilder-mcp`.
 - **UR-CI-4 [KNOWN]:** The repository currently has no `.github/workflows/*.yml` workflow files.
 - **UR-CI-5 [KNOWN]:** The repository already documents local Rust entrypoints and Compose-backed local workflows in `README.md`.
 - **UR-CI-6 [INFERRED]:** The requested change is about repository verification for the existing Rust workspace rather than release, publishing, or deployment automation.
 - **UR-CI-7 [INFERRED]:** The guide repository's broader CI package includes SPDX header enforcement, local Git hooks, coverage publication, and README badges, but the user asked specifically for a CI workflow rather than for all adjacent repository-governance surfaces.
-- **UR-CI-8 [INFERRED]:** The workflow should preserve LexonFabric's current architecture split by verifying repository quality without redefining indexer behavior, MCP behavior, storage selection, or embedding selection semantics.
+- **UR-CI-8 [INFERRED]:** The workflow should preserve LexonArchiveBuilder's current architecture split by verifying repository quality without redefining indexer behavior, MCP behavior, storage selection, or embedding selection semantics.
 
 ## Change Manifest
 
 | ID | Type | Summary | Traceability |
 |---|---|---|---|
-| CM-CI-001 | Add | Introduce the first structured requirements artifact for a LexonFabric Rust workspace CI workflow | UR-CI-1, UR-CI-2 |
+| CM-CI-001 | Add | Introduce the first structured requirements artifact for a LexonArchiveBuilder Rust workspace CI workflow | UR-CI-1, UR-CI-2 |
 | CM-CI-002 | Add | Define a GitHub Actions workflow that verifies the current Rust workspace on `main` pushes and `main` pull requests | UR-CI-1, UR-CI-3, UR-CI-4 |
 | CM-CI-003 | Add | Define the core repository quality gates as formatting, linting, and test execution over the Rust workspace | UR-CI-1, UR-CI-3, UR-CI-6 |
 | CM-CI-004 | Add | Require practical hosted-CI behavior including path-aware pull-request triggering, cancellation of superseded runs, least-privilege permissions, and Rust-aware caching | UR-CI-1, UR-CI-4, UR-CI-6 |
@@ -32,8 +32,8 @@
 
 ### BA-CI-001
 
-- **Before [KNOWN]:** LexonFabric had no structured repository requirements for hosted CI workflow behavior.
-- **After [KNOWN]:** LexonFabric has an explicit Phase 1 requirements baseline for repository CI in `docs/specs/rust-workspace-ci/requirements.md`.
+- **Before [KNOWN]:** LexonArchiveBuilder had no structured repository requirements for hosted CI workflow behavior.
+- **After [KNOWN]:** LexonArchiveBuilder has an explicit Phase 1 requirements baseline for repository CI in `docs/specs/rust-workspace-ci/requirements.md`.
 
 ### BA-CI-002
 
@@ -47,7 +47,7 @@
 
 ### BA-CI-004
 
-- **Before [KNOWN]:** The guide repository demonstrates a broader CI/governance package that includes SPDX policy, hooks, coverage publication, and README badges, but LexonFabric had no approved statement about whether those adjunct surfaces belong in this increment.
+- **Before [KNOWN]:** The guide repository demonstrates a broader CI/governance package that includes SPDX policy, hooks, coverage publication, and README badges, but LexonArchiveBuilder had no approved statement about whether those adjunct surfaces belong in this increment.
 - **After [KNOWN]:** The requirements explicitly keep this increment centered on the GitHub Actions workflow and classify the broader guide-inspired surfaces as out of scope for this increment rather than silently expanding scope.
 
 ## Requirements
@@ -56,7 +56,7 @@
 
 #### RQ-CI-001 - Hosted CI workflow
 
-LexonFabric SHALL define a GitHub Actions workflow for repository quality verification.
+LexonArchiveBuilder SHALL define a GitHub Actions workflow for repository quality verification.
 
 - **Execution scope [KNOWN]:** The workflow is repository-level and validates the current Rust workspace rooted at `Cargo.toml`.
 - **Traceability:** UR-CI-1, UR-CI-3, UR-CI-4
@@ -120,16 +120,16 @@ This CI increment SHALL remain limited to repository verification and SHALL NOT 
 
 #### RQ-CI-008 - Architectural non-interference
 
-The CI requirements SHALL verify repository quality without redefining LexonFabric's indexer contracts, MCP search-serving contracts, storage adapters, embedding adapters, or local-versus-production runtime semantics.
+The CI requirements SHALL verify repository quality without redefining LexonArchiveBuilder's indexer contracts, MCP search-serving contracts, storage adapters, embedding adapters, or local-versus-production runtime semantics.
 
-- **Rationale [INFERRED]:** CI is a repository-quality surface and must stay subordinate to the existing LexonFabric semantic baseline.
+- **Rationale [INFERRED]:** CI is a repository-quality surface and must stay subordinate to the existing LexonArchiveBuilder semantic baseline.
 - **Traceability:** UR-CI-5, UR-CI-8
 
 #### RQ-CI-009 - Current-repository alignment
 
-The workflow SHALL align with the current LexonFabric repository structure and existing Cargo-based verification commands rather than assuming a different workspace layout from the guide repository.
+The workflow SHALL align with the current LexonArchiveBuilder repository structure and existing Cargo-based verification commands rather than assuming a different workspace layout from the guide repository.
 
-- **Rationale [KNOWN]:** The guide is a reference point, but LexonFabric has its own repository shape, crates, and documented local workflows.
+- **Rationale [KNOWN]:** The guide is a reference point, but LexonArchiveBuilder has its own repository shape, crates, and documented local workflows.
 - **Traceability:** UR-CI-2, UR-CI-3, UR-CI-5
 
 ## Out of Scope
@@ -150,7 +150,7 @@ The workflow SHALL align with the current LexonFabric repository structure and e
 | Indexing remains separate from search serving | Preserved | The CI requirements verify repository quality only and do not change either semantic boundary |
 | Local/testing versus production behavior stays behind stable adapters | Preserved | The workflow validates code quality without selecting or redefining runtime adapters |
 | The architecture remains extensible to future content types | Preserved | The CI surface is repository-level and content-type-agnostic |
-| The repository remains subordinate to LexonGraph-owned indexing and search contracts | Preserved | The workflow validates LexonFabric's codebase without redefining delegated upstream semantics |
+| The repository remains subordinate to LexonGraph-owned indexing and search contracts | Preserved | The workflow validates LexonArchiveBuilder's codebase without redefining delegated upstream semantics |
 
 ## Coverage Notes
 

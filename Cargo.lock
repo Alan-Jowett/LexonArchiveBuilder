@@ -857,7 +857,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
-name = "lexonfabric-indexer"
+name = "lexonarchivebuilder-indexer"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -880,13 +880,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "lexonfabric-mcp"
+name = "lexonarchivebuilder-mcp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "ciborium",
  "clap",
- "lexonfabric-indexer",
+ "lexonarchivebuilder-indexer",
  "lexongraph-block",
  "lexongraph-block-store",
  "lexongraph-embeddings-trait",

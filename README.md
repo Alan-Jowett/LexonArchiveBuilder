@@ -1,10 +1,10 @@
-# LexonFabric
+# LexonArchiveBuilder
 
-> LexonFabric weaves mail archives, RFCs, and metadata into a unified, queryable knowledge layer atop LexonGraph, structuring threads, messages, and chunks into a coherent semantic fabric accessible through an MCP server.
+> LexonArchiveBuilder weaves mail archives, RFCs, and metadata into a unified, queryable knowledge layer atop LexonGraph, structuring threads, messages, and chunks into a coherent semantic fabric accessible through an MCP server.
 
-LexonFabric is the application layer built on top of LexonGraph. It exists to prove that LexonGraph works on real data and to provide a practical system for indexing and semantically searching mail archives and technical document collections.
+LexonArchiveBuilder is the application layer built on top of LexonGraph. It exists to prove that LexonGraph works on real data and to provide a practical system for indexing and semantically searching mail archives and technical document collections.
 
-At a high level, LexonFabric has two jobs:
+At a high level, LexonArchiveBuilder has two jobs:
 
 1. **Index content** into a structured semantic graph.
 2. **Serve search and retrieval** through an MCP server.
@@ -13,11 +13,11 @@ The initial content types are **email** and **documents**, but the architecture 
 
 ## Why it exists
 
-LexonFabric is meant to validate LexonGraph under realistic ingestion and retrieval workloads while also being directly useful as an application in its own right. The project focuses on turning fragmented archives, messages, and documents into a coherent knowledge layer that can support semantic lookup, retrieval, and downstream RAG-style workflows.
+LexonArchiveBuilder is meant to validate LexonGraph under realistic ingestion and retrieval workloads while also being directly useful as an application in its own right. The project focuses on turning fragmented archives, messages, and documents into a coherent knowledge layer that can support semantic lookup, retrieval, and downstream RAG-style workflows.
 
 ## Architecture overview
 
-LexonFabric is designed as a CDN-backed RAG system with:
+LexonArchiveBuilder is designed as a CDN-backed RAG system with:
 
 - **LexonGraph** as the underlying graph and knowledge substrate
 - An **indexer** that ingests source content, extracts structure, and emits searchable graph-aligned artifacts
@@ -50,7 +50,7 @@ This split is intentional: local development should be self-contained and easy t
 
 ## MCP server
 
-The MCP server is the search-facing surface of LexonFabric. It is intended to:
+The MCP server is the search-facing surface of LexonArchiveBuilder. It is intended to:
 
 - expose the indexed knowledge layer through a stable MCP interface
 - remain compatible with both **Linux** and **Windows**
@@ -79,9 +79,9 @@ Production is intended to use:
 
 Some production details are still **planned/TBD**, especially the exact batch shape and surrounding operational workflow. This README describes the intended direction without claiming those deployment details are finalized.
 
-## Using LexonFabric
+## Using LexonArchiveBuilder
 
-Conceptually, LexonFabric is used in two stages:
+Conceptually, LexonArchiveBuilder is used in two stages:
 
 1. **Indexing:** ingest mail archives and technical document collections, normalize them into the LexonGraph-backed fabric, and generate searchable semantic artifacts.
 2. **Querying:** connect through the MCP server to search threads, messages, documents, chunks, and related metadata through a unified knowledge layer.
@@ -90,8 +90,8 @@ Concrete commands and operational examples can be added as the executable surfac
 
 ## Indexer MVP
 
-The first `lexonfabric-indexer` MVP is now implemented as a Rust batch runtime in
-`crates/lexonfabric-indexer`.
+The first `lexonarchivebuilder-indexer` MVP is now implemented as a Rust batch runtime in
+`crates/lexonarchivebuilder-indexer`.
 
 ### Request contract
 
@@ -109,7 +109,7 @@ indexes one mailbox file and one document file.
 Build and run the batch directly:
 
 ```powershell
-cargo run -p lexonfabric-indexer -- run --request examples\local\request.sample.json
+cargo run -p lexonarchivebuilder-indexer -- run --request examples\local\request.sample.json
 ```
 
 The sample request assumes the embedding endpoint is available at
@@ -127,7 +127,7 @@ docker compose up --build indexer
 That stack starts:
 
 - `stapi` at `http://localhost:8080`
-- the `lexonfabric-indexer` batch container
+- the `lexonarchivebuilder-indexer` batch container
 - a named Docker volume mounted into the batch container at `examples/local/block-store`
 
 After the batch completes, the summary output is written to
@@ -138,7 +138,7 @@ After the batch completes, the summary output is written to
 For large local mailbox stress tests, the repository also includes a lightweight
 wrapper script that fetches one or more rsync-backed mailbox archives, discovers
 `.mail` and `.mbox` files, generates an indexer request, and runs the existing
-`lexonfabric-indexer` batch to produce a block tree and summary/root handoff
+`lexonarchivebuilder-indexer` batch to produce a block tree and summary/root handoff
 artifact.
 
 The wrapper is intentionally simple. It is designed as a local stress-test
@@ -152,14 +152,14 @@ harness over the existing indexer rather than a new indexer subsystem.
 Run it with one or more rsync URLs:
 
 ```bash
-scripts/lexonfabric-scale-test.sh \
+scripts/lexonarchivebuilder-scale-test.sh \
   rsync.ietf.org::mailman-archive/ipsec/
 ```
 
 Or from a sources file:
 
 ```bash
-scripts/lexonfabric-scale-test.sh \
+scripts/lexonarchivebuilder-scale-test.sh \
   --sources-file examples/local/scale-test/rsync.sources.sample.txt
 ```
 
@@ -195,20 +195,20 @@ block tree.
 To exercise the wrapper end to end against local mailbox fixtures, run:
 
 ```bash
-scripts/lexonfabric-scale-test-smoke.sh
+scripts/lexonarchivebuilder-scale-test-smoke.sh
 ```
 
 To exercise the Docker Compose entrypoint end to end against local mailbox
 fixtures, run:
 
 ```bash
-scripts/lexonfabric-scale-test-compose-smoke.sh
+scripts/lexonarchivebuilder-scale-test-compose-smoke.sh
 ```
 
 ## MCP MVP
 
-The first `lexonfabric-mcp` MVP is now implemented as a Rust stdio MCP server
-in `crates/lexonfabric-mcp`.
+The first `lexonarchivebuilder-mcp` MVP is now implemented as a Rust stdio MCP server
+in `crates/lexonarchivebuilder-mcp`.
 
 ### Request contract
 
@@ -226,7 +226,7 @@ See `examples/local/mcp.request.sample.json` for a complete local config.
 First generate the local block store and summary:
 
 ```powershell
-cargo run -p lexonfabric-indexer -- run --request examples\local\request.sample.json --summary-out examples\local\output\summary.json
+cargo run -p lexonarchivebuilder-indexer -- run --request examples\local\request.sample.json --summary-out examples\local\output\summary.json
 ```
 
 The sample MCP config uses `http://stapi:8080` for the Docker Compose network.
@@ -237,7 +237,7 @@ the server.
 Then start the MCP server over stdio:
 
 ```powershell
-cargo run -p lexonfabric-mcp -- serve --config examples\local\mcp.request.sample.json
+cargo run -p lexonarchivebuilder-mcp -- serve --config examples\local\mcp.request.sample.json
 ```
 
 The MVP exposes four MCP tools:
@@ -268,8 +268,8 @@ That workflow uses:
 
 - `stapi` published to the host at `http://localhost:8080` and reached from the
   Compose network as `http://stapi:8080`
-- the `lexonfabric-indexer` batch container
-- the `lexonfabric-mcp` stdio server container
+- the `lexonarchivebuilder-indexer` batch container
+- the `lexonarchivebuilder-mcp` stdio server container
 - a named Docker volume mounted into both containers at
   `examples/local/block-store`
 

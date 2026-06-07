@@ -1,1 +1,1 @@
-LexonFabric indexes mail archives and technical documents into LexonGraph-backed blocks.
+LexonArchiveBuilder indexes mail archives and technical documents into LexonGraph-backed blocks.

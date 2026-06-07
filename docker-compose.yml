@@ -7,13 +7,13 @@ services:
   indexer:
     build:
       context: .
-      dockerfile: crates/lexonfabric-indexer/Dockerfile
+      dockerfile: crates/lexonarchivebuilder-indexer/Dockerfile
     depends_on:
       - stapi
     working_dir: /workspace
     volumes:
       - .:/workspace
-      - lexonfabric-block-store:/workspace/examples/local/block-store
+      - lexonarchivebuilder-block-store:/workspace/examples/local/block-store
     command:
       [
         "run",
@@ -26,7 +26,7 @@ services:
   scale-test:
     build:
       context: .
-      dockerfile: crates/lexonfabric-indexer/Dockerfile.scale-test
+      dockerfile: crates/lexonarchivebuilder-indexer/Dockerfile.scale-test
     depends_on:
       - stapi
     working_dir: /workspace
@@ -47,13 +47,13 @@ services:
   mcp:
     build:
       context: .
-      dockerfile: crates/lexonfabric-mcp/Dockerfile
+      dockerfile: crates/lexonarchivebuilder-mcp/Dockerfile
     depends_on:
       - stapi
     working_dir: /workspace
     volumes:
       - .:/workspace
-      - lexonfabric-block-store:/workspace/examples/local/block-store
+      - lexonarchivebuilder-block-store:/workspace/examples/local/block-store
     stdin_open: true
     command:
       [
@@ -63,4 +63,4 @@ services:
       ]
 
 volumes:
-  lexonfabric-block-store:
+  lexonarchivebuilder-block-store:

@@ -3,12 +3,12 @@
 ## Status
 
 Phase 2 validation patch for the approved repository-level GitHub Actions
-workflow that verifies the current LexonFabric Rust workspace.
+workflow that verifies the current LexonArchiveBuilder Rust workspace.
 
 ## Validation Scope
 
 These validation entries define the expected verification surface for the
-LexonFabric repository CI workflow.
+LexonArchiveBuilder repository CI workflow.
 
 ## Validation Entries
 
@@ -77,7 +77,7 @@ DSG-CI-009, DSG-CI-010
 ### VAL-CI-008
 
 Inspect the workflow definition and related specification package against the
-LexonFabric semantic baseline.
+LexonArchiveBuilder semantic baseline.
 
 **Pass condition:** the workflow verifies repository quality without redefining
 indexer contracts, MCP contracts, storage adapters, embedding adapters, or

@@ -1,0 +1,29 @@
+[package]
+name = "lexonarchivebuilder-indexer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+ciborium.workspace = true
+clap.workspace = true
+half.workspace = true
+lexongraph-block.workspace = true
+lexongraph-block-store.workspace = true
+lexongraph-block-store-fs.workspace = true
+lexongraph-embeddings-trait.workspace = true
+lexongraph-indexer.workspace = true
+mailparse = "0.16.1"
+num_cpus.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+lexongraph-embeddings-trait = { workspace = true, features = ["conformance"] }
+lexongraph-indexer = { workspace = true, features = ["conformance"] }
+tempfile.workspace = true
+tokio.workspace = true

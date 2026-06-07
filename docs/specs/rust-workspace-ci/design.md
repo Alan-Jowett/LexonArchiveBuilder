@@ -3,11 +3,11 @@
 ## Status
 
 Phase 2 specification patch for the approved repository-level GitHub Actions
-workflow that verifies the current LexonFabric Rust workspace.
+workflow that verifies the current LexonArchiveBuilder Rust workspace.
 
 ## Scope
 
-This document specifies the LexonFabric-owned design for realizing the approved
+This document specifies the LexonArchiveBuilder-owned design for realizing the approved
 `rust-workspace-ci` requirements.
 
 This document is layered on top of:
@@ -39,8 +39,8 @@ automation in this increment.
 
 ### Unaffected artifacts
 
-- `docs/specs/lexonfabric-indexer/*`
-- `docs/specs/lexonfabric-mcp/*`
+- `docs/specs/lexonarchivebuilder-indexer/*`
+- `docs/specs/lexonarchivebuilder-mcp/*`
 - indexer runtime behavior
 - MCP runtime behavior
 - Docker Compose and Azure deployment behavior
@@ -51,7 +51,7 @@ The workflow design is intended to be:
 
 - minimal
 - deterministic
-- aligned with the current LexonFabric repository structure
+- aligned with the current LexonArchiveBuilder repository structure
 - efficient for routine pull requests
 - explicit about non-goals
 - subordinate to the existing indexer and MCP semantic boundaries
@@ -170,7 +170,7 @@ hook execution.
 ### DSG-CI-011 `Semantic non-interference`
 
 The workflow validates the repository without redefining or branching on
-LexonFabric's indexer contracts, MCP contracts, storage adapters, embedding
+LexonArchiveBuilder's indexer contracts, MCP contracts, storage adapters, embedding
 adapters, or content-type abstractions.
 
 **Traces to:** RQ-CI-008

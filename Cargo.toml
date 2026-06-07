@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/lexonfabric-indexer", "crates/lexonfabric-mcp"]
+members = ["crates/lexonarchivebuilder-indexer", "crates/lexonarchivebuilder-mcp"]
 resolver = "3"
 
 [workspace.package]
@@ -21,7 +21,7 @@ tempfile = "3.23.0"
 thiserror = "2.0.17"
 tokio = { version = "1.52.3", features = ["io-std", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
 
-lexonfabric-indexer = { path = "crates/lexonfabric-indexer" }
+lexonarchivebuilder-indexer = { path = "crates/lexonarchivebuilder-indexer" }
 lexongraph-block = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "42875643b7cd7461babc1bff1b40766a91e9c69e", package = "lexongraph-block" }
 lexongraph-block-store = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "42875643b7cd7461babc1bff1b40766a91e9c69e", package = "lexongraph-block-store" }
 lexongraph-block-store-fs = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "42875643b7cd7461babc1bff1b40766a91e9c69e", package = "lexongraph-block-store-fs" }
