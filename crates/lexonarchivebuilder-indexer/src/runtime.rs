@@ -335,13 +335,13 @@ fn prepare_request_replay_batches(
         report_progress(
             progress,
             format!(
-                "Indexing {} document item(s) with up to {} concurrent leaf worker(s)",
+                "Preparing {} document item(s) with up to {} concurrent leaf worker(s)",
                 document_item_count, max_concurrency
             ),
         );
         report_progress(
             progress,
-            format!("Indexed {} document item(s)", document_item_count),
+            format!("Prepared {} document item(s)", document_item_count),
         );
         items.extend(document_items);
     }
@@ -366,7 +366,7 @@ fn prepare_request_replay_batches(
             report_progress(
                 progress,
                 format!(
-                    "Indexed {} delegated item(s) from mailbox {}",
+                    "Prepared {} delegated item(s) from mailbox {}",
                     expansion.items.len(),
                     resolved.display()
                 ),
@@ -553,10 +553,6 @@ where
     EP: EmbeddingProvider + Clone,
 {
     let observer = Some(make_status_observer(Arc::clone(progress)));
-    let replay_items = replay_batches
-        .iter()
-        .map(|batch| batch.items.clone())
-        .collect::<Vec<_>>();
 
     let mut indexer = StreamingIndexingRun::with_defaults(
         resolver,
@@ -592,7 +588,7 @@ where
     );
     let result = indexer
         .finalize(
-            replay_items.iter().map(|batch| batch.as_slice()),
+            replay_batches.iter().map(|batch| batch.items.as_slice()),
             block_store,
         )
         .await?;
@@ -1118,7 +1114,7 @@ mod tests {
         assert!(
             progress
                 .iter()
-                .any(|line| line.contains("Indexing 1 document item(s)"))
+                .any(|line| line.contains("Preparing 1 document item(s)"))
         );
         assert!(
             progress
@@ -1133,7 +1129,7 @@ mod tests {
         assert!(
             progress
                 .iter()
-                .any(|line| line.contains("Indexed 1 delegated item(s) from mailbox"))
+                .any(|line| line.contains("Prepared 1 delegated item(s) from mailbox"))
         );
         assert!(
             progress
