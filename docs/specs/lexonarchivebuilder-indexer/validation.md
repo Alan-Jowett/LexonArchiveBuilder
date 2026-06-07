@@ -5,8 +5,9 @@
 Phase 2 validation patch for the approved email-artifact, chunk-level
 indexing, local filesystem block-store interoperability, replay-based
 streaming delegated indexing, stage-selectable execution, standalone
-clustering input discovery, streaming-status observability, replay-stable
-fingerprinting, and layer-parallel
+clustering input discovery, clustering-algorithm selection, clustering-option
+exposure, streaming-status observability, replay-stable fingerprinting, and
+layer-parallel
 block-construction evolution in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md` and
 `docs/specs/lexonarchivebuilder-indexer/design.md`.
@@ -16,9 +17,11 @@ block-construction evolution in
 These validation entries define the expected conformance surface for the
 LexonArchiveBuilder-owned indexer boundary, including local filesystem block-store
 interoperability, replay-based streaming delegated indexing, stage-selectable
-execution, standalone clustering input discovery, batch-progress
-observability, streaming-status observability, replay-stable fingerprinting,
-and leaf-layer parallel block scheduling in the local/testing profile.
+execution, standalone clustering input discovery, explicit delegated
+clustering-algorithm selection, algorithm-specific clustering-option exposure,
+batch-progress observability, streaming-status observability, replay-stable
+fingerprinting, and leaf-layer parallel block scheduling in the local/testing
+profile.
 
 This package validates LexonArchiveBuilder's batch contract, adapter selection, and
 delegated use of LexonGraph interfaces. It does not redefine validation already
@@ -140,6 +143,33 @@ streaming indexer accepts both executions without replay-mismatch failures and
 both executions remain contract-equivalent at the LexonArchiveBuilder boundary.
 
 **Traces to:** RQ-INDEXER-003A, RQ-INDEXER-004F, DSG-LFI-001A, DSG-LFI-001F
+
+### VAL-LFI-002K
+
+Inspect the clustering-enabled CLI surface for a representative `run`
+invocation.
+
+**Pass condition:** the CLI exposes one explicit clustering-algorithm selector,
+accepts the supported shared clustering options plus the approved
+algorithm-specific option families, rejects option values that do not belong to
+the selected algorithm instead of silently ignoring them, and preserves the
+existing request-file-driven runtime shape.
+
+**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, DSG-LFI-001G,
+DSG-LFI-001H, DSG-LFI-007C
+
+### VAL-LFI-002L
+
+Run clustering-enabled execution once with omitted clustering options and once
+with the equivalent explicit default clustering options.
+
+**Pass condition:** LexonArchiveBuilder resolves both invocations to the same
+effective delegated clustering configuration, using the repository default
+algorithm plus deterministic default option values when flags are omitted, so
+defaulting does not create hidden replay drift.
+
+**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-008,
+DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-010
 
 ### VAL-LFI-002A
 
@@ -312,9 +342,11 @@ block-store snapshot.
 **Pass condition:** the same clustering-eligible block set surfaced by the
 upstream block-iteration contract produces the same logical clustering result on
 repeated standalone clustering runs, without requiring repository-local
-duplicate-suppression logic.
+duplicate-suppression logic, as long as the effective clustering algorithm and
+option values are unchanged.
 
-**Traces to:** RQ-INDEXER-003E, RQ-INDEXER-008, DSG-LFI-001E, DSG-LFI-010
+**Traces to:** RQ-INDEXER-003E, RQ-INDEXER-003F, RQ-INDEXER-003G,
+RQ-INDEXER-008, DSG-LFI-001E, DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-010
 
 ### VAL-LFI-008
 

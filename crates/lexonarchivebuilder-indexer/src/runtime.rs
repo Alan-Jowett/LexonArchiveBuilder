@@ -10,7 +10,7 @@ use lexongraph_block::{
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_streaming_indexer::{
-    ContentResolver, IndexItem, StreamingIndexerError, StreamingIndexingPhase,
+    BuiltInClustering, ContentResolver, IndexItem, StreamingIndexerError, StreamingIndexingPhase,
     StreamingIndexingRun, StreamingIndexingStatus, StreamingIndexingStatusObserver,
     StreamingIndexingStatusState,
 };
@@ -19,7 +19,8 @@ use tokio::task::{JoinError, JoinSet};
 
 use crate::block_store::ConfiguredBlockStore;
 use crate::config::{
-    BatchItemConfig, BatchRequest, BatchSummary, ConfigError, ExecutionStage, metadata_to_text_map,
+    BatchItemConfig, BatchRequest, BatchSummary, ClusteringConfigOverrides, ConfigError,
+    ExecutionStage, metadata_to_text_map,
 };
 use crate::embedding::{ConfiguredEmbeddingProvider, ConfiguredEmbeddingProviderError};
 use crate::mailbox::{MailboxExpansionError, expand_mailbox_item_with_stats};
@@ -49,6 +50,12 @@ struct ConstructedBlocks {
 struct ReplayBatch {
     items: Vec<IndexItem<ContentRef>>,
     completion_message: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct StreamingStageConfig {
+    clustering: BuiltInClustering,
+    block_size_target: usize,
 }
 
 type ReplayedLeaf = (IndexItem<ContentRef>, Vec<u8>);
@@ -175,12 +182,25 @@ impl EmbeddingProvider for StoredLeafEmbeddingProvider {
 }
 
 pub async fn run_request_file(request_path: &Path) -> Result<BatchSummary, RuntimeError> {
-    run_request_file_with_stage(request_path, None).await
+    run_request_file_with_overrides(request_path, None, ClusteringConfigOverrides::default()).await
 }
 
 pub async fn run_request_file_with_stage(
     request_path: &Path,
     stage_override: Option<ExecutionStage>,
+) -> Result<BatchSummary, RuntimeError> {
+    run_request_file_with_overrides(
+        request_path,
+        stage_override,
+        ClusteringConfigOverrides::default(),
+    )
+    .await
+}
+
+pub async fn run_request_file_with_overrides(
+    request_path: &Path,
+    stage_override: Option<ExecutionStage>,
+    clustering_overrides: ClusteringConfigOverrides,
 ) -> Result<BatchSummary, RuntimeError> {
     let bytes = fs::read(request_path).map_err(|source| RuntimeError::ReadRequest {
         path: request_path.display().to_string(),
@@ -196,19 +216,31 @@ pub async fn run_request_file_with_stage(
     }
     let request_dir = request_path.parent().unwrap_or_else(|| Path::new("."));
 
-    run_request(request_dir, request).await
+    run_request_with_overrides(request_dir, request, clustering_overrides).await
 }
 
 pub async fn run_request(
     request_dir: &Path,
     request: BatchRequest,
 ) -> Result<BatchSummary, RuntimeError> {
-    run_request_with_progress(request_dir, request, |message| eprintln!("{message}")).await
+    run_request_with_overrides(request_dir, request, ClusteringConfigOverrides::default()).await
+}
+
+pub async fn run_request_with_overrides(
+    request_dir: &Path,
+    request: BatchRequest,
+    clustering_overrides: ClusteringConfigOverrides,
+) -> Result<BatchSummary, RuntimeError> {
+    run_request_with_progress(request_dir, request, clustering_overrides, |message| {
+        eprintln!("{message}")
+    })
+    .await
 }
 
 async fn run_request_with_progress<F>(
     request_dir: &Path,
     request: BatchRequest,
+    clustering_overrides: ClusteringConfigOverrides,
     progress: F,
 ) -> Result<BatchSummary, RuntimeError>
 where
@@ -216,6 +248,8 @@ where
 {
     let progress: ProgressReporter = Arc::new(progress);
     request.validate()?;
+    clustering_overrides.validate()?;
+    let clustering = clustering_overrides.to_built_in_clustering()?;
     let stage = request.stage;
     let block_store = ConfiguredBlockStore::from_environment(request_dir, &request.environment)?;
     let embedding_spec = request.to_embedding_spec();
@@ -259,10 +293,13 @@ where
         return run_streaming_stage(
             resolver,
             embedding_provider,
+            StreamingStageConfig {
+                clustering,
+                block_size_target: request.block_size_target,
+            },
             replay_batches,
             &block_store,
             &embedding_spec,
-            request.block_size_target,
             &progress,
         )
         .await;
@@ -273,10 +310,13 @@ where
     run_streaming_stage(
         resolver,
         embedding_provider,
+        StreamingStageConfig {
+            clustering,
+            block_size_target: request.block_size_target,
+        },
         replay_batches,
         &block_store,
         &embedding_spec,
-        request.block_size_target,
         &progress,
     )
     .await
@@ -543,10 +583,10 @@ async fn construct_leaf_block_batch(
 async fn run_streaming_stage<EP>(
     resolver: LocalFilesystemContentResolver,
     embedding_provider: EP,
+    config: StreamingStageConfig,
     replay_batches: Vec<ReplayBatch>,
     block_store: &ConfiguredBlockStore,
     embedding_spec: &EmbeddingSpec,
-    block_size_target: usize,
     progress: &ProgressReporter,
 ) -> Result<BatchSummary, RuntimeError>
 where
@@ -554,11 +594,12 @@ where
 {
     let observer = Some(make_status_observer(Arc::clone(progress)));
 
-    let mut indexer = StreamingIndexingRun::with_defaults(
+    let mut indexer = StreamingIndexingRun::with_builtin_clustering(
         resolver,
         embedding_provider,
+        config.clustering,
         embedding_spec.clone(),
-        block_size_target,
+        config.block_size_target,
     );
     if let Some(observer) = observer {
         indexer = indexer.with_observer(observer);
@@ -944,8 +985,8 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::config::{
-        BatchItemConfig, EmbeddingSpecConfig, EnvironmentConfig, ExecutionStage,
-        LocalEmbeddingConfig,
+        BatchItemConfig, ClusteringAlgorithm, ClusteringConfigOverrides, EmbeddingSpecConfig,
+        EnvironmentConfig, ExecutionStage, LocalEmbeddingConfig,
     };
 
     use super::*;
@@ -1104,9 +1145,14 @@ mod tests {
 
         let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
         let progress_capture = Arc::clone(&progress);
-        let summary = run_request_with_progress(temp.path(), request, move |message| {
-            progress_capture.lock().unwrap().push(message);
-        })
+        let summary = run_request_with_progress(
+            temp.path(),
+            request,
+            ClusteringConfigOverrides::default(),
+            move |message| {
+                progress_capture.lock().unwrap().push(message);
+            },
+        )
         .await
         .unwrap();
         let progress = progress.lock().unwrap();
@@ -1361,6 +1407,223 @@ mod tests {
 
         assert_eq!(summary.root_id, seeded.root_id);
         server.join();
+    }
+
+    #[tokio::test]
+    async fn explicit_default_clustering_matches_omitted_clustering_options() {
+        let temp = tempdir().unwrap();
+        for name in ["alpha", "beta", "gamma"] {
+            fs::write(temp.path().join(format!("{name}.txt")), format!("{name}\n")).unwrap();
+        }
+
+        let server = spawn_embedding_server(3);
+        let request_path = temp.path().join("request.json");
+        fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&json!({
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": {
+                        "base_url": server.base_url,
+                        "model": "all-MiniLM-L6-v2",
+                        "request_timeout_secs": 5,
+                        "max_retries": 0,
+                        "retry_delay_ms": 1
+                    }
+                },
+                "embedding_spec": {
+                    "dims": 2,
+                    "encoding": "f32le"
+                },
+                "items": [
+                    { "kind": "document", "path": "alpha.txt" },
+                    { "kind": "document", "path": "beta.txt" },
+                    { "kind": "document", "path": "gamma.txt" }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let omitted = run_request_file(&request_path).await.unwrap();
+        let explicit = run_request_file_with_overrides(
+            &request_path,
+            None,
+            ClusteringConfigOverrides {
+                clustering_algorithm: Some(ClusteringAlgorithm::Dcbc),
+                ..ClusteringConfigOverrides::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(omitted.root_id, explicit.root_id);
+        assert_eq!(omitted.block_ids, explicit.block_ids);
+        server.join();
+    }
+
+    #[tokio::test]
+    async fn explicit_dcbc_clustering_runs_end_to_end() {
+        let temp = tempdir().unwrap();
+        for name in ["alpha", "beta", "gamma"] {
+            fs::write(temp.path().join(format!("{name}.txt")), format!("{name}\n")).unwrap();
+        }
+
+        let server = spawn_distinct_embedding_server(3);
+        let request_path = temp.path().join("request.json");
+        fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&json!({
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": {
+                        "base_url": server.base_url,
+                        "model": "all-MiniLM-L6-v2",
+                        "request_timeout_secs": 5,
+                        "max_retries": 0,
+                        "retry_delay_ms": 1
+                    }
+                },
+                "embedding_spec": {
+                    "dims": 2,
+                    "encoding": "f32le"
+                },
+                "items": [
+                    { "kind": "document", "path": "alpha.txt" },
+                    { "kind": "document", "path": "beta.txt" },
+                    { "kind": "document", "path": "gamma.txt" }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let summary = run_request_file_with_overrides(
+            &request_path,
+            None,
+            ClusteringConfigOverrides {
+                clustering_algorithm: Some(ClusteringAlgorithm::Dcbc),
+                clustering_cluster_count: Some(2),
+                ..ClusteringConfigOverrides::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!summary.block_ids.is_empty());
+        server.join();
+    }
+
+    #[tokio::test]
+    async fn explicit_directional_pca_clustering_runs_end_to_end() {
+        let temp = tempdir().unwrap();
+        for name in ["alpha", "beta", "gamma"] {
+            fs::write(temp.path().join(format!("{name}.txt")), format!("{name}\n")).unwrap();
+        }
+
+        let server = spawn_distinct_embedding_server(3);
+        let request_path = temp.path().join("request.json");
+        fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&json!({
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": {
+                        "base_url": server.base_url,
+                        "model": "all-MiniLM-L6-v2",
+                        "request_timeout_secs": 5,
+                        "max_retries": 0,
+                        "retry_delay_ms": 1
+                    }
+                },
+                "embedding_spec": {
+                    "dims": 2,
+                    "encoding": "f32le"
+                },
+                "items": [
+                    { "kind": "document", "path": "alpha.txt" },
+                    { "kind": "document", "path": "beta.txt" },
+                    { "kind": "document", "path": "gamma.txt" }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let summary = run_request_file_with_overrides(
+            &request_path,
+            None,
+            ClusteringConfigOverrides {
+                clustering_algorithm: Some(ClusteringAlgorithm::DirectionalPca),
+                clustering_cluster_count: Some(2),
+                clustering_retained_dimension_count: Some(1),
+                clustering_variance_exponent: Some(1.0),
+                clustering_temperature: Some(1.0),
+                clustering_min_input_count: Some(2),
+                clustering_min_effective_rank: Some(1),
+                clustering_min_cumulative_variance: Some(0.0),
+                ..ClusteringConfigOverrides::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!summary.block_ids.is_empty());
+        server.join();
+    }
+
+    #[tokio::test]
+    async fn invalid_clustering_option_combinations_fail_before_ingestion_only_execution() {
+        let temp = tempdir().unwrap();
+        let document = temp.path().join("alpha.txt");
+        fs::write(&document, b"alpha\n").unwrap();
+
+        let request_path = temp.path().join("request.json");
+        fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&json!({
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": {
+                        "base_url": "http://localhost:9999",
+                        "model": "all-MiniLM-L6-v2",
+                        "request_timeout_secs": 5,
+                        "max_retries": 0,
+                        "retry_delay_ms": 1
+                    }
+                },
+                "embedding_spec": {
+                    "dims": 2,
+                    "encoding": "f32le"
+                },
+                "items": [
+                    { "kind": "document", "path": "alpha.txt" }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let error = run_request_file_with_overrides(
+            &request_path,
+            Some(ExecutionStage::IngestionAndEmbedding),
+            ClusteringConfigOverrides {
+                clustering_algorithm: Some(ClusteringAlgorithm::DirectionalPca),
+                clustering_min_cluster_occupancy: Some(1),
+                ..ClusteringConfigOverrides::default()
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeError::Config(ConfigError::UnsupportedClusteringOptionForAlgorithm { .. })
+        ));
     }
 
     #[tokio::test]
@@ -1802,6 +2065,8 @@ mod tests {
         counter: Arc<AtomicUsize>,
     }
 
+    type EmbeddingResponseBuilder = Arc<dyn Fn(&[u8]) -> String + Send + Sync + 'static>;
+
     impl Drop for InFlightGuard {
         fn drop(&mut self) {
             self.counter.fetch_sub(1, Ordering::SeqCst);
@@ -1847,9 +2112,40 @@ mod tests {
         spawn_embedding_server_with_delay(expected_requests, Duration::ZERO)
     }
 
+    fn spawn_distinct_embedding_server(expected_requests: usize) -> TestServer {
+        spawn_embedding_server_with_delay_and_responder(
+            expected_requests,
+            Duration::ZERO,
+            Arc::new(|request| {
+                let request = String::from_utf8_lossy(request);
+                if request.contains("alpha") {
+                    r#"{"data":[{"embedding":[1.0,0.0]}]}"#.to_string()
+                } else if request.contains("beta") {
+                    r#"{"data":[{"embedding":[0.0,1.0]}]}"#.to_string()
+                } else if request.contains("gamma") {
+                    r#"{"data":[{"embedding":[1.0,1.0]}]}"#.to_string()
+                } else {
+                    r#"{"data":[{"embedding":[0.25,0.75]}]}"#.to_string()
+                }
+            }),
+        )
+    }
+
     fn spawn_embedding_server_with_delay(
         expected_requests: usize,
         response_delay: Duration,
+    ) -> TestServer {
+        spawn_embedding_server_with_delay_and_responder(
+            expected_requests,
+            response_delay,
+            Arc::new(|_| r#"{"data":[{"embedding":[0.25,0.75]}]}"#.to_string()),
+        )
+    }
+
+    fn spawn_embedding_server_with_delay_and_responder(
+        expected_requests: usize,
+        response_delay: Duration,
+        responder: EmbeddingResponseBuilder,
     ) -> TestServer {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -1885,6 +2181,7 @@ mod tests {
                 let seen_for_connection = Arc::clone(&seen_for_thread);
                 let current_in_flight_for_connection = Arc::clone(&current_in_flight_for_thread);
                 let max_in_flight_for_connection = Arc::clone(&max_in_flight_for_thread);
+                let responder_for_connection = Arc::clone(&responder);
                 thread::spawn(move || {
                     let current =
                         current_in_flight_for_connection.fetch_add(1, Ordering::SeqCst) + 1;
@@ -1939,7 +2236,7 @@ mod tests {
                     if !response_delay.is_zero() {
                         thread::sleep(response_delay);
                     }
-                    let body = r#"{"data":[{"embedding":[0.25,0.75]}]}"#;
+                    let body = responder_for_connection(&request);
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                         body.len()

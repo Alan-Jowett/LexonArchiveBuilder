@@ -5,8 +5,9 @@
 Phase 2 specification patch for the approved email-artifact, chunk-level
 indexing, local filesystem block-store interoperability, replay-based
 streaming delegated indexing, stage-selectable execution, standalone
-clustering input discovery, streaming-status observability, replay-stable
-fingerprinting, and layer-parallel
+clustering input discovery, clustering-algorithm selection, clustering-option
+exposure, streaming-status observability, replay-stable fingerprinting, and
+layer-parallel
 block-construction evolution in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md`.
 
@@ -17,9 +18,10 @@ indexer requirements, including the email-ingestion refinement from `.mail` and
 `.mbox` mailbox sources to normalized email artifacts and chunk-level embedding
 units plus the local filesystem block-store interoperability correction,
 replay-based streaming delegated indexing adoption, stage-selectable execution,
-standalone clustering input discovery, batch-progress observability,
-streaming-status observability, replay-stable delegated item identity, and
-layer-parallel delegated block
+standalone clustering input discovery, delegated clustering-algorithm
+selection, algorithm-specific clustering-option exposure, batch-progress
+observability, streaming-status observability, replay-stable delegated item
+identity, and layer-parallel delegated block
 construction for the local/testing profile.
 
 This document is layered on top of:
@@ -81,6 +83,7 @@ The LexonArchiveBuilder indexer design is intended to be:
 - layer-parallel within one delegated construction layer
 - bounded by an administrator-controlled concurrency budget
 - stage-selectable at the same batch boundary across CLI and request-file use
+- explicit about delegated clustering selection and option defaulting
 - observable during long-running mailbox batches and streaming finalization work
 - chunk-first for email retrieval while preserving full-message and source
   provenance artifacts
@@ -220,6 +223,85 @@ This design fixes the replay-safety contract but does not freeze a specific
 serialization schema for the staging artifact in the specification layer.
 
 **Traces to:** RQ-INDEXER-003A, RQ-INDEXER-003E, RQ-INDEXER-004F
+
+### DSG-LFI-001G `Delegated clustering selection seam`
+
+For any execution stage that includes clustering, LexonArchiveBuilder constructs
+one explicit upstream `BuiltInClustering` selection before the first streaming
+training pass or standalone clustering replay begins.
+
+The supported built-in delegated clustering choices in this increment are:
+
+- `dcbc`
+- `directional-pca`
+
+LexonArchiveBuilder treats the upstream LexonGraph streaming indexer as the
+authority for algorithm execution semantics and only maps repository-owned
+configuration onto that explicit upstream selection. The selected algorithm and
+its effective option values remain fixed for the lifetime of one batch
+invocation so replay passes, training completion, and final materialization do
+not observe intra-run clustering-configuration drift.
+
+The design default for omitted clustering configuration is **[ASSUMPTION]** the
+`dcbc` built-in clustering path because it is the closest fit to the prior
+single-path repository behavior and does not require additional
+directional-PCA-specific parameter tuning from operators who do not opt in.
+
+**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-008, RQ-INDEXER-010A
+
+### DSG-LFI-001H `Clustering-option normalization`
+
+LexonArchiveBuilder normalizes command-line clustering options into one
+algorithm-specific upstream settings object before invoking the delegated
+streaming indexer.
+
+Shared clustering inputs are:
+
+- algorithm choice
+- `cluster_count`
+- `random_seed`
+
+The `dcbc` path additionally accepts the upstream balance-constraint family:
+
+- `min_cluster_occupancy`
+- `max_cluster_occupancy`
+- `max_cluster_size_ratio`
+- `soft_balance_penalty`
+
+The `directional-pca` path additionally accepts the upstream
+`DirectionalPcaParams` family:
+
+- `retained_dimension_count`
+- `variance_exponent`
+- `temperature`
+- `min_input_count`
+- `min_effective_rank`
+- `min_cumulative_variance`
+
+Algorithm-specific options that do not belong to the selected algorithm are
+rejected during LexonArchiveBuilder's CLI/configuration validation rather than
+being silently ignored.
+
+When a caller selects `directional-pca` but omits one or more directional-PCA-
+specific options, LexonArchiveBuilder supplies the following deterministic
+repository defaults:
+
+- `retained_dimension_count = 1`
+- `variance_exponent = 1.0`
+- `temperature = 1.0`
+- `min_input_count = 2`
+- `min_effective_rank = 1`
+- `min_cumulative_variance = 0.0`
+
+When a caller selects `dcbc` and omits optional balance settings or
+`random_seed`, LexonArchiveBuilder passes `None` for those optional upstream
+fields. When `cluster_count` is omitted, LexonArchiveBuilder preserves the
+existing repository-owned cluster-count defaulting behavior rather than
+inventing a second heuristic just for the new explicit algorithm-selection
+surface.
+
+**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-008,
+RQ-INDEXER-010A
 
 ### DSG-LFI-002 `Batch runtime shape`
 
@@ -588,12 +670,50 @@ API exposes a compatible concurrency seam.
 **Traces to:** RQ-INDEXER-003C, RQ-INDEXER-003D, RQ-INDEXER-007,
 RQ-INDEXER-010
 
+### DSG-LFI-007C `Clustering CLI surface`
+
+LexonArchiveBuilder exposes clustering selection and clustering-option flags on
+the `run` command alongside the existing request-file and stage-selection
+surface.
+
+The CLI surface is organized as one shared selector plus algorithm-scoped
+options:
+
+- `--clustering-algorithm`
+- `--clustering-cluster-count`
+- `--clustering-random-seed`
+- `--clustering-min-cluster-occupancy`
+- `--clustering-max-cluster-occupancy`
+- `--clustering-max-cluster-size-ratio`
+- `--clustering-soft-balance-penalty`
+- `--clustering-retained-dimension-count`
+- `--clustering-variance-exponent`
+- `--clustering-temperature`
+- `--clustering-min-input-count`
+- `--clustering-min-effective-rank`
+- `--clustering-min-cumulative-variance`
+
+LexonArchiveBuilder parses these flags after loading the request file and
+resolves them into one effective clustering configuration used only when the
+selected execution stage includes clustering. The `ingestion+embedding` stage
+ignores clustering execution, but still rejects syntactically invalid
+clustering option combinations at argument-validation time so misconfigured
+automation fails early and explicitly.
+
+This increment keeps clustering-option exposure on the CLI boundary. The
+request-file `BatchRequest` contract remains unchanged unless a later semantic
+increment explicitly adds persistent clustering-configuration fields there.
+
+**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-007,
+RQ-INDEXER-010
+
 ### DSG-LFI-008 `Local and production parity boundary`
 
 Local/testing and production environments differ only in adapter realization and
 provider configuration, not in the container's batch contract, the staged email
 artifact model, content item shape, the stage-selection and concurrency-
-configuration surfaces, or the delegated `lexongraph-streaming-indexer`
+configuration surfaces, the clustering-selection and clustering-option CLI
+surface, or the delegated `lexongraph-streaming-indexer`
 orchestration contract.
 
 The MVP realizes this parity boundary by keeping the core orchestration and item
@@ -604,7 +724,7 @@ contract across environments rather than introducing a local-only discovery
 mechanism.
 
 **Traces to:** RQ-INDEXER-007, RQ-INDEXER-010, RQ-INDEXER-003D,
-RQ-INDEXER-003E
+RQ-INDEXER-003E, RQ-INDEXER-003G
 
 ## Invariant Design
 
@@ -641,8 +761,13 @@ repeating the clustering-only stage against the same clustering-eligible block
 set surfaced by the upstream iteration contract is expected to produce the same
 logical clustering result under unchanged upstream semantics.
 
+The same stability expectation applies to clustering configuration resolution:
+repeating a clustering-enabled run with the same explicit flags or the same
+omitted-option defaulting path must resolve to the same effective upstream
+clustering algorithm and option values.
+
 **Traces to:** RQ-INDEXER-003B, RQ-INDEXER-003C, RQ-INDEXER-008,
-RQ-INDEXER-003E, RQ-INDEXER-010A
+RQ-INDEXER-003E, RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-010A
 
 ## Verification Realization
 
@@ -657,6 +782,8 @@ LexonArchiveBuilder-owned verification artifacts validate:
 - correct leaf-layer concurrency scheduling with cross-layer barriers
 - correct standalone clustering input discovery through the upstream block-
   iteration contract
+- correct explicit delegated clustering-algorithm selection and
+  algorithm-specific option normalization on the CLI surface
 - correct deterministic replay staging and replay-stable content fingerprinting
 - correct selection and use of content-resolution, block-store, and
   embedding-provider adapters
@@ -679,8 +806,9 @@ LexonGraph's own block-store or embedding-trait contracts beyond proving that
 LexonArchiveBuilder consumes them correctly.
 
 **Traces to:** RQ-INDEXER-003A, RQ-INDEXER-003B, RQ-INDEXER-003C,
-RQ-INDEXER-003D, RQ-INDEXER-003E, RQ-INDEXER-004F, RQ-INDEXER-008A,
-RQ-INDEXER-008B, RQ-INDEXER-010A, RQ-INDEXER-010B, RQ-INDEXER-010,
-DSG-LFI-001A, DSG-LFI-001B, DSG-LFI-001C, DSG-LFI-001D, DSG-LFI-001E,
-DSG-LFI-001F, DSG-LFI-002A, DSG-LFI-002B, DSG-LFI-004G, DSG-LFI-005A,
-DSG-LFI-007A, DSG-LFI-007B
+RQ-INDEXER-003D, RQ-INDEXER-003E, RQ-INDEXER-003F, RQ-INDEXER-003G,
+RQ-INDEXER-004F, RQ-INDEXER-008A, RQ-INDEXER-008B, RQ-INDEXER-010A,
+RQ-INDEXER-010B, RQ-INDEXER-010, DSG-LFI-001A, DSG-LFI-001B,
+DSG-LFI-001C, DSG-LFI-001D, DSG-LFI-001E, DSG-LFI-001F, DSG-LFI-001G,
+DSG-LFI-001H, DSG-LFI-002A, DSG-LFI-002B, DSG-LFI-004G, DSG-LFI-005A,
+DSG-LFI-007A, DSG-LFI-007B, DSG-LFI-007C

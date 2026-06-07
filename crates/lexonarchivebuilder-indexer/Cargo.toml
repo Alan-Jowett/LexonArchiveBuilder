@@ -12,6 +12,7 @@ half.workspace = true
 lexongraph-block.workspace = true
 lexongraph-block-store.workspace = true
 lexongraph-block-store-fs.workspace = true
+lexongraph-directional-pca.workspace = true
 lexongraph-embeddings-trait.workspace = true
 lexongraph-streaming-indexer.workspace = true
 mailparse = "0.16.1"

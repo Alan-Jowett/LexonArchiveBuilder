@@ -3,8 +3,8 @@
 ## Document Status
 
 - **Phase:** Phase 2 - Specification Changes
-- **Status:** Approved streaming-indexer migration requirements patch being propagated into design and validation
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, streaming-status observability, and layer-parallel block-construction evolution
+- **Status:** Approved streaming-indexer migration and clustering-configuration requirements patch being propagated into design and validation
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, clustering-algorithm selection, clustering-option exposure, streaming-status observability, and layer-parallel block-construction evolution
 
 ## USER-REQUEST
 
@@ -57,6 +57,10 @@
 - **UR-47 [KNOWN]:** Preserve current MCP search and retrieval behavior for already-indexed content; required changes should stay confined to indexing-time orchestration and its tests.
 - **UR-48 [KNOWN]:** The new LexonGraph streaming indexer exposes a caller-visible replay lifecycle: one or more full training passes, explicit training completion, then final materialization replay.
 - **UR-49 [INFERRED]:** LexonArchiveBuilder must preserve deterministic delegated item ordering and stable content fingerprints across streaming passes and finalization replay.
+- **UR-50 [KNOWN]:** The latest LexonGraph streaming indexer update now requires callers to select a clustering algorithm and provide algorithm-specific options.
+- **UR-51 [KNOWN]:** LexonArchiveBuilder should expose clustering algorithm selection and supported clustering options through the command line.
+- **UR-52 [KNOWN]:** Reasonable defaults are acceptable for clustering settings the caller does not specify.
+- **UR-53 [KNOWN]:** The upstream built-in clustering choices currently exposed by LexonGraph are DCBC and directional PCA, and they do not share the same option set.
 
 ## Change Manifest
 
@@ -90,6 +94,9 @@
 | CM-INDEXER-026 | Add | Preserve the current external stage contract and MCP search-serving behavior while adapting the internals to the new streaming lifecycle | UR-46, UR-47 |
 | CM-INDEXER-027 | Add | Require deterministic replay inputs, including stable delegated item ordering and content fingerprints, so streaming passes and finalization remain valid and repeatable | UR-45, UR-48, UR-49 |
 | CM-INDEXER-028 | Revise | Consume upstream streaming status notifications on the existing runtime progress surface instead of relying on the superseded incremental-indexer callback seam | UR-41, UR-45, UR-48 |
+| CM-INDEXER-029 | Revise | Require clustering-enabled execution to supply an explicit upstream-compatible clustering algorithm selection rather than depending on one implicit repository-default algorithm path | UR-39, UR-44, UR-50, UR-53 |
+| CM-INDEXER-030 | Add | Expose clustering algorithm choice and supported algorithm-specific options on the CLI while permitting repository-owned defaults for omitted settings | UR-50, UR-51, UR-52, UR-53 |
+| CM-INDEXER-031 | Add | Preserve replay-safe and environment-neutral clustering behavior by treating the effective clustering algorithm and option set as part of the approved batch orchestration contract | UR-12, UR-13, UR-39, UR-50, UR-52 |
 
 ## Before / After
 
@@ -233,6 +240,21 @@
 - **Before [KNOWN]:** Observable progress requirements referenced the superseded incremental-indexer and clustering callback seams rather than the newer streaming status-observer surface.
 - **After [KNOWN]:** The requirements now define progress visibility in terms of the upstream streaming status observer while preserving one runtime-visible progress stream for local and production-shaped execution.
 
+### BA-INDEXER-029
+
+- **Before [KNOWN]:** The requirements assumed one implicit delegated clustering path and did not capture that the updated LexonGraph streaming indexer now requires callers to choose a clustering algorithm and provide algorithm-specific settings.
+- **After [KNOWN]:** The requirements define clustering algorithm selection as an explicit part of the clustering-enabled indexer contract while keeping algorithm execution delegated to LexonGraph.
+
+### BA-INDEXER-030
+
+- **Before [KNOWN]:** The requirements did not define any operator-facing surface for selecting a clustering algorithm or providing supported clustering options.
+- **After [KNOWN]:** The requirements define a CLI surface that allows operators to choose a supported delegated clustering algorithm and provide supported option values, with repository-owned defaults for omitted settings.
+
+### BA-INDEXER-031
+
+- **Before [KNOWN]:** The requirements did not state whether clustering defaults and option values were part of the deterministic replay boundary for full-pipeline or clustering-only execution.
+- **After [KNOWN]:** The requirements define the effective clustering algorithm and option set as replay-relevant orchestration input so repeated runs can remain explainable and stable under unchanged upstream semantics.
+
 ## Requirements
 
 ### Functional Requirements
@@ -357,6 +379,54 @@ the configured `BlockStore` through the LexonGraph block-iteration API.
   yield the same logical clustering result under unchanged upstream semantics.
 - **Traceability:** UR-39, UR-40
 
+#### RQ-INDEXER-003F - Clustering algorithm selection
+
+For any execution stage that includes clustering plus block assembly,
+LexonArchiveBuilder SHALL provide an explicit delegated clustering algorithm
+selection that satisfies the updated LexonGraph streaming indexer contract.
+
+- **Upstream contract [KNOWN]:** The delegated streaming indexer now requires the
+  caller to choose a clustering algorithm and pass the corresponding
+  algorithm-specific settings rather than relying on one implicit clustering
+  realization.
+- **Current built-in algorithms [KNOWN]:**
+  - `dcbc`
+  - `directional-pca`
+- **Stage boundary [KNOWN]:** This requirement applies to the `full` and
+  `clustering+block-assembly` execution stages and does not affect
+  `ingestion+embedding` execution.
+- **Delegation boundary [KNOWN]:** LexonArchiveBuilder still delegates all actual
+  clustering behavior to LexonGraph and does not define repository-local
+  clustering algorithms in this increment.
+- **Default policy [KNOWN]:** When the caller omits clustering configuration,
+  LexonArchiveBuilder SHALL apply a repository-owned default algorithm and
+  default option values that remain compatible with the upstream contract.
+- **Traceability:** UR-39, UR-44, UR-50, UR-52, UR-53
+
+#### RQ-INDEXER-003G - Algorithm-specific clustering options on the CLI
+
+LexonArchiveBuilder SHALL expose command-line arguments that let operators
+select the delegated clustering algorithm and provide supported
+algorithm-specific option values for clustering-enabled execution.
+
+- **Required surface [KNOWN]:** The CLI must let the caller choose among the
+  supported delegated clustering algorithms and set supported option values
+  without modifying Rust code or request fixtures.
+- **Algorithm-family boundary [KNOWN]:** LexonArchiveBuilder SHALL expose only the
+  options actually supported by the selected delegated clustering algorithm.
+  Shared options may be reused across algorithms, but algorithm-specific
+  options must remain explicit rather than silently ignored.
+- **Validation rule [INFERRED]:** Supplying an option that is unsupported by the
+  selected algorithm SHALL fail explicitly rather than being dropped or
+  reinterpreted as a different option.
+- **Environment-parity implication [INFERRED]:** The same CLI surface must remain
+  usable for local/testing and production-shaped batch invocations so
+  environment selection does not introduce a separate clustering-configuration
+  interface family.
+- **[UNKNOWN: whether this increment also requires equivalent request-file
+  fields in `BatchRequest` rather than CLI-only exposure]**
+- **Traceability:** UR-4, UR-12, UR-13, UR-50, UR-51, UR-52, UR-53
+
 #### RQ-INDEXER-004 - Content resolution integration
 
 LexonArchiveBuilder SHALL provide a concrete implementation of `lexongraph_streaming_indexer::ContentResolver<R>`.
@@ -470,7 +540,11 @@ LexonArchiveBuilder SHALL preserve idempotent rerun behavior for repeated indexi
 - **Standalone clustering implication [INFERRED]:** Repeating the clustering-only
   stage against the same clustering-eligible block-store snapshot must not
   change the logical clustering result under unchanged upstream semantics.
-- **Traceability:** UR-8, UR-16, UR-36
+- **Clustering-configuration implication [INFERRED]:** Repeating a clustering-enabled
+  run against unchanged inputs under the same effective clustering algorithm and
+  option values must not change the logical clustering result merely because a
+  defaulted clustering configuration resolved differently.
+- **Traceability:** UR-8, UR-16, UR-36, UR-50, UR-52
 
 #### RQ-INDEXER-008A - Local integration composition
 
@@ -537,7 +611,11 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - **Stage-semantics implication [KNOWN]:** Stage selection must be expressed in
   terms of generic pipeline phases rather than mailbox-specific behavior so
   future content types can participate without redefining the batch contract.
-- **Traceability:** UR-3, UR-6, UR-7, UR-13, UR-19, UR-22, UR-42
+- **Clustering-configuration implication [INFERRED]:** Clustering algorithm
+  selection and supported option values must remain part of the same stable
+  batch-orchestration boundary across environments rather than creating a
+  separate environment-specific clustering configuration model.
+- **Traceability:** UR-3, UR-6, UR-7, UR-13, UR-19, UR-22, UR-42, UR-50, UR-51
 
 ## Out of Scope
 
@@ -553,6 +631,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - Introducing a dedicated telemetry service, long-lived progress daemon, or MCP-visible progress API for indexing in this increment
 - Requiring higher-layer parent or node block concurrency in the current increment before the upstream delegated indexing surface exposes a compatible implementation seam
 - Introducing a repository-local per-run clustering manifest or a repository-local block-classification scheme outside the upstream LexonGraph block-iteration contract
+- Defining repository-local clustering algorithms or option semantics beyond the supported built-in upstream clustering choices used in this increment
 
 ## Invariant Impact Assessment
 
@@ -565,6 +644,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Local development remains self-contained and batch-oriented | Preserved | Docker Compose is constrained to compose local dependencies around the batch container rather than changing the runtime model |
 | Long-running batches remain observable without adding a control plane | Preserved | Progress reporting remains on the existing batch-runtime log surface and now includes upstream streaming-status visibility in addition to mailbox processing and delegated indexing visibility |
 | Caller-visible indexing and MCP contracts remain stable across the upstream API migration | Preserved | The streaming lifecycle is constrained to an internal adaptation behind the existing stage surface and unchanged MCP retrieval semantics |
+| Clustering configuration remains explicit and replayable | Preserved with clarified scope | Requirements now treat the effective clustering algorithm and option set as part of clustering-enabled orchestration input and constrain defaults to resolve deterministically |
 | Clients are not forced to parse raw mailbox blobs for ordinary retrieval | Preserved | Indexed chunks must reference normalized email artifacts so retrieval can stay at chunk level or expand to full normalized email through repository-owned artifacts |
 | Storage abstraction count stays bounded across environments | Preserved | Requirements now reuse the environment-selected `BlockStore` abstraction family for indexed blocks, normalized email artifacts, and mailbox provenance artifacts rather than introducing a second storage stack |
 | Local filesystem block stores remain interoperable with LexonGraph tooling | Preserved | The local/testing profile is now constrained to LexonGraph's filesystem naming/layout contract so inspection tools can consume repository-produced local stores |
@@ -628,6 +708,11 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
   - user clarification in this session selecting: "All blocks in the configured block store (Recommended)"
   - user request in this session: "The LexonGraph now has a block iteration API so that the clustering can then examine the list of blocks and then start doing clustering. In addition, the clustering also has a callback trait for status updates. Implement that as well so we can monitor the clustering (which is a slow step)"
   - user clarification in this session selecting: "Keep the existing final-root BatchSummary"
+  - user request in this session: "the LexonGraph crate has been updated again. It now requires selection of clustering algorithm and options. Update the latest LexonGraph and expose these options via command line (feel free to pick reasonable defaults for unspecified options)"
+  - external LexonGraph repository source (not vendored in LexonArchiveBuilder):
+    `crates/lexongraph-streaming-indexer/src/lib.rs:539-573`
+  - external LexonGraph repository source (not vendored in LexonArchiveBuilder):
+    `crates/lexongraph-streaming-indexer/src/lib.rs:303-327`
 - **Excluded for now [KNOWN]:**
   - Detailed Rust implementation file paths, crate manifests, Docker assets, and test artifacts, because this requirements document captures the semantic contract and leaves implementation realization to downstream design, validation, and code-review artifacts
   - Exact normalized email CBOR schema, exact duplicated chunk metadata list, and the specific chunking library choice, because those belong to downstream design and validation artifacts rather than requirements
@@ -635,3 +720,4 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
   - The exact mapping from repository stage modes to concrete upstream streaming pass counts, replay batching, and training-completion timing, because those belong to downstream design and validation artifacts rather than requirements
   - The exact configuration surface for the administrator-defined concurrency cap and the exact physical-CPU detection algorithm in containerized or quota-constrained environments, because those belong to downstream design and validation artifacts rather than requirements
   - The precise block-kind predicate used inside the upstream LexonGraph block-iteration API to determine clustering eligibility, because this requirements document constrains LexonArchiveBuilder to the upstream iteration contract without redefining LexonGraph-owned block semantics
+  - The exact default clustering algorithm, exact default numeric option values, and whether clustering-option parity with `BatchRequest` is required in this increment, because those choices can be finalized in downstream design and validation artifacts so long as they stay within the approved command-line and determinism constraints
