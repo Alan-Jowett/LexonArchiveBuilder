@@ -1307,25 +1307,32 @@ mod tests {
     async fn await_with_periodic_progress_emits_heartbeat_for_long_running_operation() {
         let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
         let progress_capture = Arc::clone(&progress);
+        let heartbeat_observed = Arc::new(tokio::sync::Notify::new());
+        let heartbeat_observed_for_reporter = Arc::clone(&heartbeat_observed);
         let reporter: ProgressReporter = Arc::new(move |message| {
             progress_capture.lock().unwrap().push(message);
+            heartbeat_observed_for_reporter.notify_one();
         });
 
-        let result = await_with_periodic_progress(
-            async {
-                tokio::time::sleep(Duration::from_millis(60)).await;
-                7usize
-            },
-            &reporter,
-            Duration::from_millis(10),
-            |elapsed| {
-                format!(
-                    "Embedding batch still running after {} ms",
-                    elapsed.as_millis()
-                )
-            },
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            await_with_periodic_progress(
+                async {
+                    heartbeat_observed.notified().await;
+                    7usize
+                },
+                &reporter,
+                Duration::from_millis(10),
+                |elapsed| {
+                    format!(
+                        "Embedding batch still running after {} ms",
+                        elapsed.as_millis()
+                    )
+                },
+            ),
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(result, 7);
         let progress = progress.lock().unwrap();
