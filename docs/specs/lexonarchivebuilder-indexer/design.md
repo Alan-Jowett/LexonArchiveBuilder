@@ -2,13 +2,14 @@
 
 ## Status
 
-Phase 2 specification patch for the approved email-artifact, chunk-level
+Specification patch for the approved email-artifact, chunk-level
 indexing, local filesystem block-store interoperability, replay-based
 streaming delegated indexing, stage-selectable execution, standalone
 clustering input discovery, clustering-algorithm selection, clustering-option
-exposure, replay-submission and streaming-status observability, replay-stable fingerprinting, and
-layer-parallel
-block-construction evolution in
+exposure, latest planning-policy and telemetry compatibility, upstream
+regression assessment, replay-submission and streaming-status observability,
+replay-stable fingerprinting, and layer-parallel block-construction
+evolution in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md`.
 
 ## Scope
@@ -19,10 +20,13 @@ indexer requirements, including the email-ingestion refinement from `.mail` and
 units plus the local filesystem block-store interoperability correction,
 replay-based streaming delegated indexing adoption, stage-selectable execution,
 standalone clustering input discovery, delegated clustering-algorithm
-selection, algorithm-specific clustering-option exposure, embedding-phase
-batch-progress observability, replay-submission observability, streaming-status observability, replay-stable delegated item
-identity, and layer-parallel delegated block
-construction for the local/testing profile.
+selection, algorithm-specific clustering-option exposure, latest
+planning-policy and telemetry compatibility, upstream regression
+assessment, embedding-phase batch-progress observability,
+replay-submission observability, streaming-status observability,
+telemetry-count-semantics clarity, replay-stable delegated item
+identity, and layer-parallel delegated block construction for the
+local/testing profile.
 
 This document is layered on top of:
 
@@ -85,7 +89,8 @@ The LexonArchiveBuilder indexer design is intended to be:
 - stage-selectable at the same batch boundary across CLI and request-file use
 - explicit about delegated clustering selection and option defaulting
 - observable during long-running mailbox batches, local embedding work,
-  clustering-only replay submission, and streaming finalization work
+  clustering-only replay submission, and streaming final materialization or
+  block-assembly work
 - chunk-first for email retrieval while preserving full-message and source
   provenance artifacts
 
@@ -112,13 +117,13 @@ the upstream lifecycle in order:
 
 1. establish a deterministic delegated item stream for the selected logical
    input set
-2. drive one or more training passes over that stream
-3. mark training complete
+2. drive one or more planning passes over that stream
+3. mark planning complete
 4. drive the final materialization replay
 
 The caller-visible `full pipeline`, `ingestion plus embedding generation only`,
 and `clustering plus block assembly only` modes remain repository contracts.
-The raw upstream training and finalization lifecycle is not surfaced directly on
+The raw upstream planning and materialization lifecycle is not surfaced directly on
 the CLI or `BatchRequest`.
 
 LexonArchiveBuilder still owns mailbox expansion, artifact storage, replay
@@ -225,11 +230,12 @@ serialization schema for the staging artifact in the specification layer.
 
 **Traces to:** RQ-INDEXER-003A, RQ-INDEXER-003E, RQ-INDEXER-004F
 
-### DSG-LFI-001G `Delegated clustering selection seam`
+### DSG-LFI-001G `Delegated planning selection seam`
 
 For any execution stage that includes clustering, LexonArchiveBuilder constructs
-one explicit upstream `BuiltInClustering` selection before the first streaming
-training pass or standalone clustering replay begins.
+one explicit upstream `BuiltInPlanning` selection and wraps it in one
+`BuiltInPlanningPolicy` before the first streaming planning pass or standalone
+clustering replay begins.
 
 The supported built-in delegated clustering choices in this increment are:
 
@@ -238,10 +244,10 @@ The supported built-in delegated clustering choices in this increment are:
 
 LexonArchiveBuilder treats the upstream LexonGraph streaming indexer as the
 authority for algorithm execution semantics and only maps repository-owned
-configuration onto that explicit upstream selection. The selected algorithm and
-its effective option values remain fixed for the lifetime of one batch
-invocation so replay passes, training completion, and final materialization do
-not observe intra-run clustering-configuration drift.
+configuration onto that explicit upstream planning selection. The selected
+algorithm and its effective option values remain fixed for the lifetime of one
+batch invocation so replay passes, planning completion, and final
+materialization do not observe intra-run clustering-configuration drift.
 
 The design default for omitted clustering configuration is **[ASSUMPTION]** the
 `dcbc` built-in clustering path because it is the closest fit to the prior
@@ -250,7 +256,7 @@ directional-PCA-specific parameter tuning from operators who do not opt in.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-008, RQ-INDEXER-010A
 
-### DSG-LFI-001H `Clustering-option normalization`
+### DSG-LFI-001H `Planning-option normalization`
 
 LexonArchiveBuilder normalizes command-line clustering options into one
 algorithm-specific upstream settings object before invoking the delegated
@@ -314,6 +320,31 @@ optional upstream fields.
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003H,
 RQ-INDEXER-008, RQ-INDEXER-010A
 
+### DSG-LFI-001I `Latest-upstream compatibility and regression boundary`
+
+LexonArchiveBuilder treats the latest upstream planning-policy and
+status-observer telemetry surfaces as a mechanical adaptation boundary, not as
+permission to narrow the approved repository contract.
+
+The design therefore preserves these repository-required capabilities across the
+upgrade whenever the latest upstream contract still supports them semantically:
+
+- the external stage contract
+- deterministic split-stage replay
+- explicit `dcbc` and `directional-pca` selection
+- omitted `cluster_count` auto-sizing with explicit override preservation
+- repository-owned progress projection over upstream lifecycle events
+- projection of richer live hierarchy-stage telemetry and heartbeat events onto
+  that same repository-owned progress surface
+- unchanged MCP search-serving behavior for already-indexed content
+
+If any of those capabilities proves unavailable on the latest upstream surface,
+the implementation must surface that as an explicit compatibility finding or
+upstream regression rather than silently deleting the affected repository-owned
+behavior.
+
+**Traces to:** RQ-INDEXER-003I, RQ-INDEXER-009, RQ-INDEXER-010A
+
 ### DSG-LFI-002 `Batch runtime shape`
 
 The indexer runtime is a Linux Docker container that executes one batch under a
@@ -352,7 +383,7 @@ The first design baseline reports at least:
 - embedding or leaf-materialization progress after mailbox expansion has
   produced delegated items and before observer-driven streaming status is
   available for downstream work
-- delegated indexing progress after additional replay batches, training passes,
+- delegated indexing progress after additional replay batches, planning passes,
   or constructed blocks have advanced
 - clustering or block-assembly progress after upstream observer events indicate
   that additional streaming work has advanced
@@ -360,8 +391,8 @@ The first design baseline reports at least:
 This signaling remains part of the short-lived batch runtime and does not
 introduce a separate progress API, control-plane service, or MCP-visible
 surface. For a default full-pipeline run, mailbox or delegated-indexing
-progress appears first and observer-driven streaming finalization progress
-follows on the same runtime-visible stream.
+progress appears first and observer-driven streaming final materialization or
+block-assembly progress follows on the same runtime-visible stream.
 
 For ingestion-plus-embedding execution, the repository-owned runtime must not
 leave a non-empty delegated item set silent between mailbox-preparation
@@ -372,17 +403,22 @@ surface.
 
 For clustering-only replay, the repository-owned runtime already knows the
 reconstructed replay-batch count and cumulative delegated-item total before the
-first upstream training-pass heartbeat arrives. The design therefore emits one
+first upstream planning-pass heartbeat arrives. The design therefore emits one
 repository-owned completion signal after each replay-batch submission that
 reports completed batches and cumulative delegated items relative to the known
 invocation total, rather than relying only on later observer heartbeats with
 phase-level elapsed-time visibility.
 
+When the latest upstream observer surface emits richer live telemetry after
+repository-owned submission has handed off control, the runtime keeps those
+telemetry events on the same progress stream but does not let them replace the
+repository-owned invocation-total context established earlier in the run.
+
 When the last repository-owned replay batch has been submitted and control moves
-from local submission into waiting for upstream training-pass completion, the
+from local submission into waiting for upstream planning-pass completion, the
 same runtime-visible progress stream emits an explicit handoff marker. That
 marker distinguishes "all known replay batches submitted; waiting on delegated
-training pass completion" from the later upstream observer heartbeats so
+planning-pass completion" from the later upstream observer heartbeats so
 operators can tell whether LexonArchiveBuilder is still feeding the streaming API
 or is already blocked on downstream work.
 
@@ -390,11 +426,12 @@ or is already blocked on downstream work.
 
 ### DSG-LFI-002B `Streaming status signaling`
 
-LexonArchiveBuilder realizes long-running indexing observability by implementing the
-upstream streaming status-observer seam and translating observer events into
-runtime-visible progress messages.
+LexonArchiveBuilder realizes long-running indexing observability by implementing
+the upstream streaming status-observer seam and translating observer events
+into runtime-visible progress messages.
 
-This keeps training-pass, training-completion, finalization, and clustering
+This keeps planning-pass, planning-completion, final materialization, and
+clustering
 visibility on the same batch-log surface already used for mailbox and
 delegated-indexing progress. It does not introduce a separate progress
 transport, metrics backend, or MCP-visible monitoring surface.
@@ -409,6 +446,26 @@ repository-owned submission progress and upstream phase progress. It does not
 reinterpret upstream `InProgress` heartbeats as proof that additional replay
 batches are still being submitted once the repository-owned handoff marker has
 been emitted.
+
+For the latest known upstream contract, the translation layer maps planning
+passes, hierarchy-planning stages, final materialization replay, bottom-up
+assembly updates, and heartbeat-style in-progress telemetry onto
+repository-visible progress categories without leaking the raw upstream enum
+names into the external CLI or `BatchRequest` contract.
+
+The translation layer also preserves count-semantics clarity when the newest
+upstream telemetry mixes multiple count shapes:
+
+- planning-pass counts that remain invocation-total or replay-total
+- hierarchy-planning counts that may represent stage-local processed work
+- bottom-up assembly counts that may represent layer-local block or group totals
+
+The repository-visible rendering therefore distinguishes local replay totals
+from upstream stage-local or layer-local telemetry rather than presenting every
+count as if it were the same logical unit. This keeps operator logs
+understandable even when upstream observer events intentionally reuse one status
+shape across multiple telemetry contexts.
+
 
 **Traces to:** RQ-INDEXER-008B, RQ-INDEXER-010A
 
@@ -492,7 +549,7 @@ stable chunk locator.
 
 This design fixes the stable fingerprint inputs but leaves the exact
 serialization details to implementation so long as the resulting fingerprint is
-deterministic across training passes, finalization replay, and reruns.
+deterministic across planning passes, final materialization replay, and reruns.
 
 **Traces to:** RQ-INDEXER-004F, RQ-INDEXER-008
 
@@ -795,9 +852,9 @@ expected to produce the same mailbox artifact, normalized email artifact, and
 derived chunk identities on repeated runs.
 
 Replay staging and content fingerprinting are likewise required to be
-semantically transparent: repeated training and finalization replays over the
-same logical item set must not introduce replay mismatches under unchanged
-content and metadata semantics.
+semantically transparent: repeated planning and final materialization replays
+over the same logical item set must not introduce replay mismatches under
+unchanged content and metadata semantics.
 
 Leaf-layer scheduling is therefore required to be semantically transparent:
 changing the concurrency budget may change throughput, but it does not change
@@ -842,7 +899,7 @@ LexonArchiveBuilder-owned verification artifacts validate:
 - correct shaping of chunk-sized delegated email items
 - correct progress visibility during long-running mailbox batches, including
   the no-silent-gap requirement between mailbox preparation and local embedding
-  progress plus observer-driven finalization visibility
+  progress plus observer-driven final materialization or block-assembly visibility
 - correct application and defaulting of the administrator-defined concurrency
   budget
 - preservation of stable batch contracts across environments
@@ -859,5 +916,5 @@ RQ-INDEXER-003D, RQ-INDEXER-003E, RQ-INDEXER-003F, RQ-INDEXER-003G,
 RQ-INDEXER-004F, RQ-INDEXER-008A, RQ-INDEXER-008B, RQ-INDEXER-010A,
 RQ-INDEXER-010B, RQ-INDEXER-010, DSG-LFI-001A, DSG-LFI-001B,
 DSG-LFI-001C, DSG-LFI-001D, DSG-LFI-001E, DSG-LFI-001F, DSG-LFI-001G,
-DSG-LFI-001H, DSG-LFI-002A, DSG-LFI-002B, DSG-LFI-004G, DSG-LFI-005A,
-DSG-LFI-007A, DSG-LFI-007B, DSG-LFI-007C
+DSG-LFI-001H, DSG-LFI-001I, DSG-LFI-002A, DSG-LFI-002B, DSG-LFI-004G,
+DSG-LFI-005A, DSG-LFI-007A, DSG-LFI-007B, DSG-LFI-007C
