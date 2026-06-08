@@ -443,7 +443,7 @@ fn prepare_request_replay_batches(
 
     sort_replay_items(&mut items);
     let mut replay_batches = chunk_replay_items(items, max_concurrency);
-    annotate_ingestion_replay_batches(&mut replay_batches);
+    annotate_embedding_progress_batches(&mut replay_batches);
     Ok(replay_batches)
 }
 
@@ -464,7 +464,7 @@ fn chunk_replay_items(
     batches
 }
 
-fn annotate_ingestion_replay_batches(batches: &mut [ReplayBatch]) {
+fn annotate_embedding_progress_batches(batches: &mut [ReplayBatch]) {
     let total_batches = batches.len();
     let total_items: usize = batches.iter().map(|batch| batch.items.len()).sum();
     let mut completed_items = 0usize;
