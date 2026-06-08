@@ -47,19 +47,6 @@ struct StagedBlocks {
     blocks: Vec<SerializedBlock>,
 }
 
-fn content_preview(body: &[u8]) -> String {
-    let text = String::from_utf8_lossy(body);
-    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut preview = String::new();
-    for ch in compact.chars().take(CONTENT_PREVIEW_CHAR_LIMIT) {
-        preview.push(ch);
-    }
-    if compact.chars().count() > CONTENT_PREVIEW_CHAR_LIMIT {
-        preview.push_str("...");
-    }
-    preview
-}
-
 #[derive(Debug, Default)]
 struct ConstructedBlocks {
     block_ids: Vec<BlockHash>,
@@ -166,7 +153,7 @@ struct RepeatedEmbeddingGroupDiagnostics {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 struct RepeatedEmbeddingSampleDiagnostics {
     input: ClusteringFailureInput,
-    content_preview: Option<String>,
+    content_fingerprint: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -688,13 +675,12 @@ fn effective_clustering_diagnostics(
 
 const SUSPICIOUS_INPUT_SAMPLE_LIMIT: usize = 5;
 const VARIANCE_EPSILON: f64 = 1e-12;
-const CONTENT_PREVIEW_CHAR_LIMIT: usize = 160;
 
 #[derive(Clone, Debug, Default)]
 struct EmbeddingObservation {
     fingerprint: Option<String>,
     l2_norm: Option<f64>,
-    content_preview: Option<String>,
+    content_fingerprint: Option<String>,
     missing: bool,
     undecodable: bool,
     non_finite: bool,
@@ -733,12 +719,13 @@ fn build_embedding_health_diagnostics(
             });
             continue;
         };
-        let input_hash = hash_embedding_content(&content.media_type, &content.body).into_bytes();
-        let content_preview = Some(content_preview(&content.body));
-        let Some(embedding_bytes) = embedding_source.embedding_for_hash(&input_hash) else {
+        let input_hash = hash_embedding_content(&content.media_type, &content.body);
+        let content_fingerprint = Some(input_hash.to_string());
+        let Some(embedding_bytes) = embedding_source.embedding_for_hash(&input_hash.into_bytes())
+        else {
             missing_embedding_count += 1;
             observations.push(EmbeddingObservation {
-                content_preview,
+                content_fingerprint,
                 missing: true,
                 ..EmbeddingObservation::default()
             });
@@ -753,7 +740,7 @@ fn build_embedding_health_diagnostics(
                 undecodable_embedding_count += 1;
                 observations.push(EmbeddingObservation {
                     fingerprint: Some(fingerprint),
-                    content_preview,
+                    content_fingerprint,
                     undecodable: true,
                     ..EmbeddingObservation::default()
                 });
@@ -766,7 +753,7 @@ fn build_embedding_health_diagnostics(
             non_finite_embedding_count += 1;
             observations.push(EmbeddingObservation {
                 fingerprint: Some(fingerprint),
-                content_preview,
+                content_fingerprint,
                 non_finite: true,
                 ..EmbeddingObservation::default()
             });
@@ -809,7 +796,7 @@ fn build_embedding_health_diagnostics(
         observations.push(EmbeddingObservation {
             fingerprint: Some(fingerprint),
             l2_norm: Some(l2_norm),
-            content_preview,
+            content_fingerprint,
             zero_vector,
             ..EmbeddingObservation::default()
         });
@@ -872,7 +859,7 @@ fn build_embedding_health_diagnostics(
         if sample_inputs.len() < SUSPICIOUS_INPUT_SAMPLE_LIMIT {
             sample_inputs.push(RepeatedEmbeddingSampleDiagnostics {
                 input: input.clone(),
-                content_preview: observation.content_preview.clone(),
+                content_fingerprint: observation.content_fingerprint.clone(),
             });
         }
     }
@@ -993,7 +980,7 @@ fn build_failing_subset_diagnostics(
     let (provenance, basis) = if exact_top_level_match {
         (
             FailingSubsetProvenance::Exact,
-            "the upstream failure surface indicates the failing subset exactly matches the top-level clustering attempt".to_string(),
+            "the upstream failure surface reported the same active item count as the top-level clustering attempt, so the count-based repository-visible subset matches the top-level attempt".to_string(),
         )
     } else {
         (
@@ -2460,7 +2447,7 @@ fn persist_staged_blocks(
 }
 
 pub fn write_summary_file(path: &Path, summary: &BatchSummary) -> Result<(), RuntimeError> {
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = parent_directory_to_create(path) {
         fs::create_dir_all(parent).map_err(|source| RuntimeError::WriteSummary {
             path: path.display().to_string(),
             source,
@@ -2477,6 +2464,11 @@ fn adjacent_output_directory(path: &Path) -> &Path {
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new(""))
+}
+
+fn parent_directory_to_create(path: &Path) -> Option<&Path> {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
 }
 
 pub fn clustering_failure_diagnostics_path(
@@ -2497,7 +2489,7 @@ pub fn write_clustering_failure_diagnostics_file(
     path: &Path,
     diagnostics: &ClusteringFailureDiagnostics,
 ) -> Result<(), RuntimeError> {
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = parent_directory_to_create(path) {
         fs::create_dir_all(parent).map_err(|source| RuntimeError::WriteClusteringDiagnostics {
             path: path.display().to_string(),
             source,
@@ -3766,8 +3758,8 @@ mod tests {
             2
         );
         assert_eq!(
-            diagnostics.top_repeated_embedding_groups[0].sample_inputs[0].content_preview,
-            Some("beta".into())
+            diagnostics.top_repeated_embedding_groups[0].sample_inputs[0].content_fingerprint,
+            Some(hash_embedding_content("text/plain", b"beta").to_string())
         );
         assert_eq!(diagnostics.suspicious_input_sample.len(), 4);
         assert!(
@@ -3809,6 +3801,16 @@ mod tests {
         assert!(written.contains("\"algorithm\": \"directional-pca\""));
         assert!(written.contains("\"embedding_health\""));
         assert!(written.contains("\"source_path\": \"alpha.txt\""));
+    }
+
+    #[test]
+    fn parent_directory_to_create_skips_empty_relative_parent() {
+        let nested_summary = Path::new("nested").join("summary.json");
+        assert_eq!(parent_directory_to_create(Path::new("summary.json")), None);
+        assert_eq!(
+            parent_directory_to_create(nested_summary.as_path()),
+            Some(Path::new("nested"))
+        );
     }
 
     #[test]
@@ -3951,7 +3953,11 @@ mod tests {
             diagnostics.repository_visible_subset,
             RepositoryVisibleSubsetDiagnostics::SameAsTopLevelAttempt { input_count: 3 }
         );
-        assert!(diagnostics.basis.contains("exactly matches the top-level"));
+        assert!(
+            diagnostics
+                .basis
+                .contains("same active item count as the top-level clustering attempt")
+        );
     }
 
     #[test]
