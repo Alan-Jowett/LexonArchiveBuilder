@@ -8,8 +8,8 @@ streaming delegated indexing, stage-selectable execution, standalone
 clustering input discovery, clustering-algorithm selection, clustering-option
 exposure, latest planning-policy and telemetry compatibility, upstream
 regression assessment, replay-submission and streaming-status observability,
-replay-stable fingerprinting, and layer-parallel block-construction
-evolution in
+clustering-failure diagnostics, replay-stable fingerprinting, and
+layer-parallel block-construction evolution in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md` and
 `docs/specs/lexonarchivebuilder-indexer/design.md`.
 
@@ -23,8 +23,9 @@ delegated clustering-algorithm selection, algorithm-specific clustering-option
 exposure, latest planning-policy and telemetry compatibility, upstream
 regression assessment, embedding-phase batch-progress observability,
 replay-submission observability, streaming-status observability,
-telemetry-count-semantics clarity, replay-stable fingerprinting, and
-leaf-layer parallel block scheduling in the local/testing profile.
+telemetry-count-semantics clarity, clustering-failure diagnostics,
+replay-stable fingerprinting, and leaf-layer parallel block scheduling in the
+local/testing profile.
 
 This package validates LexonArchiveBuilder's batch contract, adapter selection, and
 delegated use of LexonGraph interfaces. It does not redefine validation already
@@ -447,6 +448,23 @@ or layer-local block or group totals, so newer upstream telemetry does not
 create misleading operator-visible count interpretations.
 
 **Traces to:** RQ-INDEXER-008B, DSG-LFI-002A, DSG-LFI-002B
+
+### VAL-LFI-007H
+
+Run a clustering-enabled execution that reaches the point where the clustering
+candidate set and effective delegated clustering configuration are known, and
+then fails during delegated clustering or clustering-dependent materialization.
+
+**Pass condition:** the normal batch log stream identifies the exact
+repository-visible clustering input set for the failed attempt and the
+effective delegated clustering configuration used for that attempt, and the
+runtime writes the same failure diagnostics to a request-adjacent artifact in
+the `--summary-out` directory when present or otherwise in the `--request`
+directory. If artifact persistence fails, the log output still contains enough
+diagnostic detail to identify the failed input set and effective delegated
+configuration without relying on the artifact.
+
+**Traces to:** RQ-INDEXER-008C, DSG-LFI-002C
 
 ### VAL-LFI-008
 

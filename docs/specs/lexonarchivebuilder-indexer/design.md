@@ -8,8 +8,8 @@ streaming delegated indexing, stage-selectable execution, standalone
 clustering input discovery, clustering-algorithm selection, clustering-option
 exposure, latest planning-policy and telemetry compatibility, upstream
 regression assessment, replay-submission and streaming-status observability,
-replay-stable fingerprinting, and layer-parallel block-construction
-evolution in
+clustering-failure diagnostics, replay-stable fingerprinting, and
+layer-parallel block-construction evolution in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md`.
 
 ## Scope
@@ -24,7 +24,8 @@ selection, algorithm-specific clustering-option exposure, latest
 planning-policy and telemetry compatibility, upstream regression
 assessment, embedding-phase batch-progress observability,
 replay-submission observability, streaming-status observability,
-telemetry-count-semantics clarity, replay-stable delegated item
+telemetry-count-semantics clarity, clustering-failure diagnostics,
+replay-stable delegated item
 identity, and layer-parallel delegated block construction for the
 local/testing profile.
 
@@ -89,8 +90,8 @@ The LexonArchiveBuilder indexer design is intended to be:
 - stage-selectable at the same batch boundary across CLI and request-file use
 - explicit about delegated clustering selection and option defaulting
 - observable during long-running mailbox batches, local embedding work,
-  clustering-only replay submission, and streaming final materialization or
-  block-assembly work
+  clustering-only replay submission, streaming final materialization or
+  block-assembly work, and delegated clustering failures
 - chunk-first for email retrieval while preserving full-message and source
   provenance artifacts
 
@@ -468,6 +469,43 @@ shape across multiple telemetry contexts.
 
 
 **Traces to:** RQ-INDEXER-008B, RQ-INDEXER-010A
+
+### DSG-LFI-002C `Clustering failure diagnostics`
+
+LexonArchiveBuilder realizes diagnosable clustering failures through one
+repository-owned clustering-attempt snapshot that is assembled at the first
+runtime point where both the clustering candidate set and the effective
+delegated clustering configuration are simultaneously known.
+
+That snapshot records:
+
+- the selected execution stage
+- the active embedding specification
+- the block-size target
+- the selected delegated clustering algorithm
+- the resolved effective `cluster_count`
+- the effective algorithm-specific delegated clustering parameters
+- the exact repository-visible clustering input set for the attempt using
+  stable identifiers such as child block identifiers, replay-item identities,
+  or equivalent repository-owned logical node identifiers
+
+On a clustering failure, the runtime renders this same snapshot onto the normal
+batch log stream and serializes it to one request-adjacent diagnostic artifact.
+The artifact location follows one repository-owned output policy: use the
+`--summary-out` directory when present, otherwise the `--request` file
+directory.
+
+This design keeps failure diagnosability inside the short-lived batch runtime.
+It does not introduce a new control plane, metrics surface, or MCP-visible
+diagnostic API, and it does not require the same verbose clustering-input
+inventory on successful runs.
+
+If writing the request-adjacent artifact fails, the runtime still emits the
+clustering-attempt snapshot on the normal log stream together with the original
+clustering failure so diagnosability does not depend on artifact persistence.
+
+**Traces to:** RQ-INDEXER-003E, RQ-INDEXER-003F, RQ-INDEXER-008C,
+RQ-INDEXER-010
 
 ### DSG-LFI-003 `Collection item normalization`
 
@@ -900,6 +938,9 @@ LexonArchiveBuilder-owned verification artifacts validate:
 - correct progress visibility during long-running mailbox batches, including
   the no-silent-gap requirement between mailbox preparation and local embedding
   progress plus observer-driven final materialization or block-assembly visibility
+- correct failure-only clustering diagnostics that identify the failed input
+  set and effective delegated clustering configuration on both required
+  surfaces
 - correct application and defaulting of the administrator-defined concurrency
   budget
 - preservation of stable batch contracts across environments
@@ -918,3 +959,8 @@ RQ-INDEXER-010B, RQ-INDEXER-010, DSG-LFI-001A, DSG-LFI-001B,
 DSG-LFI-001C, DSG-LFI-001D, DSG-LFI-001E, DSG-LFI-001F, DSG-LFI-001G,
 DSG-LFI-001H, DSG-LFI-001I, DSG-LFI-002A, DSG-LFI-002B, DSG-LFI-004G,
 DSG-LFI-005A, DSG-LFI-007A, DSG-LFI-007B, DSG-LFI-007C
+RQ-INDEXER-008C, RQ-INDEXER-010A, RQ-INDEXER-010B, RQ-INDEXER-010,
+DSG-LFI-001A, DSG-LFI-001B, DSG-LFI-001C, DSG-LFI-001D, DSG-LFI-001E,
+DSG-LFI-001F, DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-001I, DSG-LFI-002A,
+DSG-LFI-002B, DSG-LFI-002C, DSG-LFI-004G, DSG-LFI-005A, DSG-LFI-007A,
+DSG-LFI-007B, DSG-LFI-007C

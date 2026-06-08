@@ -10,7 +10,8 @@ pub use config::{
     BatchRequest, BatchSummary, ClusteringAlgorithm, ClusteringConfigOverrides, ExecutionStage,
 };
 pub use runtime::{
-    INGESTION_ONLY_ROOT_ID_PLACEHOLDER, run_request, run_request_file,
-    run_request_file_with_overrides, run_request_file_with_stage, run_request_with_overrides,
-    write_summary_file,
+    ClusteringFailureDiagnostics, INGESTION_ONLY_ROOT_ID_PLACEHOLDER,
+    clustering_failure_diagnostics_path, run_request, run_request_file,
+    run_request_file_with_outputs, run_request_file_with_overrides, run_request_file_with_stage,
+    run_request_with_overrides, write_clustering_failure_diagnostics_file, write_summary_file,
 };

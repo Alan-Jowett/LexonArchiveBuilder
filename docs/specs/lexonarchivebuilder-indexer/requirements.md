@@ -3,8 +3,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with a new requirements patch in discovery for the latest LexonGraph telemetry-aware update and feature-regression check
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, clustering-algorithm selection, clustering-option exposure, latest planning-policy and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission, and streaming-status observability, and layer-parallel block-construction evolution
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for latest LexonGraph planning-policy and telemetry compatibility, upstream regression assessment, and clustering-failure diagnostics
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, clustering-algorithm selection, clustering-option exposure, latest planning-policy and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, and layer-parallel block-construction evolution
 
 ## USER-REQUEST
 
@@ -79,6 +79,10 @@
 - **UR-69 [KNOWN]:** The latest upstream observer surface now emits live hierarchy-planning stage telemetry and periodic heartbeat-style in-progress status updates during long-running planning and materialization phases.
 - **UR-70 [INFERRED]:** LexonArchiveBuilder should preserve operator-understandable progress semantics when upstream telemetry mixes repository-total counts, stage-local progress counts, and materialization-layer counts rather than exposing those raw count semantics ambiguously.
 - **UR-71 [INFERRED]:** This telemetry upgrade must preserve the current external stage contract and unchanged MCP search or retrieval behavior for already-indexed content rather than broadening the user-visible surface beyond runtime progress.
+- **UR-72 [KNOWN]:** Current clustering failures do not report which repository-visible clustering inputs were in the failing attempt or which effective delegated clustering parameters LexonArchiveBuilder passed downstream.
+- **UR-73 [KNOWN]:** When clustering fails, operators need to know what nodes were being clustered and what parameters were passed so the failure is diagnosable without reproducing the run under a debugger.
+- **UR-74 [KNOWN]:** The required clustering-failure diagnostics must be emitted on the runtime log and in a request-adjacent diagnostic artifact rather than on a new control-plane or MCP surface.
+- **UR-75 [KNOWN]:** Detailed clustering diagnostics are required only for failure cases in this increment; successful clustering runs do not need the same verbose input inventory.
 
 ## Change Manifest
 
@@ -127,6 +131,7 @@
 | CM-INDEXER-041 | Revise | Adapt the latest-upstream compatibility requirement from planning-policy-only alignment to planning-policy plus telemetry-surface alignment against the newest LexonGraph `main` revision | UR-67, UR-69, UR-71 |
 | CM-INDEXER-042 | Revise | Tighten progress-observability requirements so LexonArchiveBuilder projects richer upstream live telemetry and heartbeat events onto the existing runtime progress surface without creating a second telemetry interface | UR-68, UR-69, UR-71 |
 | CM-INDEXER-043 | Add | Preserve operator-understandable progress semantics across the telemetry upgrade by distinguishing repository-owned totals, upstream stage-local progress, and materialization-layer counts instead of surfacing ambiguous raw counts | UR-68, UR-69, UR-70 |
+| CM-INDEXER-044 | Add | Require failure-only clustering diagnostics that identify the exact failing input set and effective delegated clustering configuration on the runtime log and in a request-adjacent artifact | UR-39, UR-50, UR-72, UR-73, UR-74, UR-75 |
 
 ## Before / After
 
@@ -344,6 +349,11 @@
 
 - **Before [KNOWN]:** The requirements assumed upstream observer counts would remain close enough to repository totals that count semantics would stay intuitive without additional clarification.
 - **After [KNOWN]:** The requirements now explicitly constrain operator-facing progress to remain understandable when upstream telemetry reports stage-local work counts or layer-local materialization counts that differ from repository-total delegated-item counts.
+
+### BA-INDEXER-044
+
+- **Before [KNOWN]:** When delegated clustering failed, runtime-visible output could report elapsed time and the upstream error text without identifying the exact clustering input set or the effective delegated clustering configuration used for the failing attempt.
+- **After [KNOWN]:** The requirements now require failure-only clustering diagnostics that identify the exact repository-visible input set and effective delegated clustering configuration on the runtime log and in a request-adjacent diagnostic artifact.
 
 ## Requirements
 
@@ -724,6 +734,53 @@ advances, and clustering or block assembly advances.
 - **Non-goal [KNOWN]:** This requirement does not introduce a separate control-plane, metrics backend, or MCP-surface change.
 - **Traceability:** UR-32, UR-33, UR-39, UR-41, UR-45, UR-48, UR-59, UR-60, UR-61, UR-62, UR-63, UR-67, UR-68, UR-69, UR-70, UR-71
 
+#### RQ-INDEXER-008C - Diagnosable clustering failures
+
+When a clustering-enabled execution fails after LexonArchiveBuilder has determined
+the clustering candidate set and effective delegated clustering configuration,
+LexonArchiveBuilder SHALL emit failure diagnostics that make the failed attempt
+reconstructable to an operator.
+
+- **Applicability [KNOWN]:** This requirement applies to the `full` and
+  `clustering+block-assembly` execution stages when the failure occurs in or
+  because of delegated clustering or clustering-dependent materialization work.
+- **Input-set visibility [KNOWN]:** Failure diagnostics must identify the exact
+  repository-visible clustering input set for the failed attempt, including
+  enough stable identifiers to determine which child blocks, replay items, or
+  equivalent repository-owned logical nodes were being clustered.
+- **Effective-configuration visibility [KNOWN]:** Failure diagnostics must record
+  the effective delegated clustering configuration actually used for the failed
+  attempt, including the selected algorithm, the resolved effective
+  `cluster_count`, the effective algorithm-specific parameter values, the active
+  embedding specification, the block-size target, and the selected execution
+  stage.
+- **Dual-surface requirement [KNOWN]:** The required diagnostics must be emitted
+  on the normal runtime log stream and written to a request-adjacent diagnostic
+  artifact so failure analysis does not depend on retaining transient console
+  output alone.
+- **Failure-only scope [KNOWN]:** This requirement does not obligate
+  LexonArchiveBuilder to emit the same detailed clustering-input inventory for
+  successful clustering runs in this increment.
+- **Environment parity [INFERRED]:** The same diagnostic information must remain
+  available for local/testing and preserved production-shaped runs rather than
+  existing only in one environment profile.
+- **Extensibility [INFERRED]:** The diagnostic shape must not assume mailbox-only
+  content; future content types should be representable through the same
+  repository-visible input-identification scheme.
+- **Failure-path robustness [INFERRED]:** If the request-adjacent diagnostic
+  artifact cannot be written, the runtime log output for the original clustering
+  failure must still include enough information to identify the failed input set
+  and effective delegated configuration rather than silently degrading to the
+  current opaque failure shape.
+- **Boundary [KNOWN]:** This requirement adds indexing-time diagnosability only
+  and does not redefine MCP search semantics, upstream clustering semantics, or
+  the external request contract.
+- **Artifact-location policy [KNOWN]:** The request-adjacent diagnostic artifact
+  SHALL be written in the `--summary-out` directory when that output path is
+  present and SHALL otherwise be written in the same directory as the
+  `--request` file.
+- **Traceability:** UR-39, UR-41, UR-50, UR-72, UR-73, UR-74, UR-75
+
 ### Boundary and Invariant Requirements
 
 #### RQ-INDEXER-009 - Search-serving separation
@@ -778,6 +835,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - Requiring higher-layer parent or node block concurrency in the current increment before the upstream delegated indexing surface exposes a compatible implementation seam
 - Introducing a repository-local per-run clustering manifest or a repository-local block-classification scheme outside the upstream LexonGraph block-iteration contract
 - Defining repository-local clustering algorithms or option semantics beyond the supported built-in upstream clustering choices used in this increment
+- Requiring detailed clustering-input inventories for successful clustering runs in this increment
 
 ## Invariant Impact Assessment
 
@@ -788,7 +846,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Architecture remains extensible to future content types | Preserved | Collection-oriented input still covers both mailbox and document collections, and stage selection is defined in generic pipeline terms rather than mailbox-specific behavior |
 | Idempotence and recoverability stay aligned with underlying immutable block semantics | Preserved with clarified scope | Requirements extend hash-addressed identity expectations to normalized email artifacts and require clustering-only reruns over the same clustering-eligible block-store snapshot to remain semantically stable under unchanged upstream semantics |
 | Local development remains self-contained and batch-oriented | Preserved | Docker Compose is constrained to compose local dependencies around the batch container rather than changing the runtime model |
-| Long-running batches remain observable without adding a control plane | Preserved with clarified scope | Progress reporting remains on the existing batch-runtime log surface and now explicitly includes the long-running embedding or leaf-materialization gap between mailbox expansion and downstream streaming-status visibility plus clustering-only replay submission progress and the handoff into upstream planning-pass waiting |
+| Long-running batches remain observable without adding a control plane | Preserved with clarified scope | Progress reporting remains on the existing batch-runtime log surface and now explicitly includes the long-running embedding or leaf-materialization gap between mailbox expansion and downstream streaming-status visibility plus clustering-only replay submission progress, the handoff into upstream planning-pass waiting, and failure-only clustering diagnostics on the runtime log plus a request-adjacent artifact |
 | Caller-visible indexing and MCP contracts remain stable across the upstream API migration | Preserved | The streaming lifecycle is constrained to an internal adaptation behind the existing stage surface and unchanged MCP retrieval semantics |
 | Clustering configuration remains explicit and replayable | Preserved with clarified scope | Requirements now treat the effective clustering algorithm and option set as part of clustering-enabled orchestration input and constrain defaults to resolve deterministically |
 | Omitted clustering-size behavior remains deterministic and safe across algorithms | Preserved with clarified scope | Requirements now constrain omitted `cluster_count` to derive from input count plus embedding-aware branch capacity for every supported built-in algorithm while preserving explicit caller override behavior |
