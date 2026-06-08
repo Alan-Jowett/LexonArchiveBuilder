@@ -4,7 +4,7 @@
 
 - **Phase:** Phase 2 - Specification Changes
 - **Status:** Approved streaming-indexer migration and clustering-configuration requirements patch being propagated into design and validation
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, clustering-algorithm selection, clustering-option exposure, streaming-status observability, and layer-parallel block-construction evolution
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, clustering-algorithm selection, clustering-option exposure, embedding-phase and streaming-status observability, and layer-parallel block-construction evolution
 
 ## USER-REQUEST
 
@@ -61,6 +61,8 @@
 - **UR-51 [KNOWN]:** LexonArchiveBuilder should expose clustering algorithm selection and supported clustering options through the command line.
 - **UR-52 [KNOWN]:** Reasonable defaults are acceptable for clustering settings the caller does not specify.
 - **UR-53 [KNOWN]:** The upstream built-in clustering choices currently exposed by LexonGraph are DCBC and directional PCA, and they do not share the same option set.
+- **UR-54 [KNOWN]:** The current builder can report mailbox processing and delegated-item preparation, then remain silent during long-running embedding work even while the local embedding service is actively consuming CPU.
+- **UR-55 [INFERRED]:** Progress visibility for ingestion-plus-embedding execution should remain continuous across the gap between delegated-item preparation and the first downstream streaming-status event so operators can distinguish slow embedding work from a hung batch.
 
 ## Change Manifest
 
@@ -97,6 +99,7 @@
 | CM-INDEXER-029 | Revise | Require clustering-enabled execution to supply an explicit upstream-compatible clustering algorithm selection rather than depending on one implicit repository-default algorithm path | UR-39, UR-44, UR-50, UR-53 |
 | CM-INDEXER-030 | Add | Expose clustering algorithm choice and supported algorithm-specific options on the CLI while permitting repository-owned defaults for omitted settings | UR-50, UR-51, UR-52, UR-53 |
 | CM-INDEXER-031 | Add | Preserve replay-safe and environment-neutral clustering behavior by treating the effective clustering algorithm and option set as part of the approved batch orchestration contract | UR-12, UR-13, UR-39, UR-50, UR-52 |
+| CM-INDEXER-032 | Revise | Tighten progress observability so ingestion-plus-embedding runs remain visibly active during long-running embedding or leaf-materialization work between mailbox expansion and downstream streaming-status events | UR-32, UR-41, UR-54, UR-55 |
 
 ## Before / After
 
@@ -254,6 +257,11 @@
 
 - **Before [KNOWN]:** The requirements did not state whether clustering defaults and option values were part of the deterministic replay boundary for full-pipeline or clustering-only execution.
 - **After [KNOWN]:** The requirements define the effective clustering algorithm and option set as replay-relevant orchestration input so repeated runs can remain explainable and stable under unchanged upstream semantics.
+
+### BA-INDEXER-032
+
+- **Before [KNOWN]:** Observable progress required mailbox-processing visibility and downstream streaming-status visibility, but it did not explicitly forbid a long silent gap while delegated items were being embedded or leaf blocks were being materialized before streaming-status events began.
+- **After [KNOWN]:** Observable progress now explicitly requires continued runtime-visible activity during ingestion-plus-embedding work between delegated-item preparation and the first downstream streaming-status event so slow embedding work does not look like a hung batch.
 
 ## Requirements
 
@@ -565,6 +573,9 @@ advances, and clustering or block assembly advances.
   visibility so operators can tell that work is continuing before the final
   summary is emitted.
 - **Streaming lifecycle visibility [KNOWN]:** Progress output must remain meaningful across upstream training passes, training completion, and final materialization without requiring callers to understand raw upstream phase names.
+- **Embedding-phase visibility [KNOWN]:** For any execution stage that includes ingestion plus embedding generation, progress output must continue after delegated items have been prepared and while local embedding or leaf-materialization work is still consuming those delegated items.
+- **Gap constraint [INFERRED]:** A non-empty ingestion-plus-embedding run SHALL NOT rely on one mailbox-preparation message and then remain silent until the first downstream streaming-status event or final summary; operators must receive continued liveness or completed-work visibility while delegated embedding work remains outstanding.
+- **Cadence boundary [INFERRED]:** The requirements do not fix an exact log-line schema or interval, but the runtime-visible signal must advance by bounded work units or bounded elapsed time rather than only at phase boundaries.
 - **Surface [KNOWN]:** Progress output should be emitted on the normal
   batch-runtime log stream so local runs, Compose runs, and containerized
   production-style runs observe the same signal shape.
@@ -642,7 +653,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Architecture remains extensible to future content types | Preserved | Collection-oriented input still covers both mailbox and document collections, and stage selection is defined in generic pipeline terms rather than mailbox-specific behavior |
 | Idempotence and recoverability stay aligned with underlying immutable block semantics | Preserved with clarified scope | Requirements extend hash-addressed identity expectations to normalized email artifacts and require clustering-only reruns over the same clustering-eligible block-store snapshot to remain semantically stable under unchanged upstream semantics |
 | Local development remains self-contained and batch-oriented | Preserved | Docker Compose is constrained to compose local dependencies around the batch container rather than changing the runtime model |
-| Long-running batches remain observable without adding a control plane | Preserved | Progress reporting remains on the existing batch-runtime log surface and now includes upstream streaming-status visibility in addition to mailbox processing and delegated indexing visibility |
+| Long-running batches remain observable without adding a control plane | Preserved with clarified scope | Progress reporting remains on the existing batch-runtime log surface and now explicitly includes the long-running embedding or leaf-materialization gap between mailbox expansion and downstream streaming-status visibility |
 | Caller-visible indexing and MCP contracts remain stable across the upstream API migration | Preserved | The streaming lifecycle is constrained to an internal adaptation behind the existing stage surface and unchanged MCP retrieval semantics |
 | Clustering configuration remains explicit and replayable | Preserved with clarified scope | Requirements now treat the effective clustering algorithm and option set as part of clustering-enabled orchestration input and constrain defaults to resolve deterministically |
 | Clients are not forced to parse raw mailbox blobs for ordinary retrieval | Preserved | Indexed chunks must reference normalized email artifacts so retrieval can stay at chunk level or expand to full normalized email through repository-owned artifacts |
@@ -709,6 +720,11 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
   - user request in this session: "The LexonGraph now has a block iteration API so that the clustering can then examine the list of blocks and then start doing clustering. In addition, the clustering also has a callback trait for status updates. Implement that as well so we can monitor the clustering (which is a slow step)"
   - user clarification in this session selecting: "Keep the existing final-root BatchSummary"
   - user request in this session: "the LexonGraph crate has been updated again. It now requires selection of clustering algorithm and options. Update the latest LexonGraph and expose these options via command line (feel free to pick reasonable defaults for unspecified options)"
+  - user request in this session: "the current builder doesn't report progress during them embedding phase: Processed mailbox /workspace/examples/local/scale-test/runs/20260607T204011Z/fetched/01-rsync.ietf.org__mailman-archive_ipsec_/2026-06.mail: 5 message(s), 10 delegated item(s) Prepared 10 delegated item(s) from mailbox /workspace/examples/local/scale-test/runs/20260607T204011Z/fetched/01-rsync.ietf.org__mailman-archive_ipsec_/2026-06.mail it reported this and then nothing. I see the embedding service hitting 8 cpu worth of work, so it's running but doesn't show progress"
+  - `crates/lexonarchivebuilder-indexer/src/runtime.rs:391-418`
+  - `crates/lexonarchivebuilder-indexer/src/runtime.rs:457-579`
+  - `crates/lexonarchivebuilder-indexer/src/runtime.rs:594-628`
+  - `crates/lexonarchivebuilder-indexer/src/runtime.rs:777-913`
   - external LexonGraph repository source (not vendored in LexonArchiveBuilder):
     `crates/lexongraph-streaming-indexer/src/lib.rs:539-573`
   - external LexonGraph repository source (not vendored in LexonArchiveBuilder):
@@ -717,6 +733,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
   - Detailed Rust implementation file paths, crate manifests, Docker assets, and test artifacts, because this requirements document captures the semantic contract and leaves implementation realization to downstream design, validation, and code-review artifacts
   - Exact normalized email CBOR schema, exact duplicated chunk metadata list, and the specific chunking library choice, because those belong to downstream design and validation artifacts rather than requirements
   - The precise log-line schema, sink configuration, and per-item verbosity throttling policy for progress output, because those belong to downstream design and validation artifacts rather than requirements
+  - The exact bounded-work-unit choice or elapsed-time threshold for embedding-phase progress updates, because that belongs to downstream design and validation artifacts so long as the approved requirements-level no-silent-gap contract is preserved
   - The exact mapping from repository stage modes to concrete upstream streaming pass counts, replay batching, and training-completion timing, because those belong to downstream design and validation artifacts rather than requirements
   - The exact configuration surface for the administrator-defined concurrency cap and the exact physical-CPU detection algorithm in containerized or quota-constrained environments, because those belong to downstream design and validation artifacts rather than requirements
   - The precise block-kind predicate used inside the upstream LexonGraph block-iteration API to determine clustering eligibility, because this requirements document constrains LexonArchiveBuilder to the upstream iteration contract without redefining LexonGraph-owned block semantics

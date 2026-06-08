@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::fs;
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use lexongraph_block::{
     Block, BlockError, BlockHash, EmbeddingSpec, LeafEntry, SerializedBlock, VERSION_1,
@@ -16,6 +18,7 @@ use lexongraph_streaming_indexer::{
 };
 use thiserror::Error;
 use tokio::task::{JoinError, JoinSet};
+use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 
 use crate::block_store::ConfiguredBlockStore;
 use crate::config::{
@@ -33,6 +36,7 @@ type ProgressReporter = Arc<dyn Fn(String) + Send + Sync + 'static>;
 
 pub const INGESTION_ONLY_ROOT_ID_PLACEHOLDER: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
+const PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Default)]
 struct StagedBlocks {
@@ -331,16 +335,39 @@ async fn run_ingestion_only_stage(
     progress: &ProgressReporter,
 ) -> Result<BatchSummary, RuntimeError> {
     let mut staged = StagedBlocks::default();
-    for batch in replay_batches {
+    let total_batches = replay_batches.len();
+    let total_items: usize = replay_batches.iter().map(|batch| batch.items.len()).sum();
+    let mut completed_items = 0usize;
+    for (batch_index, batch) in replay_batches.into_iter().enumerate() {
+        let batch_number = batch_index + 1;
+        let batch_item_count = batch.items.len();
+        report_progress(
+            progress,
+            format!(
+                "Embedding batch {batch_number} of {total_batches} started for {batch_item_count} delegated item(s); completed {completed_items} of {total_items} delegated item(s)"
+            ),
+        );
         let constructed = build_leaf_blocks_concurrently(
             resolver.clone(),
             embedding_provider.clone(),
             &batch.items,
             embedding_spec,
             max_concurrency,
+        );
+        let constructed = await_with_periodic_progress(
+            constructed,
+            progress,
+            PROGRESS_HEARTBEAT_INTERVAL,
+            |elapsed| {
+                format!(
+                    "Embedding batch {batch_number} of {total_batches} still running after {} ms for {batch_item_count} delegated item(s); completed {completed_items} of {total_items} delegated item(s)",
+                    elapsed.as_millis()
+                )
+            },
         )
         .await?;
         persist_staged_blocks(&constructed.blocks, block_store)?;
+        completed_items += batch_item_count;
         if let Some(message) = batch.completion_message {
             report_progress(
                 progress,
@@ -415,7 +442,9 @@ fn prepare_request_replay_batches(
     }
 
     sort_replay_items(&mut items);
-    Ok(chunk_replay_items(items, max_concurrency))
+    let mut replay_batches = chunk_replay_items(items, max_concurrency);
+    annotate_ingestion_replay_batches(&mut replay_batches);
+    Ok(replay_batches)
 }
 
 fn chunk_replay_items(
@@ -433,6 +462,22 @@ fn chunk_replay_items(
         });
     }
     batches
+}
+
+fn annotate_ingestion_replay_batches(batches: &mut [ReplayBatch]) {
+    let total_batches = batches.len();
+    let total_items: usize = batches.iter().map(|batch| batch.items.len()).sum();
+    let mut completed_items = 0usize;
+    for (batch_index, batch) in batches.iter_mut().enumerate() {
+        completed_items += batch.items.len();
+        batch.completion_message = Some(format!(
+            "Embedded batch {} of {}; completed {} of {} delegated item(s)",
+            batch_index + 1,
+            total_batches,
+            completed_items,
+            total_items
+        ));
+    }
 }
 
 fn sort_replay_items(items: &mut [IndexItem<ContentRef>]) {
@@ -592,6 +637,8 @@ where
     EP: EmbeddingProvider + Clone,
 {
     let observer = Some(make_status_observer(Arc::clone(progress)));
+    let total_batches = replay_batches.len();
+    let total_items: usize = replay_batches.iter().map(|batch| batch.items.len()).sum();
 
     let mut indexer = StreamingIndexingRun::with_builtin_clustering(
         resolver,
@@ -604,11 +651,32 @@ where
         indexer = indexer.with_observer(observer);
     }
 
-    for batch in &replay_batches {
+    let mut completed_items = 0usize;
+    for (batch_index, batch) in replay_batches.iter().enumerate() {
         if batch.items.is_empty() {
             continue;
         }
-        indexer.ingest_batch(&batch.items).await?;
+        let batch_number = batch_index + 1;
+        let batch_item_count = batch.items.len();
+        report_progress(
+            progress,
+            format!(
+                "Embedding batch {batch_number} of {total_batches} started for {batch_item_count} delegated item(s); completed {completed_items} of {total_items} delegated item(s)"
+            ),
+        );
+        await_with_periodic_progress(
+            indexer.ingest_batch(&batch.items),
+            progress,
+            PROGRESS_HEARTBEAT_INTERVAL,
+            |elapsed| {
+                format!(
+                    "Embedding batch {batch_number} of {total_batches} still running after {} ms for {batch_item_count} delegated item(s); completed {completed_items} of {total_items} delegated item(s)",
+                    elapsed.as_millis()
+                )
+            },
+        )
+        .await?;
+        completed_items += batch_item_count;
         if let Some(message) = &batch.completion_message {
             report_progress(progress, message.clone());
         }
@@ -649,6 +717,30 @@ where
         block_count: block_ids.len(),
         block_ids,
     })
+}
+
+async fn await_with_periodic_progress<Fut, T, M>(
+    operation: Fut,
+    progress: &ProgressReporter,
+    heartbeat_interval: Duration,
+    heartbeat_message: M,
+) -> T
+where
+    Fut: Future<Output = T>,
+    M: Fn(Duration) -> String,
+{
+    let start = std::time::Instant::now();
+    let mut heartbeat = interval_at(TokioInstant::now() + heartbeat_interval, heartbeat_interval);
+    heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    tokio::pin!(operation);
+    loop {
+        tokio::select! {
+            result = &mut operation => return result,
+            _ = heartbeat.tick() => {
+                report_progress(progress, heartbeat_message(start.elapsed()));
+            }
+        }
+    }
 }
 
 fn load_replay_batches_from_store(
@@ -1180,6 +1272,14 @@ mod tests {
         assert!(
             progress
                 .iter()
+                .any(|line| line.contains("Embedding batch 1 of 1 started"))
+        );
+        assert!(progress.iter().any(|line| {
+            line.contains("Embedded batch 1 of 1; completed 2 of 2 delegated item(s)")
+        }));
+        assert!(
+            progress
+                .iter()
                 .any(|line| line.contains("Clustering layer 0 started"))
         );
         assert!(
@@ -1193,6 +1293,39 @@ mod tests {
                 .any(|line| line.contains("Streaming training complete"))
         );
         server.join();
+    }
+
+    #[tokio::test]
+    async fn await_with_periodic_progress_emits_heartbeat_for_long_running_operation() {
+        let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let progress_capture = Arc::clone(&progress);
+        let reporter: ProgressReporter = Arc::new(move |message| {
+            progress_capture.lock().unwrap().push(message);
+        });
+
+        let result = await_with_periodic_progress(
+            async {
+                tokio::time::sleep(Duration::from_millis(60)).await;
+                7usize
+            },
+            &reporter,
+            Duration::from_millis(10),
+            |elapsed| {
+                format!(
+                    "Embedding batch still running after {} ms",
+                    elapsed.as_millis()
+                )
+            },
+        )
+        .await;
+
+        assert_eq!(result, 7);
+        let progress = progress.lock().unwrap();
+        assert!(
+            progress
+                .iter()
+                .any(|line| line.contains("Embedding batch still running after"))
+        );
     }
 
     #[tokio::test]

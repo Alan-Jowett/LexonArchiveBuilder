@@ -19,8 +19,8 @@ indexer requirements, including the email-ingestion refinement from `.mail` and
 units plus the local filesystem block-store interoperability correction,
 replay-based streaming delegated indexing adoption, stage-selectable execution,
 standalone clustering input discovery, delegated clustering-algorithm
-selection, algorithm-specific clustering-option exposure, batch-progress
-observability, streaming-status observability, replay-stable delegated item
+selection, algorithm-specific clustering-option exposure, embedding-phase
+batch-progress observability, streaming-status observability, replay-stable delegated item
 identity, and layer-parallel delegated block
 construction for the local/testing profile.
 
@@ -84,7 +84,8 @@ The LexonArchiveBuilder indexer design is intended to be:
 - bounded by an administrator-controlled concurrency budget
 - stage-selectable at the same batch boundary across CLI and request-file use
 - explicit about delegated clustering selection and option defaulting
-- observable during long-running mailbox batches and streaming finalization work
+- observable during long-running mailbox batches, local embedding work, and
+  streaming finalization work
 - chunk-first for email retrieval while preserving full-message and source
   provenance artifacts
 
@@ -338,6 +339,9 @@ the selected indexing stage advances.
 The first design baseline reports at least:
 
 - mailbox-processing start or completion boundaries
+- embedding or leaf-materialization progress after mailbox expansion has
+  produced delegated items and before observer-driven streaming status is
+  available for downstream work
 - delegated indexing progress after additional replay batches, training passes,
   or constructed blocks have advanced
 - clustering or block-assembly progress after upstream observer events indicate
@@ -348,6 +352,13 @@ introduce a separate progress API, control-plane service, or MCP-visible
 surface. For a default full-pipeline run, mailbox or delegated-indexing
 progress appears first and observer-driven streaming finalization progress
 follows on the same runtime-visible stream.
+
+For ingestion-plus-embedding execution, the repository-owned runtime must not
+leave a non-empty delegated item set silent between mailbox-preparation
+visibility and the first downstream streaming-status event. The design therefore
+includes either bounded-work-unit or bounded-elapsed-time progress signaling
+for local embedding or leaf-materialization work on that same runtime-visible
+surface.
 
 **Traces to:** RQ-INDEXER-001, RQ-INDEXER-008B
 
@@ -361,6 +372,11 @@ This keeps training-pass, training-completion, finalization, and clustering
 visibility on the same batch-log surface already used for mailbox and
 delegated-indexing progress. It does not introduce a separate progress
 transport, metrics backend, or MCP-visible monitoring surface.
+
+Because the upstream observer seam begins only once downstream streaming work is
+active, this observer translation complements rather than replaces
+repository-owned progress signaling for the earlier local embedding or
+leaf-materialization gap covered by `DSG-LFI-002A`.
 
 **Traces to:** RQ-INDEXER-008B, RQ-INDEXER-010A
 
@@ -792,8 +808,9 @@ LexonArchiveBuilder-owned verification artifacts validate:
 - correct mailbox retention, normalized email artifact derivation, and chained
   provenance
 - correct shaping of chunk-sized delegated email items
-- correct progress visibility during long-running mailbox batches and streaming
-  work, including observer-driven finalization visibility
+- correct progress visibility during long-running mailbox batches, including
+  the no-silent-gap requirement between mailbox preparation and local embedding
+  progress plus observer-driven finalization visibility
 - correct application and defaulting of the administrator-defined concurrency
   budget
 - preservation of stable batch contracts across environments

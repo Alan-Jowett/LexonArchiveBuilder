@@ -19,7 +19,7 @@ LexonArchiveBuilder-owned indexer boundary, including local filesystem block-sto
 interoperability, replay-based streaming delegated indexing, stage-selectable
 execution, standalone clustering input discovery, explicit delegated
 clustering-algorithm selection, algorithm-specific clustering-option exposure,
-batch-progress observability, streaming-status observability, replay-stable
+embedding-phase batch-progress observability, streaming-status observability, replay-stable
 fingerprinting, and leaf-layer parallel block scheduling in the local/testing
 profile.
 
@@ -347,6 +347,20 @@ option values are unchanged.
 
 **Traces to:** RQ-INDEXER-003E, RQ-INDEXER-003F, RQ-INDEXER-003G,
 RQ-INDEXER-008, DSG-LFI-001E, DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-010
+
+### VAL-LFI-007C
+
+Run an ingestion-plus-embedding stage with a mailbox batch large enough to keep
+local embedding or leaf-materialization work active after delegated-item
+preparation has been reported.
+
+**Pass condition:** after mailbox-preparation visibility is emitted for a
+non-empty batch, the normal batch log stream continues to report progress by
+bounded work units or bounded elapsed time while delegated embedding work
+remains outstanding, rather than remaining silent until the first downstream
+streaming-status event or the final summary.
+
+**Traces to:** RQ-INDEXER-008B, DSG-LFI-002A, DSG-LFI-002B
 
 ### VAL-LFI-008
 
