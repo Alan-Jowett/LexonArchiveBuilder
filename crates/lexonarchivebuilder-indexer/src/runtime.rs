@@ -1489,11 +1489,11 @@ fn format_indexing_status(status: StreamingIndexingStatus) -> String {
             StreamingIndexingStatusState::Started,
         ) => match status.phase_total_unit_count {
             Some(group_total) => format!(
-                "Bottom-up assembly for layer {layer_index} started after {elapsed_ms} ms for {} input block(s) across {group_total} group(s)",
+                "Bottom-up assembly for layer {layer_index} started for {} input block(s) across {group_total} group(s)",
                 status.item_count
             ),
             None => format!(
-                "Bottom-up assembly for layer {layer_index} started after {elapsed_ms} ms for {} input block(s) across an unknown group total",
+                "Bottom-up assembly for layer {layer_index} started for {} input block(s) across an unknown group total",
                 status.item_count
             ),
         },
@@ -2633,6 +2633,44 @@ mod tests {
         assert_eq!(
             format_indexing_status(status),
             "Bottom-up assembly for layer 1 still running after 44 ms; completed 2 group(s) so far from 8 input block(s)"
+        );
+    }
+
+    #[test]
+    fn bottom_up_assembly_started_message_omits_elapsed_clause() {
+        let status = StreamingIndexingStatus {
+            phase: StreamingIndexingPhase::BottomUpAssembly { layer_index: 2 },
+            state: StreamingIndexingStatusState::Started,
+            item_count: 12,
+            phase_total_unit_count: Some(3),
+            completed_unit_count: 0,
+            remaining_unit_count: Some(3),
+            elapsed: Duration::from_millis(0),
+            error: None,
+        };
+
+        assert_eq!(
+            format_indexing_status(status),
+            "Bottom-up assembly for layer 2 started for 12 input block(s) across 3 group(s)"
+        );
+    }
+
+    #[test]
+    fn bottom_up_assembly_started_message_handles_unknown_group_total() {
+        let status = StreamingIndexingStatus {
+            phase: StreamingIndexingPhase::BottomUpAssembly { layer_index: 1 },
+            state: StreamingIndexingStatusState::Started,
+            item_count: 8,
+            phase_total_unit_count: None,
+            completed_unit_count: 0,
+            remaining_unit_count: None,
+            elapsed: Duration::from_millis(0),
+            error: None,
+        };
+
+        assert_eq!(
+            format_indexing_status(status),
+            "Bottom-up assembly for layer 1 started for 8 input block(s) across an unknown group total"
         );
     }
 
