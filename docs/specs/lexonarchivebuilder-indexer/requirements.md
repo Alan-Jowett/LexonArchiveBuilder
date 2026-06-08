@@ -63,6 +63,9 @@
 - **UR-53 [KNOWN]:** The upstream built-in clustering choices currently exposed by LexonGraph are DCBC and directional PCA, and they do not share the same option set.
 - **UR-54 [KNOWN]:** The current builder can report mailbox processing and delegated-item preparation, then remain silent during long-running embedding work even while the local embedding service is actively consuming CPU.
 - **UR-55 [INFERRED]:** Progress visibility for ingestion-plus-embedding execution should remain continuous across the gap between delegated-item preparation and the first downstream streaming-status event so operators can distinguish slow embedding work from a hung batch.
+- **UR-56 [KNOWN]:** When a clustering-enabled run omits `cluster_count`, LexonArchiveBuilder should auto-size the effective cluster count from the number of blocks being clustered and the embedding size instead of falling back to a small fixed default.
+- **UR-57 [KNOWN]:** This auto-sizing rule should apply consistently to both built-in clustering algorithms currently exposed by LexonGraph.
+- **UR-58 [KNOWN]:** An explicit caller-supplied `cluster_count` should continue to override auto-sizing; the derived count is only for the omitted-option path.
 
 ## Change Manifest
 
@@ -100,6 +103,7 @@
 | CM-INDEXER-030 | Add | Expose clustering algorithm choice and supported algorithm-specific options on the CLI while permitting repository-owned defaults for omitted settings | UR-50, UR-51, UR-52, UR-53 |
 | CM-INDEXER-031 | Add | Preserve replay-safe and environment-neutral clustering behavior by treating the effective clustering algorithm and option set as part of the approved batch orchestration contract | UR-12, UR-13, UR-39, UR-50, UR-52 |
 | CM-INDEXER-032 | Revise | Tighten progress observability so ingestion-plus-embedding runs remain visibly active during long-running embedding or leaf-materialization work between mailbox expansion and downstream streaming-status events | UR-32, UR-41, UR-54, UR-55 |
+| CM-INDEXER-033 | Revise | Require omitted `cluster_count` to derive from clustering input count and embedding-driven branch capacity for every supported built-in clustering algorithm while preserving explicit caller override behavior | UR-52, UR-53, UR-56, UR-57, UR-58 |
 
 ## Before / After
 
@@ -262,6 +266,11 @@
 
 - **Before [KNOWN]:** Observable progress required mailbox-processing visibility and downstream streaming-status visibility, but it did not explicitly forbid a long silent gap while delegated items were being embedded or leaf blocks were being materialized before streaming-status events began.
 - **After [KNOWN]:** Observable progress now explicitly requires continued runtime-visible activity during ingestion-plus-embedding work between delegated-item preparation and the first downstream streaming-status event so slow embedding work does not look like a hung batch.
+
+### BA-INDEXER-033
+
+- **Before [KNOWN]:** The requirements allowed omitted clustering settings to resolve to repository defaults, but they did not explicitly require omitted `cluster_count` to auto-size consistently across all supported built-in clustering algorithms.
+- **After [KNOWN]:** The requirements now require omitted `cluster_count` to derive from clustering input count plus embedding-size-aware branch capacity for every supported built-in clustering algorithm, while preserving explicit caller-provided `cluster_count` as an override.
 
 ## Requirements
 
@@ -434,6 +443,32 @@ algorithm-specific option values for clustering-enabled execution.
 - **[UNKNOWN: whether this increment also requires equivalent request-file
   fields in `BatchRequest` rather than CLI-only exposure]**
 - **Traceability:** UR-4, UR-12, UR-13, UR-50, UR-51, UR-52, UR-53
+
+#### RQ-INDEXER-003H - Auto-sized omitted cluster count
+
+When a clustering-enabled execution omits `cluster_count`, LexonArchiveBuilder
+SHALL derive the effective cluster count from the number of clustering inputs
+and the maximum parent-branch capacity implied by the active embedding
+specification and block-size target.
+
+- **Applicability [KNOWN]:** This omitted-option derivation rule SHALL apply to
+  every supported built-in clustering algorithm, including `dcbc` and
+  `directional-pca`, rather than being limited to one algorithm family.
+- **Override rule [KNOWN]:** When the caller explicitly supplies
+  `cluster_count`, LexonArchiveBuilder SHALL honor that explicit value instead
+  of replacing it with a derived count.
+- **Sizing objective [INFERRED]:** The derived count SHALL be large enough that
+  the first parent-materialization layer can satisfy the repository's block-size
+  target using the active embedding dimensions and encoding, subject to the
+  delegated indexer's minimum child-count constraints.
+- **Parity implication [INFERRED]:** The same omitted-option auto-sizing rule
+  SHALL apply in both `full` and `clustering+block-assembly` execution so
+  ingestion-stage participation does not change clustering-count semantics.
+- **Failure-safety implication [INFERRED]:** If no valid derived count can
+  satisfy the active embedding specification, block-size target, and minimum
+  branch constraints, LexonArchiveBuilder SHALL fail explicitly rather than
+  silently falling back to an unsafe fixed default.
+- **Traceability:** UR-39, UR-43, UR-52, UR-53, UR-56, UR-57, UR-58
 
 #### RQ-INDEXER-004 - Content resolution integration
 
@@ -656,6 +691,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Long-running batches remain observable without adding a control plane | Preserved with clarified scope | Progress reporting remains on the existing batch-runtime log surface and now explicitly includes the long-running embedding or leaf-materialization gap between mailbox expansion and downstream streaming-status visibility |
 | Caller-visible indexing and MCP contracts remain stable across the upstream API migration | Preserved | The streaming lifecycle is constrained to an internal adaptation behind the existing stage surface and unchanged MCP retrieval semantics |
 | Clustering configuration remains explicit and replayable | Preserved with clarified scope | Requirements now treat the effective clustering algorithm and option set as part of clustering-enabled orchestration input and constrain defaults to resolve deterministically |
+| Omitted clustering-size behavior remains deterministic and safe across algorithms | Preserved with clarified scope | Requirements now constrain omitted `cluster_count` to derive from input count plus embedding-aware branch capacity for every supported built-in algorithm while preserving explicit caller override behavior |
 | Clients are not forced to parse raw mailbox blobs for ordinary retrieval | Preserved | Indexed chunks must reference normalized email artifacts so retrieval can stay at chunk level or expand to full normalized email through repository-owned artifacts |
 | Storage abstraction count stays bounded across environments | Preserved | Requirements now reuse the environment-selected `BlockStore` abstraction family for indexed blocks, normalized email artifacts, and mailbox provenance artifacts rather than introducing a second storage stack |
 | Local filesystem block stores remain interoperable with LexonGraph tooling | Preserved | The local/testing profile is now constrained to LexonGraph's filesystem naming/layout contract so inspection tools can consume repository-produced local stores |
@@ -672,6 +708,8 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
   - user clarification in this session selecting: "Exactly `.mail` and `.mbox`"
   - user request in this session: "remove LocalFilesystemBlockStore and replace with the lexongraph-block-store-fs crate from lexongraph. Our custom store is breaking lexongraph-block-inspect because it uses a totally different naming scheme"
   - user clarification in this session selecting: "Fresh/rebuilt local store is acceptable"
+  - user request in this session: "fix this behavior. It should always auto-size based on number of blocks to embededd and the embedding size"
+  - user clarification in this session selecting: "Yes — explicit cluster_count overrides; auto-size only when omitted (Recommended)"
   - `README.md:18-27`
   - `README.md:42-49`
   - `README.md:51-59`

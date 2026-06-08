@@ -5,10 +5,7 @@ use ciborium::Value;
 use clap::{Args, ValueEnum};
 use lexongraph_block::EmbeddingSpec;
 use lexongraph_directional_pca::DirectionalPcaParams;
-use lexongraph_streaming_indexer::{
-    BalanceConstraints, BuiltInClustering, DcbcBuiltInClusteringSettings,
-    DirectionalPcaBuiltInClusteringSettings, IndexItem, Metadata,
-};
+use lexongraph_streaming_indexer::{BalanceConstraints, IndexItem, Metadata};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -20,7 +17,6 @@ const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_MAX_RETRIES: u32 = 5;
 const DEFAULT_RETRY_DELAY_MS: u64 = 1_000;
 const MIN_MAX_CONCURRENCY: usize = 1;
-const DEFAULT_CLUSTER_COUNT: u32 = 2;
 const DEFAULT_DIRECTIONAL_PCA_RETAINED_DIMENSION_COUNT: usize = 1;
 const DEFAULT_DIRECTIONAL_PCA_VARIANCE_EXPONENT: f32 = 1.0;
 const DEFAULT_DIRECTIONAL_PCA_TEMPERATURE: f32 = 1.0;
@@ -99,6 +95,20 @@ pub struct ClusteringConfigOverrides {
     pub clustering_min_cumulative_variance: Option<f32>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ConfiguredClustering {
+    Dcbc {
+        cluster_count: Option<u32>,
+        balance_constraints: Option<BalanceConstraints>,
+        random_seed: Option<u64>,
+    },
+    DirectionalPca {
+        cluster_count: Option<u32>,
+        random_seed: Option<u64>,
+        params: DirectionalPcaParams,
+    },
+}
+
 impl ClusteringConfigOverrides {
     pub fn validate(&self) -> Result<(), ConfigError> {
         let algorithm = self.effective_algorithm();
@@ -174,44 +184,40 @@ impl ClusteringConfigOverrides {
         Ok(())
     }
 
-    pub fn to_built_in_clustering(&self) -> Result<BuiltInClustering, ConfigError> {
+    pub(crate) fn to_configured_clustering(&self) -> Result<ConfiguredClustering, ConfigError> {
         self.validate()?;
-        let cluster_count = self
-            .clustering_cluster_count
-            .unwrap_or(DEFAULT_CLUSTER_COUNT);
+        let cluster_count = self.clustering_cluster_count;
         let random_seed = self.clustering_random_seed;
         Ok(match self.effective_algorithm() {
-            ClusteringAlgorithm::Dcbc => BuiltInClustering::Dcbc(DcbcBuiltInClusteringSettings {
+            ClusteringAlgorithm::Dcbc => ConfiguredClustering::Dcbc {
                 cluster_count,
                 balance_constraints: self.to_balance_constraints(),
                 random_seed,
-            }),
-            ClusteringAlgorithm::DirectionalPca => {
-                BuiltInClustering::DirectionalPca(DirectionalPcaBuiltInClusteringSettings {
-                    cluster_count,
-                    random_seed,
-                    params: DirectionalPcaParams {
-                        retained_dimension_count: self
-                            .clustering_retained_dimension_count
-                            .unwrap_or(DEFAULT_DIRECTIONAL_PCA_RETAINED_DIMENSION_COUNT),
-                        variance_exponent: self
-                            .clustering_variance_exponent
-                            .unwrap_or(DEFAULT_DIRECTIONAL_PCA_VARIANCE_EXPONENT),
-                        temperature: self
-                            .clustering_temperature
-                            .unwrap_or(DEFAULT_DIRECTIONAL_PCA_TEMPERATURE),
-                        min_input_count: self
-                            .clustering_min_input_count
-                            .unwrap_or(DEFAULT_DIRECTIONAL_PCA_MIN_INPUT_COUNT),
-                        min_effective_rank: self
-                            .clustering_min_effective_rank
-                            .unwrap_or(DEFAULT_DIRECTIONAL_PCA_MIN_EFFECTIVE_RANK),
-                        min_cumulative_variance: self
-                            .clustering_min_cumulative_variance
-                            .unwrap_or(DEFAULT_DIRECTIONAL_PCA_MIN_CUMULATIVE_VARIANCE),
-                    },
-                })
-            }
+            },
+            ClusteringAlgorithm::DirectionalPca => ConfiguredClustering::DirectionalPca {
+                cluster_count,
+                random_seed,
+                params: DirectionalPcaParams {
+                    retained_dimension_count: self
+                        .clustering_retained_dimension_count
+                        .unwrap_or(DEFAULT_DIRECTIONAL_PCA_RETAINED_DIMENSION_COUNT),
+                    variance_exponent: self
+                        .clustering_variance_exponent
+                        .unwrap_or(DEFAULT_DIRECTIONAL_PCA_VARIANCE_EXPONENT),
+                    temperature: self
+                        .clustering_temperature
+                        .unwrap_or(DEFAULT_DIRECTIONAL_PCA_TEMPERATURE),
+                    min_input_count: self
+                        .clustering_min_input_count
+                        .unwrap_or(DEFAULT_DIRECTIONAL_PCA_MIN_INPUT_COUNT),
+                    min_effective_rank: self
+                        .clustering_min_effective_rank
+                        .unwrap_or(DEFAULT_DIRECTIONAL_PCA_MIN_EFFECTIVE_RANK),
+                    min_cumulative_variance: self
+                        .clustering_min_cumulative_variance
+                        .unwrap_or(DEFAULT_DIRECTIONAL_PCA_MIN_CUMULATIVE_VARIANCE),
+                },
+            },
         })
     }
 
@@ -287,9 +293,6 @@ impl ClusteringConfigOverrides {
     }
 
     fn validate_directional_pca_numeric_options(&self) -> Result<(), ConfigError> {
-        let cluster_count = self
-            .clustering_cluster_count
-            .unwrap_or(DEFAULT_CLUSTER_COUNT) as usize;
         let retained_dimension_count = self
             .clustering_retained_dimension_count
             .unwrap_or(DEFAULT_DIRECTIONAL_PCA_RETAINED_DIMENSION_COUNT);
@@ -299,7 +302,9 @@ impl ClusteringConfigOverrides {
                 message: "must be at least 1".into(),
             });
         }
-        if retained_dimension_count > cluster_count {
+        if let Some(cluster_count) = self.clustering_cluster_count
+            && retained_dimension_count > cluster_count as usize
+        {
             return Err(ConfigError::InvalidClusteringOption {
                 option: "clustering_retained_dimension_count",
                 message: "cannot exceed clustering_cluster_count".into(),
@@ -825,16 +830,20 @@ mod tests {
     #[test]
     fn clustering_defaults_to_dcbc_with_no_explicit_cli_options() {
         let clustering = ClusteringConfigOverrides::default()
-            .to_built_in_clustering()
+            .to_configured_clustering()
             .unwrap();
 
         match clustering {
-            BuiltInClustering::Dcbc(settings) => {
-                assert_eq!(settings.cluster_count, DEFAULT_CLUSTER_COUNT);
-                assert!(settings.balance_constraints.is_none());
-                assert_eq!(settings.random_seed, None);
+            ConfiguredClustering::Dcbc {
+                cluster_count,
+                balance_constraints,
+                random_seed,
+            } => {
+                assert_eq!(cluster_count, None);
+                assert!(balance_constraints.is_none());
+                assert_eq!(random_seed, None);
             }
-            BuiltInClustering::DirectionalPca(_) => {
+            ConfiguredClustering::DirectionalPca { .. } => {
                 panic!("expected default clustering algorithm to be dcbc")
             }
         }
@@ -846,15 +855,19 @@ mod tests {
             clustering_algorithm: Some(ClusteringAlgorithm::DirectionalPca),
             ..ClusteringConfigOverrides::default()
         }
-        .to_built_in_clustering()
+        .to_configured_clustering()
         .unwrap();
 
         match clustering {
-            BuiltInClustering::DirectionalPca(settings) => {
-                assert_eq!(settings.cluster_count, DEFAULT_CLUSTER_COUNT);
-                assert_eq!(settings.random_seed, None);
+            ConfiguredClustering::DirectionalPca {
+                cluster_count,
+                random_seed,
+                params,
+            } => {
+                assert_eq!(cluster_count, None);
+                assert_eq!(random_seed, None);
                 assert_eq!(
-                    settings.params,
+                    params,
                     DirectionalPcaParams {
                         retained_dimension_count: DEFAULT_DIRECTIONAL_PCA_RETAINED_DIMENSION_COUNT,
                         variance_exponent: DEFAULT_DIRECTIONAL_PCA_VARIANCE_EXPONENT,
@@ -865,7 +878,7 @@ mod tests {
                     }
                 );
             }
-            BuiltInClustering::Dcbc(_) => {
+            ConfiguredClustering::Dcbc { .. } => {
                 panic!("expected directional-pca settings when that algorithm is selected")
             }
         }
@@ -916,7 +929,7 @@ mod tests {
             clustering_retained_dimension_count: Some(3),
             ..ClusteringConfigOverrides::default()
         }
-        .to_built_in_clustering()
+        .to_configured_clustering()
         .unwrap_err();
 
         assert!(matches!(
@@ -926,5 +939,30 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn omitted_directional_pca_cluster_count_allows_larger_retained_dimension_count() {
+        let clustering = ClusteringConfigOverrides {
+            clustering_algorithm: Some(ClusteringAlgorithm::DirectionalPca),
+            clustering_retained_dimension_count: Some(3),
+            ..ClusteringConfigOverrides::default()
+        }
+        .to_configured_clustering()
+        .unwrap();
+
+        match clustering {
+            ConfiguredClustering::DirectionalPca {
+                cluster_count,
+                params,
+                ..
+            } => {
+                assert_eq!(cluster_count, None);
+                assert_eq!(params.retained_dimension_count, 3);
+            }
+            ConfiguredClustering::Dcbc { .. } => {
+                panic!("expected directional-pca settings when that algorithm is selected")
+            }
+        }
     }
 }

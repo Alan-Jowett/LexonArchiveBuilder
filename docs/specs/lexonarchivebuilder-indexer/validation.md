@@ -160,16 +160,31 @@ DSG-LFI-001H, DSG-LFI-007C
 
 ### VAL-LFI-002L
 
-Run clustering-enabled execution once with omitted clustering options and once
-with the equivalent explicit default clustering options.
+Run clustering-enabled execution for each supported built-in clustering
+algorithm once with omitted `cluster_count` and once with the equivalent
+explicit derived `cluster_count`.
 
-**Pass condition:** LexonArchiveBuilder resolves both invocations to the same
-effective delegated clustering configuration, using the repository default
-algorithm plus deterministic default option values when flags are omitted, so
-defaulting does not create hidden replay drift.
+**Pass condition:** for both `dcbc` and `directional-pca`, LexonArchiveBuilder
+resolves the omitted-option invocation to the same effective delegated
+clustering configuration as the corresponding explicit derived-count
+invocation, so omitted `cluster_count` remains deterministic and does not
+create hidden replay drift.
 
-**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-008,
-DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-010
+**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003H,
+RQ-INDEXER-008, DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-010
+
+### VAL-LFI-002M
+
+Run clustering-enabled execution with omitted `cluster_count` under an
+embedding specification and block-size target that require auto-sizing to
+increase the first-layer cluster count above a trivial fixed default.
+
+**Pass condition:** LexonArchiveBuilder derives a larger effective
+`cluster_count` from clustering-input count plus embedding-size-aware
+branch-capacity constraints, and first-parent materialization does not fail
+solely because the omitted-option path fell back to an unsafe fixed default.
+
+**Traces to:** RQ-INDEXER-003H, DSG-LFI-001H, DSG-LFI-010
 
 ### VAL-LFI-002A
 

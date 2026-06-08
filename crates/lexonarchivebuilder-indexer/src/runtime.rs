@@ -12,9 +12,11 @@ use lexongraph_block::{
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_streaming_indexer::{
-    BuiltInClustering, ContentResolver, IndexItem, StreamingIndexerError, StreamingIndexingPhase,
-    StreamingIndexingRun, StreamingIndexingStatus, StreamingIndexingStatusObserver,
-    StreamingIndexingStatusState,
+    ArithmeticMeanCanonicalEmbeddingPolicy, BuiltInClustering, BuiltInClusteringFactory,
+    BuiltInStreamingClusterTrainer, ContentResolver, DcbcBuiltInClusteringSettings,
+    DirectionalPcaBuiltInClusteringSettings, IndexItem, StreamingClusteringFactory,
+    StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingRun, StreamingIndexingStatus,
+    StreamingIndexingStatusObserver, StreamingIndexingStatusState,
 };
 use thiserror::Error;
 use tokio::task::{JoinError, JoinSet};
@@ -23,7 +25,7 @@ use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 use crate::block_store::ConfiguredBlockStore;
 use crate::config::{
     BatchItemConfig, BatchRequest, BatchSummary, ClusteringConfigOverrides, ConfigError,
-    ExecutionStage, metadata_to_text_map,
+    ConfiguredClustering, ExecutionStage, metadata_to_text_map,
 };
 use crate::embedding::{ConfiguredEmbeddingProvider, ConfiguredEmbeddingProviderError};
 use crate::mailbox::{MailboxExpansionError, expand_mailbox_item_with_stats};
@@ -58,7 +60,7 @@ struct ReplayBatch {
 
 #[derive(Clone, Debug)]
 struct StreamingStageConfig {
-    clustering: BuiltInClustering,
+    clustering: ConfiguredClustering,
     block_size_target: usize,
 }
 
@@ -73,6 +75,19 @@ struct StoredLeafEmbeddingProvider {
 enum StoredLeafEmbeddingProviderError {
     #[error("no stored embedding was available for the requested replay input")]
     MissingStoredEmbedding,
+}
+
+#[derive(Clone, Debug)]
+struct AutoSizingBuiltInClusteringFactory {
+    clustering: ConfiguredClustering,
+}
+
+#[derive(Debug, Error)]
+enum AutoSizingBuiltInClusteringFactoryError {
+    #[error("failed to derive an auto-sized cluster count: {0}")]
+    DeriveClusterCount(String),
+    #[error("failed to create a built-in clustering trainer: {0}")]
+    CreateTrainer(String),
 }
 
 impl StagedBlocks {
@@ -185,6 +200,314 @@ impl EmbeddingProvider for StoredLeafEmbeddingProvider {
     }
 }
 
+impl AutoSizingBuiltInClusteringFactory {
+    fn new(clustering: ConfiguredClustering) -> Self {
+        Self { clustering }
+    }
+}
+
+impl StreamingClusteringFactory for AutoSizingBuiltInClusteringFactory {
+    type Trainer = BuiltInStreamingClusterTrainer;
+    type Error = AutoSizingBuiltInClusteringFactoryError;
+
+    fn create_trainer(
+        &self,
+        dimensions: usize,
+        estimated_child_count: usize,
+        block_size_target: usize,
+        embedding_spec: &EmbeddingSpec,
+    ) -> Result<Self::Trainer, Self::Error> {
+        let clustering = resolved_built_in_clustering(
+            &self.clustering,
+            estimated_child_count,
+            block_size_target,
+            embedding_spec,
+        )?;
+        BuiltInClusteringFactory::new(clustering)
+            .create_trainer(
+                dimensions,
+                estimated_child_count,
+                block_size_target,
+                embedding_spec,
+            )
+            .map_err(|error| {
+                AutoSizingBuiltInClusteringFactoryError::CreateTrainer(error.to_string())
+            })
+    }
+}
+
+fn resolved_built_in_clustering(
+    clustering: &ConfiguredClustering,
+    estimated_child_count: usize,
+    block_size_target: usize,
+    embedding_spec: &EmbeddingSpec,
+) -> Result<BuiltInClustering, AutoSizingBuiltInClusteringFactoryError> {
+    Ok(match clustering {
+        ConfiguredClustering::Dcbc {
+            cluster_count,
+            balance_constraints,
+            random_seed,
+        } => BuiltInClustering::Dcbc(DcbcBuiltInClusteringSettings {
+            cluster_count: resolve_cluster_count(
+                *cluster_count,
+                1,
+                estimated_child_count,
+                block_size_target,
+                embedding_spec,
+            )?,
+            balance_constraints: balance_constraints.clone(),
+            random_seed: *random_seed,
+        }),
+        ConfiguredClustering::DirectionalPca {
+            cluster_count,
+            random_seed,
+            params,
+        } => BuiltInClustering::DirectionalPca(DirectionalPcaBuiltInClusteringSettings {
+            cluster_count: resolve_cluster_count(
+                *cluster_count,
+                params.retained_dimension_count.max(1),
+                estimated_child_count,
+                block_size_target,
+                embedding_spec,
+            )?,
+            random_seed: *random_seed,
+            params: params.clone(),
+        }),
+    })
+}
+
+fn resolve_cluster_count(
+    explicit_cluster_count: Option<u32>,
+    minimum_cluster_count: usize,
+    estimated_child_count: usize,
+    block_size_target: usize,
+    embedding_spec: &EmbeddingSpec,
+) -> Result<u32, AutoSizingBuiltInClusteringFactoryError> {
+    match explicit_cluster_count {
+        Some(cluster_count) => Ok(cluster_count),
+        None => derive_auto_sized_cluster_count(
+            minimum_cluster_count,
+            estimated_child_count,
+            block_size_target,
+            embedding_spec,
+        ),
+    }
+}
+
+fn derive_auto_sized_cluster_count(
+    minimum_cluster_count: usize,
+    estimated_child_count: usize,
+    block_size_target: usize,
+    embedding_spec: &EmbeddingSpec,
+) -> Result<u32, AutoSizingBuiltInClusteringFactoryError> {
+    let minimum_cluster_count = minimum_cluster_count.max(1);
+    if estimated_child_count == 0 {
+        return u32::try_from(minimum_cluster_count).map_err(|_| {
+            AutoSizingBuiltInClusteringFactoryError::DeriveClusterCount(format!(
+                "minimum cluster count {minimum_cluster_count} exceeds u32::MAX"
+            ))
+        });
+    }
+    if minimum_cluster_count > estimated_child_count {
+        return Err(AutoSizingBuiltInClusteringFactoryError::DeriveClusterCount(
+            format!(
+                "cannot satisfy minimum cluster count {minimum_cluster_count} for only {estimated_child_count} clustering inputs"
+            ),
+        ));
+    }
+
+    let max_per =
+        max_children_per_branch(embedding_spec, block_size_target, estimated_child_count)?;
+    let max_sensible = estimated_child_count / 2;
+    if estimated_child_count > 1 && minimum_cluster_count > max_sensible {
+        return Err(AutoSizingBuiltInClusteringFactoryError::DeriveClusterCount(
+            format!(
+                "cannot satisfy minimum cluster count {minimum_cluster_count} and two-children-per-branch constraint for {estimated_child_count} children with block size target {block_size_target}"
+            ),
+        ));
+    }
+    if estimated_child_count <= max_per.max(1) {
+        return u32::try_from(minimum_cluster_count).map_err(|_| {
+            AutoSizingBuiltInClusteringFactoryError::DeriveClusterCount(format!(
+                "minimum cluster count {minimum_cluster_count} exceeds u32::MAX"
+            ))
+        });
+    }
+
+    let needed = estimated_child_count
+        .div_ceil(max_per.max(2))
+        .max(minimum_cluster_count);
+    if needed > max_sensible {
+        return Err(AutoSizingBuiltInClusteringFactoryError::DeriveClusterCount(
+            format!(
+                "cannot satisfy minimum cluster count {minimum_cluster_count} and two-children-per-branch constraint for {estimated_child_count} children with block size target {block_size_target}"
+            ),
+        ));
+    }
+
+    u32::try_from(needed).map_err(|_| {
+        AutoSizingBuiltInClusteringFactoryError::DeriveClusterCount(format!(
+            "derived cluster count {needed} exceeds u32::MAX for estimated child count {estimated_child_count}"
+        ))
+    })
+}
+
+fn max_children_per_branch(
+    embedding_spec: &EmbeddingSpec,
+    block_size_target: usize,
+    child_count: usize,
+) -> Result<usize, AutoSizingBuiltInClusteringFactoryError> {
+    if child_count < 2 {
+        return Ok(child_count);
+    }
+
+    let min_size = serialized_branch_size(embedding_spec, 2)?;
+    if min_size > block_size_target {
+        return Err(AutoSizingBuiltInClusteringFactoryError::DeriveClusterCount(
+            format!(
+                "minimum 2-child branch serializes to {min_size} bytes, exceeding block size target {block_size_target}"
+            ),
+        ));
+    }
+
+    let mut low = 2;
+    let mut high = 2;
+    while high < child_count {
+        let candidate = (high.saturating_mul(2)).min(child_count);
+        if serialized_branch_size(embedding_spec, candidate)? <= block_size_target {
+            low = candidate;
+            high = candidate;
+        } else {
+            high = candidate;
+            break;
+        }
+    }
+    if low == child_count {
+        return Ok(child_count);
+    }
+    while low + 1 < high {
+        let mid = low + (high - low) / 2;
+        if serialized_branch_size(embedding_spec, mid)? <= block_size_target {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    Ok(low)
+}
+
+fn serialized_branch_size(
+    embedding_spec: &EmbeddingSpec,
+    entry_count: usize,
+) -> Result<usize, AutoSizingBuiltInClusteringFactoryError> {
+    if entry_count < 2 {
+        return Err(AutoSizingBuiltInClusteringFactoryError::DeriveClusterCount(
+            "branch-size estimation requires at least two entries".into(),
+        ));
+    }
+
+    let embedding_len = expected_embedding_len(embedding_spec)?;
+    let top_level_size = cbor_map_size(4)
+        + cbor_unsigned_field_size(0, VERSION_1)
+        + cbor_unsigned_field_size(1, 1)
+        + cbor_key_size(2)
+        + embedding_spec_cbor_size(embedding_spec)
+        + cbor_key_size(3)
+        + cbor_array_size(entry_count);
+    let entry_size = cbor_map_size(2)
+        + cbor_key_size(0)
+        + cbor_bytes_size(embedding_len)
+        + cbor_key_size(1)
+        + cbor_bytes_size(BlockHash::LEN);
+
+    top_level_size
+        .checked_add(entry_size.checked_mul(entry_count).ok_or_else(|| {
+            AutoSizingBuiltInClusteringFactoryError::DeriveClusterCount(format!(
+                "branch-size estimation overflow for {entry_count} entries"
+            ))
+        })?)
+        .ok_or_else(|| {
+            AutoSizingBuiltInClusteringFactoryError::DeriveClusterCount(format!(
+                "branch-size estimation overflow for {entry_count} entries"
+            ))
+        })
+}
+
+fn expected_embedding_len(
+    embedding_spec: &EmbeddingSpec,
+) -> Result<usize, AutoSizingBuiltInClusteringFactoryError> {
+    let scalar_width = match embedding_spec.encoding.as_str() {
+        "f32le" => 4_u64,
+        "f16le" => 2_u64,
+        other => {
+            return Err(AutoSizingBuiltInClusteringFactoryError::DeriveClusterCount(
+                format!("unsupported embedding encoding {other:?} for branch-size estimation"),
+            ));
+        }
+    };
+    embedding_spec
+        .dims
+        .checked_mul(scalar_width)
+        .and_then(|length| usize::try_from(length).ok())
+        .ok_or_else(|| {
+            AutoSizingBuiltInClusteringFactoryError::DeriveClusterCount(format!(
+                "embedding length overflow for {} dimensions with encoding {:?}",
+                embedding_spec.dims, embedding_spec.encoding
+            ))
+        })
+}
+
+fn embedding_spec_cbor_size(embedding_spec: &EmbeddingSpec) -> usize {
+    cbor_map_size(2)
+        + cbor_unsigned_field_size(0, embedding_spec.dims)
+        + cbor_key_size(1)
+        + cbor_text_size(&embedding_spec.encoding)
+}
+
+fn cbor_unsigned_field_size(key: u64, value: u64) -> usize {
+    cbor_key_size(key) + cbor_unsigned_size(value)
+}
+
+fn cbor_key_size(key: u64) -> usize {
+    cbor_unsigned_size(key)
+}
+
+fn cbor_map_size(entry_count: usize) -> usize {
+    cbor_major_size(entry_count)
+}
+
+fn cbor_array_size(entry_count: usize) -> usize {
+    cbor_major_size(entry_count)
+}
+
+fn cbor_text_size(value: &str) -> usize {
+    cbor_major_size(value.len()) + value.len()
+}
+
+fn cbor_bytes_size(byte_len: usize) -> usize {
+    cbor_major_size(byte_len) + byte_len
+}
+
+fn cbor_unsigned_size(value: u64) -> usize {
+    match value {
+        0..=23 => 1,
+        24..=0xff => 2,
+        0x100..=0xffff => 3,
+        0x1_0000..=0xffff_ffff => 5,
+        _ => 9,
+    }
+}
+
+fn cbor_major_size(value: usize) -> usize {
+    match value {
+        0..=23 => 1,
+        24..=0xff => 2,
+        0x100..=0xffff => 3,
+        0x1_0000..=0xffff_ffff => 5,
+        _ => 9,
+    }
+}
+
 pub async fn run_request_file(request_path: &Path) -> Result<BatchSummary, RuntimeError> {
     run_request_file_with_overrides(request_path, None, ClusteringConfigOverrides::default()).await
 }
@@ -252,7 +575,7 @@ where
 {
     let progress: ProgressReporter = Arc::new(progress);
     request.validate()?;
-    let clustering = clustering_overrides.to_built_in_clustering()?;
+    let clustering = clustering_overrides.to_configured_clustering()?;
     let stage = request.stage;
     let block_store = ConfiguredBlockStore::from_environment(request_dir, &request.environment)?;
     let embedding_spec = request.to_embedding_spec();
@@ -640,10 +963,11 @@ where
     let total_batches = replay_batches.len();
     let total_items: usize = replay_batches.iter().map(|batch| batch.items.len()).sum();
 
-    let mut indexer = StreamingIndexingRun::with_builtin_clustering(
+    let mut indexer = StreamingIndexingRun::new(
         resolver,
         embedding_provider,
-        config.clustering,
+        ArithmeticMeanCanonicalEmbeddingPolicy,
+        AutoSizingBuiltInClusteringFactory::new(config.clustering),
         embedding_spec.clone(),
         config.block_size_target,
     );
@@ -1720,6 +2044,201 @@ mod tests {
 
         assert!(!summary.block_ids.is_empty());
         server.join();
+    }
+
+    #[test]
+    fn omitted_cluster_count_auto_sizes_from_branch_capacity() {
+        let embedding_spec = EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        };
+        let block_size_target = serialized_branch_size(&embedding_spec, 2).unwrap();
+
+        assert_eq!(
+            derive_auto_sized_cluster_count(1, 6, block_size_target, &embedding_spec).unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn omitted_directional_pca_cluster_count_matches_explicit_auto_sized_count() {
+        let embedding_spec = EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        };
+        let block_size_target = serialized_branch_size(&embedding_spec, 3).unwrap();
+        let omitted = resolved_built_in_clustering(
+            &ConfiguredClustering::DirectionalPca {
+                cluster_count: None,
+                random_seed: None,
+                params: lexongraph_directional_pca::DirectionalPcaParams {
+                    retained_dimension_count: 1,
+                    variance_exponent: 1.0,
+                    temperature: 1.0,
+                    min_input_count: 2,
+                    min_effective_rank: 1,
+                    min_cumulative_variance: 0.0,
+                },
+            },
+            9,
+            block_size_target,
+            &embedding_spec,
+        )
+        .unwrap();
+        let explicit = resolved_built_in_clustering(
+            &ConfiguredClustering::DirectionalPca {
+                cluster_count: Some(3),
+                random_seed: None,
+                params: lexongraph_directional_pca::DirectionalPcaParams {
+                    retained_dimension_count: 1,
+                    variance_exponent: 1.0,
+                    temperature: 1.0,
+                    min_input_count: 2,
+                    min_effective_rank: 1,
+                    min_cumulative_variance: 0.0,
+                },
+            },
+            9,
+            block_size_target,
+            &embedding_spec,
+        )
+        .unwrap();
+
+        assert_eq!(omitted, explicit);
+    }
+
+    #[test]
+    fn omitted_dcbc_cluster_count_matches_explicit_auto_sized_count() {
+        let embedding_spec = EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        };
+        let block_size_target = serialized_branch_size(&embedding_spec, 3).unwrap();
+        let omitted = resolved_built_in_clustering(
+            &ConfiguredClustering::Dcbc {
+                cluster_count: None,
+                balance_constraints: None,
+                random_seed: Some(7),
+            },
+            9,
+            block_size_target,
+            &embedding_spec,
+        )
+        .unwrap();
+        let explicit = resolved_built_in_clustering(
+            &ConfiguredClustering::Dcbc {
+                cluster_count: Some(3),
+                balance_constraints: None,
+                random_seed: Some(7),
+            },
+            9,
+            block_size_target,
+            &embedding_spec,
+        )
+        .unwrap();
+
+        assert_eq!(omitted, explicit);
+    }
+
+    #[test]
+    fn omitted_directional_pca_cluster_count_respects_retained_dimension_count() {
+        let embedding_spec = EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        };
+        let block_size_target = serialized_branch_size(&embedding_spec, 3).unwrap();
+
+        let omitted = resolved_built_in_clustering(
+            &ConfiguredClustering::DirectionalPca {
+                cluster_count: None,
+                random_seed: None,
+                params: lexongraph_directional_pca::DirectionalPcaParams {
+                    retained_dimension_count: 3,
+                    variance_exponent: 1.0,
+                    temperature: 1.0,
+                    min_input_count: 2,
+                    min_effective_rank: 1,
+                    min_cumulative_variance: 0.0,
+                },
+            },
+            9,
+            block_size_target,
+            &embedding_spec,
+        )
+        .unwrap();
+
+        match omitted {
+            BuiltInClustering::DirectionalPca(settings) => {
+                assert_eq!(settings.cluster_count, 3);
+            }
+            BuiltInClustering::Dcbc(_) => panic!("expected directional-pca settings"),
+        }
+    }
+
+    #[test]
+    fn omitted_directional_pca_cluster_count_fails_when_minimum_is_impossible() {
+        let embedding_spec = EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        };
+        let block_size_target = serialized_branch_size(&embedding_spec, 8).unwrap();
+
+        let error = derive_auto_sized_cluster_count(3, 3, block_size_target, &embedding_spec)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("cannot satisfy minimum cluster count 3"));
+    }
+
+    #[test]
+    fn omitted_directional_pca_cluster_count_fails_when_minimum_exceeds_input_count() {
+        let embedding_spec = EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        };
+        let block_size_target = serialized_branch_size(&embedding_spec, 8).unwrap();
+
+        let error = derive_auto_sized_cluster_count(3, 1, block_size_target, &embedding_spec)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("cannot satisfy minimum cluster count 3 for only 1 clustering inputs")
+        );
+    }
+
+    #[test]
+    fn serialized_branch_size_matches_actual_serialization() {
+        let embedding_spec = EmbeddingSpec {
+            dims: 384,
+            encoding: "f32le".into(),
+        };
+        let entry_count = 37;
+        let embedding_len = expected_embedding_len(&embedding_spec).unwrap();
+        let entries = (0..entry_count)
+            .map(|index| lexongraph_block::BranchEntry {
+                embedding: vec![0; embedding_len],
+                child: BlockHash::from_bytes({
+                    let mut bytes = [0_u8; 32];
+                    bytes[..8].copy_from_slice(&(index as u64).to_le_bytes());
+                    bytes
+                }),
+            })
+            .collect();
+        let branch = lexongraph_block::build_branch_block(
+            VERSION_1,
+            1,
+            embedding_spec.clone(),
+            entries,
+            None,
+        )
+        .unwrap();
+        let serialized = serialize_block(&Block::Branch(branch)).unwrap();
+
+        assert_eq!(
+            serialized_branch_size(&embedding_spec, entry_count).unwrap(),
+            serialized.bytes.len()
+        );
     }
 
     #[tokio::test]

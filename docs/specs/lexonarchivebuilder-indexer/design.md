@@ -294,15 +294,25 @@ repository defaults:
 - `min_effective_rank = 1`
 - `min_cumulative_variance = 0.0`
 
-When a caller selects `dcbc` and omits optional balance settings or
-`random_seed`, LexonArchiveBuilder passes `None` for those optional upstream
-fields. When `cluster_count` is omitted, LexonArchiveBuilder preserves the
-existing repository-owned cluster-count defaulting behavior rather than
-inventing a second heuristic just for the new explicit algorithm-selection
-surface.
+When a caller selects either built-in clustering algorithm and omits
+`cluster_count`, LexonArchiveBuilder derives the effective cluster count from:
 
-**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-008,
-RQ-INDEXER-010A
+- the number of clustering inputs
+- the active embedding dimensions and encoding
+- the configured block-size target
+
+The derivation target is the smallest count that keeps first-parent
+materialization within branch-capacity limits implied by the active embedding
+specification while still satisfying the delegated indexer's minimum child-count
+constraints.
+
+When a caller explicitly supplies `cluster_count`, LexonArchiveBuilder forwards
+that explicit value unchanged. When a caller selects `dcbc` and omits optional
+balance settings or `random_seed`, LexonArchiveBuilder passes `None` for those
+optional upstream fields.
+
+**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003H,
+RQ-INDEXER-008, RQ-INDEXER-010A
 
 ### DSG-LFI-002 `Batch runtime shape`
 
