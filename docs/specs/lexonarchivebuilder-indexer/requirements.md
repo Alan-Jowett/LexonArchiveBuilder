@@ -3,8 +3,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with a new requirements patch in discovery for the latest LexonGraph planning-policy update and feature-regression check
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, clustering-algorithm selection, clustering-option exposure, latest planning-policy compatibility, upstream regression assessment, embedding-phase, replay-submission, and streaming-status observability, and layer-parallel block-construction evolution
+- **Status:** Approved streaming-indexer migration baseline with a new requirements patch in discovery for the latest LexonGraph telemetry-aware update and feature-regression check
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, clustering-algorithm selection, clustering-option exposure, latest planning-policy and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission, and streaming-status observability, and layer-parallel block-construction evolution
 
 ## USER-REQUEST
 
@@ -74,6 +74,11 @@
 - **UR-64 [KNOWN]:** Determine whether the latest LexonGraph update regressed any repository-required features or only changed the API shape, so any true upstream regression can be fixed explicitly rather than hidden by narrowing LexonArchiveBuilder behavior.
 - **UR-65 [INFERRED]:** LexonArchiveBuilder currently depends on repository-owned behavior layered on top of the upstream indexing crate, including deterministic split-stage replay, explicit built-in algorithm selection for `dcbc` and `directional-pca`, omitted `cluster_count` auto-sizing, and runtime progress projection that hides raw upstream lifecycle details.
 - **UR-66 [INFERRED]:** If the latest upstream contract no longer exposes a repository-required capability, LexonArchiveBuilder must surface that incompatibility explicitly in requirements, design, and implementation review rather than silently dropping the affected behavior during adaptation.
+- **UR-67 [KNOWN]:** Update LexonArchiveBuilder to the latest LexonGraph `main` revision again because the upstream streaming indexer now exposes richer live telemetry through the status-observer surface.
+- **UR-68 [KNOWN]:** LexonArchiveBuilder should project the new upstream telemetry onto the existing runtime progress/log surface.
+- **UR-69 [KNOWN]:** The latest upstream observer surface now emits live hierarchy-planning stage telemetry and periodic heartbeat-style in-progress status updates during long-running planning and materialization phases.
+- **UR-70 [INFERRED]:** LexonArchiveBuilder should preserve operator-understandable progress semantics when upstream telemetry mixes repository-total counts, stage-local progress counts, and materialization-layer counts rather than exposing those raw count semantics ambiguously.
+- **UR-71 [INFERRED]:** This telemetry upgrade must preserve the current external stage contract and unchanged MCP search or retrieval behavior for already-indexed content rather than broadening the user-visible surface beyond runtime progress.
 
 ## Change Manifest
 
@@ -119,6 +124,9 @@
 | CM-INDEXER-038 | Add | Require explicit repository-level regression assessment for capabilities relied on by LexonArchiveBuilder before any behavior is narrowed during the upstream upgrade | UR-64, UR-65, UR-66 |
 | CM-INDEXER-039 | Revise | Update progress-observability requirements to map latest upstream planning, hierarchy-planning, and bottom-up assembly lifecycle signals onto the existing runtime progress surface without exposing raw upstream terminology directly | UR-62, UR-63, UR-65 |
 | CM-INDEXER-040 | Add | Preserve current repository-required capabilities across the latest LexonGraph upgrade, including split-stage replay, explicit algorithm selection, omitted `cluster_count` auto-sizing, and stable MCP search-serving behavior | UR-63, UR-64, UR-65, UR-66 |
+| CM-INDEXER-041 | Revise | Adapt the latest-upstream compatibility requirement from planning-policy-only alignment to planning-policy plus telemetry-surface alignment against the newest LexonGraph `main` revision | UR-67, UR-69, UR-71 |
+| CM-INDEXER-042 | Revise | Tighten progress-observability requirements so LexonArchiveBuilder projects richer upstream live telemetry and heartbeat events onto the existing runtime progress surface without creating a second telemetry interface | UR-68, UR-69, UR-71 |
+| CM-INDEXER-043 | Add | Preserve operator-understandable progress semantics across the telemetry upgrade by distinguishing repository-owned totals, upstream stage-local progress, and materialization-layer counts instead of surfacing ambiguous raw counts | UR-68, UR-69, UR-70 |
 
 ## Before / After
 
@@ -321,6 +329,21 @@
 
 - **Before [KNOWN]:** The requirements preserved stage-selection and MCP invariants during the earlier streaming-indexer migration, but they did not yet enumerate the repository-required capabilities that must survive the newest planning-policy upgrade review.
 - **After [KNOWN]:** The requirements explicitly preserve split-stage replay, algorithm selection, omitted `cluster_count` auto-sizing, progress projection, and unchanged MCP search-serving behavior as feature-level obligations for the latest upgrade.
+
+### BA-INDEXER-041
+
+- **Before [KNOWN]:** The current requirements align LexonArchiveBuilder with the latest known planning-policy surface, but they do not yet treat the newly expanded upstream telemetry surface as part of the same compatibility boundary.
+- **After [KNOWN]:** The requirements now treat the latest upstream telemetry behavior as part of the upgrade boundary, so the newest LexonGraph revision must be assessed for both planning-policy compatibility and observer-surface compatibility.
+
+### BA-INDEXER-042
+
+- **Before [KNOWN]:** Progress observability required projection of the upstream status-observer surface, but it did not yet explicitly account for richer live hierarchy-stage telemetry and heartbeat-style in-progress events from newer upstream revisions.
+- **After [KNOWN]:** The requirements now explicitly require LexonArchiveBuilder to project the richer upstream telemetry onto the same existing runtime progress surface rather than dropping it or introducing a second telemetry interface.
+
+### BA-INDEXER-043
+
+- **Before [KNOWN]:** The requirements assumed upstream observer counts would remain close enough to repository totals that count semantics would stay intuitive without additional clarification.
+- **After [KNOWN]:** The requirements now explicitly constrain operator-facing progress to remain understandable when upstream telemetry reports stage-local work counts or layer-local materialization counts that differ from repository-total delegated-item counts.
 
 ## Requirements
 
@@ -536,10 +559,11 @@ behavior.
   - explicit built-in algorithm selection for `dcbc` and `directional-pca`
   - omitted `cluster_count` auto-sizing with explicit override preservation
   - runtime progress projection that keeps raw upstream lifecycle details behind the repository-owned progress surface
+  - projection of the latest upstream live telemetry and heartbeat events onto that same repository-owned progress surface
   - unchanged MCP search-serving and retrieval behavior for already-indexed content
 - **Regression rule [INFERRED]:** If the latest upstream surface removes or weakens one of those capabilities, LexonArchiveBuilder SHALL treat that as a compatibility finding requiring explicit design and implementation handling, not as permission to drop the affected repository behavior.
 - **Boundary [KNOWN]:** This requirement does not force LexonArchiveBuilder to re-implement upstream planning internals in-repo; it constrains adaptation and regression reporting at the repository boundary.
-- **Traceability:** UR-47, UR-61, UR-63, UR-64, UR-65, UR-66
+- **Traceability:** UR-47, UR-61, UR-63, UR-64, UR-65, UR-66, UR-67, UR-68, UR-69, UR-71
 
 #### RQ-INDEXER-004 - Content resolution integration
 
@@ -694,9 +718,11 @@ advances, and clustering or block assembly advances.
 - **Observer integration [KNOWN]:** LexonArchiveBuilder SHALL implement the upstream
   streaming status-observer seam and translate observer events onto the same
   runtime progress surface used for mailbox and delegated-indexing progress.
+- **Telemetry projection [KNOWN]:** When the latest upstream observer surface emits richer live hierarchy-planning telemetry or heartbeat-style in-progress status updates, LexonArchiveBuilder SHALL continue projecting those events onto the same runtime progress stream rather than dropping them or exposing them only through a separate telemetry path.
+- **Count-semantics clarity [KNOWN]:** If upstream observer events report phase-local or layer-local work counts that differ from the repository-total delegated-item count for the invocation, LexonArchiveBuilder SHALL render progress messages so operators can tell whether a reported count refers to invocation-total delegated items, stage-local processed work, or materialized block counts.
 - **Boundary discipline [INFERRED]:** Repository-owned progress messages SHOULD make clear when they describe local replay submission state versus upstream observer-reported training, clustering, or materialization state, even when the upstream observer does not expose in-phase processed-versus-remaining counts.
 - **Non-goal [KNOWN]:** This requirement does not introduce a separate control-plane, metrics backend, or MCP-surface change.
-- **Traceability:** UR-32, UR-33, UR-39, UR-41, UR-45, UR-48, UR-59, UR-60, UR-61, UR-62, UR-63
+- **Traceability:** UR-32, UR-33, UR-39, UR-41, UR-45, UR-48, UR-59, UR-60, UR-61, UR-62, UR-63, UR-67, UR-68, UR-69, UR-70, UR-71
 
 ### Boundary and Invariant Requirements
 
@@ -767,6 +793,8 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Clustering configuration remains explicit and replayable | Preserved with clarified scope | Requirements now treat the effective clustering algorithm and option set as part of clustering-enabled orchestration input and constrain defaults to resolve deterministically |
 | Omitted clustering-size behavior remains deterministic and safe across algorithms | Preserved with clarified scope | Requirements now constrain omitted `cluster_count` to derive from input count plus embedding-aware branch capacity for every supported built-in algorithm while preserving explicit caller override behavior |
 | Required repository capabilities remain distinguishable from upstream regressions during the latest upgrade | Preserved with clarified scope | The requirements now force the upgrade to classify missing capabilities explicitly instead of silently narrowing split-stage replay, planning-policy mapping, progress projection, or MCP-facing behavior |
+| Latest upstream telemetry remains subordinate to the existing runtime progress surface | Preserved with clarified scope | Requirements now constrain richer live telemetry and heartbeat events to the same repository-owned log stream rather than a new telemetry interface |
+| Operator-visible progress counts remain understandable across upstream telemetry changes | Preserved with clarified scope | Requirements now distinguish invocation-total delegated-item counts from stage-local or layer-local telemetry counts so upstream count-shape changes do not create misleading logs |
 | Clients are not forced to parse raw mailbox blobs for ordinary retrieval | Preserved | Indexed chunks must reference normalized email artifacts so retrieval can stay at chunk level or expand to full normalized email through repository-owned artifacts |
 | Storage abstraction count stays bounded across environments | Preserved | Requirements now reuse the environment-selected `BlockStore` abstraction family for indexed blocks, normalized email artifacts, and mailbox provenance artifacts rather than introducing a second storage stack |
 | Local filesystem block stores remain interoperable with LexonGraph tooling | Preserved | The local/testing profile is now constrained to LexonGraph's filesystem naming/layout contract so inspection tools can consume repository-produced local stores |
@@ -777,6 +805,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - **Q-INDEXER-061 [UNKNOWN]:** Does the latest upstream planning-policy surface preserve exactly the same effective option semantics for `dcbc` balance constraints and `directional-pca` parameters that the repository already exposes, or only the same field names?
 - **Q-INDEXER-062 [UNKNOWN]:** Does the latest upstream status-observer contract expose enough information for LexonArchiveBuilder to preserve its current replay-submission handoff and long-running liveness messages without weakening operator visibility?
 - **Q-INDEXER-063 [UNKNOWN]:** Are any repository-required split-stage replay guarantees now expressed through different upstream lifecycle transitions beyond the observed rename from training completion to planning completion?
+- **Q-INDEXER-064 [UNKNOWN]:** Does the newest upstream telemetry contract intend `item_count` to remain invocation-total for planning-pass events while hierarchy-planning and bottom-up assembly events report stage-local or layer-local progress units, or is that count shape still evolving?
 
 ## Coverage Notes
 
@@ -792,10 +821,13 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
   - user clarification in this session selecting: "Fresh/rebuilt local store is acceptable"
   - user request in this session: "fix this behavior. It should always auto-size based on number of blocks to embededd and the embedding size"
   - user clarification in this session selecting: "Yes — explicit cluster_count overrides; auto-size only when omitted (Recommended)"
+  - user request in this session: "ok, can we pull latest lexongraph again? It has new telemtry"
+  - user clarification in this session selecting: "Project the new upstream telemetry onto the existing runtime progress/log surface (Recommended)"
   - `docs/specs/lexonarchivebuilder-indexer/design.md:228-315`
   - `docs/specs/lexonarchivebuilder-indexer/validation.md:72-187`
   - `crates/lexonarchivebuilder-indexer/src/runtime.rs:14-340`
   - `Alan-Jowett/LexonGraph` `crates/lexongraph-streaming-indexer/src/lib.rs` on `main`: planning-policy and status-observer surfaces around `HierarchicalPlanningPolicy`, `BuiltInPlanningPolicy`, `StreamingIndexingPhase`, and `mark_planning_complete`
+  - `Alan-Jowett/LexonGraph` `crates/lexongraph-streaming-indexer/src/lib.rs` on `main`: telemetry and heartbeat surfaces around `PlanningStageStatusTracker`, `start_status_heartbeat`, and `with_legacy_item_count`
   - `README.md:18-27`
   - `README.md:42-49`
   - `README.md:51-59`

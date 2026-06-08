@@ -6,8 +6,8 @@ Phase 2 specification patch for the approved email-artifact, chunk-level
 indexing, local filesystem block-store interoperability, replay-based
 streaming delegated indexing, stage-selectable execution, standalone
 clustering input discovery, clustering-algorithm selection, clustering-option
-exposure, latest planning-policy compatibility, upstream regression
-assessment, replay-submission and streaming-status observability,
+exposure, latest planning-policy and telemetry compatibility, upstream
+regression assessment, replay-submission and streaming-status observability,
 replay-stable fingerprinting, and layer-parallel block-construction
 evolution in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md`.
@@ -21,11 +21,12 @@ units plus the local filesystem block-store interoperability correction,
 replay-based streaming delegated indexing adoption, stage-selectable execution,
 standalone clustering input discovery, delegated clustering-algorithm
 selection, algorithm-specific clustering-option exposure, latest
-planning-policy compatibility, upstream regression assessment,
-embedding-phase batch-progress observability, replay-submission
-observability, streaming-status observability, replay-stable delegated
-item identity, and layer-parallel delegated block
-construction for the local/testing profile.
+planning-policy and telemetry compatibility, upstream regression
+assessment, embedding-phase batch-progress observability,
+replay-submission observability, streaming-status observability,
+telemetry-count-semantics clarity, replay-stable delegated item
+identity, and layer-parallel delegated block construction for the
+local/testing profile.
 
 This document is layered on top of:
 
@@ -321,9 +322,9 @@ RQ-INDEXER-008, RQ-INDEXER-010A
 
 ### DSG-LFI-001I `Latest-upstream compatibility and regression boundary`
 
-LexonArchiveBuilder treats the latest upstream planning-policy surface as a
-mechanical adaptation boundary, not as permission to narrow the approved
-repository contract.
+LexonArchiveBuilder treats the latest upstream planning-policy and
+status-observer telemetry surfaces as a mechanical adaptation boundary, not as
+permission to narrow the approved repository contract.
 
 The design therefore preserves these repository-required capabilities across the
 upgrade whenever the latest upstream contract still supports them semantically:
@@ -333,6 +334,8 @@ upgrade whenever the latest upstream contract still supports them semantically:
 - explicit `dcbc` and `directional-pca` selection
 - omitted `cluster_count` auto-sizing with explicit override preservation
 - repository-owned progress projection over upstream lifecycle events
+- projection of richer live hierarchy-stage telemetry and heartbeat events onto
+  that same repository-owned progress surface
 - unchanged MCP search-serving behavior for already-indexed content
 
 If any of those capabilities proves unavailable on the latest upstream surface,
@@ -406,6 +409,11 @@ reports completed batches and cumulative delegated items relative to the known
 invocation total, rather than relying only on later observer heartbeats with
 phase-level elapsed-time visibility.
 
+When the latest upstream observer surface emits richer live telemetry after
+repository-owned submission has handed off control, the runtime keeps those
+telemetry events on the same progress stream but does not let them replace the
+repository-owned invocation-total context established earlier in the run.
+
 When the last repository-owned replay batch has been submitted and control moves
 from local submission into waiting for upstream planning-pass completion, the
 same runtime-visible progress stream emits an explicit handoff marker. That
@@ -418,9 +426,9 @@ or is already blocked on downstream work.
 
 ### DSG-LFI-002B `Streaming status signaling`
 
-LexonArchiveBuilder realizes long-running indexing observability by implementing the
-upstream streaming status-observer seam and translating observer events into
-runtime-visible progress messages.
+LexonArchiveBuilder realizes long-running indexing observability by implementing
+the upstream streaming status-observer seam and translating observer events
+into runtime-visible progress messages.
 
 This keeps planning-pass, planning-completion, final materialization, and
 clustering
@@ -440,9 +448,23 @@ batches are still being submitted once the repository-owned handoff marker has
 been emitted.
 
 For the latest known upstream contract, the translation layer maps planning
-passes, hierarchy-planning stages, final materialization replay, and bottom-up
-assembly updates onto repository-visible progress categories without leaking the
-raw upstream enum names into the external CLI or `BatchRequest` contract.
+passes, hierarchy-planning stages, final materialization replay, bottom-up
+assembly updates, and heartbeat-style in-progress telemetry onto
+repository-visible progress categories without leaking the raw upstream enum
+names into the external CLI or `BatchRequest` contract.
+
+The translation layer also preserves count-semantics clarity when the newest
+upstream telemetry mixes multiple count shapes:
+
+- planning-pass counts that remain invocation-total or replay-total
+- hierarchy-planning counts that may represent stage-local processed work
+- bottom-up assembly counts that may represent layer-local block or group totals
+
+The repository-visible rendering therefore distinguishes local replay totals
+from upstream stage-local or layer-local telemetry rather than presenting every
+count as if it were the same logical unit. This keeps operator logs
+understandable even when upstream observer events intentionally reuse one status
+shape across multiple telemetry contexts.
 
 
 **Traces to:** RQ-INDEXER-008B, RQ-INDEXER-010A

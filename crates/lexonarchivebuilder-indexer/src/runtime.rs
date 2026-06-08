@@ -1341,6 +1341,14 @@ fn format_planning_stage(stage: PlanningStage) -> &'static str {
     }
 }
 
+fn format_completed_of_total(
+    completed: usize,
+    total: Option<usize>,
+    unit_label: &str,
+) -> Option<String> {
+    total.map(|total| format!("; completed {completed} of {total} {unit_label}"))
+}
+
 fn format_indexing_status(status: StreamingIndexingStatus) -> String {
     let elapsed_ms = status.elapsed.as_millis();
     match (status.phase, status.state) {
@@ -1354,17 +1362,33 @@ fn format_indexing_status(status: StreamingIndexingStatus) -> String {
         (
             StreamingIndexingPhase::PlanningPass { pass_number },
             StreamingIndexingStatusState::InProgress,
-        ) => format!(
-            "Planning pass {pass_number} still running after {elapsed_ms} ms for {} item(s)",
-            status.item_count
-        ),
+        ) => {
+            let progress_suffix = format_completed_of_total(
+                status.completed_unit_count,
+                status.phase_total_unit_count,
+                "pass item(s)",
+            )
+            .unwrap_or_default();
+            format!(
+                "Planning pass {pass_number} still running after {elapsed_ms} ms for {} item(s){}",
+                status.item_count, progress_suffix
+            )
+        }
         (
             StreamingIndexingPhase::PlanningPass { pass_number },
             StreamingIndexingStatusState::Completed,
-        ) => format!(
-            "Planning pass {pass_number} completed in {elapsed_ms} ms for {} item(s)",
-            status.item_count
-        ),
+        ) => {
+            let progress_suffix = format_completed_of_total(
+                status.completed_unit_count,
+                status.phase_total_unit_count,
+                "pass item(s)",
+            )
+            .unwrap_or_default();
+            format!(
+                "Planning pass {pass_number} completed in {elapsed_ms} ms for {} item(s){}",
+                status.item_count, progress_suffix
+            )
+        }
         (
             StreamingIndexingPhase::PlanningPass { pass_number },
             StreamingIndexingStatusState::Failed,
@@ -1387,9 +1411,9 @@ fn format_indexing_status(status: StreamingIndexingStatus) -> String {
             StreamingIndexingStatusState::InProgress,
         ) => {
             format!(
-                "{} still running after {elapsed_ms} ms for {} item(s)",
+                "{} still running after {elapsed_ms} ms; processed {} stage-local item(s)",
                 format_planning_stage(stage),
-                status.item_count,
+                status.completed_unit_count,
             )
         }
         (
@@ -1397,9 +1421,9 @@ fn format_indexing_status(status: StreamingIndexingStatus) -> String {
             StreamingIndexingStatusState::Completed,
         ) => {
             format!(
-                "{} completed in {elapsed_ms} ms for {} item(s)",
+                "{} completed in {elapsed_ms} ms after processing {} stage-local item(s)",
                 format_planning_stage(stage),
-                status.item_count,
+                status.completed_unit_count,
             )
         }
         (
@@ -1407,8 +1431,9 @@ fn format_indexing_status(status: StreamingIndexingStatus) -> String {
             StreamingIndexingStatusState::Failed,
         ) => {
             format!(
-                "{} failed after {elapsed_ms} ms: {}",
+                "{} failed after {elapsed_ms} ms after processing {} stage-local item(s): {}",
                 format_planning_stage(stage),
+                status.completed_unit_count,
                 status.error.unwrap_or_else(|| "unknown error".into())
             )
         }
@@ -1424,17 +1449,33 @@ fn format_indexing_status(status: StreamingIndexingStatus) -> String {
         (
             StreamingIndexingPhase::FinalMaterializationReplay,
             StreamingIndexingStatusState::InProgress,
-        ) => format!(
-            "Final materialization replay still running after {elapsed_ms} ms for {} item(s)",
-            status.item_count
-        ),
+        ) => {
+            let progress_suffix = format_completed_of_total(
+                status.completed_unit_count,
+                status.phase_total_unit_count,
+                "replay item(s)",
+            )
+            .unwrap_or_default();
+            format!(
+                "Final materialization replay still running after {elapsed_ms} ms for {} item(s){}",
+                status.item_count, progress_suffix
+            )
+        }
         (
             StreamingIndexingPhase::FinalMaterializationReplay,
             StreamingIndexingStatusState::Completed,
-        ) => format!(
-            "Final materialization replay completed in {elapsed_ms} ms for {} item(s)",
-            status.item_count
-        ),
+        ) => {
+            let progress_suffix = format_completed_of_total(
+                status.completed_unit_count,
+                status.phase_total_unit_count,
+                "replay item(s)",
+            )
+            .unwrap_or_default();
+            format!(
+                "Final materialization replay completed in {elapsed_ms} ms for {} item(s){}",
+                status.item_count, progress_suffix
+            )
+        }
         (
             StreamingIndexingPhase::FinalMaterializationReplay,
             StreamingIndexingStatusState::Failed,
@@ -1445,25 +1486,45 @@ fn format_indexing_status(status: StreamingIndexingStatus) -> String {
         (
             StreamingIndexingPhase::BottomUpAssembly { layer_index },
             StreamingIndexingStatusState::Started,
-        ) => format!("Bottom-up assembly for layer {layer_index} started after {elapsed_ms} ms"),
+        ) => format!(
+            "Bottom-up assembly for layer {layer_index} started after {elapsed_ms} ms for {} input block(s) across {} group(s)",
+            status.item_count,
+            status
+                .phase_total_unit_count
+                .unwrap_or(status.completed_unit_count)
+        ),
         (
             StreamingIndexingPhase::BottomUpAssembly { layer_index },
             StreamingIndexingStatusState::InProgress,
         ) => format!(
-            "Bottom-up assembly for layer {layer_index} still running after {elapsed_ms} ms"
+            "Bottom-up assembly for layer {layer_index} still running after {elapsed_ms} ms; completed {} of {} group(s) from {} input block(s)",
+            status.completed_unit_count,
+            status
+                .phase_total_unit_count
+                .unwrap_or(status.completed_unit_count),
+            status.item_count
         ),
         (
             StreamingIndexingPhase::BottomUpAssembly { layer_index },
             StreamingIndexingStatusState::Completed,
         ) => format!(
-            "Bottom-up assembly for layer {layer_index} completed in {elapsed_ms} ms: {} block(s)",
+            "Bottom-up assembly for layer {layer_index} completed in {elapsed_ms} ms: built {} of {} group(s) from {} input block(s)",
+            status.completed_unit_count,
+            status
+                .phase_total_unit_count
+                .unwrap_or(status.completed_unit_count),
             status.item_count
         ),
         (
             StreamingIndexingPhase::BottomUpAssembly { layer_index },
             StreamingIndexingStatusState::Failed,
         ) => format!(
-            "Bottom-up assembly for layer {layer_index} failed after {elapsed_ms} ms: {}",
+            "Bottom-up assembly for layer {layer_index} failed after {elapsed_ms} ms after completing {} of {} group(s) from {} input block(s): {}",
+            status.completed_unit_count,
+            status
+                .phase_total_unit_count
+                .unwrap_or(status.completed_unit_count),
+            status.item_count,
             status.error.unwrap_or_else(|| "unknown error".into())
         ),
     }
@@ -2481,6 +2542,65 @@ mod tests {
         assert_eq!(
             serialized_branch_size(&embedding_spec, entry_count).unwrap(),
             serialized.bytes.len()
+        );
+    }
+
+    #[test]
+    fn hierarchy_planning_progress_reports_stage_local_counts() {
+        let status = StreamingIndexingStatus {
+            phase: StreamingIndexingPhase::HierarchyPlanning {
+                stage: PlanningStage::Custom,
+            },
+            state: StreamingIndexingStatusState::InProgress,
+            item_count: 7,
+            phase_total_unit_count: None,
+            completed_unit_count: 7,
+            remaining_unit_count: None,
+            elapsed: Duration::from_millis(125),
+            error: None,
+        };
+
+        assert_eq!(
+            format_indexing_status(status),
+            "custom planning still running after 125 ms; processed 7 stage-local item(s)"
+        );
+    }
+
+    #[test]
+    fn final_materialization_progress_reports_replay_totals_when_available() {
+        let status = StreamingIndexingStatus {
+            phase: StreamingIndexingPhase::FinalMaterializationReplay,
+            state: StreamingIndexingStatusState::InProgress,
+            item_count: 9,
+            phase_total_unit_count: Some(9),
+            completed_unit_count: 4,
+            remaining_unit_count: Some(5),
+            elapsed: Duration::from_millis(250),
+            error: None,
+        };
+
+        assert_eq!(
+            format_indexing_status(status),
+            "Final materialization replay still running after 250 ms for 9 item(s); completed 4 of 9 replay item(s)"
+        );
+    }
+
+    #[test]
+    fn bottom_up_assembly_progress_distinguishes_input_blocks_from_groups() {
+        let status = StreamingIndexingStatus {
+            phase: StreamingIndexingPhase::BottomUpAssembly { layer_index: 2 },
+            state: StreamingIndexingStatusState::Completed,
+            item_count: 12,
+            phase_total_unit_count: Some(3),
+            completed_unit_count: 3,
+            remaining_unit_count: Some(0),
+            elapsed: Duration::from_millis(88),
+            error: None,
+        };
+
+        assert_eq!(
+            format_indexing_status(status),
+            "Bottom-up assembly for layer 2 completed in 88 ms: built 3 of 3 group(s) from 12 input block(s)"
         );
     }
 

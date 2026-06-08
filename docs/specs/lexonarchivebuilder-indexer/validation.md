@@ -6,8 +6,8 @@ Phase 2 validation patch for the approved email-artifact, chunk-level
 indexing, local filesystem block-store interoperability, replay-based
 streaming delegated indexing, stage-selectable execution, standalone
 clustering input discovery, clustering-algorithm selection, clustering-option
-exposure, latest planning-policy compatibility, upstream regression
-assessment, replay-submission and streaming-status observability,
+exposure, latest planning-policy and telemetry compatibility, upstream
+regression assessment, replay-submission and streaming-status observability,
 replay-stable fingerprinting, and layer-parallel block-construction
 evolution in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md` and
@@ -20,11 +20,11 @@ LexonArchiveBuilder-owned indexer boundary, including local filesystem
 block-store interoperability, replay-based streaming delegated indexing,
 stage-selectable execution, standalone clustering input discovery, explicit
 delegated clustering-algorithm selection, algorithm-specific clustering-option
-exposure, latest planning-policy compatibility, upstream regression
-assessment, embedding-phase batch-progress observability,
+exposure, latest planning-policy and telemetry compatibility, upstream
+regression assessment, embedding-phase batch-progress observability,
 replay-submission observability, streaming-status observability,
-replay-stable fingerprinting, and leaf-layer parallel block scheduling in the
-local/testing profile.
+telemetry-count-semantics clarity, replay-stable fingerprinting, and
+leaf-layer parallel block scheduling in the local/testing profile.
 
 This package validates LexonArchiveBuilder's batch contract, adapter selection, and
 delegated use of LexonGraph interfaces. It does not redefine validation already
@@ -197,9 +197,11 @@ indexer contract.
 **Pass condition:** the upgrade preserves the approved external stage contract,
 deterministic split-stage replay, explicit `dcbc` and `directional-pca`
 selection, omitted `cluster_count` auto-sizing semantics, repository-owned
-progress projection, and unchanged MCP search-serving behavior for already-
-indexed content, or else any missing capability is classified explicitly as an
-upstream regression or compatibility finding rather than being silently dropped.
+progress projection, projection of the latest upstream live telemetry and
+heartbeat events, and unchanged MCP search-serving behavior for already-indexed
+content, or else any missing capability is classified explicitly as an
+upstream regression or compatibility finding rather than being silently
+dropped.
 
 **Traces to:** RQ-INDEXER-003I, DSG-LFI-001I
 
@@ -360,9 +362,9 @@ mailbox-processing and delegated-indexing steps.
 **Pass condition:** the normal batch log stream reports forward progress before
 the final summary, including mailbox-processing visibility plus delegated
 indexing visibility and observer-driven streaming visibility across planning
-and final materialization when the selected stage includes clustering, so an
-operator can distinguish an active run from a hung run without consulting a
-separate control-plane service.
+and final materialization when the selected stage includes clustering, and the
+same log surface continues to carry richer live telemetry from newer upstream
+observer revisions without requiring a separate control-plane service.
 
 **Traces to:** RQ-INDEXER-008B, DSG-LFI-002A
 
@@ -418,6 +420,31 @@ message when repository-owned replay submission completes and the runtime begins
 waiting for upstream planning-pass completion, and later upstream observer
 heartbeats remain distinguishable from that local handoff rather than implying
 that additional replay batches are still being submitted.
+
+**Traces to:** RQ-INDEXER-008B, DSG-LFI-002A, DSG-LFI-002B
+
+### VAL-LFI-007F
+
+Run a clustering-enabled stage against a latest-upstream build that emits live
+hierarchy-planning telemetry and heartbeat-style in-progress status updates.
+
+**Pass condition:** the normal batch log stream projects those telemetry events
+onto the same repository-owned progress surface, preserves distinguishable
+rendering for planning-pass, hierarchy-stage, and materialization progress, and
+does not require operators to consult a second telemetry interface.
+
+**Traces to:** RQ-INDEXER-003I, RQ-INDEXER-008B, DSG-LFI-001I, DSG-LFI-002B
+
+### VAL-LFI-007G
+
+Inspect progress output from a run where upstream observer events report counts
+with different semantics across planning-pass, hierarchy-planning, and
+bottom-up assembly phases.
+
+**Pass condition:** repository-visible progress messages make it clear when a
+count refers to invocation-total delegated items, stage-local processed work,
+or layer-local block or group totals, so newer upstream telemetry does not
+create misleading operator-visible count interpretations.
 
 **Traces to:** RQ-INDEXER-008B, DSG-LFI-002A, DSG-LFI-002B
 
