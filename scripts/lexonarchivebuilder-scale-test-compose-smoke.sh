@@ -28,6 +28,7 @@ EOF
 (cd "$REPO_ROOT" && COMPOSE_PROJECT_NAME=lexonarchivebuilder docker compose run --rm scale-test \
   --run-name "$RUN_NAME" \
   --sources-file "$CONTAINER_SOURCES_FILE" \
+  --clustering-mode divisive \
   --clustering-algorithm dcbc \
   --clustering-cluster-count 2 \
   --clustering-random-seed 11)

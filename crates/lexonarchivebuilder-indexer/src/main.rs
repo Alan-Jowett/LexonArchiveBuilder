@@ -294,6 +294,8 @@ mod tests {
             "run",
             "--request",
             "request.json",
+            "--clustering-mode",
+            "divisive",
             "--clustering-algorithm",
             "directional-pca",
             "--clustering-cluster-count",
@@ -317,6 +319,10 @@ mod tests {
 
         match cli.command {
             Command::Run { clustering, .. } => {
+                assert_eq!(
+                    clustering.clustering_mode,
+                    Some(lexonarchivebuilder_indexer::ClusteringMode::Divisive)
+                );
                 assert_eq!(
                     clustering.clustering_algorithm,
                     Some(lexonarchivebuilder_indexer::ClusteringAlgorithm::DirectionalPca)

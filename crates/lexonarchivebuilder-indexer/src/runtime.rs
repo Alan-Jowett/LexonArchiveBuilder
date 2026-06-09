@@ -12,10 +12,10 @@ use lexongraph_block::{
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_streaming_indexer::{
-    ArithmeticMeanCanonicalEmbeddingPolicy, BuiltInPlanning, ContentResolver,
-    DcbcBuiltInPlanningSettings, DirectionalPcaBuiltInPlanningSettings, IndexItem, PlanningStage,
-    StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingRun, StreamingIndexingStatus,
-    StreamingIndexingStatusObserver, StreamingIndexingStatusState,
+    ArithmeticMeanCanonicalEmbeddingPolicy, BuiltInPlanning, BuiltInPlanningDirection,
+    ContentResolver, DcbcBuiltInPlanningSettings, DirectionalPcaBuiltInPlanningSettings, IndexItem,
+    PlanningStage, StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingRun,
+    StreamingIndexingStatus, StreamingIndexingStatusObserver, StreamingIndexingStatusState,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -24,8 +24,8 @@ use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 
 use crate::block_store::ConfiguredBlockStore;
 use crate::config::{
-    BatchItemConfig, BatchRequest, BatchSummary, ClusteringConfigOverrides, ConfigError,
-    ConfiguredClustering, ExecutionStage, metadata_to_text_map,
+    BatchItemConfig, BatchRequest, BatchSummary, ClusteringConfigOverrides, ClusteringMode,
+    ConfigError, ConfiguredClustering, ExecutionStage, metadata_to_text_map,
 };
 use crate::embedding::{ConfiguredEmbeddingProvider, ConfiguredEmbeddingProviderError};
 use crate::mailbox::{MailboxExpansionError, expand_mailbox_item_with_stats};
@@ -81,11 +81,13 @@ struct ClusteringFailureEmbeddingSpec {
 #[serde(tag = "algorithm", rename_all = "kebab-case")]
 enum EffectiveClusteringDiagnostics {
     Dcbc {
+        mode: ClusteringMode,
         cluster_count: u32,
         random_seed: Option<u64>,
         balance_constraints: Option<BalanceConstraintsDiagnostics>,
     },
     DirectionalPca {
+        mode: ClusteringMode,
         cluster_count: u32,
         random_seed: Option<u64>,
         retained_dimension_count: usize,
@@ -548,10 +550,12 @@ fn resolved_built_in_planning(
 ) -> Result<BuiltInPlanning, AutoSizingBuiltInPlanningError> {
     Ok(match clustering {
         ConfiguredClustering::Dcbc {
+            mode,
             cluster_count,
             balance_constraints,
             random_seed,
         } => BuiltInPlanning::Dcbc(DcbcBuiltInPlanningSettings {
+            direction: built_in_planning_direction(*mode),
             cluster_count: resolve_cluster_count(
                 *cluster_count,
                 1,
@@ -563,10 +567,12 @@ fn resolved_built_in_planning(
             random_seed: *random_seed,
         }),
         ConfiguredClustering::DirectionalPca {
+            mode,
             cluster_count,
             random_seed,
             params,
         } => BuiltInPlanning::DirectionalPca(DirectionalPcaBuiltInPlanningSettings {
+            direction: built_in_planning_direction(*mode),
             cluster_count: resolve_cluster_count(
                 *cluster_count,
                 params.retained_dimension_count.max(1),
@@ -578,6 +584,20 @@ fn resolved_built_in_planning(
             params: params.clone(),
         }),
     })
+}
+
+fn built_in_planning_direction(mode: ClusteringMode) -> BuiltInPlanningDirection {
+    match mode {
+        ClusteringMode::Aggregation => BuiltInPlanningDirection::Agglomerative,
+        ClusteringMode::Divisive => BuiltInPlanningDirection::Divisive,
+    }
+}
+
+fn clustering_mode_from_direction(direction: BuiltInPlanningDirection) -> ClusteringMode {
+    match direction {
+        BuiltInPlanningDirection::Agglomerative => ClusteringMode::Aggregation,
+        BuiltInPlanningDirection::Divisive => ClusteringMode::Divisive,
+    }
 }
 
 fn resolve_cluster_count(
@@ -640,10 +660,12 @@ fn effective_clustering_diagnostics(
     .ok()?;
     Some(match clustering {
         BuiltInPlanning::Dcbc(DcbcBuiltInPlanningSettings {
+            direction,
             cluster_count,
             balance_constraints,
             random_seed,
         }) => EffectiveClusteringDiagnostics::Dcbc {
+            mode: clustering_mode_from_direction(direction),
             cluster_count,
             random_seed,
             balance_constraints: balance_constraints.map(|constraints| {
@@ -656,10 +678,12 @@ fn effective_clustering_diagnostics(
             }),
         },
         BuiltInPlanning::DirectionalPca(DirectionalPcaBuiltInPlanningSettings {
+            direction,
             cluster_count,
             random_seed,
             params,
         }) => EffectiveClusteringDiagnostics::DirectionalPca {
+            mode: clustering_mode_from_direction(direction),
             cluster_count,
             random_seed,
             retained_dimension_count: params.retained_dimension_count,
@@ -2488,8 +2512,8 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::config::{
-        BatchItemConfig, ClusteringAlgorithm, ClusteringConfigOverrides, EmbeddingSpecConfig,
-        EnvironmentConfig, ExecutionStage, LocalEmbeddingConfig,
+        BatchItemConfig, ClusteringAlgorithm, ClusteringConfigOverrides, ClusteringMode,
+        EmbeddingSpecConfig, EnvironmentConfig, ExecutionStage, LocalEmbeddingConfig,
     };
 
     use super::*;
@@ -2995,11 +3019,13 @@ mod tests {
         )));
         match &diagnostics.clustering {
             EffectiveClusteringDiagnostics::DirectionalPca {
+                mode,
                 cluster_count,
                 retained_dimension_count,
                 min_effective_rank,
                 ..
             } => {
+                assert_eq!(*mode, ClusteringMode::Aggregation);
                 assert_eq!(*cluster_count, 2);
                 assert_eq!(*retained_dimension_count, 1);
                 assert_eq!(*min_effective_rank, 1);
@@ -3416,6 +3442,7 @@ mod tests {
             &request_path,
             None,
             ClusteringConfigOverrides {
+                clustering_mode: Some(ClusteringMode::Aggregation),
                 clustering_algorithm: Some(ClusteringAlgorithm::Dcbc),
                 ..ClusteringConfigOverrides::default()
             },
@@ -3469,6 +3496,61 @@ mod tests {
             &request_path,
             None,
             ClusteringConfigOverrides {
+                clustering_mode: Some(ClusteringMode::Aggregation),
+                clustering_algorithm: Some(ClusteringAlgorithm::Dcbc),
+                clustering_cluster_count: Some(2),
+                ..ClusteringConfigOverrides::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!summary.block_ids.is_empty());
+        server.join();
+    }
+
+    #[tokio::test]
+    async fn explicit_divisive_dcbc_clustering_runs_end_to_end() {
+        let temp = tempdir().unwrap();
+        for name in ["alpha", "beta", "gamma"] {
+            fs::write(temp.path().join(format!("{name}.txt")), format!("{name}\n")).unwrap();
+        }
+
+        let server = spawn_distinct_embedding_server(3);
+        let request_path = temp.path().join("request.json");
+        fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&json!({
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": {
+                        "base_url": server.base_url,
+                        "model": "all-MiniLM-L6-v2",
+                        "request_timeout_secs": 5,
+                        "max_retries": 0,
+                        "retry_delay_ms": 1
+                    }
+                },
+                "embedding_spec": {
+                    "dims": 2,
+                    "encoding": "f32le"
+                },
+                "items": [
+                    { "kind": "document", "path": "alpha.txt" },
+                    { "kind": "document", "path": "beta.txt" },
+                    { "kind": "document", "path": "gamma.txt" }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let summary = run_request_file_with_overrides(
+            &request_path,
+            None,
+            ClusteringConfigOverrides {
+                clustering_mode: Some(ClusteringMode::Divisive),
                 clustering_algorithm: Some(ClusteringAlgorithm::Dcbc),
                 clustering_cluster_count: Some(2),
                 ..ClusteringConfigOverrides::default()
@@ -3522,6 +3604,7 @@ mod tests {
             &request_path,
             None,
             ClusteringConfigOverrides {
+                clustering_mode: Some(ClusteringMode::Aggregation),
                 clustering_algorithm: Some(ClusteringAlgorithm::DirectionalPca),
                 clustering_cluster_count: Some(2),
                 clustering_retained_dimension_count: Some(1),
@@ -3792,6 +3875,7 @@ mod tests {
         let block_size_target = serialized_branch_size(&embedding_spec, 3).unwrap();
         let omitted = resolved_built_in_planning(
             &ConfiguredClustering::DirectionalPca {
+                mode: ClusteringMode::Aggregation,
                 cluster_count: None,
                 random_seed: None,
                 params: lexongraph_directional_pca::DirectionalPcaParams {
@@ -3810,6 +3894,7 @@ mod tests {
         .unwrap();
         let explicit = resolved_built_in_planning(
             &ConfiguredClustering::DirectionalPca {
+                mode: ClusteringMode::Aggregation,
                 cluster_count: Some(3),
                 random_seed: None,
                 params: lexongraph_directional_pca::DirectionalPcaParams {
@@ -3867,6 +3952,7 @@ mod tests {
             },
             block_size_target: 65_536,
             clustering: EffectiveClusteringDiagnostics::DirectionalPca {
+                mode: ClusteringMode::Aggregation,
                 cluster_count: 2,
                 random_seed: Some(7),
                 retained_dimension_count: 1,
@@ -3970,6 +4056,7 @@ mod tests {
         let block_size_target = serialized_branch_size(&embedding_spec, 3).unwrap();
         let omitted = resolved_built_in_planning(
             &ConfiguredClustering::Dcbc {
+                mode: ClusteringMode::Aggregation,
                 cluster_count: None,
                 balance_constraints: None,
                 random_seed: Some(7),
@@ -3981,6 +4068,7 @@ mod tests {
         .unwrap();
         let explicit = resolved_built_in_planning(
             &ConfiguredClustering::Dcbc {
+                mode: ClusteringMode::Aggregation,
                 cluster_count: Some(3),
                 balance_constraints: None,
                 random_seed: Some(7),
@@ -4004,6 +4092,7 @@ mod tests {
 
         let omitted = resolved_built_in_planning(
             &ConfiguredClustering::DirectionalPca {
+                mode: ClusteringMode::Aggregation,
                 cluster_count: None,
                 random_seed: None,
                 params: lexongraph_directional_pca::DirectionalPcaParams {
@@ -4023,6 +4112,7 @@ mod tests {
 
         match omitted {
             BuiltInPlanning::DirectionalPca(settings) => {
+                assert_eq!(settings.direction, BuiltInPlanningDirection::Agglomerative);
                 assert_eq!(settings.cluster_count, 3);
             }
             BuiltInPlanning::Dcbc(_) => panic!("expected directional-pca settings"),
@@ -4043,6 +4133,37 @@ mod tests {
             .to_string();
 
         assert!(error.contains("cannot satisfy minimum cluster count 3"));
+    }
+
+    #[test]
+    fn divisive_dcbc_mode_maps_to_divisive_upstream_direction() {
+        let embedding_spec = EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        };
+        let block_size_target = serialized_branch_size(&embedding_spec, 3).unwrap();
+
+        let planning = resolved_built_in_planning(
+            &ConfiguredClustering::Dcbc {
+                mode: ClusteringMode::Divisive,
+                cluster_count: Some(3),
+                balance_constraints: None,
+                random_seed: Some(7),
+            },
+            9,
+            block_size_target,
+            &embedding_spec,
+        )
+        .unwrap();
+
+        match planning {
+            BuiltInPlanning::Dcbc(settings) => {
+                assert_eq!(settings.direction, BuiltInPlanningDirection::Divisive);
+                assert_eq!(settings.cluster_count, 3);
+            }
+            BuiltInPlanning::DirectionalPca(_) => panic!("expected dcbc settings"),
+            BuiltInPlanning::Hybrid(_) => panic!("expected dcbc settings"),
+        }
     }
 
     #[test]

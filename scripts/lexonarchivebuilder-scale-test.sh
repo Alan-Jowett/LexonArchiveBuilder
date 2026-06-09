@@ -10,7 +10,7 @@ Usage:
 Examples:
   scripts/lexonarchivebuilder-scale-test.sh rsync.ietf.org::mailman-archive/ipsec/
   scripts/lexonarchivebuilder-scale-test.sh --sources-file examples/local/scale-test/rsync.sources.sample.txt
-  scripts/lexonarchivebuilder-scale-test.sh --clustering-algorithm directional-pca --clustering-cluster-count 3 rsync.ietf.org::mailman-archive/ipsec/
+  scripts/lexonarchivebuilder-scale-test.sh --clustering-mode divisive --clustering-algorithm directional-pca --clustering-cluster-count 3 rsync.ietf.org::mailman-archive/ipsec/
 
 This script:
   1. fetches mailbox content from one or more rsync URLs
@@ -20,6 +20,7 @@ This script:
   5. leaves summary/root handoff output in the run directory
 
 Supported clustering flags:
+  --clustering-mode
   --clustering-algorithm
   --clustering-cluster-count
   --clustering-random-seed
@@ -168,6 +169,7 @@ while [[ $# -gt 0 ]]; do
       RUN_NAME="$2"
       shift 2
       ;;
+    --clustering-mode|\
     --clustering-algorithm|\
     --clustering-cluster-count|\
     --clustering-random-seed|\

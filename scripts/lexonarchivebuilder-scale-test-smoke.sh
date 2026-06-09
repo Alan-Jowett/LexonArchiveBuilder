@@ -26,6 +26,7 @@ cp "$FIXTURE_MAILBOX" "${SOURCE_TWO}/2026-02.mbox"
 
 bash "$SCALE_TEST_SCRIPT" \
   --run-name "$RUN_NAME" \
+  --clustering-mode aggregation \
   --clustering-algorithm dcbc \
   --clustering-cluster-count 2 \
   --clustering-random-seed 7 \

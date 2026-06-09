@@ -3,7 +3,7 @@
 ## Status
 
 Phase 2 specification patch for the approved local rsync-driven stress-test
-wrapper with caller-selectable delegated clustering configuration in
+wrapper with caller-selectable delegated clustering mode and configuration in
 `docs/specs/lexonarchivebuilder-scale-test/requirements.md`.
 
 ## Scope
@@ -12,8 +12,8 @@ This document specifies the LexonArchiveBuilder-owned design for realizing
 `lexonarchivebuilder-scale-test` as a lightweight local wrapper that fetches
 mailbox archives from rsync, discovers `.mail` and `.mbox` mailbox inputs,
 generates an indexer-compatible request/config artifact, derives one explicit
-delegated clustering configuration from caller-selected wrapper inputs when
-needed, and delegates block-tree generation to existing
+delegated clustering-mode and clustering configuration from caller-selected
+wrapper inputs when needed, and delegates block-tree generation to existing
 LexonArchiveBuilder indexing behavior through one shared local workflow with both
 direct shell and Docker Compose entrypoints.
 
@@ -116,7 +116,7 @@ The wrapper realizes one run as a staged pipeline:
 2. discover mailbox files from the fetched mirror set
 3. generate an indexer-compatible request/config artifact
 4. invoke the existing LexonArchiveBuilder batch/indexer entrypoint with any
-   caller-selected delegated clustering configuration
+   caller-selected delegated clustering-mode and clustering configuration
 5. capture and publish root handoff output for the resulting block tree
 
 The wrapper remains batch-oriented and does not introduce a long-lived control
@@ -186,6 +186,8 @@ argument passthrough.
 The wrapper-owned delegated clustering control surface is aligned to the
 existing delegated indexer clustering surface and is limited to:
 
+- one delegated clustering-mode selector using the downstream-supported mode
+  names
 - one delegated clustering algorithm selector using the downstream-supported
   algorithm names
 - the shared delegated clustering controls supported by the downstream indexer
@@ -220,13 +222,13 @@ RQ-SCALE-013
 
 When the caller supplies delegated clustering selections, the wrapper forwards
 those selections to the existing LexonArchiveBuilder indexer entrypoint using the
-same algorithm names and option meanings already owned by the downstream
-indexer contract.
+same mode names, algorithm names, and option meanings already owned by the
+downstream indexer contract.
 
 The wrapper does not reinterpret algorithm-specific settings, synthesize a new
 wrapper-local clustering policy, or redefine downstream validation rules for
-unsupported option combinations. Downstream indexer validation and defaulting
-remain authoritative.
+unsupported mode, algorithm, or option combinations. Downstream indexer
+validation and defaulting remain authoritative.
 
 For one logical wrapper run, the same effective delegated clustering
 configuration is forwarded regardless of whether the user launches through the

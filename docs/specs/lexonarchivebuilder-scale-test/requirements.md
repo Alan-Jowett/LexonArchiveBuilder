@@ -4,7 +4,7 @@
 
 - **Phase:** Phase 2 - Specification Changes
 - **Status:** Approved requirements patch being propagated into design and validation
-- **Scope:** `lexonarchivebuilder-scale-test` local stress-test wrapper for rsync-backed mailbox acquisition, caller-selected delegated clustering configuration, and delegated block-tree generation
+- **Scope:** `lexonarchivebuilder-scale-test` local stress-test wrapper for rsync-backed mailbox acquisition, caller-selected delegated clustering mode and configuration, and delegated block-tree generation
 
 ## USER-REQUEST
 
@@ -33,6 +33,11 @@
 - **UR-SCALE-23 [KNOWN]:** The scale-test caller contract should expose the existing indexer clustering controls as first-class wrapper flags and pass them through to the delegated indexer.
 - **UR-SCALE-24 [INFERRED]:** The scale-test wrapper should reuse the delegated indexer's supported clustering algorithm names and option meanings rather than inventing wrapper-local clustering semantics.
 - **UR-SCALE-25 [KNOWN]:** Generic arbitrary extra indexer argument passthrough is not the approved caller contract for this increment.
+- **UR-SCALE-26 [KNOWN]:** The upstream LexonGraph clustering surface now allows either aggregation-based or divisive clustering, and the scale-test wrapper should expose that delegated clustering-mode choice as well.
+- **UR-SCALE-27 [KNOWN]:** Aggregation-based clustering should be the default wrapper behavior, with divisive clustering available as an explicit opt-in.
+- **UR-SCALE-28 [KNOWN]:** The same delegated clustering-mode contract should apply across both the direct shell and Docker Compose entrypoints.
+- **UR-SCALE-29 [KNOWN]:** Existing delegated algorithm-specific clustering controls should continue to be exposed by the wrapper under the selected clustering mode instead of being hidden by the wrapper.
+- **UR-SCALE-30 [KNOWN]:** The wrapper should continue to mirror the downstream indexer clustering contract as a content-type-agnostic control surface rather than adding content-type-specific clustering-mode logic.
 
 ## Change Manifest
 
@@ -52,6 +57,7 @@
 | CM-SCALE-012 | Add | Require the wrapper caller contract to expose delegated clustering-algorithm selection for scale-test runs that include clustering | UR-SCALE-21, UR-SCALE-23, UR-SCALE-24 |
 | CM-SCALE-013 | Add | Require first-class wrapper exposure of supported delegated clustering options rather than arbitrary opaque extra-argument passthrough | UR-SCALE-22, UR-SCALE-23, UR-SCALE-25 |
 | CM-SCALE-014 | Add | Preserve one explicit delegated clustering configuration across the bash and Docker Compose entrypoints for reproducible local stress-test runs | UR-SCALE-21, UR-SCALE-22, UR-SCALE-23, UR-SCALE-24 |
+| CM-SCALE-015 | Revise | Extend the mirrored delegated clustering surface to include clustering-mode selection, with aggregation as the default and divisive as an explicit opt-in across both wrapper entrypoints | UR-SCALE-26, UR-SCALE-27, UR-SCALE-28, UR-SCALE-29, UR-SCALE-30 |
 
 ## Before / After
 
@@ -109,6 +115,11 @@
 
 - **Before [KNOWN]:** The wrapper could have grown a generic opaque downstream-argument passthrough that diverged between direct shell and Docker Compose launch paths.
 - **After [KNOWN]:** The wrapper requirements constrain this increment to one explicit, first-class delegated clustering surface that remains consistent across both supported entrypoints.
+
+### BA-SCALE-012
+
+- **Before [KNOWN]:** The wrapper requirements exposed delegated clustering algorithm and option forwarding, but they did not capture the newer upstream aggregation-based versus divisive clustering mode as part of the mirrored caller contract.
+- **After [KNOWN]:** The wrapper requirements now define delegated clustering-mode exposure with aggregation as the default and divisive as an explicit opt-in, while preserving wrapper parity across shell and Docker Compose entrypoints and keeping downstream algorithm-specific controls subordinate to the selected mode.
 
 ## Requirements
 
@@ -173,14 +184,22 @@ The bash and Docker Compose entrypoints SHALL preserve the same wrapper-owned wo
 - **Constraint [INFERRED]:** Docker Compose must not introduce a second, divergent `lexonarchivebuilder-scale-test` contract.
 - **Traceability:** UR-SCALE-17, UR-SCALE-18
 
-#### RQ-SCALE-003E - Caller-selectable delegated clustering algorithm
+#### RQ-SCALE-003E - Caller-selectable delegated clustering mode and algorithm
 
 For any `lexonarchivebuilder-scale-test` run that includes delegated clustering,
-the wrapper SHALL allow the caller to select the delegated clustering algorithm.
+the wrapper SHALL allow the caller to select the delegated clustering mode and
+the delegated clustering algorithm.
 
 - **Approved algorithm family [KNOWN]:** The wrapper surface for this increment follows the existing delegated indexer clustering choices rather than inventing a wrapper-local algorithm taxonomy.
-- **Entry-point parity [KNOWN]:** The same algorithm-selection contract applies to both the direct shell and Docker Compose entrypoints.
-- **Traceability:** UR-SCALE-21, UR-SCALE-23, UR-SCALE-24
+- **Default mode [KNOWN]:** When the caller omits delegated clustering mode, the
+  wrapper SHALL preserve aggregation-based clustering as the downstream default
+  behavior.
+- **Entry-point parity [KNOWN]:** The same mode-and-algorithm selection contract
+  applies to both the direct shell and Docker Compose entrypoints.
+- **Mode boundary [KNOWN]:** The wrapper mirrors the downstream indexer's
+  aggregation-based versus divisive mode choice rather than inventing wrapper-
+  local clustering-mode semantics.
+- **Traceability:** UR-SCALE-21, UR-SCALE-23, UR-SCALE-24, UR-SCALE-26, UR-SCALE-27, UR-SCALE-28
 
 #### RQ-SCALE-003F - First-class delegated clustering option exposure
 
@@ -189,8 +208,11 @@ options as first-class wrapper inputs.
 
 - **Approved caller contract [KNOWN]:** This increment uses named wrapper inputs for delegated clustering controls rather than a generic arbitrary downstream-argument passthrough.
 - **Defaulting [KNOWN]:** Omitted delegated clustering options may continue to rely on the downstream indexer's approved defaults.
+- **Mode implication [KNOWN]:** The wrapper's delegated clustering control family
+  includes clustering mode alongside algorithm choice and supported algorithm-
+  specific options.
 - **Boundary [INFERRED]:** The supported option set should track the delegated indexer's supported clustering controls for the selected algorithm.
-- **Traceability:** UR-SCALE-22, UR-SCALE-23, UR-SCALE-24, UR-SCALE-25
+- **Traceability:** UR-SCALE-22, UR-SCALE-23, UR-SCALE-24, UR-SCALE-25, UR-SCALE-26, UR-SCALE-29
 
 #### RQ-SCALE-004 - Delegated parser/indexer use
 
@@ -201,14 +223,15 @@ options as first-class wrapper inputs.
 
 #### RQ-SCALE-004A - Delegated clustering configuration pass-through
 
-When the caller selects a delegated clustering algorithm or provides supported
-delegated clustering options, `lexonarchivebuilder-scale-test` SHALL pass that
-configuration through to the existing LexonArchiveBuilder indexer entrypoint
-without redefining clustering semantics in the wrapper.
+When the caller selects a delegated clustering mode, selects a delegated
+clustering algorithm, or provides supported delegated clustering options,
+`lexonarchivebuilder-scale-test` SHALL pass that configuration through to the
+existing LexonArchiveBuilder indexer entrypoint without redefining clustering
+semantics in the wrapper.
 
 - **Authority boundary [KNOWN]:** The downstream indexer remains the authority for delegated clustering validation, defaulting, and execution semantics.
 - **Constraint [INFERRED]:** The wrapper remains responsible only for exposing and forwarding the approved caller inputs coherently across its supported entrypoints.
-- **Traceability:** UR-SCALE-21, UR-SCALE-22, UR-SCALE-23, UR-SCALE-24
+- **Traceability:** UR-SCALE-21, UR-SCALE-22, UR-SCALE-23, UR-SCALE-24, UR-SCALE-26, UR-SCALE-27, UR-SCALE-28, UR-SCALE-29, UR-SCALE-30
 
 #### RQ-SCALE-005 - Mailbox discovery expansion
 
@@ -337,7 +360,7 @@ When multiple rsync URLs are provided in one run, `lexonarchivebuilder-scale-tes
 | Indexing remains separate from search serving | Preserved | The wrapper is limited to local orchestration and delegated execution |
 | `lexonarchivebuilder-indexer` remains focused on indexing contracts | Preserved | The rsync stress-test flow is explicitly outside the indexer boundary |
 | Local/testing remains self-contained and batch-oriented | Preserved | The wrapper remains stage-ordered and container-oriented while supporting both direct Linux shell use and Docker Compose launch |
-| Entry-point parity remains intact | Preserved | The delegated clustering caller contract is required to stay consistent across shell and Docker Compose launch modes |
+| Entry-point parity remains intact | Preserved | The delegated clustering-mode, algorithm, and option contract is required to stay consistent across shell and Docker Compose launch modes |
 | Production seams remain open | Preserved | Production orchestration remains a separate future workflow |
 | Future content extensibility remains intact | Preserved | The wrapper adds mailbox stress testing now without closing off later document handling |
 | LexonArchiveBuilder remains subordinate to LexonGraph contracts | Preserved | The wrapper drives existing downstream flows rather than redefining block construction |
@@ -351,10 +374,13 @@ When multiple rsync URLs are provided in one run, `lexonarchivebuilder-scale-tes
 - **Q-SCALE-005 [UNKNOWN]:** Should the Docker Compose entrypoint wrap the existing bash implementation inside a Linux container, or should Compose invoke a dedicated container command path that reproduces the same workflow semantics without host bash?
 - **Q-SCALE-006 [UNKNOWN]:** How should rsync source inputs be passed into the Docker Compose entrypoint for Windows users: a mounted sources file, inline environment variables, or both?
 - **Q-SCALE-007 [UNKNOWN]:** Should the effective delegated clustering algorithm and option values be persisted in a dedicated machine-consumable run artifact in addition to the existing generated request and summary outputs?
+- **Q-SCALE-008 [UNKNOWN]:** What is the exact downstream-supported compatibility matrix between aggregation-based versus divisive clustering mode and the delegated algorithms or algorithm-specific option families mirrored by the wrapper?
 
 ## Coverage Notes
 
 - **Covered sources [KNOWN]:**
+  - user request in this session: "the upstream LexonGraph API has evolved to allow either divisive or aggregation based clustering. We need to expose this as an option at this layer as well"
+  - user clarification in this session: "I think it is important to both. Aggregate should be the default with an option to try out divisive (but I suspect that won't be interesting)"
   - `README.md:91-168`
   - `README.md:183-203`
   - `docker-compose.yml:1-45`

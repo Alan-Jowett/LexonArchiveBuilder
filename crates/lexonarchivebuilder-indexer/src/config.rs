@@ -44,6 +44,14 @@ impl ExecutionStage {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, ValueEnum, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClusteringMode {
+    #[default]
+    Aggregation,
+    Divisive,
+}
+
 #[derive(Clone, Copy, Debug, Default, ValueEnum, PartialEq, Eq)]
 pub enum ClusteringAlgorithm {
     #[default]
@@ -68,6 +76,8 @@ impl std::fmt::Display for ClusteringAlgorithm {
 
 #[derive(Args, Clone, Debug, Default, PartialEq)]
 pub struct ClusteringConfigOverrides {
+    #[arg(long, value_enum)]
+    pub clustering_mode: Option<ClusteringMode>,
     #[arg(long, value_enum)]
     pub clustering_algorithm: Option<ClusteringAlgorithm>,
     #[arg(long)]
@@ -99,11 +109,13 @@ pub struct ClusteringConfigOverrides {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ConfiguredClustering {
     Dcbc {
+        mode: ClusteringMode,
         cluster_count: Option<u32>,
         balance_constraints: Option<BalanceConstraints>,
         random_seed: Option<u64>,
     },
     DirectionalPca {
+        mode: ClusteringMode,
         cluster_count: Option<u32>,
         random_seed: Option<u64>,
         params: DirectionalPcaParams,
@@ -187,15 +199,18 @@ impl ClusteringConfigOverrides {
 
     pub(crate) fn to_configured_clustering(&self) -> Result<ConfiguredClustering, ConfigError> {
         self.validate()?;
+        let mode = self.effective_mode();
         let cluster_count = self.clustering_cluster_count;
         let random_seed = self.clustering_random_seed;
         Ok(match self.effective_algorithm() {
             ClusteringAlgorithm::Dcbc => ConfiguredClustering::Dcbc {
+                mode,
                 cluster_count,
                 balance_constraints: self.to_balance_constraints(),
                 random_seed,
             },
             ClusteringAlgorithm::DirectionalPca => ConfiguredClustering::DirectionalPca {
+                mode,
                 cluster_count,
                 random_seed,
                 params: DirectionalPcaParams {
@@ -224,6 +239,10 @@ impl ClusteringConfigOverrides {
 
     fn effective_algorithm(&self) -> ClusteringAlgorithm {
         self.clustering_algorithm.unwrap_or_default()
+    }
+
+    fn effective_mode(&self) -> ClusteringMode {
+        self.clustering_mode.unwrap_or_default()
     }
 
     fn to_balance_constraints(&self) -> Option<BalanceConstraints> {
@@ -823,17 +842,19 @@ mod tests {
     }
 
     #[test]
-    fn clustering_defaults_to_dcbc_with_no_explicit_cli_options() {
+    fn clustering_defaults_to_aggregation_dcbc_with_no_explicit_cli_options() {
         let clustering = ClusteringConfigOverrides::default()
             .to_configured_clustering()
             .unwrap();
 
         match clustering {
             ConfiguredClustering::Dcbc {
+                mode,
                 cluster_count,
                 balance_constraints,
                 random_seed,
             } => {
+                assert_eq!(mode, ClusteringMode::Aggregation);
                 assert_eq!(cluster_count, None);
                 assert!(balance_constraints.is_none());
                 assert_eq!(random_seed, None);
@@ -855,10 +876,12 @@ mod tests {
 
         match clustering {
             ConfiguredClustering::DirectionalPca {
+                mode,
                 cluster_count,
                 random_seed,
                 params,
             } => {
+                assert_eq!(mode, ClusteringMode::Aggregation);
                 assert_eq!(cluster_count, None);
                 assert_eq!(random_seed, None);
                 assert_eq!(
@@ -875,6 +898,25 @@ mod tests {
             }
             ConfiguredClustering::Dcbc { .. } => {
                 panic!("expected directional-pca settings when that algorithm is selected")
+            }
+        }
+    }
+
+    #[test]
+    fn divisive_mode_is_applied_when_selected() {
+        let clustering = ClusteringConfigOverrides {
+            clustering_mode: Some(ClusteringMode::Divisive),
+            ..ClusteringConfigOverrides::default()
+        }
+        .to_configured_clustering()
+        .unwrap();
+
+        match clustering {
+            ConfiguredClustering::Dcbc { mode, .. } => {
+                assert_eq!(mode, ClusteringMode::Divisive);
+            }
+            ConfiguredClustering::DirectionalPca { .. } => {
+                panic!("expected default clustering algorithm to remain dcbc")
             }
         }
     }

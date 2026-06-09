@@ -3,7 +3,7 @@
 ## Status
 
 Phase 2 validation patch for the approved local rsync-driven stress-test
-wrapper and caller-selectable delegated clustering configuration in
+wrapper and caller-selectable delegated clustering mode and configuration in
 `docs/specs/lexonarchivebuilder-scale-test/requirements.md` and
 `docs/specs/lexonarchivebuilder-scale-test/design.md`.
 
@@ -66,10 +66,12 @@ DSG-LST-005, DSG-LST-010
 Inspect the caller-facing delegated clustering control surface for
 `lexonarchivebuilder-scale-test`.
 
-**Pass condition:** the wrapper exposes one explicit delegated clustering-
-algorithm selector plus the approved shared and algorithm-specific delegated
-clustering option families, aligned to the downstream indexer contract, and
-does not rely on a generic opaque extra-argument passthrough surface.
+**Pass condition:** the wrapper exposes one explicit delegated clustering-mode
+selector with aggregation as the default and divisive as an explicit opt-in,
+one explicit delegated clustering-algorithm selector, plus the approved shared
+and algorithm-specific delegated clustering option families, aligned to the
+downstream indexer contract, and does not rely on a generic opaque extra-
+argument passthrough surface.
 
 **Traces to:** RQ-SCALE-003E, RQ-SCALE-003F, DSG-LST-005B, DSG-LST-010A
 
@@ -78,9 +80,10 @@ does not rely on a generic opaque extra-argument passthrough surface.
 Inspect the delegated clustering control surface across the supported bash and
 Docker Compose entrypoints.
 
-**Pass condition:** both entrypoints preserve the same delegated clustering
-selector and option family, with the same downstream meaning for one logical
-run, rather than introducing entrypoint-specific clustering behavior.
+**Pass condition:** both entrypoints preserve the same delegated clustering-mode
+selector, delegated clustering-algorithm selector, and delegated option family,
+with the same downstream meaning for one logical run, rather than introducing
+entrypoint-specific clustering behavior.
 
 **Traces to:** RQ-SCALE-003D, RQ-SCALE-003E, RQ-SCALE-003F, RQ-SCALE-010A,
 DSG-LST-005B, DSG-LST-006A, DSG-LST-010A
