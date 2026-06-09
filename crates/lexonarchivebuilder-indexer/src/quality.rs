@@ -23,6 +23,16 @@ pub enum TreeQualityError {
         encoding: String,
         dims: u64,
     },
+    #[error(
+        "block {block_id} embedding payload length {actual_bytes} does not match expected length {expected_bytes} for {encoding}/{dims}"
+    )]
+    InvalidEmbeddingLength {
+        block_id: String,
+        encoding: String,
+        dims: u64,
+        expected_bytes: usize,
+        actual_bytes: usize,
+    },
     #[error("block {block_id} contains a non-finite embedding value")]
     NonFiniteEmbedding { block_id: String },
     #[error(transparent)]
@@ -55,6 +65,7 @@ pub enum FindingKind {
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct SpreadMetrics {
+    #[serde(skip_serializing)]
     pub centroid: Vec<f32>,
     pub mean_centroid_distance: f32,
     pub max_centroid_distance: f32,
@@ -168,6 +179,40 @@ struct BlockComputedMetrics {
     spread: SpreadMetrics,
     pca_first_component_variance_fraction: f32,
     quantile_occupancy: QuantileOccupancyMetrics,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RunningStats {
+    count: usize,
+    sum: f64,
+    sum_squares: f64,
+}
+
+impl RunningStats {
+    fn push(&mut self, value: f32) {
+        let value = f64::from(value);
+        self.count += 1;
+        self.sum += value;
+        self.sum_squares += value * value;
+    }
+
+    fn mean(self) -> f32 {
+        if self.count == 0 {
+            0.0
+        } else {
+            (self.sum / self.count as f64) as f32
+        }
+    }
+
+    fn stdev(self) -> f32 {
+        if self.count <= 1 {
+            0.0
+        } else {
+            let count = self.count as f64;
+            let mean = self.sum / count;
+            ((self.sum_squares / count) - (mean * mean)).max(0.0).sqrt() as f32
+        }
+    }
 }
 
 impl TraversalState {
@@ -514,7 +559,7 @@ fn build_layer_metrics(state: &TraversalState) -> Vec<LayerQualityMetrics> {
     let mut quantile_variance_by_layer = BTreeMap::<u64, Vec<f32>>::new();
     let mut empty_bins_by_layer = BTreeMap::<u64, usize>::new();
     let mut overfull_bins_by_layer = BTreeMap::<u64, usize>::new();
-    let mut sibling_distances_by_layer = BTreeMap::<u64, Vec<f32>>::new();
+    let mut sibling_distances_by_layer = BTreeMap::<u64, RunningStats>::new();
 
     for block in &state.blocks {
         dispersion_by_layer
@@ -570,18 +615,16 @@ fn build_layer_metrics(state: &TraversalState) -> Vec<LayerQualityMetrics> {
             block_count: dispersions.len(),
             mean_intra_block_dispersion: mean(&dispersions),
             stdev_intra_block_dispersion: stdev(&dispersions),
-            mean_sibling_centroid_distance: mean(
-                sibling_distances_by_layer
-                    .get(&level)
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[]),
-            ),
-            stdev_sibling_centroid_distance: stdev(
-                sibling_distances_by_layer
-                    .get(&level)
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[]),
-            ),
+            mean_sibling_centroid_distance: sibling_distances_by_layer
+                .get(&level)
+                .copied()
+                .unwrap_or_default()
+                .mean(),
+            stdev_sibling_centroid_distance: sibling_distances_by_layer
+                .get(&level)
+                .copied()
+                .unwrap_or_default()
+                .stdev(),
             mean_pca_axis_strength: mean(
                 pca_by_layer.get(&level).map(Vec::as_slice).unwrap_or(&[]),
             ),
@@ -734,11 +777,25 @@ where
     let mut decoded = Vec::new();
     for embedding in embeddings {
         let Some(values) = decode_embedding_values(embedding, embedding_spec) else {
-            return Err(TreeQualityError::UnsupportedEmbeddingSpec {
-                block_id: block_id.to_string(),
-                encoding: embedding_spec.encoding.clone(),
-                dims: embedding_spec.dims,
-            });
+            let block_id = block_id.to_string();
+            let encoding = embedding_spec.encoding.clone();
+            let dims = embedding_spec.dims;
+            return match expected_embedding_byte_len(embedding_spec) {
+                Some(expected_bytes) if embedding.len() != expected_bytes => {
+                    Err(TreeQualityError::InvalidEmbeddingLength {
+                        block_id,
+                        encoding,
+                        dims,
+                        expected_bytes,
+                        actual_bytes: embedding.len(),
+                    })
+                }
+                _ => Err(TreeQualityError::UnsupportedEmbeddingSpec {
+                    block_id,
+                    encoding,
+                    dims,
+                }),
+            };
         };
         if values.iter().any(|value| !value.is_finite()) {
             return Err(TreeQualityError::NonFiniteEmbedding {
@@ -748,6 +805,16 @@ where
         decoded.push(values);
     }
     Ok(decoded)
+}
+
+fn expected_embedding_byte_len(embedding_spec: &EmbeddingSpec) -> Option<usize> {
+    let dimension_count = usize::try_from(embedding_spec.dims).ok()?;
+    let bytes_per_value = match embedding_spec.encoding.as_str() {
+        "f32le" => 4usize,
+        "f16le" => 2usize,
+        _ => return None,
+    };
+    dimension_count.checked_mul(bytes_per_value)
 }
 
 fn spread_metrics(decoded: &[Vec<f32>], embedding_spec: &EmbeddingSpec) -> SpreadMetrics {
@@ -1046,6 +1113,42 @@ mod tests {
         assert!(rendered.contains("\"layers\""));
         assert!(rendered.contains("\"splits\""));
         assert!(rendered.contains("\"occupancies\""));
+        assert!(!rendered.contains("\"centroid\""));
+    }
+
+    #[test]
+    fn assessment_reports_invalid_embedding_length() {
+        let dir = tempdir().unwrap();
+        let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
+        let root = store
+            .put(&Block::Leaf(LeafBlock {
+                version: VERSION_1,
+                level: 0,
+                embedding_spec: EmbeddingSpec {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                entries: vec![LeafEntry {
+                    embedding: vec![0u8; 2],
+                    metadata: Vec::new(),
+                    content: Content {
+                        media_type: "text/plain".into(),
+                        body: b"body".to_vec(),
+                    },
+                }],
+                ext: None,
+            }))
+            .unwrap();
+
+        let error = assess_rooted_tree(&root, &store).unwrap_err();
+        assert!(matches!(
+            error,
+            TreeQualityError::InvalidEmbeddingLength {
+                expected_bytes: 8,
+                actual_bytes: 2,
+                ..
+            }
+        ));
     }
 
     fn branch_block(level: u64, entries: Vec<([f32; 2], BlockHash)>) -> Block {
