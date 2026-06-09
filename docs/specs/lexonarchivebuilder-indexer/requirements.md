@@ -120,6 +120,7 @@
 - **UR-110 [KNOWN]:** User-query TNN-Recall results shall be labeled as diagnostic recall.
 - **UR-111 [KNOWN]:** The system shall clearly distinguish corpus-based recall as a statistical quality metric from user-query recall as a debugging aid.
 - **UR-112 [KNOWN]:** For this rooted quality tool, the corpus-based TNN-Recall evaluation corpus should be the embeddings reachable from the caller-supplied root rather than all embeddings visible in the configured block store.
+- **UR-113 [KNOWN]:** Corpus-based rooted TNN-Recall traversal width must be configurable so operators can measure recall as traversal width changes.
 
 ## Change Manifest
 
@@ -179,6 +180,7 @@
 | CM-INDEXER-052 | Revise | Extend rooted quality assessment with TNN-Recall at Recall@1, Recall@5, and Recall@10 over the rooted reachable embedding corpus | UR-101, UR-102, UR-112 |
 | CM-INDEXER-053 | Add | Require corpus-based TNN-Recall to use uniform, seeded, configurable sampling and to be the only source for aggregate recall metrics and histograms | UR-102, UR-103, UR-104, UR-105, UR-106 |
 | CM-INDEXER-054 | Add | Permit optional user-query TNN-Recall as a diagnostic-only mode that reports exact-versus-approximate neighbors and remains separated from automated quality evaluation | UR-107, UR-108, UR-109, UR-110, UR-111 |
+| CM-INDEXER-055 | Revise | Extend corpus-based rooted TNN-Recall so the approximate-neighbor path exposes configurable traversal width for measurement sweeps without changing aggregate-mode ownership | UR-102, UR-113 |
 
 ## Before / After
 
@@ -451,6 +453,11 @@
 
 - **Before [KNOWN]:** The requirements did not distinguish between a statistical recall metric computed over the rooted corpus and a one-off user-supplied query used to debug approximate-neighbor behavior.
 - **After [KNOWN]:** The requirements now separate corpus-based recall from optional user-query diagnostic recall, require user-query output to show exact and approximate neighbors for comparison, and explicitly exclude diagnostic recall from aggregate quality metrics.
+
+### BA-INDEXER-055
+
+- **Before [KNOWN]:** The rooted TNN-recall requirements defined seeded corpus sampling and aggregate-mode ownership but did not specify whether approximate-neighbor traversal width could be tuned for measurement.
+- **After [KNOWN]:** The rooted TNN-recall requirements now require configurable traversal width for corpus-based evaluation so operators can measure recall across different approximate-search widths while preserving the rooted-corpus aggregate boundary.
 
 ## Requirements
 
@@ -978,6 +985,9 @@ Recall@10.
   given seed.
 - **Sample-size control [KNOWN]:** The number of sampled query embeddings SHALL
   be configurable.
+- **Traversal-width control [KNOWN]:** The approximate-neighbor retrieval path
+  used for corpus-based TNN-recall SHALL expose configurable traversal width so
+  operators can measure recall at different widths.
 - **Aggregate outputs [KNOWN]:** Mean recall, recall standard deviation, and
   recall histograms SHALL be computed from this corpus-based mode.
 - **Metric family [KNOWN]:** The required recall outputs for this increment are
@@ -985,7 +995,7 @@ Recall@10.
 - **Boundary [INFERRED]:** This requirement adds post-index rooted quality
   evidence only; it does not redefine LexonGraph search semantics or create an
   MCP-visible recall surface.
-- **Traceability:** UR-101, UR-102, UR-103, UR-104, UR-105, UR-106, UR-112
+- **Traceability:** UR-101, UR-102, UR-103, UR-104, UR-105, UR-106, UR-112, UR-113
 
 #### RQ-INDEXER-008D2 - User-query diagnostic recall
 

@@ -619,19 +619,23 @@ over the same rooted snapshot used by the block-tree assessment.
 
 The reachable embedding set under the caller-supplied root is the evaluation
 corpus. The flow draws a uniform random sample of query embeddings from that
-rooted corpus using a caller-selectable sample size and a reproducible seed,
-then computes Recall@1, Recall@5, and Recall@10 for each sampled query.
+rooted corpus using a caller-selectable sample size, a reproducible seed, and
+a caller-selectable traversal width for the approximate-neighbor path, then
+computes Recall@1, Recall@5, and Recall@10 for each sampled query.
 
 For each sampled query, the design compares:
 
 - exact nearest neighbors computed against the rooted corpus itself
 - approximate nearest neighbors returned through the repository's approved
-  rooted retrieval path over that same rooted snapshot
+  rooted retrieval path over that same rooted snapshot using the
+  caller-selected traversal width
 
 Aggregate outputs such as mean recall, recall standard deviation, and recall
 histograms are derived only from this corpus-based mode. This keeps automated
 quality evaluation statistical, reproducible, and scoped to one rooted tree
-rather than to the entire configured block store.
+rather than to the entire configured block store. The selected traversal width
+is carried in the emitted recall artifact so experiment results remain
+traceable.
 
 **Traces to:** RQ-INDEXER-008D1, RQ-INDEXER-008D3, RQ-INDEXER-010
 
@@ -1083,8 +1087,8 @@ dedicated CLI-only operator surface that accepts:
 - the same environment-selected block-store configuration family used by the
   indexer runtime
 - one root block identifier to analyze
-- optional rooted-corpus recall controls, including sample-size and seed inputs
-  for corpus-based TNN-recall
+- optional rooted-corpus recall controls, including sample-size, seed, and
+  traversal-width inputs for corpus-based TNN-recall
 - optional diagnostic-query inputs when the operator wants one-off
   query-specific recall evidence
 - one optional artifact destination for the JSON report when the default output

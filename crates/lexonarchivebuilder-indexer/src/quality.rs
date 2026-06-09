@@ -48,6 +48,8 @@ pub enum TreeQualityError {
     NonFiniteEmbedding { block_id: String },
     #[error("tnn recall sample_size must be at least 1")]
     InvalidTnnRecallSampleSize,
+    #[error("tnn recall traversal_width must be at least 1")]
+    InvalidTnnRecallTraversalWidth,
     #[error(
         "block {block_id} contains a zero-magnitude embedding that cannot be scored for tnn recall"
     )]
@@ -175,6 +177,7 @@ pub struct TreeQualitySummary {
 pub struct TnnRecallConfig {
     pub sample_size: usize,
     pub seed: u64,
+    pub traversal_width: usize,
 }
 
 impl Default for TnnRecallConfig {
@@ -182,6 +185,7 @@ impl Default for TnnRecallConfig {
         Self {
             sample_size: DEFAULT_TNN_RECALL_SAMPLE_SIZE,
             seed: DEFAULT_TNN_RECALL_SEED,
+            traversal_width: default_search_traversal_width(),
         }
     }
 }
@@ -306,6 +310,9 @@ pub fn assess_rooted_tree_with_config(
 ) -> Result<TreeQualityReport, TreeQualityError> {
     if tnn_recall.sample_size == 0 {
         return Err(TreeQualityError::InvalidTnnRecallSampleSize);
+    }
+    if tnn_recall.traversal_width == 0 {
+        return Err(TreeQualityError::InvalidTnnRecallTraversalWidth);
     }
     let Some(root) = store.get(root_id)? else {
         return Err(TreeQualityError::MissingRootBlock {
@@ -828,7 +835,7 @@ fn build_corpus_tnn_recall_report(
     store: &dyn BlockStore,
     config: TnnRecallConfig,
 ) -> Result<CorpusTnnRecallReport, TreeQualityError> {
-    let traversal_width = default_search_traversal_width();
+    let traversal_width = config.traversal_width;
     let corpus_size = state.corpus_entries.len();
     let effective_sample_size = config.sample_size.min(corpus_size);
     if effective_sample_size == 0 {
@@ -1561,6 +1568,7 @@ mod tests {
             TnnRecallConfig {
                 sample_size: 2,
                 seed: 7,
+                traversal_width: 7,
             },
         )
         .unwrap();
@@ -1569,6 +1577,7 @@ mod tests {
         assert_eq!(report.corpus_tnn_recall.corpus_size, 2);
         assert_eq!(report.corpus_tnn_recall.effective_sample_size, 2);
         assert_eq!(report.corpus_tnn_recall.seed, 7);
+        assert_eq!(report.corpus_tnn_recall.traversal_width, 7);
         assert_eq!(report.corpus_tnn_recall.recall_at.len(), 3);
         for metric in &report.corpus_tnn_recall.recall_at {
             assert_eq!(metric.mean_recall, 1.0);
@@ -1578,6 +1587,29 @@ mod tests {
             assert_eq!(metric.histogram[0].matched_neighbor_count, metric.k.min(2));
             assert_eq!(metric.histogram[0].recall, 1.0);
         }
+    }
+
+    #[test]
+    fn assessment_rejects_zero_tnn_recall_traversal_width() {
+        let dir = tempdir().unwrap();
+        let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
+        let root = store.put(&leaf_block(0, &[1.0, 0.0])).unwrap();
+
+        let error = assess_rooted_tree_with_config(
+            &root,
+            &store,
+            TnnRecallConfig {
+                sample_size: 1,
+                seed: 0,
+                traversal_width: 0,
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TreeQualityError::InvalidTnnRecallTraversalWidth
+        ));
     }
 
     #[test]

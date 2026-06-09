@@ -218,8 +218,9 @@ identifier, does not require request-file batch execution or MCP exposure, and
 renders both an operator-readable summary and a machine-readable JSON report for
 the rooted analysis result without requiring an operator-visible quantile-bin
 configuration surface in this increment. When rooted TNN-recall is enabled, the
-same surface keeps corpus-based evaluation controls distinct from optional
-diagnostic-query recall inputs.
+same surface keeps corpus-based evaluation controls, including sample size,
+seed, and traversal width, distinct from optional diagnostic-query recall
+inputs.
 
 **Traces to:** RQ-INDEXER-008D, RQ-INDEXER-008D1, RQ-INDEXER-008D2, RQ-INDEXER-008D3, DSG-LFI-002D, DSG-LFI-002D1, DSG-LFI-002D2, DSG-LFI-005B, DSG-LFI-007D
 
@@ -386,8 +387,9 @@ whose dispersion exceeds the parent's plus the mean and maximum increase,
 rather than as emitted per-pair warning findings. The same run computes
 corpus-based TNN-recall over the rooted reachable embedding set at Recall@1,
 Recall@5, and Recall@10 using uniform seeded sampling with configurable sample
-size, and derives mean recall, recall standard deviation, and recall histograms
-from that corpus-based mode only.
+size and configurable traversal width, derives mean recall, recall standard
+deviation, and recall histograms from that corpus-based mode only, and records
+the selected traversal width in the emitted recall evidence.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-008D, RQ-INDEXER-008D1, DSG-LFI-002D, DSG-LFI-002D1, DSG-LFI-005B
 
@@ -403,6 +405,19 @@ for each supplied query, emits exact and approximate neighbors for comparison,
 and excludes those results from aggregate recall statistics and histograms.
 
 **Traces to:** RQ-INDEXER-008D2, RQ-INDEXER-008D3, DSG-LFI-002D2, DSG-LFI-007D
+
+### VAL-LFI-005B2
+
+Run the rooted block-tree quality tool twice against the same representative
+stored tree with identical corpus-based TNN-recall sample and seed settings but
+different traversal-width values.
+
+**Pass condition:** the corpus-based TNN-recall path accepts each traversal
+width, preserves the rooted corpus and seeded sampling contract, and records
+the selected traversal width in the report so operators can compare measurement
+runs across widths without ambiguity.
+
+**Traces to:** RQ-INDEXER-008D1, DSG-LFI-002D1, DSG-LFI-007D
 
 ### VAL-LFI-005C
 

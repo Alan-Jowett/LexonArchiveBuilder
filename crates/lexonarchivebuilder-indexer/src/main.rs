@@ -55,6 +55,8 @@ enum Command {
         tnn_recall_sample_size: usize,
         #[arg(long, default_value_t = default_tnn_recall_seed())]
         tnn_recall_seed: u64,
+        #[arg(long, default_value_t = default_search_traversal_width())]
+        traversal_width: usize,
         #[arg(long)]
         json_out: Option<PathBuf>,
         #[command(flatten)]
@@ -170,6 +172,7 @@ async fn main() -> anyhow::Result<()> {
             root_id,
             tnn_recall_sample_size,
             tnn_recall_seed,
+            traversal_width,
             json_out,
             block_store,
         } => {
@@ -181,6 +184,7 @@ async fn main() -> anyhow::Result<()> {
                 TnnRecallConfig {
                     sample_size: tnn_recall_sample_size,
                     seed: tnn_recall_seed,
+                    traversal_width,
                 },
             )?;
             let output_path = json_out.unwrap_or_else(|| default_quality_report_path(&root_id));
@@ -341,6 +345,8 @@ mod tests {
             "17",
             "--tnn-recall-seed",
             "9",
+            "--traversal-width",
+            "7",
             "--block-store-root",
             "blocks",
         ])
@@ -351,6 +357,7 @@ mod tests {
                 root_id,
                 tnn_recall_sample_size,
                 tnn_recall_seed,
+                traversal_width,
                 block_store,
                 ..
             } => {
@@ -360,6 +367,7 @@ mod tests {
                 );
                 assert_eq!(tnn_recall_sample_size, 17);
                 assert_eq!(tnn_recall_seed, 9);
+                assert_eq!(traversal_width, 7);
                 assert_eq!(block_store.block_store_profile, BlockStoreProfile::Local);
                 assert_eq!(block_store.block_store_root, Some(PathBuf::from("blocks")));
             }
