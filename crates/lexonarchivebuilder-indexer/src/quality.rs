@@ -838,24 +838,14 @@ fn build_corpus_tnn_recall_report(
     let traversal_width = config.traversal_width;
     let corpus_size = state.corpus_entries.len();
     let effective_sample_size = config.sample_size.min(corpus_size);
-    if effective_sample_size == 0 {
-        return Ok(CorpusTnnRecallReport {
-            query_source: "corpus-based".into(),
+    if effective_sample_size == 0 || has_embedding_spec_mismatch(state) {
+        return Ok(zeroed_corpus_tnn_recall_report(
             corpus_size,
-            requested_sample_size: config.sample_size,
+            config.sample_size,
             effective_sample_size,
-            seed: config.seed,
+            config.seed,
             traversal_width,
-            recall_at: REQUIRED_RECALL_AT
-                .into_iter()
-                .map(|k| TnnRecallAtMetrics {
-                    k,
-                    mean_recall: 0.0,
-                    stdev_recall: 0.0,
-                    histogram: Vec::new(),
-                })
-                .collect(),
-        });
+        ));
     }
 
     let sampled_queries = select_corpus_sample(&state.corpus_entries, config);
@@ -914,6 +904,39 @@ fn build_corpus_tnn_recall_report(
             })
             .collect(),
     })
+}
+
+fn zeroed_corpus_tnn_recall_report(
+    corpus_size: usize,
+    requested_sample_size: usize,
+    effective_sample_size: usize,
+    seed: u64,
+    traversal_width: usize,
+) -> CorpusTnnRecallReport {
+    CorpusTnnRecallReport {
+        query_source: "corpus-based".into(),
+        corpus_size,
+        requested_sample_size,
+        effective_sample_size,
+        seed,
+        traversal_width,
+        recall_at: REQUIRED_RECALL_AT
+            .into_iter()
+            .map(|k| TnnRecallAtMetrics {
+                k,
+                mean_recall: 0.0,
+                stdev_recall: 0.0,
+                histogram: Vec::new(),
+            })
+            .collect(),
+    }
+}
+
+fn has_embedding_spec_mismatch(state: &TraversalState) -> bool {
+    state
+        .findings
+        .iter()
+        .any(|finding| finding.kind == FindingKind::EmbeddingSpecMismatch)
 }
 
 fn tnn_recall_metrics(k: usize, denominator: usize, counts: &[usize]) -> TnnRecallAtMetrics {
@@ -1613,6 +1636,52 @@ mod tests {
     }
 
     #[test]
+    fn assessment_zeroes_tnn_recall_when_embedding_specs_mismatch() {
+        let dir = tempdir().unwrap();
+        let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
+
+        let matching = store
+            .put(&named_leaf_block("matching", &[1.0, 0.0]))
+            .unwrap();
+        let mismatched = store
+            .put(&named_leaf_block_with_dims("mismatched", &[0.0, 1.0, 0.0]))
+            .unwrap();
+        let root = store
+            .put(&branch_block(
+                1,
+                vec![([1.0, 0.0], matching), ([0.0, 1.0], mismatched)],
+            ))
+            .unwrap();
+
+        let report = assess_rooted_tree_with_config(
+            &root,
+            &store,
+            TnnRecallConfig {
+                sample_size: 2,
+                seed: 7,
+                traversal_width: 3,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.kind == FindingKind::EmbeddingSpecMismatch)
+        );
+        assert!(
+            report
+                .corpus_tnn_recall
+                .recall_at
+                .iter()
+                .all(|metric| metric.mean_recall == 0.0
+                    && metric.stdev_recall == 0.0
+                    && metric.histogram.is_empty())
+        );
+    }
+
+    #[test]
     fn assessment_rejects_zero_tnn_recall_traversal_width() {
         let dir = tempdir().unwrap();
         let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
@@ -1768,7 +1837,37 @@ mod tests {
         })
     }
 
+    fn named_leaf_block_with_dims(name: &str, embedding: &[f32; 3]) -> Block {
+        Block::Leaf(LeafBlock {
+            version: VERSION_1,
+            level: 0,
+            embedding_spec: EmbeddingSpec {
+                dims: 3,
+                encoding: "f32le".into(),
+            },
+            entries: vec![LeafEntry {
+                embedding: encode_f32_3(embedding),
+                metadata: vec![(
+                    ciborium::Value::Text("source_name".into()),
+                    ciborium::Value::Text(name.into()),
+                )],
+                content: Content {
+                    media_type: "text/plain".into(),
+                    body: name.as_bytes().to_vec(),
+                },
+            }],
+            ext: None,
+        })
+    }
+
     fn encode_f32(values: &[f32; 2]) -> Vec<u8> {
+        values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect()
+    }
+
+    fn encode_f32_3(values: &[f32; 3]) -> Vec<u8> {
         values
             .iter()
             .flat_map(|value| value.to_le_bytes())
