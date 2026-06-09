@@ -4314,6 +4314,7 @@ mod tests {
                 remaining_unit_count: Some(3),
                 elapsed: Duration::from_secs(1),
                 error: Some("boom".into()),
+                adaptive_planning: None,
             },
             3,
             &sample_clustering_failure_diagnostics().embedding_health,
@@ -4345,6 +4346,7 @@ mod tests {
                 remaining_unit_count: Some(1),
                 elapsed: Duration::from_secs(1),
                 error: Some("boom".into()),
+                adaptive_planning: None,
             },
             3,
             &sample_clustering_failure_diagnostics().embedding_health,
@@ -4597,6 +4599,7 @@ mod tests {
             remaining_unit_count: None,
             elapsed: Duration::from_millis(125),
             error: None,
+            adaptive_planning: None,
         };
 
         assert_eq!(
@@ -4616,6 +4619,7 @@ mod tests {
             remaining_unit_count: Some(5),
             elapsed: Duration::from_millis(250),
             error: None,
+            adaptive_planning: None,
         };
 
         assert_eq!(
@@ -4635,6 +4639,7 @@ mod tests {
             remaining_unit_count: Some(0),
             elapsed: Duration::from_millis(88),
             error: None,
+            adaptive_planning: None,
         };
 
         assert_eq!(
@@ -4654,6 +4659,7 @@ mod tests {
             remaining_unit_count: None,
             elapsed: Duration::from_millis(44),
             error: None,
+            adaptive_planning: None,
         };
 
         assert_eq!(
@@ -4673,6 +4679,7 @@ mod tests {
             remaining_unit_count: Some(3),
             elapsed: Duration::from_millis(0),
             error: None,
+            adaptive_planning: None,
         };
 
         assert_eq!(
@@ -4692,6 +4699,7 @@ mod tests {
             remaining_unit_count: None,
             elapsed: Duration::from_millis(0),
             error: None,
+            adaptive_planning: None,
         };
 
         assert_eq!(
@@ -4713,6 +4721,7 @@ mod tests {
             remaining_unit_count: None,
             elapsed: Duration::from_millis(125),
             error: Some("boom".into()),
+            adaptive_planning: None,
         };
 
         assert_eq!(
@@ -4732,6 +4741,7 @@ mod tests {
             remaining_unit_count: Some(1),
             elapsed: Duration::from_millis(88),
             error: Some("boom".into()),
+            adaptive_planning: None,
         };
 
         assert_eq!(

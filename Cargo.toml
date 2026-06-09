@@ -23,10 +23,10 @@ thiserror = "2.0.17"
 tokio = { version = "1.52.3", features = ["io-std", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
 
 lexonarchivebuilder-indexer = { path = "crates/lexonarchivebuilder-indexer" }
-lexongraph-block = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "fac6f87b229b6ef08f078c9ec2674edeea5ef339", package = "lexongraph-block" }
-lexongraph-block-store = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "fac6f87b229b6ef08f078c9ec2674edeea5ef339", package = "lexongraph-block-store" }
-lexongraph-block-store-fs = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "fac6f87b229b6ef08f078c9ec2674edeea5ef339", package = "lexongraph-block-store-fs" }
-lexongraph-directional-pca = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "fac6f87b229b6ef08f078c9ec2674edeea5ef339", package = "lexongraph-directional-pca" }
-lexongraph-embeddings-trait = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "fac6f87b229b6ef08f078c9ec2674edeea5ef339", package = "lexongraph-embeddings-trait" }
-lexongraph-search = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "fac6f87b229b6ef08f078c9ec2674edeea5ef339", package = "lexongraph-search" }
-lexongraph-streaming-indexer = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "fac6f87b229b6ef08f078c9ec2674edeea5ef339", package = "lexongraph-streaming-indexer" }
+lexongraph-block = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "6cf03ef83168d51c2de7f6f8a9fb1a0ab40bc028", package = "lexongraph-block" }
+lexongraph-block-store = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "6cf03ef83168d51c2de7f6f8a9fb1a0ab40bc028", package = "lexongraph-block-store" }
+lexongraph-block-store-fs = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "6cf03ef83168d51c2de7f6f8a9fb1a0ab40bc028", package = "lexongraph-block-store-fs" }
+lexongraph-directional-pca = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "6cf03ef83168d51c2de7f6f8a9fb1a0ab40bc028", package = "lexongraph-directional-pca" }
+lexongraph-embeddings-trait = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "6cf03ef83168d51c2de7f6f8a9fb1a0ab40bc028", package = "lexongraph-embeddings-trait" }
+lexongraph-search = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "6cf03ef83168d51c2de7f6f8a9fb1a0ab40bc028", package = "lexongraph-search" }
+lexongraph-streaming-indexer = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "6cf03ef83168d51c2de7f6f8a9fb1a0ab40bc028", package = "lexongraph-streaming-indexer" }
