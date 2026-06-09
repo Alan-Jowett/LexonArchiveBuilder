@@ -12,8 +12,8 @@ use lexongraph_block::{
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_streaming_indexer::{
-    ActivePlanningAlgorithm, AdaptiveDcbcSettings, AdaptivePlanningDirection,
-    AdaptivePlanningSettings, AdaptivePlanningStatusTelemetry, AdaptiveSwitchCriteria,
+    AdaptiveDcbcSettings, AdaptivePlanningDecisionReason, AdaptivePlanningDirection,
+    AdaptivePlanningSettings, AdaptivePlanningStatusTelemetry,
     ArithmeticMeanCanonicalEmbeddingPolicy, BuiltInPlanning, BuiltInPlanningDirection,
     ContentResolver, DcbcBuiltInPlanningSettings, DcbcStreamingClusteringFactory,
     DirectionalPcaBuiltInPlanningSettings, HierarchicalPlanningPolicy, IndexItem, PlanningStage,
@@ -114,7 +114,7 @@ enum EffectiveClusteringDiagnostics {
         min_effective_rank: usize,
         min_cumulative_variance: f32,
         balance_constraints: Option<BalanceConstraintsDiagnostics>,
-        mean_cluster_radius_threshold: f32,
+        embedding_count_cutoff: usize,
     },
 }
 
@@ -630,7 +630,7 @@ fn resolved_built_in_planning(
             random_seed,
             balance_constraints,
             params,
-            mean_cluster_radius_threshold,
+            embedding_count_cutoff: _,
         } => {
             if *provider != ClusteringProvider::BuiltIn {
                 return Err(AutoSizingBuiltInPlanningError::DeriveClusterCount(
@@ -660,9 +660,6 @@ fn resolved_built_in_planning(
                     )?,
                     balance_constraints: balance_constraints.clone(),
                     random_seed: *random_seed,
-                },
-                switch_criteria: AdaptiveSwitchCriteria {
-                    mean_cluster_radius_threshold: *mean_cluster_radius_threshold,
                 },
             })
         }
@@ -791,8 +788,7 @@ fn effective_clustering_diagnostics(
             balance_constraints: None,
         },
         ConfiguredClustering::Dcbc { provider, .. }
-        | ConfiguredClustering::DirectionalPca { provider, .. }
-        | ConfiguredClustering::Adaptive { provider, .. } => {
+        | ConfiguredClustering::DirectionalPca { provider, .. } => {
             let clustering = resolved_built_in_planning(
                 clustering,
                 estimated_child_count,
@@ -837,6 +833,23 @@ fn effective_clustering_diagnostics(
                     min_effective_rank: params.min_effective_rank,
                     min_cumulative_variance: params.min_cumulative_variance,
                 },
+                BuiltInPlanning::Adaptive(_) => return None,
+                BuiltInPlanning::Hybrid(_) => return None,
+            }
+        }
+        ConfiguredClustering::Adaptive {
+            provider,
+            embedding_count_cutoff,
+            ..
+        } => {
+            let clustering = resolved_built_in_planning(
+                clustering,
+                estimated_child_count,
+                block_size_target,
+                embedding_spec,
+            )
+            .ok()?;
+            match clustering {
                 BuiltInPlanning::Adaptive(settings) => EffectiveClusteringDiagnostics::Adaptive {
                     provider: *provider,
                     mode: match settings.direction {
@@ -865,10 +878,10 @@ fn effective_clustering_diagnostics(
                             soft_balance_penalty: constraints.soft_balance_penalty,
                         }
                     }),
-                    mean_cluster_radius_threshold: settings
-                        .switch_criteria
-                        .mean_cluster_radius_threshold,
+                    embedding_count_cutoff: *embedding_count_cutoff,
                 },
+                BuiltInPlanning::Dcbc(_) => return None,
+                BuiltInPlanning::DirectionalPca(_) => return None,
                 BuiltInPlanning::Hybrid(_) => return None,
             }
         }
@@ -2640,26 +2653,28 @@ fn format_adaptive_planning_status(
         return String::new();
     };
     let decision = adaptive_planning.decision;
-    let detail = match (
-        decision.active_algorithm,
-        decision.switch_boundary_occurred,
-        decision.boundary_position,
-    ) {
-        (ActivePlanningAlgorithm::DirectionalPca, false, 0) => {
+    let detail = match (decision.reason, decision.boundary_position) {
+        (AdaptivePlanningDecisionReason::InitialDirectionalPcaSegment, 0) => {
             "initial adaptive boundary used directional-pca".to_string()
         }
-        (ActivePlanningAlgorithm::DirectionalPca, false, boundary_position) => {
+        (
+            AdaptivePlanningDecisionReason::StayedOnDirectionalPcaAtOrAboveEmbeddingCountCutoff,
+            boundary_position,
+        ) => {
             format!("adaptive boundary {boundary_position} stayed on directional-pca")
         }
-        (ActivePlanningAlgorithm::Dcbc, true, boundary_position) => {
+        (
+            AdaptivePlanningDecisionReason::SwitchedToDcbcBelowEmbeddingCountCutoff,
+            boundary_position,
+        ) => {
             format!("adaptive boundary {boundary_position} switched to dcbc")
         }
-        (ActivePlanningAlgorithm::Dcbc, false, boundary_position) => {
+        (AdaptivePlanningDecisionReason::PreviouslySwitchedToDcbc, boundary_position) => {
             format!("adaptive boundary {boundary_position} stayed on dcbc after an earlier switch")
         }
-        (ActivePlanningAlgorithm::DirectionalPca, true, boundary_position) => format!(
-            "adaptive boundary {boundary_position} reported a switch while remaining on directional-pca"
-        ),
+        (AdaptivePlanningDecisionReason::InitialDirectionalPcaSegment, boundary_position) => {
+            format!("adaptive boundary {boundary_position} used directional-pca")
+        }
     };
     let compared_values = format_adaptive_compared_values(decision);
     format!(
@@ -2671,21 +2686,18 @@ fn format_adaptive_planning_status(
 fn format_adaptive_compared_values(
     decision: lexongraph_streaming_indexer::AdaptivePlanningDecisionTelemetry,
 ) -> String {
-    let (Some(mean_cluster_radius), Some(mean_cluster_radius_threshold)) = (
-        decision.mean_cluster_radius,
-        decision.mean_cluster_radius_threshold,
-    ) else {
+    let (Some(embedding_count), Some(embedding_count_cutoff)) =
+        (decision.embedding_count, decision.embedding_count_cutoff)
+    else {
         return String::new();
     };
 
     let comparator = if decision.switch_boundary_occurred {
-        ">"
+        "<"
     } else {
-        "<="
+        ">="
     };
-    format!(
-        " (mean_cluster_radius={mean_cluster_radius:.6} {comparator} threshold={mean_cluster_radius_threshold:.6})"
-    )
+    format!(" (embedding_count={embedding_count} {comparator} cutoff={embedding_count_cutoff})")
 }
 
 fn report_progress(progress: &ProgressReporter, message: String) {
@@ -3981,7 +3993,7 @@ mod tests {
                 clustering_min_input_count: Some(2),
                 clustering_min_effective_rank: Some(1),
                 clustering_min_cumulative_variance: Some(0.0),
-                clustering_mean_cluster_radius_threshold: Some(0.25),
+                clustering_embedding_count_cutoff: Some(2),
                 ..ClusteringConfigOverrides::default()
             },
         )
@@ -4569,7 +4581,7 @@ mod tests {
                     min_effective_rank: 1,
                     min_cumulative_variance: 0.25,
                 },
-                mean_cluster_radius_threshold: 0.4,
+                embedding_count_cutoff: 4,
             },
             9,
             block_size_target,
@@ -4584,7 +4596,6 @@ mod tests {
                 assert_eq!(settings.directional_pca.random_seed, Some(7));
                 assert_eq!(settings.dcbc.cluster_count, 3);
                 assert_eq!(settings.dcbc.random_seed, Some(7));
-                assert_eq!(settings.switch_criteria.mean_cluster_radius_threshold, 0.4);
             }
             BuiltInPlanning::Dcbc(_) => panic!("expected adaptive settings"),
             BuiltInPlanning::DirectionalPca(_) => panic!("expected adaptive settings"),
@@ -4682,10 +4693,12 @@ mod tests {
                 pass_number: 1,
                 decision: lexongraph_streaming_indexer::AdaptivePlanningDecisionTelemetry {
                     boundary_position: 0,
-                    active_algorithm: ActivePlanningAlgorithm::DirectionalPca,
+                    active_algorithm:
+                        lexongraph_streaming_indexer::ActivePlanningAlgorithm::DirectionalPca,
                     switch_boundary_occurred: false,
-                    mean_cluster_radius: None,
-                    mean_cluster_radius_threshold: None,
+                    embedding_count: None,
+                    embedding_count_cutoff: None,
+                    reason: AdaptivePlanningDecisionReason::InitialDirectionalPcaSegment,
                 },
             }),
         };
@@ -4713,17 +4726,18 @@ mod tests {
                 pass_number: 2,
                 decision: lexongraph_streaming_indexer::AdaptivePlanningDecisionTelemetry {
                     boundary_position: 4,
-                    active_algorithm: ActivePlanningAlgorithm::Dcbc,
+                    active_algorithm: lexongraph_streaming_indexer::ActivePlanningAlgorithm::Dcbc,
                     switch_boundary_occurred: true,
-                    mean_cluster_radius: Some(0.31),
-                    mean_cluster_radius_threshold: Some(0.25),
+                    embedding_count: Some(875),
+                    embedding_count_cutoff: Some(1000),
+                    reason: AdaptivePlanningDecisionReason::SwitchedToDcbcBelowEmbeddingCountCutoff,
                 },
             }),
         };
 
         assert_eq!(
             format_indexing_status(status),
-            "custom planning still running after 125 ms; processed 7 stage-local item(s); adaptive pass 2: adaptive boundary 4 switched to dcbc (mean_cluster_radius=0.310000 > threshold=0.250000)"
+            "custom planning still running after 125 ms; processed 7 stage-local item(s); adaptive pass 2: adaptive boundary 4 switched to dcbc (embedding_count=875 < cutoff=1000)"
         );
     }
 
@@ -4744,10 +4758,11 @@ mod tests {
                 pass_number: 2,
                 decision: lexongraph_streaming_indexer::AdaptivePlanningDecisionTelemetry {
                     boundary_position: 5,
-                    active_algorithm: ActivePlanningAlgorithm::Dcbc,
+                    active_algorithm: lexongraph_streaming_indexer::ActivePlanningAlgorithm::Dcbc,
                     switch_boundary_occurred: false,
-                    mean_cluster_radius: None,
-                    mean_cluster_radius_threshold: None,
+                    embedding_count: None,
+                    embedding_count_cutoff: None,
+                    reason: AdaptivePlanningDecisionReason::PreviouslySwitchedToDcbc,
                 },
             }),
         };
@@ -4775,17 +4790,19 @@ mod tests {
                 pass_number: 1,
                 decision: lexongraph_streaming_indexer::AdaptivePlanningDecisionTelemetry {
                     boundary_position: 3,
-                    active_algorithm: ActivePlanningAlgorithm::DirectionalPca,
+                    active_algorithm:
+                        lexongraph_streaming_indexer::ActivePlanningAlgorithm::DirectionalPca,
                     switch_boundary_occurred: false,
-                    mean_cluster_radius: Some(0.12),
-                    mean_cluster_radius_threshold: Some(0.25),
+                    embedding_count: Some(1200),
+                    embedding_count_cutoff: Some(1000),
+                    reason: AdaptivePlanningDecisionReason::StayedOnDirectionalPcaAtOrAboveEmbeddingCountCutoff,
                 },
             }),
         };
 
         assert_eq!(
             format_indexing_status(status),
-            "custom planning still running after 125 ms; processed 7 stage-local item(s); adaptive pass 1: adaptive boundary 3 stayed on directional-pca (mean_cluster_radius=0.120000 <= threshold=0.250000)"
+            "custom planning still running after 125 ms; processed 7 stage-local item(s); adaptive pass 1: adaptive boundary 3 stayed on directional-pca (embedding_count=1200 >= cutoff=1000)"
         );
     }
 

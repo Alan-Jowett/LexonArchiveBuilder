@@ -375,8 +375,8 @@ mod tests {
             "1",
             "--clustering-min-cumulative-variance",
             "0.25",
-            "--clustering-mean-cluster-radius-threshold",
-            "0.4",
+            "--clustering-embedding-count-cutoff",
+            "400",
         ])
         .unwrap();
 
@@ -402,10 +402,7 @@ mod tests {
                 assert_eq!(clustering.clustering_min_input_count, Some(2));
                 assert_eq!(clustering.clustering_min_effective_rank, Some(1));
                 assert_eq!(clustering.clustering_min_cumulative_variance, Some(0.25));
-                assert_eq!(
-                    clustering.clustering_mean_cluster_radius_threshold,
-                    Some(0.4)
-                );
+                assert_eq!(clustering.clustering_embedding_count_cutoff, Some(400));
             }
             _ => panic!("expected run command"),
         }

@@ -6,7 +6,7 @@ use clap::{Args, ValueEnum};
 use lexongraph_block::EmbeddingSpec;
 use lexongraph_directional_pca::DirectionalPcaParams;
 use lexongraph_streaming_indexer::{
-    BalanceConstraints, DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD, IndexItem, Metadata,
+    BalanceConstraints, DEFAULT_EMBEDDING_COUNT_CUTOFF, IndexItem, Metadata,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -134,7 +134,7 @@ pub struct ClusteringConfigOverrides {
     #[arg(long)]
     pub clustering_min_cumulative_variance: Option<f32>,
     #[arg(long)]
-    pub clustering_mean_cluster_radius_threshold: Option<f32>,
+    pub clustering_embedding_count_cutoff: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -160,7 +160,7 @@ pub(crate) enum ConfiguredClustering {
         random_seed: Option<u64>,
         balance_constraints: Option<BalanceConstraints>,
         params: DirectionalPcaParams,
-        mean_cluster_radius_threshold: f32,
+        embedding_count_cutoff: usize,
     },
 }
 
@@ -201,8 +201,8 @@ impl ClusteringConfigOverrides {
                         .map(|_| "clustering_min_effective_rank"),
                     self.clustering_min_cumulative_variance
                         .map(|_| "clustering_min_cumulative_variance"),
-                    self.clustering_mean_cluster_radius_threshold
-                        .map(|_| "clustering_mean_cluster_radius_threshold"),
+                    self.clustering_embedding_count_cutoff
+                        .map(|_| "clustering_embedding_count_cutoff"),
                 ]
                 .into_iter()
                 .flatten()
@@ -263,9 +263,9 @@ impl ClusteringConfigOverrides {
                         algorithm,
                     });
                 }
-                if self.clustering_mean_cluster_radius_threshold.is_some() {
+                if self.clustering_embedding_count_cutoff.is_some() {
                     return Err(ConfigError::UnsupportedClusteringOptionForAlgorithm {
-                        option: "clustering_mean_cluster_radius_threshold",
+                        option: "clustering_embedding_count_cutoff",
                         algorithm,
                     });
                 }
@@ -295,9 +295,9 @@ impl ClusteringConfigOverrides {
                         algorithm,
                     });
                 }
-                if self.clustering_mean_cluster_radius_threshold.is_some() {
+                if self.clustering_embedding_count_cutoff.is_some() {
                     return Err(ConfigError::UnsupportedClusteringOptionForAlgorithm {
-                        option: "clustering_mean_cluster_radius_threshold",
+                        option: "clustering_embedding_count_cutoff",
                         algorithm,
                     });
                 }
@@ -354,9 +354,9 @@ impl ClusteringConfigOverrides {
                     random_seed,
                     balance_constraints: self.to_balance_constraints(),
                     params: self.directional_pca_params(),
-                    mean_cluster_radius_threshold: self
-                        .clustering_mean_cluster_radius_threshold
-                        .unwrap_or(DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD),
+                    embedding_count_cutoff: self
+                        .clustering_embedding_count_cutoff
+                        .unwrap_or(DEFAULT_EMBEDDING_COUNT_CUTOFF),
                 }
             }
             (
@@ -535,12 +535,10 @@ impl ClusteringConfigOverrides {
     }
 
     fn validate_adaptive_numeric_options(&self) -> Result<(), ConfigError> {
-        if let Some(mean_cluster_radius_threshold) = self.clustering_mean_cluster_radius_threshold
-            && (!mean_cluster_radius_threshold.is_finite() || mean_cluster_radius_threshold < 0.0)
-        {
+        if matches!(self.clustering_embedding_count_cutoff, Some(0)) {
             return Err(ConfigError::InvalidClusteringOption {
-                option: "clustering_mean_cluster_radius_threshold",
-                message: "must be finite and non-negative".into(),
+                option: "clustering_embedding_count_cutoff",
+                message: "must be at least 1".into(),
             });
         }
 
@@ -1117,7 +1115,7 @@ mod tests {
                 random_seed,
                 balance_constraints,
                 params,
-                mean_cluster_radius_threshold,
+                embedding_count_cutoff,
             } => {
                 assert_eq!(provider, ClusteringProvider::BuiltIn);
                 assert_eq!(mode, ClusteringMode::Aggregation);
@@ -1135,10 +1133,7 @@ mod tests {
                         min_cumulative_variance: DEFAULT_DIRECTIONAL_PCA_MIN_CUMULATIVE_VARIANCE,
                     }
                 );
-                assert_eq!(
-                    mean_cluster_radius_threshold,
-                    DEFAULT_MEAN_CLUSTER_RADIUS_THRESHOLD
-                );
+                assert_eq!(embedding_count_cutoff, DEFAULT_EMBEDDING_COUNT_CUTOFF);
             }
             ConfiguredClustering::Dcbc { .. } => {
                 panic!("expected adaptive settings when that algorithm is selected")
@@ -1316,11 +1311,11 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_rejects_negative_mean_cluster_radius_threshold() {
+    fn adaptive_rejects_zero_embedding_count_cutoff() {
         let error = ClusteringConfigOverrides {
             clustering_provider: Some(ClusteringProvider::BuiltIn),
             clustering_algorithm: Some(ClusteringAlgorithm::Adaptive),
-            clustering_mean_cluster_radius_threshold: Some(-0.01),
+            clustering_embedding_count_cutoff: Some(0),
             ..ClusteringConfigOverrides::default()
         }
         .validate()
@@ -1329,7 +1324,7 @@ mod tests {
         assert!(matches!(
             error,
             ConfigError::InvalidClusteringOption {
-                option: "clustering_mean_cluster_radius_threshold",
+                option: "clustering_embedding_count_cutoff",
                 ..
             }
         ));
