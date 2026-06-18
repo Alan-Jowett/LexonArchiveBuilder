@@ -136,7 +136,7 @@
 - **UR-126 [KNOWN]:** LexonGraph has now merged a wgpu acceleration feature, and LexonArchiveBuilder should refresh its pinned upstream LexonGraph revision to include that feature.
 - **UR-127 [KNOWN]:** Opting into this upstream wgpu acceleration should not require a LexonArchiveBuilder API, CLI, request-schema, or published-profile contract change for this increment; refreshing the pinned upstream commit should be sufficient.
 - **UR-128 [INFERRED]:** The approved published profile version `0.1.0`, existing execution-stage contract, and existing MCP search or retrieval behavior should remain unchanged while the upstream dependency revision advances to pick up wgpu acceleration.
-- **UR-129 [KNOWN]:** The target LexonGraph upstream revision for this increment is commit `8f56d720bdafcd5d213a30b8d5d12283f36a6682`.
+- **UR-129 [KNOWN]:** The target LexonGraph upstream revision for this increment is commit `70a80a2b51b41759217eec05086cb76586c4f1a5`.
 - **UR-130 [KNOWN]:** This increment originated as a dependency-pin refresh, but the approved replay-journal capability is also in scope; beyond those two changes, no unrelated requirements, design, validation, API, CLI, or request-schema changes are required unless the target upstream revision proves incompatible during implementation.
 - **UR-131 [KNOWN]:** LexonArchiveBuilder should own a durable replay journal for successfully persisted replayable leaf outputs so resumed ingestion and clustering-only replay do not need to rediscover all eligible inputs solely by rescanning the entire configured block store.
 - **UR-132 [INFERRED]:** The replay journal should be append-only and should record completion only after the corresponding replayable leaf output has been durably persisted, so crash recovery can distinguish committed replay state from incomplete work.
@@ -209,7 +209,7 @@
 | CM-INDEXER-058 | Revise | Replace the current lower-level planning-policy integration target with the higher-level published-profile streaming API and require `0.1.0` for this increment | UR-121, UR-122, UR-123 |
 | CM-INDEXER-059 | Revise | Replace the current external clustering mode, algorithm, and option contract with a profile-based contract pinned to published profile `0.1.0` | UR-121, UR-123, UR-124 |
 | CM-INDEXER-060 | Add | Preserve environment-neutral and content-type-neutral indexing behavior while the approved published-profile version remains fixed across invocation shapes in this increment | UR-118, UR-119, UR-123, UR-125 |
-| CM-INDEXER-061 | Revise | Refresh the pinned LexonGraph upstream revision to commit `8f56d720bdafcd5d213a30b8d5d12283f36a6682` to include merged wgpu acceleration while preserving the approved published-profile contract and existing repository-visible behavior | UR-123, UR-126, UR-127, UR-128, UR-129, UR-130 |
+| CM-INDEXER-061 | Revise | Refresh the pinned LexonGraph upstream revision to commit `70a80a2b51b41759217eec05086cb76586c4f1a5` to include merged wgpu acceleration while preserving the approved published-profile contract and existing repository-visible behavior | UR-123, UR-126, UR-127, UR-128, UR-129, UR-130 |
 | CM-INDEXER-062 | Revise | Change standalone clustering discovery from mandatory whole-store iteration to a journal-preferred replay-input contract with block-store iteration as compatibility fallback | UR-131, UR-133 |
 | CM-INDEXER-063 | Add | Require a LAB-owned durable replay journal for successfully persisted replayable leaf outputs so resumed ingestion and clustering-only replay can reuse repository-owned replay state | UR-131, UR-132, UR-136 |
 | CM-INDEXER-064 | Add | Constrain the replay journal to remain content-type-agnostic, low-overhead, append-only, and segmentable under large-corpus growth | UR-132, UR-134, UR-135 |
@@ -520,7 +520,7 @@
 ### BA-INDEXER-061
 
 - **Before [KNOWN]:** The requirements pinned LexonGraph to the published-profile-compatible upstream revision, but they did not yet capture adoption of the newly merged upstream wgpu acceleration feature or the exact target upstream commit.
-- **After [KNOWN]:** The requirements now call for refreshing the pinned LexonGraph revision specifically to commit `8f56d720bdafcd5d213a30b8d5d12283f36a6682` to include upstream wgpu acceleration while preserving the approved `0.1.0` published profile and all existing repository-visible contracts.
+- **After [KNOWN]:** The requirements now call for refreshing the pinned LexonGraph revision specifically to commit `70a80a2b51b41759217eec05086cb76586c4f1a5` to include upstream wgpu acceleration while preserving the approved `0.1.0` published profile and all existing repository-visible contracts.
 
 ### BA-INDEXER-062
 
@@ -809,7 +809,7 @@ behavior.
   - projection of the latest upstream live telemetry and heartbeat events onto that same repository-owned progress surface
   - unchanged MCP search-serving and retrieval behavior for already-indexed content
 - **Regression rule [INFERRED]:** If the latest upstream surface removes or weakens one of those capabilities, LexonArchiveBuilder SHALL treat that as a compatibility finding requiring explicit design and implementation handling, not as permission to drop the affected repository behavior.
-- **Acceleration adoption rule [KNOWN]:** When the latest upstream revision adds wgpu acceleration without requiring a caller-surface change, LexonArchiveBuilder SHALL adopt commit `8f56d720bdafcd5d213a30b8d5d12283f36a6682` by refreshing the pinned LexonGraph dependency set rather than introducing repository-local API or contract changes for this increment.
+- **Acceleration adoption rule [KNOWN]:** When the latest upstream revision adds wgpu acceleration without requiring a caller-surface change, LexonArchiveBuilder SHALL adopt commit `70a80a2b51b41759217eec05086cb76586c4f1a5` by refreshing the pinned LexonGraph dependency set rather than introducing repository-local API or contract changes for this increment.
 - **Boundary [KNOWN]:** This requirement does not force LexonArchiveBuilder to re-implement upstream planning internals in-repo; it constrains adaptation and regression reporting at the repository boundary.
 - **Traceability:** UR-47, UR-61, UR-63, UR-64, UR-65, UR-66, UR-67, UR-68, UR-69, UR-71, UR-126, UR-127, UR-128, UR-129, UR-130
 

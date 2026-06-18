@@ -236,7 +236,7 @@ clustering control family, deterministic split-stage replay, repository-owned
 progress projection, projection of the latest upstream live telemetry and
 heartbeat events, unchanged MCP search-serving behavior for already-indexed
 content, and dependency-pin-only adoption of LexonGraph commit
-`8f56d720bdafcd5d213a30b8d5d12283f36a6682` for upstream wgpu acceleration
+`70a80a2b51b41759217eec05086cb76586c4f1a5` for upstream wgpu acceleration
 without new repository-visible controls, or else any missing capability is
 classified explicitly as an
 upstream regression or compatibility finding rather than being silently

@@ -47,7 +47,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -58,7 +58,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -295,6 +295,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-deque"
+version = "0.8.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9dd111b7b7f7d55b72c0a6ae361660ee5853c9af73f70c3c2ef6858b950e2e51"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.9.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
+
+[[package]]
 name = "crunchy"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -398,6 +423,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "either"
+version = "1.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -413,7 +444,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -557,20 +588,9 @@ dependencies = [
  "cfg-if",
  "js-sys",
  "libc",
- "r-efi 5.3.0",
+ "r-efi",
  "wasip2",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "getrandom"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
-dependencies = [
- "cfg-if",
- "libc",
- "r-efi 6.0.0",
 ]
 
 [[package]]
@@ -937,7 +957,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-adaptive-planning-policy"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=8f56d720bdafcd5d213a30b8d5d12283f36a6682#8f56d720bdafcd5d213a30b8d5d12283f36a6682"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=70a80a2b51b41759217eec05086cb76586c4f1a5#70a80a2b51b41759217eec05086cb76586c4f1a5"
 dependencies = [
  "lexongraph-directional-pca",
  "lexongraph-pca",
@@ -947,7 +967,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=8f56d720bdafcd5d213a30b8d5d12283f36a6682#8f56d720bdafcd5d213a30b8d5d12283f36a6682"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=70a80a2b51b41759217eec05086cb76586c4f1a5#70a80a2b51b41759217eec05086cb76586c4f1a5"
 dependencies = [
  "ciborium",
  "sha2 0.11.0",
@@ -956,7 +976,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=8f56d720bdafcd5d213a30b8d5d12283f36a6682#8f56d720bdafcd5d213a30b8d5d12283f36a6682"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=70a80a2b51b41759217eec05086cb76586c4f1a5#70a80a2b51b41759217eec05086cb76586c4f1a5"
 dependencies = [
  "lexongraph-block",
 ]
@@ -964,7 +984,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store-fs"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=8f56d720bdafcd5d213a30b8d5d12283f36a6682#8f56d720bdafcd5d213a30b8d5d12283f36a6682"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=70a80a2b51b41759217eec05086cb76586c4f1a5#70a80a2b51b41759217eec05086cb76586c4f1a5"
 dependencies = [
  "lexongraph-block",
  "lexongraph-block-store",
@@ -974,7 +994,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-dcbc-streaming"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=8f56d720bdafcd5d213a30b8d5d12283f36a6682#8f56d720bdafcd5d213a30b8d5d12283f36a6682"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=70a80a2b51b41759217eec05086cb76586c4f1a5#70a80a2b51b41759217eec05086cb76586c4f1a5"
 dependencies = [
  "lexongraph-streaming-clustering",
 ]
@@ -982,7 +1002,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-directional-pca"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=8f56d720bdafcd5d213a30b8d5d12283f36a6682#8f56d720bdafcd5d213a30b8d5d12283f36a6682"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=70a80a2b51b41759217eec05086cb76586c4f1a5#70a80a2b51b41759217eec05086cb76586c4f1a5"
 dependencies = [
  "lexongraph-pca",
  "lexongraph-streaming-clustering",
@@ -992,7 +1012,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-embeddings-trait"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=8f56d720bdafcd5d213a30b8d5d12283f36a6682#8f56d720bdafcd5d213a30b8d5d12283f36a6682"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=70a80a2b51b41759217eec05086cb76586c4f1a5#70a80a2b51b41759217eec05086cb76586c4f1a5"
 dependencies = [
  "lexongraph-block",
  "pollster",
@@ -1001,7 +1021,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-linear-algebra-acceleration"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=8f56d720bdafcd5d213a30b8d5d12283f36a6682#8f56d720bdafcd5d213a30b8d5d12283f36a6682"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=70a80a2b51b41759217eec05086cb76586c4f1a5#70a80a2b51b41759217eec05086cb76586c4f1a5"
 dependencies = [
  "serde",
 ]
@@ -1009,7 +1029,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-pca"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=8f56d720bdafcd5d213a30b8d5d12283f36a6682#8f56d720bdafcd5d213a30b8d5d12283f36a6682"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=70a80a2b51b41759217eec05086cb76586c4f1a5#70a80a2b51b41759217eec05086cb76586c4f1a5"
 dependencies = [
  "nalgebra",
 ]
@@ -1017,7 +1037,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-search"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=8f56d720bdafcd5d213a30b8d5d12283f36a6682#8f56d720bdafcd5d213a30b8d5d12283f36a6682"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=70a80a2b51b41759217eec05086cb76586c4f1a5#70a80a2b51b41759217eec05086cb76586c4f1a5"
 dependencies = [
  "lexongraph-block",
  "lexongraph-block-store",
@@ -1026,21 +1046,22 @@ dependencies = [
 [[package]]
 name = "lexongraph-spherical-kmeans"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=8f56d720bdafcd5d213a30b8d5d12283f36a6682#8f56d720bdafcd5d213a30b8d5d12283f36a6682"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=70a80a2b51b41759217eec05086cb76586c4f1a5#70a80a2b51b41759217eec05086cb76586c4f1a5"
 dependencies = [
  "lexongraph-linear-algebra-acceleration",
  "lexongraph-streaming-clustering",
+ "rayon",
 ]
 
 [[package]]
 name = "lexongraph-streaming-clustering"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=8f56d720bdafcd5d213a30b8d5d12283f36a6682#8f56d720bdafcd5d213a30b8d5d12283f36a6682"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=70a80a2b51b41759217eec05086cb76586c4f1a5#70a80a2b51b41759217eec05086cb76586c4f1a5"
 
 [[package]]
 name = "lexongraph-streaming-indexer"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=8f56d720bdafcd5d213a30b8d5d12283f36a6682#8f56d720bdafcd5d213a30b8d5d12283f36a6682"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=70a80a2b51b41759217eec05086cb76586c4f1a5#70a80a2b51b41759217eec05086cb76586c4f1a5"
 dependencies = [
  "ciborium",
  "half",
@@ -1353,12 +1374,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
-name = "r-efi"
-version = "6.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
-
-[[package]]
 name = "rand"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1392,6 +1407,26 @@ name = "rawpointer"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3"
+
+[[package]]
+name = "rayon"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
+]
 
 [[package]]
 name = "ref-cast"
@@ -1516,7 +1551,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1726,7 +1761,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1785,10 +1820,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

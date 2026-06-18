@@ -339,7 +339,7 @@ status-observer telemetry surfaces as a mechanical adaptation boundary, not as
 permission to narrow the approved repository contract.
 
 For this increment, that boundary is the LexonGraph dependency refresh to commit
-`8f56d720bdafcd5d213a30b8d5d12283f36a6682`, which is intended to pick up
+`70a80a2b51b41759217eec05086cb76586c4f1a5`, which is intended to pick up
 upstream wgpu acceleration without changing the repository-visible
 published-profile, CLI, request-schema, or MCP-facing contracts.
 
@@ -357,7 +357,7 @@ upgrade whenever the latest upstream contract still supports them semantically:
   that same repository-owned progress surface
 - unchanged MCP search-serving behavior for already-indexed content
 - dependency-pin-only adoption of upstream wgpu acceleration at commit
-  `8f56d720bdafcd5d213a30b8d5d12283f36a6682`
+  `70a80a2b51b41759217eec05086cb76586c4f1a5`
 
 If any of those capabilities proves unavailable on the latest upstream surface,
 the implementation must surface that as an explicit compatibility finding or

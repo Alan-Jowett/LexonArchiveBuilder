@@ -23,9 +23,9 @@ thiserror = "2.0.17"
 tokio = { version = "1.52.3", features = ["io-std", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
 
 lexonarchivebuilder-indexer = { path = "crates/lexonarchivebuilder-indexer" }
-lexongraph-block = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "8f56d720bdafcd5d213a30b8d5d12283f36a6682", package = "lexongraph-block" }
-lexongraph-block-store = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "8f56d720bdafcd5d213a30b8d5d12283f36a6682", package = "lexongraph-block-store" }
-lexongraph-block-store-fs = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "8f56d720bdafcd5d213a30b8d5d12283f36a6682", package = "lexongraph-block-store-fs" }
-lexongraph-embeddings-trait = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "8f56d720bdafcd5d213a30b8d5d12283f36a6682", package = "lexongraph-embeddings-trait" }
-lexongraph-search = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "8f56d720bdafcd5d213a30b8d5d12283f36a6682", package = "lexongraph-search" }
-lexongraph-streaming-indexer = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "8f56d720bdafcd5d213a30b8d5d12283f36a6682", package = "lexongraph-streaming-indexer" }
+lexongraph-block = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "70a80a2b51b41759217eec05086cb76586c4f1a5", package = "lexongraph-block" }
+lexongraph-block-store = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "70a80a2b51b41759217eec05086cb76586c4f1a5", package = "lexongraph-block-store" }
+lexongraph-block-store-fs = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "70a80a2b51b41759217eec05086cb76586c4f1a5", package = "lexongraph-block-store-fs" }
+lexongraph-embeddings-trait = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "70a80a2b51b41759217eec05086cb76586c4f1a5", package = "lexongraph-embeddings-trait" }
+lexongraph-search = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "70a80a2b51b41759217eec05086cb76586c4f1a5", package = "lexongraph-search" }
+lexongraph-streaming-indexer = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "70a80a2b51b41759217eec05086cb76586c4f1a5", package = "lexongraph-streaming-indexer" }
