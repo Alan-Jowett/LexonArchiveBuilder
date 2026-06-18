@@ -165,7 +165,7 @@ while [[ $# -gt 0 ]]; do
     --clustering-min-input-count|\
     --clustering-min-effective-rank|\
     --clustering-min-cumulative-variance)
-      printf 'error: %s is no longer supported; clustering now uses the repository-pinned published profile v0.1.0\n' "$1" >&2
+      printf 'error: %s is no longer supported; clustering now uses the repository-pinned published profile 0.1.0\n' "$1" >&2
       exit 1
       ;;
     --help|-h)
