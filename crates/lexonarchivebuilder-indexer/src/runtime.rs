@@ -44,6 +44,8 @@ const REPLAY_JOURNAL_FILE_MAGIC: &[u8] = b"LABRJ1\0";
 const REPLAY_JOURNAL_SEGMENT_PREFIX: &str = "segment-";
 const REPLAY_JOURNAL_SEGMENT_EXTENSION: &str = "cbor";
 const REPLAY_JOURNAL_SEGMENT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const REPLAY_JOURNAL_RECORD_MAX_BYTES: usize =
+    (REPLAY_JOURNAL_SEGMENT_MAX_BYTES as usize) - REPLAY_JOURNAL_FILE_MAGIC.len() - 4;
 
 #[derive(Clone, Copy)]
 struct RuntimeIo<'a> {
@@ -442,6 +444,12 @@ pub enum RuntimeError {
     },
     #[error("failed to append replay journal {path}: {source}")]
     WriteReplayJournal {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to read replay journal {path}: {source}")]
+    ReadReplayJournal {
         path: String,
         #[source]
         source: io::Error,
@@ -1579,6 +1587,7 @@ fn append_replay_journal_records(
         replay_journal_segment_path(&journal_root, current_segment_index)
     };
     let mut current_size = initialize_replay_journal_segment(&current_segment_path)?;
+    let mut file = open_replay_journal_segment_for_append(&current_segment_path)?;
 
     for record in records {
         let mut encoded = Vec::new();
@@ -1592,19 +1601,18 @@ fn append_replay_journal_records(
         if current_size > REPLAY_JOURNAL_FILE_MAGIC.len() as u64
             && current_size + frame_size > REPLAY_JOURNAL_SEGMENT_MAX_BYTES
         {
+            file.sync_data()
+                .map_err(|source| RuntimeError::WriteReplayJournal {
+                    path: current_segment_path.display().to_string(),
+                    source,
+                })?;
             current_segment_index += 1;
             current_segment_path =
                 replay_journal_segment_path(&journal_root, current_segment_index);
             current_size = initialize_replay_journal_segment(&current_segment_path)?;
+            file = open_replay_journal_segment_for_append(&current_segment_path)?;
         }
 
-        let mut file = fs::OpenOptions::new()
-            .append(true)
-            .open(&current_segment_path)
-            .map_err(|source| RuntimeError::WriteReplayJournal {
-                path: current_segment_path.display().to_string(),
-                source,
-            })?;
         let record_len =
             u32::try_from(encoded.len()).map_err(|_| RuntimeError::WriteReplayJournal {
                 path: current_segment_path.display().to_string(),
@@ -1615,7 +1623,6 @@ fn append_replay_journal_records(
             })?;
         file.write_all(&record_len.to_le_bytes())
             .and_then(|_| file.write_all(&encoded))
-            .and_then(|_| file.sync_data())
             .map_err(|source| RuntimeError::WriteReplayJournal {
                 path: current_segment_path.display().to_string(),
                 source,
@@ -1623,25 +1630,42 @@ fn append_replay_journal_records(
         current_size += frame_size;
     }
 
+    file.sync_data()
+        .map_err(|source| RuntimeError::WriteReplayJournal {
+            path: current_segment_path.display().to_string(),
+            source,
+        })?;
+
     Ok(())
 }
 
 fn replay_journal_segment_paths(journal_root: &Path) -> Result<Vec<PathBuf>, RuntimeError> {
+    collect_replay_journal_segment_paths(journal_root).map_err(|source| {
+        RuntimeError::PrepareReplayJournal {
+            path: journal_root.display().to_string(),
+            source,
+        }
+    })
+}
+
+fn load_replay_journal_segment_paths(journal_root: &Path) -> Result<Vec<PathBuf>, RuntimeError> {
+    collect_replay_journal_segment_paths(journal_root).map_err(|source| {
+        RuntimeError::ReadReplayJournal {
+            path: journal_root.display().to_string(),
+            source,
+        }
+    })
+}
+
+fn collect_replay_journal_segment_paths(journal_root: &Path) -> io::Result<Vec<PathBuf>> {
     if !journal_root.exists() {
         return Ok(Vec::new());
     }
 
     let mut segments = Vec::new();
-    let entries =
-        fs::read_dir(journal_root).map_err(|source| RuntimeError::PrepareReplayJournal {
-            path: journal_root.display().to_string(),
-            source,
-        })?;
+    let entries = fs::read_dir(journal_root)?;
     for entry in entries {
-        let entry = entry.map_err(|source| RuntimeError::PrepareReplayJournal {
-            path: journal_root.display().to_string(),
-            source,
-        })?;
+        let entry = entry?;
         let path = entry.path();
         if replay_journal_segment_index(&path).is_some() {
             segments.push(path);
@@ -1696,11 +1720,21 @@ fn initialize_replay_journal_segment(path: &Path) -> Result<u64, RuntimeError> {
     Ok(REPLAY_JOURNAL_FILE_MAGIC.len() as u64)
 }
 
+fn open_replay_journal_segment_for_append(path: &Path) -> Result<fs::File, RuntimeError> {
+    fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .map_err(|source| RuntimeError::WriteReplayJournal {
+            path: path.display().to_string(),
+            source,
+        })
+}
+
 fn load_replay_journal_records(
     block_store_root: &Path,
 ) -> Result<Option<Vec<ReplayJournalRecord>>, RuntimeError> {
     let journal_root = replay_journal_root(block_store_root);
-    let segment_paths = replay_journal_segment_paths(&journal_root)?;
+    let segment_paths = load_replay_journal_segment_paths(&journal_root)?;
     if segment_paths.is_empty() {
         return Ok(None);
     }
@@ -1708,7 +1742,7 @@ fn load_replay_journal_records(
     let mut records = Vec::new();
     for segment_path in segment_paths {
         let mut file =
-            fs::File::open(&segment_path).map_err(|source| RuntimeError::WriteReplayJournal {
+            fs::File::open(&segment_path).map_err(|source| RuntimeError::ReadReplayJournal {
                 path: segment_path.display().to_string(),
                 source,
             })?;
@@ -1723,19 +1757,22 @@ fn load_replay_journal_records(
                 Ok(()) => {}
                 Err(error) if error.kind() == ErrorKind::UnexpectedEof => break,
                 Err(error) => {
-                    return Err(RuntimeError::WriteReplayJournal {
+                    return Err(RuntimeError::ReadReplayJournal {
                         path: segment_path.display().to_string(),
                         source: error,
                     });
                 }
             }
             let record_len = u32::from_le_bytes(len_bytes) as usize;
+            if record_len > REPLAY_JOURNAL_RECORD_MAX_BYTES {
+                return Ok(None);
+            }
             let mut payload = vec![0u8; record_len];
             match file.read_exact(&mut payload) {
                 Ok(()) => {}
                 Err(error) if error.kind() == ErrorKind::UnexpectedEof => break,
                 Err(error) => {
-                    return Err(RuntimeError::WriteReplayJournal {
+                    return Err(RuntimeError::ReadReplayJournal {
                         path: segment_path.display().to_string(),
                         source: error,
                     });
@@ -4886,6 +4923,64 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(records.len(), 1);
+        server.join();
+    }
+
+    #[tokio::test]
+    async fn replay_journal_rejects_oversized_record_length() {
+        let temp = tempdir().unwrap();
+        let document_path = temp.path().join("alpha.txt");
+        fs::write(&document_path, "alpha\n").unwrap();
+
+        let server = spawn_embedding_server(1);
+        let request = BatchRequest {
+            environment: EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: server.base_url.clone(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            block_size_target: 65_536,
+            stage: ExecutionStage::IngestionAndEmbedding,
+            max_concurrency: Some(1),
+            items: vec![BatchItemConfig::Document {
+                path: document_path
+                    .strip_prefix(temp.path())
+                    .unwrap()
+                    .to_path_buf(),
+                metadata: BTreeMap::new(),
+            }],
+        };
+        run_request(temp.path(), request).await.unwrap();
+
+        let block_store_root = temp.path().join("blocks");
+        let segment_path = replay_journal_segment_paths(&replay_journal_root(&block_store_root))
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&segment_path)
+            .unwrap();
+        let oversized_len = (REPLAY_JOURNAL_RECORD_MAX_BYTES + 1) as u32;
+        file.write_all(&oversized_len.to_le_bytes()).unwrap();
+        file.sync_data().unwrap();
+
+        assert!(
+            load_replay_journal_records(&block_store_root)
+                .unwrap()
+                .is_none()
+        );
         server.join();
     }
 

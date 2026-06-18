@@ -653,10 +653,11 @@ the same invocation, LexonArchiveBuilder SHALL derive clustering inputs from a
 repository-owned replay-input source that is valid for the configured store
 snapshot.
 
-- **Preferred source [KNOWN]:** When a valid LexonArchiveBuilder-owned replay
-  journal is available for the configured store snapshot, standalone
-  clustering SHALL reconstruct replay inputs from that journal rather than by
-  rescanning the entire configured block store.
+- **Preferred source [KNOWN]:** When the selected environment exposes a
+  LexonArchiveBuilder-managed local filesystem block-store root and a valid
+  LexonArchiveBuilder-owned replay journal is available for that configured
+  store snapshot, standalone clustering SHALL reconstruct replay inputs from
+  that journal rather than by rescanning the entire configured block store.
 - **Compatibility fallback [KNOWN]:** When the replay journal is absent,
   incomplete, incompatible with the configured store snapshot, or intentionally
   unavailable because the store was rebuilt without journal continuity,
@@ -682,7 +683,8 @@ snapshot.
 #### RQ-INDEXER-003E1 - Durable replay journal for split-stage reuse
 
 LexonArchiveBuilder SHALL persist a repository-owned durable replay journal for
-successfully persisted replayable leaf outputs.
+successfully persisted replayable leaf outputs when the selected environment
+exposes a LexonArchiveBuilder-managed local filesystem block-store root.
 
 - **Write boundary [KNOWN]:** A journal record SHALL become durable only after
   the corresponding replayable leaf output has been durably persisted through
@@ -692,6 +694,9 @@ successfully persisted replayable leaf outputs.
      outputs
   2. clustering-only replay that can reconstruct delegated replay inputs
      without requiring whole-store discovery in the common case
+- **Environment scope [KNOWN]:** Environments that do not expose a
+  LexonArchiveBuilder-managed local filesystem block-store root remain on the
+  compatibility fallback path until an equivalent journal location is approved.
 - **Ownership boundary [KNOWN]:** The journal is a LexonArchiveBuilder-owned
   orchestration artifact and SHALL NOT redefine LexonGraph-owned block
   identity, embedding, or replay-validation semantics.

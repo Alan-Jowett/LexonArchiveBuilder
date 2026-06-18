@@ -221,11 +221,12 @@ ingestion phase in the same invocation, LexonArchiveBuilder derives its clusteri
 candidate set from a repository-owned replay-input source that is valid for the
 configured store snapshot.
 
-The preferred source is a LAB-owned replay journal emitted during successful
-leaf persistence. When that journal is absent, incompatible, incomplete, or
-intentionally unavailable because the store was rebuilt without journal
-continuity, the runtime falls back to iterating the configured `BlockStore`
-through the upstream LexonGraph block-iteration API.
+When the selected environment exposes a LAB-managed local filesystem block-store
+root, the preferred source is a LAB-owned replay journal emitted during
+successful leaf persistence. When that journal is absent, incompatible,
+incomplete, or intentionally unavailable because the store was rebuilt without
+journal continuity, the runtime falls back to iterating the configured
+`BlockStore` through the upstream LexonGraph block-iteration API.
 
 LexonArchiveBuilder treats the approved replay-journal contract plus the upstream
 iteration contract as the authorities for which stored inputs are
@@ -259,6 +260,7 @@ RQ-INDEXER-004F
 
 ### DSG-LFI-001F1 `Replay-journal write and growth discipline`
 
+For environments that expose a LAB-managed local filesystem block-store root,
 LexonArchiveBuilder realizes the repository-owned replay staging artifact as a
 durable replay journal whose committed records are append-only and emitted only
 after the corresponding replayable leaf output has been durably persisted

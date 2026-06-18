@@ -144,9 +144,10 @@ DSG-LFI-001F1
 
 ### VAL-LFI-002I
 
-Run the clustering-plus-block-assembly stage against a configured block store
-that already contains representative delegated blocks, replay metadata, a valid
-replay journal, and an empty request item collection.
+Run the clustering-plus-block-assembly stage against a configured local
+filesystem-backed block store that already contains representative delegated
+blocks, replay metadata, a valid replay journal, and an empty request item
+collection.
 
 **Pass condition:** LexonArchiveBuilder prefers the replay journal as the
 clustering-only replay-input source, reconstructs the deterministic replay input
