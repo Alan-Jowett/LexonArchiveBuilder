@@ -3,8 +3,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for latest LexonGraph planning-policy and telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, and rooted CLI search discovery
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, clustering-mode and clustering-algorithm selection, clustering-option exposure, latest planning-policy and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics and rooted TNN-recall diagnostics, rooted CLI search over stored trees, and layer-parallel block-construction evolution
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, and rooted CLI search discovery
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, published-profile-based clustering configuration, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics and rooted TNN-recall diagnostics, rooted CLI search over stored trees, and layer-parallel block-construction evolution
 
 ## USER-REQUEST
 
@@ -128,6 +128,11 @@
 - **UR-118 [KNOWN]:** The clustering-mode contract should remain content-type-agnostic so it applies uniformly across current and future content types.
 - **UR-119 [KNOWN]:** Local/testing and production-shaped indexer invocations should expose the same clustering-mode contract and default.
 - **UR-120 [KNOWN]:** Existing algorithm-specific clustering controls should continue to work under the selected clustering mode.
+- **UR-121 [KNOWN]:** LexonGraph now exposes a simpler higher-level streaming indexing API that groups planning and hierarchy options into a published versioned profile.
+- **UR-122 [KNOWN]:** LexonArchiveBuilder should switch from the current lower-level planning-policy configuration path to the published-profile API.
+- **UR-123 [KNOWN]:** This increment should use the published profile version `0.1.0`.
+- **UR-124 [KNOWN]:** The indexer's external clustering configuration contract should be replaced by a profile-based contract pinned to published profile `0.1.0` rather than preserving the current low-level mode, algorithm, and option controls.
+- **UR-125 [INFERRED]:** The approved `0.1.0` profile should apply consistently across local/testing and production-shaped invocations unless a later approved increment expands the profile-version surface.
 
 ## Change Manifest
 
@@ -190,6 +195,9 @@
 | CM-INDEXER-055 | Revise | Extend corpus-based rooted TNN-Recall so the approximate-neighbor path exposes configurable traversal width for measurement sweeps without changing aggregate-mode ownership | UR-102, UR-113 |
 | CM-INDEXER-056 | Revise | Extend delegated clustering control to include a first-class clustering-mode selector, with aggregation as the repository default and divisive as an explicit opt-in | UR-114, UR-115, UR-116 |
 | CM-INDEXER-057 | Add | Preserve indexing-only clustering-mode parity across environments and content types while keeping existing algorithm-specific controls subordinate to the selected mode and upstream contract | UR-117, UR-118, UR-119, UR-120 |
+| CM-INDEXER-058 | Revise | Replace the current lower-level planning-policy integration target with the higher-level published-profile streaming API and require `0.1.0` for this increment | UR-121, UR-122, UR-123 |
+| CM-INDEXER-059 | Revise | Replace the current external clustering mode, algorithm, and option contract with a profile-based contract pinned to published profile `0.1.0` | UR-121, UR-123, UR-124 |
+| CM-INDEXER-060 | Add | Preserve environment-neutral and content-type-neutral indexing behavior while the approved published-profile version remains fixed across invocation shapes in this increment | UR-118, UR-119, UR-123, UR-125 |
 
 ## Before / After
 
@@ -478,6 +486,21 @@
 - **Before [KNOWN]:** The requirements did not explicitly constrain the new clustering-mode choice to remain indexing-only, environment-stable, and content-type-agnostic, nor did they tie existing algorithm-specific controls to the selected mode.
 - **After [KNOWN]:** The requirements now preserve unchanged MCP behavior, require the same clustering-mode contract across local/testing and production-shaped invocations, keep the control generic across current and future content types, and require existing algorithm-specific controls to remain subordinate to the selected mode and upstream support matrix.
 
+### BA-INDEXER-058
+
+- **Before [KNOWN]:** The requirements targeted the lower-level planning-policy integration surface and did not yet capture the newly published higher-level LexonGraph profile API.
+- **After [KNOWN]:** The requirements now target the higher-level published-profile API and require the approved `0.1.0` profile version for this increment.
+
+### BA-INDEXER-059
+
+- **Before [KNOWN]:** The external indexer contract centered clustering configuration on explicit clustering mode, algorithm, and algorithm-specific option controls.
+- **After [KNOWN]:** The external indexer contract now centers clustering configuration on the approved published profile version instead of exposing the retired low-level control family.
+
+### BA-INDEXER-060
+
+- **Before [KNOWN]:** The requirements preserved clustering-configuration parity across environments and content types, but they did so through a low-level mode-and-algorithm contract that is now being retired.
+- **After [KNOWN]:** The requirements preserve the same parity and extensibility expectations while pinning both invocation shapes to the same approved published profile version in this increment.
+
 ## Requirements
 
 ### Functional Requirements
@@ -603,100 +626,71 @@ the configured `BlockStore` through the LexonGraph block-iteration API.
   yield the same logical clustering result under unchanged upstream semantics.
 - **Traceability:** UR-39, UR-40
 
-#### RQ-INDEXER-003F - Clustering mode and algorithm selection
+#### RQ-INDEXER-003F - Published profile adoption for clustering-enabled execution
 
 For any execution stage that includes clustering plus block assembly,
-LexonArchiveBuilder SHALL provide an explicit delegated clustering mode and
-delegated clustering algorithm selection that satisfies the updated LexonGraph
-streaming indexer contract.
+LexonArchiveBuilder SHALL invoke the delegated LexonGraph streaming indexer
+through the published-profile API and SHALL use published profile version
+`0.1.0` for this increment.
 
-- **Upstream contract [KNOWN]:** The delegated streaming indexer now requires the
-  caller to choose an aggregation-based or divisive clustering mode, choose a
-  built-in planning configuration within the upstream-supported matrix, and pass
-  the corresponding algorithm-specific settings rather than relying on one
-  implicit clustering realization or the retired built-in clustering-factory
-  seam.
-- **Default mode [KNOWN]:** When the caller omits clustering mode,
-  LexonArchiveBuilder SHALL default to aggregation-based clustering.
-- **Current built-in algorithms [KNOWN]:**
-  - `dcbc`
-  - `directional-pca`
-- **Compatibility rule [INFERRED]:** LexonArchiveBuilder SHALL preserve the
-  existing algorithm-specific control families when the selected clustering mode
-  and the upstream contract support the chosen algorithm, and SHALL fail
-  explicitly rather than silently remapping or ignoring unsupported
-  mode-and-algorithm combinations.
+- **Upstream contract [KNOWN]:** The delegated streaming indexer now exposes a
+  published-profile surface in which profile version selects the approved leaf
+  algorithm, packing strategy, hierarchy strategy, summary policy, and related
+  planning parameters as one versioned configuration.
+- **Approved profile [KNOWN]:** Published profile version `0.1.0` is the only
+  approved clustering-enabled profile in this increment.
+- **Compatibility rule [KNOWN]:** LexonArchiveBuilder SHALL adopt that profile
+  directly rather than reconstructing an equivalent repository-local
+  planning-policy configuration from lower-level clustering controls.
 - **Stage boundary [KNOWN]:** This requirement applies to the `full` and
   `clustering+block-assembly` execution stages and does not affect
   `ingestion+embedding` execution.
 - **Delegation boundary [KNOWN]:** LexonArchiveBuilder still delegates all actual
-  planning and clustering behavior to LexonGraph and does not define
-  repository-local planning, clustering modes, or clustering algorithms in this
+  planning and hierarchy construction behavior to LexonGraph and does not
+  define repository-local clustering profiles or planning semantics in this
   increment.
-- **Default policy [KNOWN]:** When the caller omits clustering configuration,
-  LexonArchiveBuilder SHALL apply a repository-owned default mode, default
-  algorithm, and default option values that remain compatible with the upstream
-  contract.
-- **Compatibility note [KNOWN]:** The latest known upstream built-in planning
-  seam continues to expose `dcbc` and `directional-pca` as repository-relevant
-  built-in choices, but LexonArchiveBuilder must now bind those choices through
-  the planning-policy contract together with the selected clustering mode rather
-  than through `BuiltInClusteringFactory`.
-- **Traceability:** UR-39, UR-44, UR-50, UR-52, UR-53, UR-61, UR-62, UR-65, UR-114, UR-115, UR-116, UR-120
+- **Traceability:** UR-39, UR-44, UR-61, UR-62, UR-121, UR-122, UR-123, UR-124
 
-#### RQ-INDEXER-003G - Clustering mode and algorithm-specific options on the CLI
+#### RQ-INDEXER-003G - Profile-based clustering contract on the CLI and `BatchRequest`
 
-LexonArchiveBuilder SHALL expose command-line arguments that let operators
-select the delegated clustering mode, select the delegated clustering
-algorithm, and provide supported algorithm-specific option values for
-clustering-enabled execution.
+LexonArchiveBuilder SHALL express clustering-enabled batch configuration on the
+CLI and `BatchRequest` in terms of the approved published profile contract
+rather than low-level clustering mode, clustering algorithm, and
+algorithm-specific option controls.
 
-- **Required surface [KNOWN]:** The CLI must let the caller choose among the
-  supported delegated clustering modes and delegated clustering algorithms and
-  set supported option values without modifying Rust code or request fixtures.
-- **Algorithm-family boundary [KNOWN]:** LexonArchiveBuilder SHALL expose only the
-  options actually supported by the selected delegated clustering algorithm.
-  Shared options may be reused across algorithms, but algorithm-specific
-  options must remain explicit rather than silently ignored.
-- **Mode boundary [KNOWN]:** LexonArchiveBuilder SHALL expose only the delegated
-  algorithms and option combinations that are valid for the selected clustering
-  mode on the upstream contract.
-- **Validation rule [INFERRED]:** Supplying an option that is unsupported by the
-  selected mode or selected algorithm SHALL fail explicitly rather than being
-  dropped or reinterpreted as a different option.
+- **Required surface [KNOWN]:** Clustering-enabled invocations must no longer
+  require callers to understand or populate low-level upstream planning-policy
+  fields when the approved published profile is sufficient.
+- **Pinned-profile rule [KNOWN]:** In this increment, the approved external
+  contract is the repository-pinned published profile version `0.1.0`; callers
+  are not required to select among multiple approved profile versions.
+- **Retirement rule [KNOWN]:** Legacy clustering mode, clustering algorithm, and
+  algorithm-specific tuning controls SHALL be removed from the approved
+  external contract for this increment rather than silently accepted and
+  ignored.
 - **Environment-parity implication [INFERRED]:** The same CLI surface must remain
   usable for local/testing and production-shaped batch invocations so
-  environment selection does not introduce a separate clustering-configuration
+  environment selection does not introduce a separate profile-configuration
   interface family.
-- **[UNKNOWN: whether this increment also requires equivalent request-file
-  fields in `BatchRequest` rather than CLI-only exposure]**
-- **Traceability:** UR-4, UR-12, UR-13, UR-50, UR-51, UR-52, UR-53, UR-114, UR-115, UR-119, UR-120
+- **Traceability:** UR-4, UR-12, UR-13, UR-42, UR-119, UR-123, UR-124, UR-125
 
-#### RQ-INDEXER-003H - Auto-sized omitted cluster count
+#### RQ-INDEXER-003H - Published profile-owned clustering cardinality
 
-When a clustering-enabled execution omits `cluster_count`, LexonArchiveBuilder
-SHALL derive the effective cluster count from the number of clustering inputs
-and the maximum parent-branch capacity implied by the active embedding
-specification and block-size target.
+For clustering-enabled execution in this increment, LexonArchiveBuilder SHALL
+use the clustering cardinality and related planning parameters owned by the
+approved published profile version `0.1.0` rather than deriving or accepting
+repository-local `cluster_count` overrides.
 
-- **Applicability [KNOWN]:** This omitted-option derivation rule SHALL apply to
-  every supported built-in clustering algorithm, including `dcbc` and
-  `directional-pca`, rather than being limited to one algorithm family.
-- **Override rule [KNOWN]:** When the caller explicitly supplies
-  `cluster_count`, LexonArchiveBuilder SHALL honor that explicit value instead
-  of replacing it with a derived count.
-- **Sizing objective [INFERRED]:** The derived count SHALL be large enough that
-  the first parent-materialization layer can satisfy the repository's block-size
-  target using the active embedding dimensions and encoding, subject to the
-  delegated indexer's minimum child-count constraints.
-- **Parity implication [INFERRED]:** The same omitted-option auto-sizing rule
-  SHALL apply in both `full` and `clustering+block-assembly` execution so
-  ingestion-stage participation does not change clustering-count semantics.
-- **Failure-safety implication [INFERRED]:** If no valid derived count can
-  satisfy the active embedding specification, block-size target, and minimum
-  branch constraints, LexonArchiveBuilder SHALL fail explicitly rather than
-  silently falling back to an unsafe fixed default.
-- **Traceability:** UR-39, UR-43, UR-52, UR-53, UR-56, UR-57, UR-58
+- **Behavior change [KNOWN]:** The previously approved omitted-option auto-sizing
+  rule is retired for this increment because the published profile now owns the
+  relevant planning cardinality.
+- **Override rule [KNOWN]:** Callers SHALL NOT supply repository-local
+  `cluster_count` overrides while the approved contract remains pinned to
+  profile `0.1.0`.
+- **Delegation boundary [KNOWN]:** Any future variation in clustering cardinality
+  for this surface must come from an approved published profile version rather
+  than from repository-local remapping of profile internals.
+- **Traceability:** UR-56, UR-57, UR-58, UR-121, UR-123, UR-124
 
 #### RQ-INDEXER-003I - Upstream feature-regression containment
 
@@ -709,9 +703,9 @@ behavior.
 - **Repository-required capabilities [KNOWN]:**
   - the external stage contract (`full`, `ingestion+embedding`, `clustering+block-assembly`)
   - deterministic split-stage replay acceptance
-  - explicit clustering-mode selection with aggregation as the default and divisive as an opt-in
-  - explicit built-in algorithm selection for `dcbc` and `directional-pca`
-  - omitted `cluster_count` auto-sizing with explicit override preservation
+  - adoption of the published-profile API for clustering-enabled execution
+  - repository pinning to published profile `0.1.0` for the approved increment
+  - removal of the retired low-level clustering mode, algorithm, and numeric tuning controls from the approved external contract
   - runtime progress projection that keeps raw upstream lifecycle details behind the repository-owned progress surface
   - projection of the latest upstream live telemetry and heartbeat events onto that same repository-owned progress surface
   - unchanged MCP search-serving and retrieval behavior for already-indexed content
@@ -835,10 +829,10 @@ LexonArchiveBuilder SHALL preserve idempotent rerun behavior for repeated indexi
   stage against the same clustering-eligible block-store snapshot must not
   change the logical clustering result under unchanged upstream semantics.
 - **Clustering-configuration implication [INFERRED]:** Repeating a clustering-enabled
-  run against unchanged inputs under the same effective clustering algorithm and
-  option values must not change the logical clustering result merely because a
-  defaulted clustering configuration resolved differently.
-- **Traceability:** UR-8, UR-16, UR-36, UR-50, UR-52
+  run against unchanged inputs under the same approved published profile
+  version must not change the logical clustering result merely because profile
+  selection or resolution differed across invocations.
+- **Traceability:** UR-8, UR-16, UR-36, UR-121, UR-123, UR-124
 
 #### RQ-INDEXER-008A - Local integration composition
 
@@ -896,10 +890,10 @@ reconstructable to an operator.
   equivalent repository-owned logical nodes were being clustered.
 - **Effective-configuration visibility [KNOWN]:** Failure diagnostics must record
   the effective delegated clustering configuration actually used for the failed
-  attempt, including the selected algorithm, the resolved effective
-  `cluster_count`, the effective algorithm-specific parameter values, the active
-  embedding specification, the block-size target, and the selected execution
-  stage.
+  attempt, including the selected published profile version, the active
+  embedding specification, the block-size target, the selected execution
+  stage, and any profile-resolved delegated configuration identifiers needed to
+  explain the upstream failure.
 - **Embedding-health visibility [KNOWN]:** Failure diagnostics must include compact
   embedding-health evidence sufficient to explain embedding-degeneracy failures,
   including summary statistics and counts that let an operator distinguish
@@ -1115,10 +1109,10 @@ The indexer requirements SHALL remain limited to indexing-time orchestration and
 
 #### RQ-INDEXER-010A - Subordinate external contracts
 
-LexonArchiveBuilder SHALL remain subordinate to the public contracts owned by `lexongraph-streaming-indexer`, `lexongraph-streaming-clustering`, `lexongraph-block-store`, and `lexongraph-embeddings-trait` and SHALL NOT redefine their index-construction, planning-policy, replay-validation, block-identity, or embedding-contract semantics within this repository.
+LexonArchiveBuilder SHALL remain subordinate to the public contracts owned by `lexongraph-streaming-indexer`, `lexongraph-streaming-clustering`, `lexongraph-block-store`, and `lexongraph-embeddings-trait` and SHALL NOT redefine their index-construction, published-profile, replay-validation, block-identity, or embedding-contract semantics within this repository.
 
 - **Rationale [KNOWN]:** Those semantics are already owned by the upstream LexonGraph crates and specifications.
-- **Traceability:** UR-3, UR-8, UR-9, UR-44, UR-45, UR-48, UR-61, UR-62
+- **Traceability:** UR-3, UR-8, UR-9, UR-44, UR-45, UR-48, UR-61, UR-62, UR-121, UR-122
 
 #### RQ-INDEXER-010B - Local block-store tooling interoperability
 
@@ -1137,15 +1131,14 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - **Stage-semantics implication [KNOWN]:** Stage selection must be expressed in
   terms of generic pipeline phases rather than mailbox-specific behavior so
   future content types can participate without redefining the batch contract.
-- **Clustering-configuration implication [INFERRED]:** Clustering mode
-  selection, clustering algorithm selection, and supported option values must
-  remain part of the same stable batch-orchestration boundary across
-  environments rather than creating a separate environment-specific clustering
-  configuration model.
-- **Content-type implication [KNOWN]:** The clustering-mode contract must remain
-  generic across current mailbox and document flows so future content types do
-  not require a parallel clustering-control family.
-- **Traceability:** UR-3, UR-6, UR-7, UR-13, UR-19, UR-22, UR-42, UR-50, UR-51, UR-114, UR-118, UR-119
+- **Clustering-configuration implication [INFERRED]:** Published profile
+  selection and its repository-approved defaults must remain part of the same
+  stable batch-orchestration boundary across environments rather than creating
+  a separate environment-specific clustering configuration model.
+- **Content-type implication [KNOWN]:** The published-profile clustering contract
+  must remain generic across current mailbox and document flows so future
+  content types do not require a parallel clustering-control family.
+- **Traceability:** UR-3, UR-6, UR-7, UR-13, UR-19, UR-22, UR-42, UR-118, UR-119, UR-121, UR-123, UR-125
 
 ## Out of Scope
 
@@ -1161,7 +1154,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - Introducing a dedicated telemetry service, long-lived progress daemon, or MCP-visible progress API for indexing in this increment
 - Requiring higher-layer parent or node block concurrency in the current increment before the upstream delegated indexing surface exposes a compatible implementation seam
 - Introducing a repository-local per-run clustering manifest or a repository-local block-classification scheme outside the upstream LexonGraph block-iteration contract
-- Defining repository-local clustering modes, clustering algorithms, or option semantics beyond the supported upstream clustering choices used in this increment
+- Defining repository-local clustering profiles, clustering modes, clustering algorithms, or option semantics beyond the approved upstream published profile contract used in this increment
 - Requiring detailed clustering-input inventories for successful clustering runs in this increment
 - Requiring the block-tree quality assessment tool to expose an MCP-visible interface in this increment
 - Reinterpreting advisory embedding-space quality heuristics as new LexonGraph-owned block-validity rules in this increment
@@ -1179,10 +1172,10 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Idempotence and recoverability stay aligned with underlying immutable block semantics | Preserved with clarified scope | Requirements extend hash-addressed identity expectations to normalized email artifacts and require clustering-only reruns over the same clustering-eligible block-store snapshot to remain semantically stable under unchanged upstream semantics |
 | Local development remains self-contained and batch-oriented | Preserved | Docker Compose is constrained to compose local dependencies around the batch container rather than changing the runtime model |
 | Long-running batches remain observable without adding a control plane | Preserved with clarified scope | Progress reporting remains on the existing batch-runtime log surface and now explicitly includes the long-running embedding or leaf-materialization gap between mailbox expansion and downstream streaming-status visibility plus clustering-only replay submission progress, the handoff into upstream planning-pass waiting, and failure-only clustering diagnostics on the runtime log plus a request-adjacent artifact |
-| Caller-visible indexing and MCP contracts remain stable across the upstream API migration | Preserved | The streaming lifecycle is constrained to an internal adaptation behind the existing stage surface and unchanged MCP retrieval semantics |
-| Clustering configuration remains explicit and replayable | Preserved with clarified scope | Requirements now treat the effective clustering mode, algorithm, and option set as part of clustering-enabled orchestration input and constrain defaults to resolve deterministically |
-| Omitted clustering-size behavior remains deterministic and safe across algorithms | Preserved with clarified scope | Requirements now constrain omitted `cluster_count` to derive from input count plus embedding-aware branch capacity for every supported built-in algorithm while preserving explicit caller override behavior |
-| Required repository capabilities remain distinguishable from upstream regressions during the latest upgrade | Preserved with clarified scope | The requirements now force the upgrade to classify missing capabilities explicitly instead of silently narrowing split-stage replay, planning-policy mapping, progress projection, or MCP-facing behavior |
+| Caller-visible indexing and MCP contracts remain stable across the upstream API migration | Preserved with approved contract change | The stage surface and MCP retrieval semantics remain stable while clustering-enabled indexing adopts the approved published-profile contract in place of the retired low-level planning controls |
+| Clustering configuration remains explicit and replayable | Preserved with revised contract | Requirements now treat the approved published profile version as the replay-relevant clustering input rather than a repository-local mode, algorithm, and option tuple |
+| Clustering-size behavior remains deterministic under the approved profile | Preserved with revised ownership | Requirements now assign clustering cardinality to the approved published profile version `0.1.0` rather than to repository-local auto-sizing or caller overrides |
+| Required repository capabilities remain distinguishable from upstream regressions during the latest upgrade | Preserved with clarified scope | The requirements now force the upgrade to classify missing capabilities explicitly instead of silently narrowing split-stage replay, published-profile adoption, progress projection, or MCP-facing behavior |
 | Latest upstream telemetry remains subordinate to the existing runtime progress surface | Preserved with clarified scope | Requirements now constrain richer live telemetry and heartbeat events to the same repository-owned log stream rather than a new telemetry interface |
 | Operator-visible progress counts remain understandable across upstream telemetry changes | Preserved with clarified scope | Requirements now distinguish invocation-total delegated-item counts from stage-local or layer-local telemetry counts so upstream count-shape changes do not create misleading logs |
 | Post-index quality assessment remains subordinate to existing storage and serving boundaries | Preserved with clarified scope | The new assessment is constrained to a CLI-only operator tool that reads through the shared `BlockStore` boundary and does not alter MCP-facing behavior |
@@ -1195,7 +1188,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 
 ## Open Questions / Discovery Gaps
 
-- **Q-INDEXER-061 [UNKNOWN]:** Does the latest upstream planning-policy surface preserve exactly the same effective option semantics for `dcbc` balance constraints and `directional-pca` parameters that the repository already exposes, or only the same field names?
+- **Q-INDEXER-061 [UNKNOWN]:** After the repository adopts published profile `0.1.0`, does any approved downstream workflow still require an operator-visible profile-version selector, or is a repository-pinned profile sufficient until multiple approved profiles exist?
 - **Q-INDEXER-062 [UNKNOWN]:** Does the latest upstream status-observer contract expose enough information for LexonArchiveBuilder to preserve its current replay-submission handoff and long-running liveness messages without weakening operator visibility?
 - **Q-INDEXER-063 [UNKNOWN]:** Are any repository-required split-stage replay guarantees now expressed through different upstream lifecycle transitions beyond the observed rename from training completion to planning completion?
 - **Q-INDEXER-064 [UNKNOWN]:** Does the newest upstream telemetry contract intend `item_count` to remain invocation-total for planning-pass events while hierarchy-planning and bottom-up assembly events report stage-local or layer-local progress units, or is that count shape still evolving?
@@ -1204,7 +1197,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - **Q-INDEXER-067 [UNKNOWN]:** Beyond the required query text, embedding endpoint, root, and `k`, does the rooted CLI search tool need repository-approved filters, score thresholds, or output-field selection in this increment?
 - **Q-INDEXER-068 [UNKNOWN]:** Should the rooted CLI search tool treat the caller-supplied embedding endpoint as the complete query-embedding configuration, or must it also accept repository-specific embedding-spec inputs such as dimensions or encoding overrides at the CLI boundary?
 - **Q-INDEXER-069 [UNKNOWN]:** For corpus-based TNN-recall histograms, should a future increment keep repository-owned default histogram buckets or expose bucket configuration as an operator-visible parameter?
-- **Q-INDEXER-070 [UNKNOWN]:** What is the exact upstream-supported compatibility matrix between aggregation-based versus divisive clustering mode and the repository-relevant built-in algorithms such as `dcbc` and `directional-pca`?
+- **Q-INDEXER-070 [UNKNOWN]:** Does published profile `0.1.0` preserve repository-acceptable tree-shape and retrieval-quality behavior across the expected corpus sizes, or will a later increment need additional approved published profiles for materially different workloads?
 
 ## Coverage Notes
 
@@ -1285,10 +1278,12 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   - user clarification in this session selecting: "Project the new upstream telemetry onto the existing runtime progress/log surface (Recommended)"
   - user request in this session: "adding a new diagnostic TNN-Recall (1, 5 and 10 key versions). TNN‑Recall Query Source Requirements 1. Corpus‑Based Evaluation (Required) The system SHALL support True Nearest Neighbor Recall evaluation using randomly sampled embeddings from the corpus. This mode SHALL be the default and SHALL be used for all aggregate recall metrics. - Sampling MUST be uniform over the embedding set. - Sampling MUST be reproducible given a seed. - Sample size MUST be configurable. - This mode SHALL be used for Mean Recall, StdDev Recall, and Recall Histograms. 2. User‑Query Evaluation (Optional) The system MAY support TNN‑Recall evaluation using user‑supplied query embeddings. This mode SHALL be treated as a diagnostic tool only and SHALL NOT contribute to aggregate recall metrics. - The system SHALL compute Recall@k for the user query. - The system SHALL report the exact neighbors and approximate neighbors for comparison. - The system SHALL label this result as “diagnostic recall.” 3. Separation of Modes The system SHALL clearly distinguish between: - Corpus‑based recall (statistical quality metric) - User‑query recall (debugging aid) Corpus‑based recall SHALL be the only mode used for automated quality evaluation."
   - user clarification in this session selecting: "Reachable embeddings under the supplied root (Recommended)"
+  - user request in this session: "LexonGraph crate has been updated and now has a simpler higher level API that groups options into a versioned profile. Please switch to this API and use the v0.1.0 profile"
+  - user clarification in this session selecting: "Replace the external control surface with profile-based v0.1.0 (Recommended)"
   - `docs/specs/lexonarchivebuilder-indexer/design.md:228-315`
   - `docs/specs/lexonarchivebuilder-indexer/validation.md:72-187`
   - `crates/lexonarchivebuilder-indexer/src/runtime.rs:14-340`
-  - `Alan-Jowett/LexonGraph` `crates/lexongraph-streaming-indexer/src/lib.rs` on `main`: planning-policy and status-observer surfaces around `HierarchicalPlanningPolicy`, `BuiltInPlanningPolicy`, `StreamingIndexingPhase`, and `mark_planning_complete`
+  - `Alan-Jowett/LexonGraph` `crates/lexongraph-streaming-indexer/src/lib.rs` on `main`: published-profile surfaces around `PublishedProfileVersion`, `PUBLISHED_PROFILE_V0_1_0`, `PublishedIndexingProfile`, and `with_published_profile`
   - `Alan-Jowett/LexonGraph` `crates/lexongraph-streaming-indexer/src/lib.rs` on `main`: telemetry and heartbeat surfaces around `PlanningStageStatusTracker`, `start_status_heartbeat`, and `with_legacy_item_count`
   - `README.md:18-27`
   - `README.md:42-49`
@@ -1356,6 +1351,6 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   - The exact mapping from repository stage modes to concrete upstream streaming pass counts, replay batching, and training-completion timing, because those belong to downstream design and validation artifacts rather than requirements
   - The exact configuration surface for the administrator-defined concurrency cap and the exact physical-CPU detection algorithm in containerized or quota-constrained environments, because those belong to downstream design and validation artifacts rather than requirements
   - The precise block-kind predicate used inside the upstream LexonGraph block-iteration API to determine clustering eligibility, because this requirements document constrains LexonArchiveBuilder to the upstream iteration contract without redefining LexonGraph-owned block semantics
-  - The exact default clustering algorithm, exact default numeric option values, and whether clustering-option parity with `BatchRequest` is required in this increment, because those choices can be finalized in downstream design and validation artifacts so long as they stay within the approved command-line and determinism constraints
+  - The exact field names, serialization shape, and any future operator-visible selector for the repository-pinned published profile contract, because those choices belong to downstream design and validation artifacts so long as they preserve the approved `0.1.0` profile boundary
   - The exact formulas, thresholds, weighting model, and exit-code policy for quantitative block-tree quality heuristics, because those choices belong to downstream design and validation artifacts so long as the approved distinction between hard structural findings and advisory quality evidence is preserved
   - The exact rooted CLI search flag names, result-field schema, score formatting, and default artifact location, because those choices belong to downstream design and validation artifacts so long as the approved rooted search scope, `lexongraph-search` boundary, and dual-output contract are preserved

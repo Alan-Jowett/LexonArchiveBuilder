@@ -5,8 +5,8 @@
 Specification patch for the approved email-artifact, chunk-level
 indexing, local filesystem block-store interoperability, replay-based
 streaming delegated indexing, stage-selectable execution, standalone
-clustering input discovery, clustering-mode and clustering-algorithm
-selection, clustering-option exposure, latest planning-policy and telemetry compatibility, upstream
+clustering input discovery, published-profile API adoption, published-profile
+contract pinning, latest published-profile and telemetry compatibility, upstream
 regression assessment, replay-submission and streaming-status observability,
 clustering-failure diagnostics, rooted block-tree quality assessment with
 rooted TNN-recall diagnostics, rooted CLI search over stored trees,
@@ -20,9 +20,9 @@ indexer requirements, including the email-ingestion refinement from `.mail` and
 `.mbox` mailbox sources to normalized email artifacts and chunk-level embedding
 units plus the local filesystem block-store interoperability correction,
 replay-based streaming delegated indexing adoption, stage-selectable execution,
-standalone clustering input discovery, delegated clustering-mode and
-clustering-algorithm selection, algorithm-specific clustering-option exposure, latest
-planning-policy and telemetry compatibility, upstream regression
+standalone clustering input discovery, delegated published-profile adoption,
+repository-pinned published-profile configuration, latest published-profile and
+telemetry compatibility, upstream regression
 assessment, embedding-phase batch-progress observability,
 replay-submission observability, streaming-status observability,
 telemetry-count-semantics clarity, clustering-failure diagnostics,
@@ -245,112 +245,60 @@ serialization schema for the staging artifact in the specification layer.
 
 **Traces to:** RQ-INDEXER-003A, RQ-INDEXER-003E, RQ-INDEXER-004F
 
-### DSG-LFI-001G `Delegated planning selection seam`
+### DSG-LFI-001G `Published-profile planning seam`
 
 For any execution stage that includes clustering, LexonArchiveBuilder resolves
-one explicit upstream clustering mode, constructs one explicit upstream
-`BuiltInPlanning` selection within the upstream-supported mode-and-algorithm
-matrix, and wraps that planning choice in one `BuiltInPlanningPolicy` before
-the first streaming planning pass or standalone clustering replay begins.
+one explicit upstream published indexing profile before the first streaming
+planning pass or standalone clustering replay begins.
 
-The supported delegated clustering modes in this increment are:
-
-- `aggregation`
-- `divisive`
-
-The supported built-in delegated clustering choices in this increment are:
-
-- `dcbc`
-- `directional-pca`
+For this increment, the selected profile is the upstream published profile
+version `0.1.0`.
 
 LexonArchiveBuilder treats the upstream LexonGraph streaming indexer as the
-authority for clustering-mode and algorithm execution semantics and only maps
-repository-owned configuration onto that explicit upstream planning selection.
-The selected clustering mode, algorithm, and effective option values remain
-fixed for the lifetime of one batch invocation so replay passes, planning
-completion, and final materialization do not observe intra-run clustering-
-configuration drift.
+authority for the planning, packing, hierarchy, summary, and clustering
+semantics bundled into that published profile and does not reconstruct an
+equivalent repository-local planning-policy configuration from retired
+low-level controls.
 
-The design default for omitted clustering-mode configuration is
-aggregation-based clustering. The default delegated algorithm within that mode
-remains the repository's existing built-in default path.
+The selected published profile version remains fixed for the lifetime of one
+batch invocation so replay passes, planning completion, and final
+materialization do not observe intra-run clustering-configuration drift.
 
-**[UNKNOWN: exact upstream-supported mode-and-algorithm compatibility matrix]**
-The design therefore constrains LexonArchiveBuilder to validate or reject
-unsupported mode-and-algorithm combinations explicitly rather than silently
-falling back to a different delegated planning shape.
+**[KNOWN]:** The upstream published-profile surface exposes this increment's
+approved contract through `PublishedProfileVersion`, the
+`PUBLISHED_PROFILE_V0_1_0` constant, and the higher-level
+`with_published_profile(...)` construction path.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-008, RQ-INDEXER-010A
 
-### DSG-LFI-001H `Planning-option normalization`
+### DSG-LFI-001H `Published-profile contract normalization`
 
-LexonArchiveBuilder normalizes command-line clustering options into one
-mode-aware, algorithm-specific upstream settings object before invoking the
-delegated streaming indexer.
+LexonArchiveBuilder normalizes clustering-enabled invocation state into the
+approved published-profile contract before invoking the delegated streaming
+indexer.
 
-Shared clustering inputs are:
+In this increment, that normalization means:
 
-- clustering mode
-- algorithm choice
-- `cluster_count`
-- `random_seed`
+- clustering-enabled execution resolves to the repository-pinned published
+  profile version `0.1.0`
+- no repository-local clustering mode, clustering algorithm, `cluster_count`,
+  or algorithm-specific tuning values are forwarded as active upstream planning
+  inputs
+- retired low-level clustering controls are rejected explicitly if supplied by
+  stale automation rather than being silently ignored
 
-The `dcbc` path additionally accepts the upstream balance-constraint family:
-
-- `min_cluster_occupancy`
-- `max_cluster_occupancy`
-- `max_cluster_size_ratio`
-- `soft_balance_penalty`
-
-The `directional-pca` path additionally accepts the upstream
-`DirectionalPcaParams` family:
-
-- `retained_dimension_count`
-- `variance_exponent`
-- `temperature`
-- `min_input_count`
-- `min_effective_rank`
-- `min_cumulative_variance`
-
-Algorithm-specific options that do not belong to the selected algorithm are
-rejected during LexonArchiveBuilder's CLI/configuration validation rather than
-being silently ignored. Mode-and-algorithm combinations that are unsupported on
-the upstream contract are rejected by the same explicit validation boundary.
-
-When a caller selects `directional-pca` but omits one or more directional-PCA-
-specific options, LexonArchiveBuilder supplies the following deterministic
-repository defaults:
-
-- `retained_dimension_count = 1`
-- `variance_exponent = 1.0`
-- `temperature = 1.0`
-- `min_input_count = 2`
-- `min_effective_rank = 1`
-- `min_cumulative_variance = 0.0`
-
-When a caller selects either built-in clustering algorithm and omits
-`cluster_count`, LexonArchiveBuilder derives the effective cluster count from:
-
-- the number of clustering inputs
-- the active embedding dimensions and encoding
-- the configured block-size target
-
-The derivation target is the smallest count that keeps first-parent
-materialization within branch-capacity limits implied by the active embedding
-specification while still satisfying the delegated indexer's minimum child-count
-constraints.
-
-When a caller explicitly supplies `cluster_count`, LexonArchiveBuilder forwards
-that explicit value unchanged. When a caller selects `dcbc` and omits optional
-balance settings or `random_seed`, LexonArchiveBuilder passes `None` for those
-optional upstream fields.
+Because the published profile owns clustering cardinality and related planning
+parameters, LexonArchiveBuilder does not perform repository-local omitted-option
+auto-sizing or override merging for clustering-enabled execution in this
+increment. Any future variation in those values must come from approval of a
+different published profile version rather than ad hoc repository-local tuning.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003H,
 RQ-INDEXER-008, RQ-INDEXER-010A
 
 ### DSG-LFI-001I `Latest-upstream compatibility and regression boundary`
 
-LexonArchiveBuilder treats the latest upstream planning-policy and
+LexonArchiveBuilder treats the latest upstream published-profile and
 status-observer telemetry surfaces as a mechanical adaptation boundary, not as
 permission to narrow the approved repository contract.
 
@@ -359,8 +307,10 @@ upgrade whenever the latest upstream contract still supports them semantically:
 
 - the external stage contract
 - deterministic split-stage replay
-- explicit `dcbc` and `directional-pca` selection
-- omitted `cluster_count` auto-sizing with explicit override preservation
+- adoption of the published-profile API for clustering-enabled execution
+- repository pinning to published profile `0.1.0`
+- retirement of the old low-level clustering control family from the approved
+  external contract
 - repository-owned progress projection over upstream lifecycle events
 - projection of richer live hierarchy-stage telemetry and heartbeat events onto
   that same repository-owned progress surface
@@ -509,9 +459,9 @@ The top-level clustering-attempt snapshot records:
 - the selected execution stage
 - the active embedding specification
 - the block-size target
-- the selected delegated clustering algorithm
-- the resolved effective `cluster_count`
-- the effective algorithm-specific delegated clustering parameters
+- the selected published profile version
+- any upstream profile-resolved delegated configuration identifiers needed to
+  explain the failed attempt
 - the exact repository-visible clustering input set for the attempt using
   stable identifiers such as child block identifiers, replay-item identities,
   or equivalent repository-owned logical node identifiers
@@ -1055,40 +1005,28 @@ API exposes a compatible concurrency seam.
 **Traces to:** RQ-INDEXER-003C, RQ-INDEXER-003D, RQ-INDEXER-007,
 RQ-INDEXER-010
 
-### DSG-LFI-007C `Clustering CLI surface`
+### DSG-LFI-007C `Published-profile CLI surface`
 
-LexonArchiveBuilder exposes clustering-mode selection, clustering selection,
-and clustering-option flags on the `run` command alongside the existing
-request-file and stage-selection surface.
+LexonArchiveBuilder exposes clustering-enabled execution through the existing
+`run` command alongside the existing request-file and stage-selection surface,
+but this increment retires the prior low-level clustering-configuration flag
+family.
 
-The CLI surface is organized as one shared selector plus algorithm-scoped
-options:
+The approved operator-facing behavior is:
 
-- `--clustering-mode`
-- `--clustering-algorithm`
-- `--clustering-cluster-count`
-- `--clustering-random-seed`
-- `--clustering-min-cluster-occupancy`
-- `--clustering-max-cluster-occupancy`
-- `--clustering-max-cluster-size-ratio`
-- `--clustering-soft-balance-penalty`
-- `--clustering-retained-dimension-count`
-- `--clustering-variance-exponent`
-- `--clustering-temperature`
-- `--clustering-min-input-count`
-- `--clustering-min-effective-rank`
-- `--clustering-min-cumulative-variance`
+- callers continue to choose whether clustering runs by selecting the execution
+  stage
+- any clustering-enabled stage resolves to the repository-pinned published
+  profile version `0.1.0`
+- the request-file-driven runtime shape remains preserved for batch items,
+  environment selection, and stage selection
+- any legacy low-level clustering flags that remain in old automation fail
+  validation explicitly so operators are not misled into believing they still
+  tune active upstream planning behavior
 
-LexonArchiveBuilder parses these flags after loading the request file and
-resolves them into one effective clustering configuration used only when the
-selected execution stage includes clustering. The `ingestion+embedding` stage
-ignores clustering execution, but still rejects syntactically invalid
-clustering mode, algorithm, and option combinations at argument-validation time
-so misconfigured automation fails early and explicitly.
-
-This increment keeps clustering-option exposure on the CLI boundary. The
-request-file `BatchRequest` contract remains unchanged unless a later semantic
-increment explicitly adds persistent clustering-configuration fields there.
+This increment therefore does not require a persistent profile-selection field
+in `BatchRequest`; the approved contract is the repository-pinned profile
+version rather than a caller-selected profile matrix.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-007,
 RQ-INDEXER-010
@@ -1212,9 +1150,8 @@ set surfaced by the upstream iteration contract is expected to produce the same
 logical clustering result under unchanged upstream semantics.
 
 The same stability expectation applies to clustering configuration resolution:
-repeating a clustering-enabled run with the same explicit flags or the same
-omitted-option defaulting path must resolve to the same effective upstream
-clustering algorithm and option values.
+repeating a clustering-enabled run with the same approved published profile
+version must resolve to the same effective upstream planning behavior.
 
 For rooted block-tree quality assessment, the comparable invariant is rooted
 snapshot determinism: repeated assessment over the same reachable rooted block
@@ -1244,8 +1181,9 @@ LexonArchiveBuilder-owned verification artifacts validate:
 - correct leaf-layer concurrency scheduling with cross-layer barriers
 - correct standalone clustering input discovery through the upstream block-
   iteration contract
-- correct explicit delegated clustering-mode and clustering-algorithm
-  selection plus algorithm-specific option normalization on the CLI surface
+- correct adoption of the upstream published-profile API with repository pinning
+  to profile `0.1.0` and explicit rejection of retired low-level clustering
+  controls
 - correct deterministic replay staging and replay-stable content fingerprinting
 - correct selection and use of content-resolution, block-store, and
   embedding-provider adapters

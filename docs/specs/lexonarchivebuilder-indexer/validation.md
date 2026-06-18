@@ -5,8 +5,8 @@
 Validation patch for the approved email-artifact, chunk-level
 indexing, local filesystem block-store interoperability, replay-based
 streaming delegated indexing, stage-selectable execution, standalone
-clustering input discovery, clustering-mode and clustering-algorithm
-selection, clustering-option exposure, latest planning-policy and telemetry compatibility, upstream
+clustering input discovery, published-profile API adoption, published-profile
+contract pinning, latest published-profile and telemetry compatibility, upstream
 regression assessment, replay-submission and streaming-status observability,
 clustering-failure diagnostics, rooted block-tree quality assessment with
 rooted TNN-recall diagnostics, rooted CLI search over stored trees,
@@ -19,9 +19,9 @@ replay-stable fingerprinting, and layer-parallel block-construction evolution in
 These validation entries define the expected conformance surface for the
 LexonArchiveBuilder-owned indexer boundary, including local filesystem
 block-store interoperability, replay-based streaming delegated indexing,
-stage-selectable execution, standalone clustering input discovery, explicit
-delegated clustering-mode and clustering-algorithm selection, algorithm-specific clustering-option
-exposure, latest planning-policy and telemetry compatibility, upstream
+stage-selectable execution, standalone clustering input discovery,
+published-profile API adoption, repository-pinned published-profile
+configuration, latest published-profile and telemetry compatibility, upstream
 regression assessment, embedding-phase batch-progress observability,
 replay-submission observability, streaming-status observability,
 telemetry-count-semantics clarity, clustering-failure diagnostics, rooted
@@ -155,43 +155,38 @@ both executions remain contract-equivalent at the LexonArchiveBuilder boundary.
 Inspect the clustering-enabled CLI surface for a representative `run`
 invocation.
 
-**Pass condition:** the CLI exposes one explicit clustering-mode selector with
-aggregation as the omitted-value default and divisive as an explicit opt-in,
-exposes one explicit clustering-algorithm selector, accepts the supported
-shared clustering options plus the approved algorithm-specific option families,
-rejects option values that do not belong to the selected mode or selected
-algorithm instead of silently ignoring them, and preserves the existing
-request-file-driven runtime shape.
+**Pass condition:** the CLI preserves the existing request-file-driven runtime
+shape and stage selector, clustering-enabled execution resolves to the approved
+published profile version `0.1.0`, and any retired low-level clustering flags
+or equivalent stale automation inputs are rejected explicitly instead of being
+silently ignored.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, DSG-LFI-001G,
 DSG-LFI-001H, DSG-LFI-007C
 
 ### VAL-LFI-002L
 
-Run clustering-enabled execution for each supported built-in clustering
-algorithm under each supported clustering mode-and-algorithm combination once
-with omitted `cluster_count` and once with the equivalent explicit derived
-`cluster_count`.
+Run clustering-enabled execution twice through the approved published-profile
+path against the same representative input snapshot.
 
-**Pass condition:** for every supported delegated clustering mode-and-algorithm
-combination, LexonArchiveBuilder resolves the omitted-option invocation to the
-same effective delegated clustering configuration as the corresponding explicit
-derived-count invocation, so omitted `cluster_count` remains deterministic and
-does not create hidden replay drift.
+**Pass condition:** both invocations resolve to the same approved published
+profile version `0.1.0` and therefore to the same effective delegated planning
+behavior, so the profile-based contract remains deterministic and does not
+create hidden replay drift.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003H,
 RQ-INDEXER-008, DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-010
 
 ### VAL-LFI-002M
 
-Run clustering-enabled execution with omitted `cluster_count` under an
-embedding specification and block-size target that require auto-sizing to
-increase the first-layer cluster count above a trivial fixed default.
+Attempt clustering-enabled execution once through the approved published-profile
+path and once with one of the retired low-level clustering controls such as
+`cluster_count` supplied explicitly.
 
-**Pass condition:** LexonArchiveBuilder derives a larger effective
-`cluster_count` from clustering-input count plus embedding-size-aware
-branch-capacity constraints, and first-parent materialization does not fail
-solely because the omitted-option path fell back to an unsafe fixed default.
+**Pass condition:** the normal published-profile invocation succeeds through the
+approved `0.1.0` profile path, and the invocation that supplies a retired
+low-level clustering control fails explicitly rather than being merged into or
+silently overriding the published profile.
 
 **Traces to:** RQ-INDEXER-003H, DSG-LFI-001H, DSG-LFI-010
 
@@ -201,14 +196,14 @@ Inspect the latest LexonGraph upgrade boundary against the repository-required
 indexer contract.
 
 **Pass condition:** the upgrade preserves the approved external stage contract,
-explicit aggregation-default clustering-mode selection with divisive opt-in,
-explicit `dcbc` and `directional-pca` selection where supported by the chosen
-mode, omitted `cluster_count` auto-sizing semantics, deterministic split-stage
-replay, repository-owned progress projection, projection of the latest upstream
-live telemetry and heartbeat events, and unchanged MCP search-serving behavior
-for already-indexed content, or else any missing capability is classified
-explicitly as an upstream regression or compatibility finding rather than being
-silently dropped.
+published-profile API adoption for clustering-enabled execution, repository
+pinning to published profile `0.1.0`, retirement of the old low-level
+clustering control family, deterministic split-stage replay, repository-owned
+progress projection, projection of the latest upstream live telemetry and
+heartbeat events, and unchanged MCP search-serving behavior for already-indexed
+content, or else any missing capability is classified explicitly as an
+upstream regression or compatibility finding rather than being silently
+dropped.
 
 **Traces to:** RQ-INDEXER-003I, DSG-LFI-001I
 
@@ -486,8 +481,8 @@ block-store snapshot.
 **Pass condition:** the same clustering-eligible block set surfaced by the
 upstream block-iteration contract produces the same logical clustering result on
 repeated standalone clustering runs, without requiring repository-local
-duplicate-suppression logic, as long as the effective clustering algorithm and
-option values are unchanged.
+duplicate-suppression logic, as long as the approved published profile version
+is unchanged.
 
 **Traces to:** RQ-INDEXER-003E, RQ-INDEXER-003F, RQ-INDEXER-003G,
 RQ-INDEXER-008, DSG-LFI-001E, DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-010

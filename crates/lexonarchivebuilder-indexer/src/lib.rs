@@ -9,10 +9,7 @@ pub mod runtime;
 pub mod search;
 pub mod tree_tools;
 
-pub use config::{
-    BatchRequest, BatchSummary, ClusteringAlgorithm, ClusteringConfigOverrides, ClusteringMode,
-    ExecutionStage,
-};
+pub use config::{BatchRequest, BatchSummary, ClusteringConfigOverrides, ExecutionStage};
 pub use runtime::{
     ClusteringFailureDiagnostics, INGESTION_ONLY_ROOT_ID_PLACEHOLDER,
     clustering_failure_diagnostics_path, run_request, run_request_file,

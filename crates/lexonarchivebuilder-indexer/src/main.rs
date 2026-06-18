@@ -288,56 +288,19 @@ mod tests {
     }
 
     #[test]
-    fn run_command_parses_directional_pca_clustering_options() {
-        let cli = Cli::try_parse_from([
+    fn run_command_rejects_retired_low_level_clustering_flags() {
+        let error = Cli::try_parse_from([
             "lexonarchivebuilder-indexer",
             "run",
             "--request",
             "request.json",
-            "--clustering-mode",
-            "divisive",
             "--clustering-algorithm",
             "directional-pca",
-            "--clustering-cluster-count",
-            "3",
-            "--clustering-random-seed",
-            "7",
-            "--clustering-retained-dimension-count",
-            "1",
-            "--clustering-variance-exponent",
-            "1.5",
-            "--clustering-temperature",
-            "0.75",
-            "--clustering-min-input-count",
-            "2",
-            "--clustering-min-effective-rank",
-            "1",
-            "--clustering-min-cumulative-variance",
-            "0.25",
         ])
-        .unwrap();
+        .unwrap_err()
+        .to_string();
 
-        match cli.command {
-            Command::Run { clustering, .. } => {
-                assert_eq!(
-                    clustering.clustering_mode,
-                    Some(lexonarchivebuilder_indexer::ClusteringMode::Divisive)
-                );
-                assert_eq!(
-                    clustering.clustering_algorithm,
-                    Some(lexonarchivebuilder_indexer::ClusteringAlgorithm::DirectionalPca)
-                );
-                assert_eq!(clustering.clustering_cluster_count, Some(3));
-                assert_eq!(clustering.clustering_random_seed, Some(7));
-                assert_eq!(clustering.clustering_retained_dimension_count, Some(1));
-                assert_eq!(clustering.clustering_variance_exponent, Some(1.5));
-                assert_eq!(clustering.clustering_temperature, Some(0.75));
-                assert_eq!(clustering.clustering_min_input_count, Some(2));
-                assert_eq!(clustering.clustering_min_effective_rank, Some(1));
-                assert_eq!(clustering.clustering_min_cumulative_variance, Some(0.25));
-            }
-            _ => panic!("expected run command"),
-        }
+        assert!(error.contains("--clustering-algorithm"));
     }
 
     #[test]
