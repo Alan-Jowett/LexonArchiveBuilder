@@ -10,7 +10,8 @@ contract pinning, latest published-profile and telemetry compatibility, upstream
 regression assessment, replay-submission and streaming-status observability,
 clustering-failure diagnostics, rooted block-tree quality assessment with
 rooted TNN-recall diagnostics, rooted CLI search over stored trees,
-replay-stable fingerprinting, and layer-parallel block-construction evolution in
+replay-stable fingerprinting, upstream wgpu-acceleration revision
+compatibility, and layer-parallel block-construction evolution in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md`.
 
 ## Scope
@@ -22,7 +23,7 @@ units plus the local filesystem block-store interoperability correction,
 replay-based streaming delegated indexing adoption, stage-selectable execution,
 standalone clustering input discovery, delegated published-profile adoption,
 repository-pinned published-profile configuration, latest published-profile and
-telemetry compatibility, upstream regression
+telemetry compatibility, upstream wgpu-acceleration revision compatibility, upstream regression
 assessment, embedding-phase batch-progress observability,
 replay-submission observability, streaming-status observability,
 telemetry-count-semantics clarity, clustering-failure diagnostics,
@@ -302,6 +303,11 @@ LexonArchiveBuilder treats the latest upstream published-profile and
 status-observer telemetry surfaces as a mechanical adaptation boundary, not as
 permission to narrow the approved repository contract.
 
+For this increment, that boundary is the LexonGraph dependency refresh to commit
+`8f56d720bdafcd5d213a30b8d5d12283f36a6682`, which is intended to pick up
+upstream wgpu acceleration without changing the repository-visible
+published-profile, CLI, request-schema, or MCP-facing contracts.
+
 The design therefore preserves these repository-required capabilities across the
 upgrade whenever the latest upstream contract still supports them semantically:
 
@@ -315,13 +321,15 @@ upgrade whenever the latest upstream contract still supports them semantically:
 - projection of richer live hierarchy-stage telemetry and heartbeat events onto
   that same repository-owned progress surface
 - unchanged MCP search-serving behavior for already-indexed content
+- dependency-pin-only adoption of upstream wgpu acceleration at commit
+  `8f56d720bdafcd5d213a30b8d5d12283f36a6682`
 
 If any of those capabilities proves unavailable on the latest upstream surface,
 the implementation must surface that as an explicit compatibility finding or
 upstream regression rather than silently deleting the affected repository-owned
 behavior.
 
-**Traces to:** RQ-INDEXER-003I, RQ-INDEXER-009, RQ-INDEXER-010A
+**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003I, RQ-INDEXER-009, RQ-INDEXER-010A
 
 ### DSG-LFI-002 `Batch runtime shape`
 

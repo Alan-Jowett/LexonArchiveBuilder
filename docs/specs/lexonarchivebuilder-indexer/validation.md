@@ -10,7 +10,8 @@ contract pinning, latest published-profile and telemetry compatibility, upstream
 regression assessment, replay-submission and streaming-status observability,
 clustering-failure diagnostics, rooted block-tree quality assessment with
 rooted TNN-recall diagnostics, rooted CLI search over stored trees,
-replay-stable fingerprinting, and layer-parallel block-construction evolution in
+replay-stable fingerprinting, upstream wgpu-acceleration revision
+compatibility, and layer-parallel block-construction evolution in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md` and
 `docs/specs/lexonarchivebuilder-indexer/design.md`.
 
@@ -22,7 +23,7 @@ block-store interoperability, replay-based streaming delegated indexing,
 stage-selectable execution, standalone clustering input discovery,
 published-profile API adoption, repository-pinned published-profile
 configuration, latest published-profile and telemetry compatibility, upstream
-regression assessment, embedding-phase batch-progress observability,
+wgpu-acceleration revision compatibility, upstream regression assessment, embedding-phase batch-progress observability,
 replay-submission observability, streaming-status observability,
 telemetry-count-semantics clarity, clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted CLI
@@ -200,8 +201,11 @@ published-profile API adoption for clustering-enabled execution, repository
 pinning to published profile `0.1.0`, retirement of the old low-level
 clustering control family, deterministic split-stage replay, repository-owned
 progress projection, projection of the latest upstream live telemetry and
-heartbeat events, and unchanged MCP search-serving behavior for already-indexed
-content, or else any missing capability is classified explicitly as an
+heartbeat events, unchanged MCP search-serving behavior for already-indexed
+content, and dependency-pin-only adoption of LexonGraph commit
+`8f56d720bdafcd5d213a30b8d5d12283f36a6682` for upstream wgpu acceleration
+without new repository-visible controls, or else any missing capability is
+classified explicitly as an
 upstream regression or compatibility finding rather than being silently
 dropped.
 
