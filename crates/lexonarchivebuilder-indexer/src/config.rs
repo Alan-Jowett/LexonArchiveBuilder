@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 use ciborium::Value;
 use clap::{Args, ValueEnum};
 use lexongraph_block::EmbeddingSpec;
-use lexongraph_directional_pca::DirectionalPcaParams;
-use lexongraph_streaming_indexer::{BalanceConstraints, IndexItem, Metadata};
+use lexongraph_streaming_indexer::{
+    IndexItem, Metadata, PUBLISHED_PROFILE_V0_1_0, PublishedProfileVersion,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -18,12 +19,6 @@ const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_MAX_RETRIES: u32 = 5;
 const DEFAULT_RETRY_DELAY_MS: u64 = 1_000;
 const MIN_MAX_CONCURRENCY: usize = 1;
-const DEFAULT_DIRECTIONAL_PCA_RETAINED_DIMENSION_COUNT: usize = 1;
-const DEFAULT_DIRECTIONAL_PCA_VARIANCE_EXPONENT: f32 = 1.0;
-const DEFAULT_DIRECTIONAL_PCA_TEMPERATURE: f32 = 1.0;
-const DEFAULT_DIRECTIONAL_PCA_MIN_INPUT_COUNT: usize = 2;
-const DEFAULT_DIRECTIONAL_PCA_MIN_EFFECTIVE_RANK: usize = 1;
-const DEFAULT_DIRECTIONAL_PCA_MIN_CUMULATIVE_VARIANCE: f32 = 0.0;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, ValueEnum, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -44,336 +39,24 @@ impl ExecutionStage {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, ValueEnum, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum ClusteringMode {
-    #[default]
-    Aggregation,
-    Divisive,
-}
-
-#[derive(Clone, Copy, Debug, Default, ValueEnum, PartialEq, Eq)]
-pub enum ClusteringAlgorithm {
-    #[default]
-    Dcbc,
-    DirectionalPca,
-}
-
-impl ClusteringAlgorithm {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Dcbc => "dcbc",
-            Self::DirectionalPca => "directional-pca",
-        }
-    }
-}
-
-impl std::fmt::Display for ClusteringAlgorithm {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 #[derive(Args, Clone, Debug, Default, PartialEq)]
-pub struct ClusteringConfigOverrides {
-    #[arg(long, value_enum)]
-    pub clustering_mode: Option<ClusteringMode>,
-    #[arg(long, value_enum)]
-    pub clustering_algorithm: Option<ClusteringAlgorithm>,
-    #[arg(long)]
-    pub clustering_cluster_count: Option<u32>,
-    #[arg(long)]
-    pub clustering_random_seed: Option<u64>,
-    #[arg(long)]
-    pub clustering_min_cluster_occupancy: Option<u32>,
-    #[arg(long)]
-    pub clustering_max_cluster_occupancy: Option<u32>,
-    #[arg(long)]
-    pub clustering_max_cluster_size_ratio: Option<f64>,
-    #[arg(long)]
-    pub clustering_soft_balance_penalty: Option<f64>,
-    #[arg(long)]
-    pub clustering_retained_dimension_count: Option<usize>,
-    #[arg(long)]
-    pub clustering_variance_exponent: Option<f32>,
-    #[arg(long)]
-    pub clustering_temperature: Option<f32>,
-    #[arg(long)]
-    pub clustering_min_input_count: Option<usize>,
-    #[arg(long)]
-    pub clustering_min_effective_rank: Option<usize>,
-    #[arg(long)]
-    pub clustering_min_cumulative_variance: Option<f32>,
-}
+pub struct ClusteringConfigOverrides {}
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum ConfiguredClustering {
-    Dcbc {
-        mode: ClusteringMode,
-        cluster_count: Option<u32>,
-        balance_constraints: Option<BalanceConstraints>,
-        random_seed: Option<u64>,
-    },
-    DirectionalPca {
-        mode: ClusteringMode,
-        cluster_count: Option<u32>,
-        random_seed: Option<u64>,
-        params: DirectionalPcaParams,
-    },
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ConfiguredClustering {
+    pub profile_version: PublishedProfileVersion,
 }
 
 impl ClusteringConfigOverrides {
     pub fn validate(&self) -> Result<(), ConfigError> {
-        let algorithm = self.effective_algorithm();
-        self.validate_shared_numeric_options()?;
-        match algorithm {
-            ClusteringAlgorithm::Dcbc => {
-                if self.clustering_retained_dimension_count.is_some() {
-                    return Err(ConfigError::UnsupportedClusteringOptionForAlgorithm {
-                        option: "clustering_retained_dimension_count",
-                        algorithm,
-                    });
-                }
-                if self.clustering_variance_exponent.is_some() {
-                    return Err(ConfigError::UnsupportedClusteringOptionForAlgorithm {
-                        option: "clustering_variance_exponent",
-                        algorithm,
-                    });
-                }
-                if self.clustering_temperature.is_some() {
-                    return Err(ConfigError::UnsupportedClusteringOptionForAlgorithm {
-                        option: "clustering_temperature",
-                        algorithm,
-                    });
-                }
-                if self.clustering_min_input_count.is_some() {
-                    return Err(ConfigError::UnsupportedClusteringOptionForAlgorithm {
-                        option: "clustering_min_input_count",
-                        algorithm,
-                    });
-                }
-                if self.clustering_min_effective_rank.is_some() {
-                    return Err(ConfigError::UnsupportedClusteringOptionForAlgorithm {
-                        option: "clustering_min_effective_rank",
-                        algorithm,
-                    });
-                }
-                if self.clustering_min_cumulative_variance.is_some() {
-                    return Err(ConfigError::UnsupportedClusteringOptionForAlgorithm {
-                        option: "clustering_min_cumulative_variance",
-                        algorithm,
-                    });
-                }
-            }
-            ClusteringAlgorithm::DirectionalPca => {
-                if self.clustering_min_cluster_occupancy.is_some() {
-                    return Err(ConfigError::UnsupportedClusteringOptionForAlgorithm {
-                        option: "clustering_min_cluster_occupancy",
-                        algorithm,
-                    });
-                }
-                if self.clustering_max_cluster_occupancy.is_some() {
-                    return Err(ConfigError::UnsupportedClusteringOptionForAlgorithm {
-                        option: "clustering_max_cluster_occupancy",
-                        algorithm,
-                    });
-                }
-                if self.clustering_max_cluster_size_ratio.is_some() {
-                    return Err(ConfigError::UnsupportedClusteringOptionForAlgorithm {
-                        option: "clustering_max_cluster_size_ratio",
-                        algorithm,
-                    });
-                }
-                if self.clustering_soft_balance_penalty.is_some() {
-                    return Err(ConfigError::UnsupportedClusteringOptionForAlgorithm {
-                        option: "clustering_soft_balance_penalty",
-                        algorithm,
-                    });
-                }
-                self.validate_directional_pca_numeric_options()?;
-            }
-        }
-
         Ok(())
     }
 
     pub(crate) fn to_configured_clustering(&self) -> Result<ConfiguredClustering, ConfigError> {
         self.validate()?;
-        let mode = self.effective_mode();
-        let cluster_count = self.clustering_cluster_count;
-        let random_seed = self.clustering_random_seed;
-        Ok(match self.effective_algorithm() {
-            ClusteringAlgorithm::Dcbc => ConfiguredClustering::Dcbc {
-                mode,
-                cluster_count,
-                balance_constraints: self.to_balance_constraints(),
-                random_seed,
-            },
-            ClusteringAlgorithm::DirectionalPca => ConfiguredClustering::DirectionalPca {
-                mode,
-                cluster_count,
-                random_seed,
-                params: DirectionalPcaParams {
-                    retained_dimension_count: self
-                        .clustering_retained_dimension_count
-                        .unwrap_or(DEFAULT_DIRECTIONAL_PCA_RETAINED_DIMENSION_COUNT),
-                    variance_exponent: self
-                        .clustering_variance_exponent
-                        .unwrap_or(DEFAULT_DIRECTIONAL_PCA_VARIANCE_EXPONENT),
-                    temperature: self
-                        .clustering_temperature
-                        .unwrap_or(DEFAULT_DIRECTIONAL_PCA_TEMPERATURE),
-                    min_input_count: self
-                        .clustering_min_input_count
-                        .unwrap_or(DEFAULT_DIRECTIONAL_PCA_MIN_INPUT_COUNT),
-                    min_effective_rank: self
-                        .clustering_min_effective_rank
-                        .unwrap_or(DEFAULT_DIRECTIONAL_PCA_MIN_EFFECTIVE_RANK),
-                    min_cumulative_variance: self
-                        .clustering_min_cumulative_variance
-                        .unwrap_or(DEFAULT_DIRECTIONAL_PCA_MIN_CUMULATIVE_VARIANCE),
-                },
-            },
+        Ok(ConfiguredClustering {
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
         })
-    }
-
-    fn effective_algorithm(&self) -> ClusteringAlgorithm {
-        self.clustering_algorithm.unwrap_or_default()
-    }
-
-    fn effective_mode(&self) -> ClusteringMode {
-        self.clustering_mode.unwrap_or_default()
-    }
-
-    fn to_balance_constraints(&self) -> Option<BalanceConstraints> {
-        let constraints = BalanceConstraints {
-            min_cluster_occupancy: self.clustering_min_cluster_occupancy,
-            max_cluster_occupancy: self.clustering_max_cluster_occupancy,
-            max_cluster_size_ratio: self.clustering_max_cluster_size_ratio,
-            soft_balance_penalty: self.clustering_soft_balance_penalty,
-        };
-        if constraints.min_cluster_occupancy.is_none()
-            && constraints.max_cluster_occupancy.is_none()
-            && constraints.max_cluster_size_ratio.is_none()
-            && constraints.soft_balance_penalty.is_none()
-        {
-            None
-        } else {
-            Some(constraints)
-        }
-    }
-
-    fn validate_shared_numeric_options(&self) -> Result<(), ConfigError> {
-        if matches!(self.clustering_cluster_count, Some(0)) {
-            return Err(ConfigError::InvalidClusteringOption {
-                option: "clustering_cluster_count",
-                message: "must be at least 1".into(),
-            });
-        }
-        if matches!(self.clustering_min_cluster_occupancy, Some(0)) {
-            return Err(ConfigError::InvalidClusteringOption {
-                option: "clustering_min_cluster_occupancy",
-                message: "must be at least 1 when provided".into(),
-            });
-        }
-        if matches!(self.clustering_max_cluster_occupancy, Some(0)) {
-            return Err(ConfigError::InvalidClusteringOption {
-                option: "clustering_max_cluster_occupancy",
-                message: "must be at least 1 when provided".into(),
-            });
-        }
-        if let (Some(min_cluster_occupancy), Some(max_cluster_occupancy)) = (
-            self.clustering_min_cluster_occupancy,
-            self.clustering_max_cluster_occupancy,
-        ) && min_cluster_occupancy > max_cluster_occupancy
-        {
-            return Err(ConfigError::InvalidClusteringOption {
-                option: "clustering_min_cluster_occupancy",
-                message: "cannot exceed clustering_max_cluster_occupancy".into(),
-            });
-        }
-        if let Some(max_cluster_size_ratio) = self.clustering_max_cluster_size_ratio
-            && (!max_cluster_size_ratio.is_finite() || max_cluster_size_ratio <= 0.0)
-        {
-            return Err(ConfigError::InvalidClusteringOption {
-                option: "clustering_max_cluster_size_ratio",
-                message: "must be finite and positive".into(),
-            });
-        }
-        if let Some(soft_balance_penalty) = self.clustering_soft_balance_penalty
-            && (!soft_balance_penalty.is_finite() || soft_balance_penalty < 0.0)
-        {
-            return Err(ConfigError::InvalidClusteringOption {
-                option: "clustering_soft_balance_penalty",
-                message: "must be finite and non-negative".into(),
-            });
-        }
-
-        Ok(())
-    }
-
-    fn validate_directional_pca_numeric_options(&self) -> Result<(), ConfigError> {
-        let retained_dimension_count = self
-            .clustering_retained_dimension_count
-            .unwrap_or(DEFAULT_DIRECTIONAL_PCA_RETAINED_DIMENSION_COUNT);
-        if retained_dimension_count == 0 {
-            return Err(ConfigError::InvalidClusteringOption {
-                option: "clustering_retained_dimension_count",
-                message: "must be at least 1".into(),
-            });
-        }
-        if let Some(cluster_count) = self.clustering_cluster_count
-            && retained_dimension_count > cluster_count as usize
-        {
-            return Err(ConfigError::InvalidClusteringOption {
-                option: "clustering_retained_dimension_count",
-                message: "cannot exceed clustering_cluster_count".into(),
-            });
-        }
-        if let Some(variance_exponent) = self.clustering_variance_exponent
-            && (!variance_exponent.is_finite() || variance_exponent < 0.0)
-        {
-            return Err(ConfigError::InvalidClusteringOption {
-                option: "clustering_variance_exponent",
-                message: "must be finite and non-negative".into(),
-            });
-        }
-        if let Some(temperature) = self.clustering_temperature
-            && (!temperature.is_finite() || temperature <= 0.0)
-        {
-            return Err(ConfigError::InvalidClusteringOption {
-                option: "clustering_temperature",
-                message: "must be finite and positive".into(),
-            });
-        }
-        if let Some(min_input_count) = self.clustering_min_input_count
-            && min_input_count < 2
-        {
-            return Err(ConfigError::InvalidClusteringOption {
-                option: "clustering_min_input_count",
-                message: "must be at least 2".into(),
-            });
-        }
-        let min_effective_rank = self
-            .clustering_min_effective_rank
-            .unwrap_or(DEFAULT_DIRECTIONAL_PCA_MIN_EFFECTIVE_RANK);
-        if min_effective_rank == 0 || min_effective_rank > retained_dimension_count {
-            return Err(ConfigError::InvalidClusteringOption {
-                option: "clustering_min_effective_rank",
-                message: "must be between 1 and clustering_retained_dimension_count".into(),
-            });
-        }
-        if let Some(min_cumulative_variance) = self.clustering_min_cumulative_variance
-            && (!min_cumulative_variance.is_finite()
-                || !(0.0..=1.0).contains(&min_cumulative_variance))
-        {
-            return Err(ConfigError::InvalidClusteringOption {
-                option: "clustering_min_cumulative_variance",
-                message: "must be finite and in [0, 1]".into(),
-            });
-        }
-
-        Ok(())
     }
 }
 
@@ -473,16 +156,6 @@ pub enum ConfigError {
     InvalidMaxConcurrency,
     #[error("local embedding base_url must not be empty")]
     MissingLocalEmbeddingBaseUrl,
-    #[error("clustering option {option} is not supported for algorithm {algorithm}")]
-    UnsupportedClusteringOptionForAlgorithm {
-        option: &'static str,
-        algorithm: ClusteringAlgorithm,
-    },
-    #[error("invalid clustering option {option}: {message}")]
-    InvalidClusteringOption {
-        option: &'static str,
-        message: String,
-    },
 }
 
 impl BatchRequest {
@@ -842,164 +515,11 @@ mod tests {
     }
 
     #[test]
-    fn clustering_defaults_to_aggregation_dcbc_with_no_explicit_cli_options() {
+    fn clustering_defaults_to_published_profile_v0_1_0() {
         let clustering = ClusteringConfigOverrides::default()
             .to_configured_clustering()
             .unwrap();
 
-        match clustering {
-            ConfiguredClustering::Dcbc {
-                mode,
-                cluster_count,
-                balance_constraints,
-                random_seed,
-            } => {
-                assert_eq!(mode, ClusteringMode::Aggregation);
-                assert_eq!(cluster_count, None);
-                assert!(balance_constraints.is_none());
-                assert_eq!(random_seed, None);
-            }
-            ConfiguredClustering::DirectionalPca { .. } => {
-                panic!("expected default clustering algorithm to be dcbc")
-            }
-        }
-    }
-
-    #[test]
-    fn directional_pca_defaults_are_applied_when_algorithm_is_selected() {
-        let clustering = ClusteringConfigOverrides {
-            clustering_algorithm: Some(ClusteringAlgorithm::DirectionalPca),
-            ..ClusteringConfigOverrides::default()
-        }
-        .to_configured_clustering()
-        .unwrap();
-
-        match clustering {
-            ConfiguredClustering::DirectionalPca {
-                mode,
-                cluster_count,
-                random_seed,
-                params,
-            } => {
-                assert_eq!(mode, ClusteringMode::Aggregation);
-                assert_eq!(cluster_count, None);
-                assert_eq!(random_seed, None);
-                assert_eq!(
-                    params,
-                    DirectionalPcaParams {
-                        retained_dimension_count: DEFAULT_DIRECTIONAL_PCA_RETAINED_DIMENSION_COUNT,
-                        variance_exponent: DEFAULT_DIRECTIONAL_PCA_VARIANCE_EXPONENT,
-                        temperature: DEFAULT_DIRECTIONAL_PCA_TEMPERATURE,
-                        min_input_count: DEFAULT_DIRECTIONAL_PCA_MIN_INPUT_COUNT,
-                        min_effective_rank: DEFAULT_DIRECTIONAL_PCA_MIN_EFFECTIVE_RANK,
-                        min_cumulative_variance: DEFAULT_DIRECTIONAL_PCA_MIN_CUMULATIVE_VARIANCE,
-                    }
-                );
-            }
-            ConfiguredClustering::Dcbc { .. } => {
-                panic!("expected directional-pca settings when that algorithm is selected")
-            }
-        }
-    }
-
-    #[test]
-    fn divisive_mode_is_applied_when_selected() {
-        let clustering = ClusteringConfigOverrides {
-            clustering_mode: Some(ClusteringMode::Divisive),
-            ..ClusteringConfigOverrides::default()
-        }
-        .to_configured_clustering()
-        .unwrap();
-
-        match clustering {
-            ConfiguredClustering::Dcbc { mode, .. } => {
-                assert_eq!(mode, ClusteringMode::Divisive);
-            }
-            ConfiguredClustering::DirectionalPca { .. } => {
-                panic!("expected default clustering algorithm to remain dcbc")
-            }
-        }
-    }
-
-    #[test]
-    fn dcbc_rejects_directional_pca_only_options() {
-        let error = ClusteringConfigOverrides {
-            clustering_retained_dimension_count: Some(1),
-            ..ClusteringConfigOverrides::default()
-        }
-        .validate()
-        .unwrap_err();
-
-        assert!(matches!(
-            error,
-            ConfigError::UnsupportedClusteringOptionForAlgorithm {
-                option: "clustering_retained_dimension_count",
-                algorithm: ClusteringAlgorithm::Dcbc,
-            }
-        ));
-    }
-
-    #[test]
-    fn directional_pca_rejects_dcbc_only_options() {
-        let error = ClusteringConfigOverrides {
-            clustering_algorithm: Some(ClusteringAlgorithm::DirectionalPca),
-            clustering_min_cluster_occupancy: Some(1),
-            ..ClusteringConfigOverrides::default()
-        }
-        .validate()
-        .unwrap_err();
-
-        assert!(matches!(
-            error,
-            ConfigError::UnsupportedClusteringOptionForAlgorithm {
-                option: "clustering_min_cluster_occupancy",
-                algorithm: ClusteringAlgorithm::DirectionalPca,
-            }
-        ));
-    }
-
-    #[test]
-    fn directional_pca_requires_retained_dimension_count_not_exceed_cluster_count() {
-        let error = ClusteringConfigOverrides {
-            clustering_algorithm: Some(ClusteringAlgorithm::DirectionalPca),
-            clustering_cluster_count: Some(2),
-            clustering_retained_dimension_count: Some(3),
-            ..ClusteringConfigOverrides::default()
-        }
-        .to_configured_clustering()
-        .unwrap_err();
-
-        assert!(matches!(
-            error,
-            ConfigError::InvalidClusteringOption {
-                option: "clustering_retained_dimension_count",
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn omitted_directional_pca_cluster_count_allows_larger_retained_dimension_count() {
-        let clustering = ClusteringConfigOverrides {
-            clustering_algorithm: Some(ClusteringAlgorithm::DirectionalPca),
-            clustering_retained_dimension_count: Some(3),
-            ..ClusteringConfigOverrides::default()
-        }
-        .to_configured_clustering()
-        .unwrap();
-
-        match clustering {
-            ConfiguredClustering::DirectionalPca {
-                cluster_count,
-                params,
-                ..
-            } => {
-                assert_eq!(cluster_count, None);
-                assert_eq!(params.retained_dimension_count, 3);
-            }
-            ConfiguredClustering::Dcbc { .. } => {
-                panic!("expected directional-pca settings when that algorithm is selected")
-            }
-        }
+        assert_eq!(clustering.profile_version, PUBLISHED_PROFILE_V0_1_0);
     }
 }
