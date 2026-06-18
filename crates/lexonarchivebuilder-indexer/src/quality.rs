@@ -7,7 +7,8 @@ use half::f16;
 use lexongraph_block::{Block, BlockHash, BranchEntry, EmbeddingSpec, LeafBlock, LeafEntry};
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_search::{
-    DefaultCandidateScorer, DefaultEmbeddingCompatibility, EncodedTargetEmbedding, Searcher,
+    CandidateScorer, CosineScore, DefaultCandidateScorer, DefaultEmbeddingCompatibility,
+    EncodedTargetEmbedding, Searcher,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -218,6 +219,76 @@ pub struct CorpusTnnRecallReport {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct TnnMatchedNeighborCount {
+    pub k: usize,
+    pub matched_neighbor_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct TnnOraclePathRound {
+    pub round_index: usize,
+    pub parent_block_id: String,
+    pub parent_level: u64,
+    pub child_block_id: String,
+    pub child_level: u64,
+    pub local_sibling_count: usize,
+    pub local_sibling_rank: usize,
+    pub frontier_branch_rank: usize,
+    pub selected_for_expansion: bool,
+    pub local_routing_score: f32,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct TnnBlockingPointSummary {
+    pub blocked_child_level: u64,
+    pub blocked_parent_level: u64,
+    pub query_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct TnnFalsificationSummary {
+    pub sample_count: usize,
+    pub approximate_top1_hit_count: usize,
+    pub approximate_top1_failure_count: usize,
+    pub oracle_leaf_visited_failure_count: usize,
+    pub oracle_leaf_unvisited_failure_count: usize,
+    pub visited_leaf_oracle_top1_hit_count: usize,
+    pub visited_leaf_oracle_top1_repaired_failure_count: usize,
+    pub first_blocking_points: Vec<TnnBlockingPointSummary>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct TnnFalsificationQueryReport {
+    pub query_neighbor_id: String,
+    pub oracle_neighbor_id: String,
+    pub oracle_leaf_block_id: String,
+    pub approximate_top1_hit: bool,
+    pub oracle_leaf_visited: bool,
+    pub deepest_visited_oracle_block_id: String,
+    pub deepest_visited_oracle_level: u64,
+    pub first_blocked_round_index: Option<usize>,
+    pub first_blocked_child_level: Option<u64>,
+    pub first_blocked_parent_level: Option<u64>,
+    pub approximate_matches_at: Vec<TnnMatchedNeighborCount>,
+    pub visited_leaf_oracle_matches_at: Vec<TnnMatchedNeighborCount>,
+    pub oracle_path_rounds: Vec<TnnOraclePathRound>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct TnnFalsificationReport {
+    pub root_id: String,
+    pub corpus_size: usize,
+    pub requested_sample_size: usize,
+    pub effective_sample_size: usize,
+    pub seed: u64,
+    pub traversal_width: usize,
+    pub approximate_recall_at: Vec<TnnRecallAtMetrics>,
+    pub visited_leaf_oracle_recall_at: Vec<TnnRecallAtMetrics>,
+    pub summary: TnnFalsificationSummary,
+    pub queries: Vec<TnnFalsificationQueryReport>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct TreeQualityReport {
     pub root_id: String,
     pub summary: TreeQualitySummary,
@@ -235,6 +306,7 @@ struct TraversalState {
     findings: Vec<TreeQualityFinding>,
     metrics_by_id: HashMap<BlockHash, BlockQualityMetrics>,
     child_ids_by_parent: HashMap<BlockHash, Vec<BlockHash>>,
+    parent_by_id: HashMap<BlockHash, Option<BlockHash>>,
     visited: HashSet<BlockHash>,
     has_zero_magnitude_tnn_entry: bool,
     structural_finding_count: usize,
@@ -254,6 +326,34 @@ struct CorpusLeafEntry {
     neighbor_id: String,
     leaf_block_id: BlockHash,
     embedding: Vec<f32>,
+}
+
+#[derive(Clone, Debug)]
+struct OracleChildLocalRank {
+    parent_block_id: BlockHash,
+    parent_level: u64,
+    child_block_id: BlockHash,
+    child_level: u64,
+    local_sibling_count: usize,
+    local_sibling_rank: usize,
+    local_routing_score: f32,
+}
+
+#[derive(Clone, Debug)]
+struct OraclePathRoundTrace {
+    round_index: usize,
+    local_rank: OracleChildLocalRank,
+    frontier_branch_rank: usize,
+    selected_for_expansion: bool,
+}
+
+#[derive(Clone, Debug)]
+struct SearchTraceOutcome {
+    approximate_neighbors: Vec<CorpusLeafEntry>,
+    visited_leaf_neighbors: Vec<CorpusLeafEntry>,
+    deepest_visited_oracle_index: usize,
+    oracle_leaf_visited: bool,
+    oracle_path_rounds: Vec<OraclePathRoundTrace>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -327,6 +427,7 @@ pub fn assess_rooted_tree_with_config(
         findings: Vec::new(),
         metrics_by_id: HashMap::new(),
         child_ids_by_parent: HashMap::new(),
+        parent_by_id: HashMap::new(),
         visited: HashSet::new(),
         has_zero_magnitude_tnn_entry: false,
         structural_finding_count: 0,
@@ -423,12 +524,363 @@ pub fn default_tnn_recall_seed() -> u64 {
     DEFAULT_TNN_RECALL_SEED
 }
 
+pub fn assess_tnn_falsification(
+    root_id: &BlockHash,
+    store: &dyn BlockStore,
+    tnn_recall: TnnRecallConfig,
+) -> Result<TnnFalsificationReport, TreeQualityError> {
+    if tnn_recall.sample_size == 0 {
+        return Err(TreeQualityError::InvalidTnnRecallSampleSize);
+    }
+    if tnn_recall.traversal_width == 0 {
+        return Err(TreeQualityError::InvalidTnnRecallTraversalWidth);
+    }
+    let Some(root) = store.get(root_id)? else {
+        return Err(TreeQualityError::MissingRootBlock {
+            root_id: root_id.to_string(),
+        });
+    };
+
+    let mut state = TraversalState {
+        blocks: Vec::new(),
+        corpus_entries: Vec::new(),
+        findings: Vec::new(),
+        metrics_by_id: HashMap::new(),
+        child_ids_by_parent: HashMap::new(),
+        parent_by_id: HashMap::new(),
+        visited: HashSet::new(),
+        has_zero_magnitude_tnn_entry: false,
+        structural_finding_count: 0,
+        edge_count: 0,
+        max_depth: 0,
+    };
+    let mut ancestry = Vec::new();
+    traverse_block(
+        root.hash,
+        &root.block,
+        None,
+        0,
+        store,
+        &mut ancestry,
+        &mut state,
+    )?;
+
+    let corpus_size = state.corpus_entries.len();
+    let can_compute_recall = corpus_size >= 2
+        && !has_embedding_spec_mismatch(&state)
+        && !state.has_zero_magnitude_tnn_entry;
+    let effective_sample_size = if can_compute_recall {
+        tnn_recall.sample_size.min(corpus_size)
+    } else {
+        0
+    };
+    if effective_sample_size == 0 {
+        return Ok(TnnFalsificationReport {
+            root_id: root_id.to_string(),
+            corpus_size,
+            requested_sample_size: tnn_recall.sample_size,
+            effective_sample_size,
+            seed: tnn_recall.seed,
+            traversal_width: tnn_recall.traversal_width,
+            approximate_recall_at: zeroed_corpus_tnn_recall_report(
+                corpus_size,
+                tnn_recall.sample_size,
+                effective_sample_size,
+                tnn_recall.seed,
+                tnn_recall.traversal_width,
+            )
+            .recall_at,
+            visited_leaf_oracle_recall_at: zeroed_corpus_tnn_recall_report(
+                corpus_size,
+                tnn_recall.sample_size,
+                effective_sample_size,
+                tnn_recall.seed,
+                tnn_recall.traversal_width,
+            )
+            .recall_at,
+            summary: TnnFalsificationSummary {
+                sample_count: 0,
+                approximate_top1_hit_count: 0,
+                approximate_top1_failure_count: 0,
+                oracle_leaf_visited_failure_count: 0,
+                oracle_leaf_unvisited_failure_count: 0,
+                visited_leaf_oracle_top1_hit_count: 0,
+                visited_leaf_oracle_top1_repaired_failure_count: 0,
+                first_blocking_points: Vec::new(),
+            },
+            queries: Vec::new(),
+        });
+    }
+
+    let root_embedding_spec = embedding_spec_for_block(&root.block);
+    let sampled_queries = select_corpus_sample(&state.corpus_entries, tnn_recall);
+    let max_k = REQUIRED_RECALL_AT
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(1)
+        .min(corpus_size.saturating_sub(1));
+    let mut approximate_counts = REQUIRED_RECALL_AT
+        .into_iter()
+        .map(|k| (k, Vec::<usize>::new()))
+        .collect::<BTreeMap<_, _>>();
+    let mut visited_counts = REQUIRED_RECALL_AT
+        .into_iter()
+        .map(|k| (k, Vec::<usize>::new()))
+        .collect::<BTreeMap<_, _>>();
+    let mut blocking_counts = BTreeMap::<(u64, u64), usize>::new();
+    let mut queries = Vec::with_capacity(sampled_queries.len());
+    let mut approximate_top1_hit_count = 0usize;
+    let mut oracle_leaf_visited_failure_count = 0usize;
+    let mut oracle_leaf_unvisited_failure_count = 0usize;
+    let mut visited_leaf_oracle_top1_hit_count = 0usize;
+
+    for query in sampled_queries {
+        let exact_neighbors = exact_neighbors(&state.corpus_entries, query, max_k)?;
+        let oracle_neighbor = exact_neighbors
+            .first()
+            .expect("effective sample size implies a non-empty exact neighbor set");
+        let oracle_path = ancestry_path_for_leaf(root_id, oracle_neighbor.leaf_block_id, &state)?;
+        let trace = trace_approximate_neighbors(TraceSearchRequest {
+            root_id,
+            root_embedding_spec: &root_embedding_spec,
+            query,
+            max_k,
+            traversal_width: tnn_recall.traversal_width,
+            store,
+            oracle_path: &oracle_path,
+            state: &state,
+        })?;
+
+        let approximate_match_counts =
+            matched_neighbor_counts(&exact_neighbors, &trace.approximate_neighbors);
+        let visited_match_counts =
+            matched_neighbor_counts(&exact_neighbors, &trace.visited_leaf_neighbors);
+
+        for count in &approximate_match_counts {
+            approximate_counts
+                .entry(count.k)
+                .or_default()
+                .push(count.matched_neighbor_count);
+        }
+        for count in &visited_match_counts {
+            visited_counts
+                .entry(count.k)
+                .or_default()
+                .push(count.matched_neighbor_count);
+        }
+
+        let approximate_top1_hit = approximate_match_counts
+            .iter()
+            .find(|count| count.k == 1)
+            .map(|count| count.matched_neighbor_count == 1)
+            .unwrap_or(false);
+        let visited_top1_hit = visited_match_counts
+            .iter()
+            .find(|count| count.k == 1)
+            .map(|count| count.matched_neighbor_count == 1)
+            .unwrap_or(false);
+
+        if approximate_top1_hit {
+            approximate_top1_hit_count += 1;
+        } else if trace.oracle_leaf_visited {
+            oracle_leaf_visited_failure_count += 1;
+        } else {
+            oracle_leaf_unvisited_failure_count += 1;
+        }
+        if visited_top1_hit {
+            visited_leaf_oracle_top1_hit_count += 1;
+        }
+
+        let deepest_visited_oracle_block_id = oracle_path[trace.deepest_visited_oracle_index];
+        let deepest_visited_oracle_level = state
+            .metrics_by_id
+            .get(&deepest_visited_oracle_block_id)
+            .expect("oracle path block metrics must exist")
+            .level;
+        let first_blocking = (!approximate_top1_hit && !trace.oracle_leaf_visited)
+            .then(|| first_blocking_round(&trace, &oracle_path))
+            .flatten();
+        if let Some(blocking) = &first_blocking {
+            *blocking_counts
+                .entry((
+                    blocking.local_rank.parent_level,
+                    blocking.local_rank.child_level,
+                ))
+                .or_default() += 1;
+        }
+
+        queries.push(TnnFalsificationQueryReport {
+            query_neighbor_id: query.neighbor_id.clone(),
+            oracle_neighbor_id: oracle_neighbor.neighbor_id.clone(),
+            oracle_leaf_block_id: oracle_neighbor.leaf_block_id.to_string(),
+            approximate_top1_hit,
+            oracle_leaf_visited: trace.oracle_leaf_visited,
+            deepest_visited_oracle_block_id: deepest_visited_oracle_block_id.to_string(),
+            deepest_visited_oracle_level,
+            first_blocked_round_index: first_blocking.as_ref().map(|round| round.round_index),
+            first_blocked_child_level: first_blocking
+                .as_ref()
+                .map(|round| round.local_rank.child_level),
+            first_blocked_parent_level: first_blocking
+                .as_ref()
+                .map(|round| round.local_rank.parent_level),
+            approximate_matches_at: approximate_match_counts,
+            visited_leaf_oracle_matches_at: visited_match_counts,
+            oracle_path_rounds: trace
+                .oracle_path_rounds
+                .into_iter()
+                .map(|round| TnnOraclePathRound {
+                    round_index: round.round_index,
+                    parent_block_id: round.local_rank.parent_block_id.to_string(),
+                    parent_level: round.local_rank.parent_level,
+                    child_block_id: round.local_rank.child_block_id.to_string(),
+                    child_level: round.local_rank.child_level,
+                    local_sibling_count: round.local_rank.local_sibling_count,
+                    local_sibling_rank: round.local_rank.local_sibling_rank,
+                    frontier_branch_rank: round.frontier_branch_rank,
+                    selected_for_expansion: round.selected_for_expansion,
+                    local_routing_score: round.local_rank.local_routing_score,
+                })
+                .collect(),
+        });
+    }
+
+    let approximate_recall_at = REQUIRED_RECALL_AT
+        .into_iter()
+        .map(|k| {
+            let counts = approximate_counts.remove(&k).unwrap_or_default();
+            tnn_recall_metrics(k, k.min(corpus_size.saturating_sub(1)), &counts)
+        })
+        .collect();
+    let visited_leaf_oracle_recall_at = REQUIRED_RECALL_AT
+        .into_iter()
+        .map(|k| {
+            let counts = visited_counts.remove(&k).unwrap_or_default();
+            tnn_recall_metrics(k, k.min(corpus_size.saturating_sub(1)), &counts)
+        })
+        .collect();
+    let approximate_top1_failure_count = queries.len().saturating_sub(approximate_top1_hit_count);
+    let visited_leaf_oracle_top1_repaired_failure_count = queries
+        .iter()
+        .filter(|query| !query.approximate_top1_hit)
+        .filter(|query| {
+            query
+                .visited_leaf_oracle_matches_at
+                .iter()
+                .find(|count| count.k == 1)
+                .map(|count| count.matched_neighbor_count == 1)
+                .unwrap_or(false)
+        })
+        .count();
+
+    Ok(TnnFalsificationReport {
+        root_id: root_id.to_string(),
+        corpus_size,
+        requested_sample_size: tnn_recall.sample_size,
+        effective_sample_size,
+        seed: tnn_recall.seed,
+        traversal_width: tnn_recall.traversal_width,
+        approximate_recall_at,
+        visited_leaf_oracle_recall_at,
+        summary: TnnFalsificationSummary {
+            sample_count: queries.len(),
+            approximate_top1_hit_count,
+            approximate_top1_failure_count,
+            oracle_leaf_visited_failure_count,
+            oracle_leaf_unvisited_failure_count,
+            visited_leaf_oracle_top1_hit_count,
+            visited_leaf_oracle_top1_repaired_failure_count,
+            first_blocking_points: blocking_counts
+                .into_iter()
+                .map(
+                    |((blocked_parent_level, blocked_child_level), query_count)| {
+                        TnnBlockingPointSummary {
+                            blocked_child_level,
+                            blocked_parent_level,
+                            query_count,
+                        }
+                    },
+                )
+                .collect(),
+        },
+        queries,
+    })
+}
+
+pub fn default_falsification_report_path(root_id: &BlockHash) -> PathBuf {
+    PathBuf::from(format!(
+        "tnn-falsification-{}.json",
+        &root_id.to_string()[..8]
+    ))
+}
+
 pub fn write_report(path: &Path, report: &TreeQualityReport) -> Result<(), TreeQualityError> {
     let rendered = serde_json::to_vec_pretty(report)?;
     fs::write(path, rendered).map_err(|source| TreeQualityError::WriteArtifact {
         path: path.display().to_string(),
         source,
     })
+}
+
+pub fn write_falsification_report(
+    path: &Path,
+    report: &TnnFalsificationReport,
+) -> Result<(), TreeQualityError> {
+    let rendered = serde_json::to_vec_pretty(report)?;
+    fs::write(path, rendered).map_err(|source| TreeQualityError::WriteArtifact {
+        path: path.display().to_string(),
+        source,
+    })
+}
+
+pub fn render_falsification_report_summary(report: &TnnFalsificationReport) -> String {
+    let mut lines = vec![
+        format!("TNN falsification report for {}", report.root_id),
+        format!(
+            "Corpus {} sampled {}/{} query(ies), seed {}, traversal width {}",
+            report.corpus_size,
+            report.effective_sample_size,
+            report.requested_sample_size,
+            report.seed,
+            report.traversal_width
+        ),
+        format!(
+            "Top-1 outcomes: hit {}, fail {}, oracle leaf visited on fail {}, oracle leaf unvisited on fail {}, visited-leaf oracle repaired {}",
+            report.summary.approximate_top1_hit_count,
+            report.summary.approximate_top1_failure_count,
+            report.summary.oracle_leaf_visited_failure_count,
+            report.summary.oracle_leaf_unvisited_failure_count,
+            report
+                .summary
+                .visited_leaf_oracle_top1_repaired_failure_count
+        ),
+        "Approximate TNN recall:".into(),
+    ];
+    for recall_at in &report.approximate_recall_at {
+        lines.push(format!(
+            "- TNN Recall@{}: mean {:.6} stdev {:.6}",
+            recall_at.k, recall_at.mean_recall, recall_at.stdev_recall
+        ));
+    }
+    lines.push("Visited-leaf oracle TNN recall:".into());
+    for recall_at in &report.visited_leaf_oracle_recall_at {
+        lines.push(format!(
+            "- TNN Recall@{}: mean {:.6} stdev {:.6}",
+            recall_at.k, recall_at.mean_recall, recall_at.stdev_recall
+        ));
+    }
+    if !report.summary.first_blocking_points.is_empty() {
+        lines
+            .push("First blocking points for top-1 failures with an unvisited oracle leaf:".into());
+        for point in &report.summary.first_blocking_points {
+            lines.push(format!(
+                "- parent level {} -> child level {}: {} query(ies)",
+                point.blocked_parent_level, point.blocked_child_level, point.query_count
+            ));
+        }
+    }
+    lines.join("\n")
 }
 
 pub fn render_report_summary(report: &TreeQualityReport) -> String {
@@ -598,6 +1050,10 @@ fn traverse_block(
         }
     }
 
+    state
+        .parent_by_id
+        .entry(block_id)
+        .or_insert(parent.map(|(id, _)| id));
     state.metrics_by_id.insert(block_id, metrics.clone());
     state.blocks.push(metrics.clone());
 
@@ -678,6 +1134,9 @@ fn handle_child_entry(
         .entry(parent_id)
         .or_default()
         .push(validated_child.hash);
+    state
+        .parent_by_id
+        .insert(validated_child.hash, Some(parent_id));
 
     traverse_block(
         validated_child.hash,
@@ -1078,6 +1537,588 @@ fn approximate_neighbors(
         })
         .take(max_k)
         .collect()
+}
+
+#[derive(Clone, Debug)]
+enum TraceSearchCandidate {
+    Branch {
+        child: BlockHash,
+        depth: usize,
+        level: u64,
+        rank_score: CosineScore,
+        display_score: f32,
+    },
+    Leaf {
+        entry: CorpusLeafEntry,
+        level: u64,
+        rank_score: CosineScore,
+    },
+}
+
+impl TraceSearchCandidate {
+    fn is_terminal(&self) -> bool {
+        self.level() == 0
+    }
+
+    fn level(&self) -> u64 {
+        match self {
+            Self::Branch { level, .. } | Self::Leaf { level, .. } => *level,
+        }
+    }
+
+    fn identity(&self) -> &[u8; 32] {
+        match self {
+            Self::Branch { child, .. } => child.as_bytes(),
+            Self::Leaf { entry, .. } => entry.leaf_block_id.as_bytes(),
+        }
+    }
+}
+
+fn compare_trace_candidates(left: &TraceSearchCandidate, right: &TraceSearchCandidate) -> Ordering {
+    trace_candidate_rank_score(right)
+        .cmp(trace_candidate_rank_score(left))
+        .then_with(|| left.level().cmp(&right.level()))
+        .then_with(|| left.identity().cmp(right.identity()))
+}
+
+fn trace_candidate_rank_score(candidate: &TraceSearchCandidate) -> &CosineScore {
+    match candidate {
+        TraceSearchCandidate::Branch { rank_score, .. }
+        | TraceSearchCandidate::Leaf { rank_score, .. } => rank_score,
+    }
+}
+
+fn ancestry_path_for_leaf(
+    root_id: &BlockHash,
+    leaf_block_id: BlockHash,
+    state: &TraversalState,
+) -> Result<Vec<BlockHash>, TreeQualityError> {
+    let mut path = Vec::new();
+    let mut cursor = Some(leaf_block_id);
+    while let Some(block_id) = cursor {
+        path.push(block_id);
+        cursor = state.parent_by_id.get(&block_id).copied().flatten();
+    }
+    path.reverse();
+    if path.first() == Some(root_id) {
+        Ok(path)
+    } else {
+        Err(TreeQualityError::Search {
+            message: format!(
+                "leaf block {} did not resolve to root {} while building falsification ancestry",
+                leaf_block_id, root_id
+            ),
+        })
+    }
+}
+
+fn matched_neighbor_counts(
+    exact_neighbors: &[&CorpusLeafEntry],
+    approximate_neighbors: &[CorpusLeafEntry],
+) -> Vec<TnnMatchedNeighborCount> {
+    REQUIRED_RECALL_AT
+        .into_iter()
+        .map(|k| {
+            let denominator = exact_neighbors.len().min(k);
+            let approximate_ids = approximate_neighbors
+                .iter()
+                .take(k)
+                .map(|entry| entry.neighbor_id.clone())
+                .collect::<HashSet<_>>();
+            let matched_neighbor_count = exact_neighbors
+                .iter()
+                .take(k)
+                .filter(|entry| approximate_ids.contains(&entry.neighbor_id))
+                .count()
+                .min(denominator);
+            TnnMatchedNeighborCount {
+                k,
+                matched_neighbor_count,
+            }
+        })
+        .collect()
+}
+
+fn first_blocking_round<'a>(
+    trace: &'a SearchTraceOutcome,
+    oracle_path: &[BlockHash],
+) -> Option<&'a OraclePathRoundTrace> {
+    let blocked_child = oracle_path.get(trace.deepest_visited_oracle_index + 1)?;
+    trace.oracle_path_rounds.iter().find(|round| {
+        round.local_rank.child_block_id == *blocked_child && !round.selected_for_expansion
+    })
+}
+
+struct TraceSearchRequest<'a> {
+    root_id: &'a BlockHash,
+    root_embedding_spec: &'a EmbeddingSpec,
+    query: &'a CorpusLeafEntry,
+    max_k: usize,
+    traversal_width: usize,
+    store: &'a dyn BlockStore,
+    oracle_path: &'a [BlockHash],
+    state: &'a TraversalState,
+}
+
+struct PendingOracleRoundState<'a> {
+    frontier: &'a [TraceSearchCandidate],
+    expanded_children: &'a HashSet<BlockHash>,
+    oracle_path: &'a [BlockHash],
+    local_ranks_by_child: &'a HashMap<BlockHash, OracleChildLocalRank>,
+}
+
+fn trace_approximate_neighbors(
+    request: TraceSearchRequest<'_>,
+) -> Result<SearchTraceOutcome, TreeQualityError> {
+    let TraceSearchRequest {
+        root_id,
+        root_embedding_spec,
+        query,
+        max_k,
+        traversal_width,
+        store,
+        oracle_path,
+        state,
+    } = request;
+    if max_k == 0 {
+        return Ok(SearchTraceOutcome {
+            approximate_neighbors: Vec::new(),
+            visited_leaf_neighbors: Vec::new(),
+            deepest_visited_oracle_index: 0,
+            oracle_leaf_visited: false,
+            oracle_path_rounds: Vec::new(),
+        });
+    }
+    let target = EncodedTargetEmbedding::new(
+        encode_embedding_values(&query.embedding, root_embedding_spec, &query.leaf_block_id)?,
+        root_embedding_spec.clone(),
+    );
+    let requested = max_k.saturating_add(1);
+    let mut frontier = Vec::new();
+    let mut local_ranks_by_child = HashMap::<BlockHash, OracleChildLocalRank>::new();
+    let mut visited_leaf_neighbors = HashMap::<String, CorpusLeafEntry>::new();
+    let mut deepest_visited_oracle_index = 0usize;
+    let mut oracle_leaf_visited = false;
+    let mut oracle_path_rounds = Vec::new();
+
+    let initial = load_trace_block_candidates(
+        root_id,
+        &target,
+        store,
+        0,
+        oracle_path,
+        deepest_visited_oracle_index,
+        state,
+    )?;
+    if let Some(local_rank) = initial.oracle_local_rank {
+        local_ranks_by_child.insert(local_rank.child_block_id, local_rank);
+    }
+    frontier.extend(initial.candidates);
+
+    let mut expanded_children = HashSet::new();
+    let mut round_index = 0usize;
+
+    loop {
+        frontier.retain(|candidate| {
+            !matches!(
+                candidate,
+                TraceSearchCandidate::Branch { child, .. } if expanded_children.contains(child)
+            )
+        });
+        frontier.sort_by(compare_trace_candidates);
+
+        if frontier.len() >= requested
+            && frontier
+                .iter()
+                .take(requested)
+                .all(TraceSearchCandidate::is_terminal)
+        {
+            let pending_oracle_round = PendingOracleRoundState {
+                frontier: &frontier,
+                expanded_children: &expanded_children,
+                oracle_path,
+                local_ranks_by_child: &local_ranks_by_child,
+            };
+            record_pending_oracle_round(
+                pending_oracle_round,
+                deepest_visited_oracle_index,
+                round_index,
+                false,
+                &mut oracle_path_rounds,
+            );
+            let approximate_neighbors = frontier
+                .iter()
+                .filter_map(|candidate| match candidate {
+                    TraceSearchCandidate::Leaf { entry, .. } => Some(entry.clone()),
+                    TraceSearchCandidate::Branch { .. } => None,
+                })
+                .filter(|entry| entry.neighbor_id != query.neighbor_id)
+                .take(max_k)
+                .collect::<Vec<_>>();
+            return Ok(SearchTraceOutcome {
+                approximate_neighbors,
+                visited_leaf_neighbors: rerank_visited_leaf_neighbors(
+                    &visited_leaf_neighbors,
+                    &query.neighbor_id,
+                    &query.embedding,
+                    max_k,
+                )?,
+                deepest_visited_oracle_index,
+                oracle_leaf_visited,
+                oracle_path_rounds,
+            });
+        }
+
+        let current_round =
+            select_trace_children_to_expand(&frontier, &expanded_children, traversal_width);
+        if current_round.is_empty() {
+            let pending_oracle_round = PendingOracleRoundState {
+                frontier: &frontier,
+                expanded_children: &expanded_children,
+                oracle_path,
+                local_ranks_by_child: &local_ranks_by_child,
+            };
+            record_pending_oracle_round(
+                pending_oracle_round,
+                deepest_visited_oracle_index,
+                round_index,
+                false,
+                &mut oracle_path_rounds,
+            );
+            let approximate_neighbors = frontier
+                .iter()
+                .filter_map(|candidate| match candidate {
+                    TraceSearchCandidate::Leaf { entry, .. } => Some(entry.clone()),
+                    TraceSearchCandidate::Branch { .. } => None,
+                })
+                .filter(|entry| entry.neighbor_id != query.neighbor_id)
+                .take(max_k)
+                .collect::<Vec<_>>();
+            return Ok(SearchTraceOutcome {
+                approximate_neighbors,
+                visited_leaf_neighbors: rerank_visited_leaf_neighbors(
+                    &visited_leaf_neighbors,
+                    &query.neighbor_id,
+                    &query.embedding,
+                    max_k,
+                )?,
+                deepest_visited_oracle_index,
+                oracle_leaf_visited,
+                oracle_path_rounds,
+            });
+        }
+
+        let pending_oracle_round = PendingOracleRoundState {
+            frontier: &frontier,
+            expanded_children: &expanded_children,
+            oracle_path,
+            local_ranks_by_child: &local_ranks_by_child,
+        };
+        record_pending_oracle_round(
+            pending_oracle_round,
+            deepest_visited_oracle_index,
+            round_index,
+            current_round
+                .iter()
+                .any(|child_id| oracle_path.get(deepest_visited_oracle_index + 1) == Some(child_id)),
+            &mut oracle_path_rounds,
+        );
+
+        let current_round_set: HashSet<_> = current_round.iter().copied().collect();
+        let mut next_candidates = Vec::new();
+        for child_id in &current_round {
+            let next_deepest_visited_oracle_index =
+                if oracle_path.get(deepest_visited_oracle_index + 1) == Some(child_id) {
+                    deepest_visited_oracle_index + 1
+                } else {
+                    deepest_visited_oracle_index
+                };
+            let child_depth = frontier
+                .iter()
+                .find_map(|candidate| match candidate {
+                    TraceSearchCandidate::Branch { child, depth, .. } if child == child_id => {
+                        Some(*depth)
+                    }
+                    _ => None,
+                })
+                .unwrap_or(1);
+            let loaded = load_trace_block_candidates(
+                child_id,
+                &target,
+                store,
+                child_depth,
+                oracle_path,
+                next_deepest_visited_oracle_index,
+                state,
+            )?;
+            if let Some(local_rank) = loaded.oracle_local_rank {
+                local_ranks_by_child.insert(local_rank.child_block_id, local_rank);
+            }
+            for candidate in loaded.candidates {
+                if let TraceSearchCandidate::Leaf { entry, .. } = &candidate {
+                    visited_leaf_neighbors
+                        .entry(entry.neighbor_id.clone())
+                        .or_insert_with(|| entry.clone());
+                }
+                next_candidates.push(candidate);
+            }
+            if oracle_path.get(deepest_visited_oracle_index + 1) == Some(child_id) {
+                deepest_visited_oracle_index += 1;
+                oracle_leaf_visited = deepest_visited_oracle_index + 1 == oracle_path.len();
+            }
+            expanded_children.insert(*child_id);
+        }
+
+        frontier.retain(|candidate| {
+            !matches!(
+                candidate,
+                TraceSearchCandidate::Branch { child, .. } if current_round_set.contains(child)
+            )
+        });
+        frontier.extend(next_candidates);
+        round_index += 1;
+    }
+}
+
+fn record_pending_oracle_round(
+    state: PendingOracleRoundState<'_>,
+    deepest_visited_oracle_index: usize,
+    round_index: usize,
+    selected_for_expansion: bool,
+    oracle_path_rounds: &mut Vec<OraclePathRoundTrace>,
+) {
+    let Some(next_oracle_child) = state.oracle_path.get(deepest_visited_oracle_index + 1) else {
+        return;
+    };
+    let Some(frontier_branch_rank) =
+        frontier_branch_rank(state.frontier, state.expanded_children, *next_oracle_child)
+    else {
+        return;
+    };
+    let Some(local_rank) = state.local_ranks_by_child.get(next_oracle_child).cloned() else {
+        return;
+    };
+    if oracle_path_rounds.last().is_some_and(|round| {
+        round.round_index == round_index && round.local_rank.child_block_id == *next_oracle_child
+    }) {
+        return;
+    }
+    oracle_path_rounds.push(OraclePathRoundTrace {
+        round_index,
+        local_rank,
+        frontier_branch_rank,
+        selected_for_expansion,
+    });
+}
+
+fn frontier_branch_rank(
+    frontier: &[TraceSearchCandidate],
+    expanded_children: &HashSet<BlockHash>,
+    target_child: BlockHash,
+) -> Option<usize> {
+    let mut seen_children = HashSet::new();
+    let mut rank = 0usize;
+    for candidate in frontier {
+        let TraceSearchCandidate::Branch { child, .. } = candidate else {
+            continue;
+        };
+        if expanded_children.contains(child) || !seen_children.insert(*child) {
+            continue;
+        }
+        rank += 1;
+        if *child == target_child {
+            return Some(rank);
+        }
+    }
+    None
+}
+
+fn select_trace_children_to_expand(
+    frontier: &[TraceSearchCandidate],
+    expanded_children: &HashSet<BlockHash>,
+    traversal_width: usize,
+) -> Vec<BlockHash> {
+    let mut selected = Vec::new();
+    let mut seen_children = HashSet::new();
+    for candidate in frontier {
+        let TraceSearchCandidate::Branch { child, .. } = candidate else {
+            continue;
+        };
+        if expanded_children.contains(child) || !seen_children.insert(*child) {
+            continue;
+        }
+        selected.push(*child);
+        if selected.len() == traversal_width {
+            break;
+        }
+    }
+    selected
+}
+
+struct LoadedTraceCandidates {
+    candidates: Vec<TraceSearchCandidate>,
+    oracle_local_rank: Option<OracleChildLocalRank>,
+}
+
+fn load_trace_block_candidates(
+    block_id: &BlockHash,
+    target: &EncodedTargetEmbedding,
+    store: &dyn BlockStore,
+    depth: usize,
+    oracle_path: &[BlockHash],
+    deepest_visited_oracle_index: usize,
+    state: &TraversalState,
+) -> Result<LoadedTraceCandidates, TreeQualityError> {
+    let Some(validated) = store.get(block_id)? else {
+        return Err(TreeQualityError::Search {
+            message: format!("missing block {block_id} while tracing TNN falsification"),
+        });
+    };
+    let scorer = DefaultCandidateScorer;
+    match &validated.block {
+        Block::Branch(branch) => {
+            let next_oracle_child = oracle_path.get(deepest_visited_oracle_index + 1).copied();
+            let mut candidates = branch
+                .entries
+                .iter()
+                .map(|entry| {
+                    let rank_score = scorer
+                        .score(target, &entry.embedding, &branch.embedding_spec)
+                        .map_err(|error| TreeQualityError::Search {
+                            message: format!(
+                                "failed to score branch child {} from block {}: {error}",
+                                entry.child, validated.hash
+                            ),
+                        })?;
+                    let embedding =
+                        decode_embedding_values(&entry.embedding, &branch.embedding_spec)
+                            .ok_or_else(|| TreeQualityError::InvalidEmbeddingLength {
+                                block_id: validated.hash.to_string(),
+                                encoding: branch.embedding_spec.encoding.clone(),
+                                dims: branch.embedding_spec.dims,
+                                expected_bytes: usize::try_from(branch.embedding_spec.dims)
+                                    .unwrap_or(0)
+                                    .saturating_mul(4),
+                                actual_bytes: entry.embedding.len(),
+                            })?;
+                    let display_score = cosine_similarity_embedding_bytes(target, &embedding)?;
+                    Ok(TraceSearchCandidate::Branch {
+                        child: entry.child,
+                        depth: depth + 1,
+                        level: branch.level,
+                        rank_score,
+                        display_score,
+                    })
+                })
+                .collect::<Result<Vec<_>, TreeQualityError>>()?;
+            candidates.sort_by(compare_trace_candidates);
+
+            let oracle_local_rank = next_oracle_child.and_then(|oracle_child| {
+                candidates
+                    .iter()
+                    .position(|candidate| matches!(candidate, TraceSearchCandidate::Branch { child, .. } if *child == oracle_child))
+                    .map(|index| {
+                        let TraceSearchCandidate::Branch {
+                            child,
+                            level,
+                            display_score,
+                            ..
+                        } = &candidates[index]
+                        else {
+                            unreachable!("position lookup must yield a branch candidate")
+                        };
+                        OracleChildLocalRank {
+                            parent_block_id: validated.hash,
+                            parent_level: branch.level,
+                            child_block_id: *child,
+                            child_level: state
+                                .metrics_by_id
+                                .get(child)
+                                .map(|metrics| metrics.level)
+                                .unwrap_or(level.saturating_sub(1)),
+                            local_sibling_count: candidates.len(),
+                            local_sibling_rank: index + 1,
+                            local_routing_score: *display_score,
+                        }
+                    })
+            });
+
+            Ok(LoadedTraceCandidates {
+                candidates,
+                oracle_local_rank,
+            })
+        }
+        Block::Leaf(leaf) => Ok(LoadedTraceCandidates {
+            candidates: leaf
+                .entries
+                .iter()
+                .map(|entry| {
+                    let rank_score = scorer
+                        .score(target, &entry.embedding, &leaf.embedding_spec)
+                        .map_err(|error| TreeQualityError::Search {
+                            message: format!(
+                                "failed to score leaf entry in block {}: {error}",
+                                validated.hash
+                            ),
+                        })?;
+                    let corpus_entry =
+                        corpus_entry_from_leaf_result(validated.hash, entry, &leaf.embedding_spec)?;
+                    Ok(TraceSearchCandidate::Leaf {
+                        entry: corpus_entry,
+                        level: leaf.level,
+                        rank_score,
+                    })
+                })
+                .collect::<Result<Vec<_>, TreeQualityError>>()?,
+            oracle_local_rank: None,
+        }),
+    }
+}
+
+fn cosine_similarity_embedding_bytes(
+    target: &EncodedTargetEmbedding,
+    candidate: &[f32],
+) -> Result<f32, TreeQualityError> {
+    let query =
+        decode_embedding_values(&target.bytes, &target.embedding_spec).ok_or_else(|| {
+            TreeQualityError::Search {
+                message: "failed to decode target embedding while tracing TNN falsification".into(),
+            }
+        })?;
+    cosine_similarity(&query, candidate).map(|score| score as f32)
+}
+
+fn rerank_visited_leaf_neighbors(
+    visited_leaf_neighbors: &HashMap<String, CorpusLeafEntry>,
+    query_neighbor_id: &str,
+    query_embedding: &[f32],
+    max_k: usize,
+) -> Result<Vec<CorpusLeafEntry>, TreeQualityError> {
+    let mut ranked = visited_leaf_neighbors
+        .values()
+        .filter(|entry| entry.neighbor_id != query_neighbor_id)
+        .map(|entry| {
+            cosine_similarity(query_embedding, &entry.embedding).map(|score| (score, entry))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    ranked.sort_by(|left, right| {
+        right
+            .0
+            .partial_cmp(&left.0)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| {
+                left.1
+                    .leaf_block_id
+                    .as_bytes()
+                    .cmp(right.1.leaf_block_id.as_bytes())
+            })
+            .then_with(|| left.1.neighbor_id.cmp(&right.1.neighbor_id))
+    });
+    Ok(ranked
+        .into_iter()
+        .take(max_k)
+        .map(|(_, entry)| entry.clone())
+        .collect())
 }
 
 fn collect_corpus_entries(
@@ -1793,6 +2834,89 @@ mod tests {
             error,
             TreeQualityError::InvalidTnnRecallTraversalWidth
         ));
+    }
+
+    #[test]
+    fn falsification_reports_oracle_branch_not_visited_before_termination() {
+        let dir = tempdir().unwrap();
+        let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
+
+        let query_leaf = store.put(&named_leaf_block("query", &[1.0, 0.0])).unwrap();
+        let near_a = store.put(&named_leaf_block("near-a", &[0.8, 0.6])).unwrap();
+        let near_b = store
+            .put(&named_leaf_block("near-b", &[0.75, 0.66]))
+            .unwrap();
+        let near_c = store
+            .put(&named_leaf_block("near-c", &[0.7, 0.71]))
+            .unwrap();
+        let oracle = store
+            .put(&named_leaf_block("oracle", &[0.999, 0.001]))
+            .unwrap();
+        let favored = store
+            .put(&branch_block(
+                1,
+                vec![
+                    ([1.0, 0.0], query_leaf),
+                    ([0.8, 0.6], near_a),
+                    ([0.75, 0.66], near_b),
+                    ([0.7, 0.71], near_c),
+                ],
+            ))
+            .unwrap();
+        let oracle_branch = store
+            .put(&branch_block(1, vec![([0.999, 0.001], oracle)]))
+            .unwrap();
+        let root = store
+            .put(&branch_block(
+                2,
+                vec![([1.0, 0.0], favored), ([0.6, 0.8], oracle_branch)],
+            ))
+            .unwrap();
+
+        let query_block = store.get(&query_leaf).unwrap().unwrap();
+        let query_entry = match &query_block.block {
+            Block::Leaf(leaf) => {
+                corpus_entry_from_leaf_result(query_leaf, &leaf.entries[0], &leaf.embedding_spec)
+            }
+            Block::Branch(_) => panic!("query leaf must remain a leaf block"),
+        }
+        .unwrap();
+        let root_block = store.get(&root).unwrap().unwrap();
+        let root_embedding_spec = embedding_spec_for_block(&root_block.block);
+        let oracle_path = vec![root, oracle_branch, oracle];
+
+        let trace = trace_approximate_neighbors(TraceSearchRequest {
+            root_id: &root,
+            root_embedding_spec: &root_embedding_spec,
+            query: &query_entry,
+            max_k: 1,
+            traversal_width: 1,
+            store: &store,
+            oracle_path: &oracle_path,
+            state: &TraversalState {
+                blocks: Vec::new(),
+                corpus_entries: Vec::new(),
+                findings: Vec::new(),
+                metrics_by_id: HashMap::new(),
+                child_ids_by_parent: HashMap::new(),
+                parent_by_id: HashMap::new(),
+                visited: HashSet::new(),
+                has_zero_magnitude_tnn_entry: false,
+                structural_finding_count: 0,
+                edge_count: 0,
+                max_depth: 0,
+            },
+        })
+        .unwrap();
+        let blocking = first_blocking_round(&trace, &oracle_path).unwrap();
+
+        assert!(!trace.oracle_leaf_visited);
+        assert_eq!(trace.deepest_visited_oracle_index, 0);
+        assert_eq!(trace.approximate_neighbors.len(), 1);
+        assert_eq!(trace.approximate_neighbors[0].leaf_block_id, near_a);
+        assert_eq!(blocking.local_rank.child_level, 1);
+        assert_eq!(blocking.frontier_branch_rank, 2);
+        assert!(!blocking.selected_for_expansion);
     }
 
     #[test]

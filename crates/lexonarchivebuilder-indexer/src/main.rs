@@ -8,9 +8,10 @@ use lexonarchivebuilder_indexer::config::{
 };
 use lexonarchivebuilder_indexer::embedding::ConfiguredEmbeddingProvider;
 use lexonarchivebuilder_indexer::quality::{
-    TnnRecallConfig, assess_rooted_tree_with_config,
-    default_report_path as default_quality_report_path, default_tnn_recall_sample_size,
-    default_tnn_recall_seed, render_report_summary, write_report as write_quality_report,
+    TnnRecallConfig, assess_rooted_tree_with_config, assess_tnn_falsification,
+    default_falsification_report_path, default_report_path as default_quality_report_path,
+    default_tnn_recall_sample_size, default_tnn_recall_seed, render_falsification_report_summary,
+    render_report_summary, write_falsification_report, write_report as write_quality_report,
 };
 use lexonarchivebuilder_indexer::search::{
     default_report_path as default_search_report_path,
@@ -49,6 +50,20 @@ enum Command {
         clustering: ClusteringConfigOverrides,
     },
     Quality {
+        #[arg(long)]
+        root_id: String,
+        #[arg(long, default_value_t = default_tnn_recall_sample_size())]
+        tnn_recall_sample_size: usize,
+        #[arg(long, default_value_t = default_tnn_recall_seed())]
+        tnn_recall_seed: u64,
+        #[arg(long, default_value_t = default_search_traversal_width())]
+        traversal_width: usize,
+        #[arg(long)]
+        json_out: Option<PathBuf>,
+        #[command(flatten)]
+        block_store: BlockStoreArgs,
+    },
+    QualityFalsification {
         #[arg(long)]
         root_id: String,
         #[arg(long, default_value_t = default_tnn_recall_sample_size())]
@@ -234,6 +249,31 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", render_search_report_summary(&report));
             println!("JSON report: {}", output_path.display());
         }
+        Command::QualityFalsification {
+            root_id,
+            tnn_recall_sample_size,
+            tnn_recall_seed,
+            traversal_width,
+            json_out,
+            block_store,
+        } => {
+            let root_id = parse_block_hash(&root_id)?;
+            let store = configured_block_store(&block_store)?;
+            let report = assess_tnn_falsification(
+                &root_id,
+                &store,
+                TnnRecallConfig {
+                    sample_size: tnn_recall_sample_size,
+                    seed: tnn_recall_seed,
+                    traversal_width,
+                },
+            )?;
+            let output_path =
+                json_out.unwrap_or_else(|| default_falsification_report_path(&root_id));
+            write_falsification_report(&output_path, &report)?;
+            println!("{}", render_falsification_report_summary(&report));
+            println!("JSON report: {}", output_path.display());
+        }
     }
 
     Ok(())
@@ -372,6 +412,47 @@ mod tests {
                 assert_eq!(embedding_model, DEFAULT_LOCAL_MODEL);
             }
             _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn quality_falsification_command_parses_local_block_store_args() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "quality-falsification",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--tnn-recall-sample-size",
+            "17",
+            "--tnn-recall-seed",
+            "9",
+            "--traversal-width",
+            "16",
+            "--block-store-root",
+            "blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::QualityFalsification {
+                root_id,
+                tnn_recall_sample_size,
+                tnn_recall_seed,
+                traversal_width,
+                block_store,
+                ..
+            } => {
+                assert_eq!(
+                    root_id,
+                    "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                );
+                assert_eq!(tnn_recall_sample_size, 17);
+                assert_eq!(tnn_recall_seed, 9);
+                assert_eq!(traversal_width, 16);
+                assert_eq!(block_store.block_store_profile, BlockStoreProfile::Local);
+                assert_eq!(block_store.block_store_root, Some(PathBuf::from("blocks")));
+            }
+            _ => panic!("expected quality-falsification command"),
         }
     }
 
