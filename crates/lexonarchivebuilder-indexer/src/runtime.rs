@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fs;
 use std::future::Future;
 use std::io::{self, ErrorKind, Read, Write};
@@ -2309,15 +2309,10 @@ fn try_load_replay_batches_from_journal(
         return Ok(None);
     }
 
-    let mut records_by_item = BTreeMap::new();
-    for record in records {
-        let item = replay_journal_record_to_item(&record);
-        records_by_item.insert(replay_sort_key(&item), (item, record));
-    }
-
     let mut items = Vec::new();
     let mut embeddings_by_input_hash = HashMap::new();
-    for (_, (journal_item, record)) in records_by_item {
+    for record in records {
+        let journal_item = replay_journal_record_to_item(&record);
         let block_id = match parse_block_hash(&record.block_id) {
             Ok(block_id) => block_id,
             Err(_) => return Ok(None),
@@ -5169,6 +5164,101 @@ mod tests {
             other => panic!("expected document replay item, got {other:?}"),
         }
         server.join();
+    }
+
+    #[test]
+    fn journal_replay_preserves_duplicate_items_with_distinct_blocks() {
+        let temp = tempdir().unwrap();
+        let block_store = ConfiguredBlockStore::from_environment(
+            temp.path(),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: String::new(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+        )
+        .unwrap();
+        let block_store_root = temp.path().join("blocks");
+        prepare_replay_journal(&block_store_root).unwrap();
+
+        let embedding_spec = EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        };
+        let metadata = vec![
+            (
+                Value::Text("source_kind".into()),
+                Value::Text("document".into()),
+            ),
+            (
+                Value::Text("source_path".into()),
+                Value::Text("C:/shared/duplicate.txt".into()),
+            ),
+        ];
+        let block_one = Block::Leaf(
+            build_leaf_block(
+                VERSION_1,
+                embedding_spec.clone(),
+                vec![LeafEntry {
+                    embedding: vec![0, 0, 0, 0, 0, 0, 128, 63],
+                    metadata: metadata.clone(),
+                    content: Content {
+                        media_type: "text/plain".into(),
+                        body: b"first body".to_vec(),
+                    },
+                }],
+                None,
+            )
+            .unwrap(),
+        );
+        let block_two = Block::Leaf(
+            build_leaf_block(
+                VERSION_1,
+                embedding_spec.clone(),
+                vec![LeafEntry {
+                    embedding: vec![0, 0, 0, 64, 0, 0, 128, 63],
+                    metadata: metadata.clone(),
+                    content: Content {
+                        media_type: "text/plain".into(),
+                        body: b"second body".to_vec(),
+                    },
+                }],
+                None,
+            )
+            .unwrap(),
+        );
+        let block_one_id = block_store.put(&block_one).unwrap();
+        let block_two_id = block_store.put(&block_two).unwrap();
+        let validated_one = block_store.get(&block_one_id).unwrap().unwrap();
+        let validated_two = block_store.get(&block_two_id).unwrap().unwrap();
+        let (item_one, _) = replay_item_from_validated_block(&validated_one, &embedding_spec)
+            .unwrap()
+            .unwrap();
+        let (item_two, _) = replay_item_from_validated_block(&validated_two, &embedding_spec)
+            .unwrap()
+            .unwrap();
+        let records = vec![
+            replay_journal_record_from_item(block_one_id, &item_one),
+            replay_journal_record_from_item(block_two_id, &item_two),
+        ];
+        append_replay_journal_records(&block_store_root, &records).unwrap();
+
+        let progress: ProgressReporter = Arc::new(|_| {});
+        let io = RuntimeIo {
+            local_block_store_root: Some(block_store_root.as_path()),
+            progress: &progress,
+        };
+        let (replay_batches, _) =
+            load_replay_batches_from_store(&block_store, &embedding_spec, 8, io).unwrap();
+
+        let replay_item_count: usize = replay_batches.iter().map(|batch| batch.items.len()).sum();
+        assert_eq!(replay_item_count, 2);
     }
 
     struct TestServer {
