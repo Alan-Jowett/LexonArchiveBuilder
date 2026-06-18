@@ -1597,6 +1597,18 @@ fn append_replay_journal_records(
                 source: io::Error::new(ErrorKind::InvalidData, source.to_string()),
             }
         })?;
+        if encoded.len() > REPLAY_JOURNAL_RECORD_MAX_BYTES {
+            return Err(RuntimeError::WriteReplayJournal {
+                path: current_segment_path.display().to_string(),
+                source: io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "replay journal record exceeded {}-byte maximum payload",
+                        REPLAY_JOURNAL_RECORD_MAX_BYTES
+                    ),
+                ),
+            });
+        }
         let frame_size = encoded.len() as u64 + 4;
         if current_size > REPLAY_JOURNAL_FILE_MAGIC.len() as u64
             && current_size + frame_size > REPLAY_JOURNAL_SEGMENT_MAX_BYTES
@@ -1697,7 +1709,9 @@ fn initialize_replay_journal_segment(path: &Path) -> Result<u64, RuntimeError> {
             path: path.display().to_string(),
             source,
         })?;
-        if metadata.len() >= REPLAY_JOURNAL_FILE_MAGIC.len() as u64 {
+        if metadata.len() >= REPLAY_JOURNAL_FILE_MAGIC.len() as u64
+            && replay_journal_segment_has_magic(path)?
+        {
             return Ok(metadata.len());
         }
     }
@@ -1718,6 +1732,20 @@ fn initialize_replay_journal_segment(path: &Path) -> Result<u64, RuntimeError> {
             source,
         })?;
     Ok(REPLAY_JOURNAL_FILE_MAGIC.len() as u64)
+}
+
+fn replay_journal_segment_has_magic(path: &Path) -> Result<bool, RuntimeError> {
+    let mut file = fs::File::open(path).map_err(|source| RuntimeError::WriteReplayJournal {
+        path: path.display().to_string(),
+        source,
+    })?;
+    let mut magic = vec![0u8; REPLAY_JOURNAL_FILE_MAGIC.len()];
+    file.read_exact(&mut magic)
+        .map_err(|source| RuntimeError::WriteReplayJournal {
+            path: path.display().to_string(),
+            source,
+        })?;
+    Ok(magic == REPLAY_JOURNAL_FILE_MAGIC)
 }
 
 fn open_replay_journal_segment_for_append(path: &Path) -> Result<fs::File, RuntimeError> {
@@ -1796,7 +1824,7 @@ fn replay_journal_record_from_item(
     let metadata = metadata_to_text_map(&item.metadata).into_iter().collect();
     let content_ref = match &item.content_ref {
         ContentRef::Document { path } => ReplayJournalContentRef::Document {
-            path: path.to_string_lossy().into_owned(),
+            path: normalize_replay_journal_path(path),
         },
         ContentRef::Inline { media_type, body } => ReplayJournalContentRef::Inline {
             media_type: media_type.clone(),
@@ -1815,6 +1843,10 @@ fn replay_journal_record_from_item(
         metadata,
         content_ref,
     }
+}
+
+fn normalize_replay_journal_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn replay_journal_record_to_item(record: &ReplayJournalRecord) -> IndexItem<ContentRef> {
@@ -2285,7 +2317,7 @@ fn try_load_replay_batches_from_journal(
 
     let mut items = Vec::new();
     let mut embeddings_by_input_hash = HashMap::new();
-    for (_, (item, record)) in records_by_item {
+    for (_, (journal_item, record)) in records_by_item {
         let block_id = match parse_block_hash(&record.block_id) {
             Ok(block_id) => block_id,
             Err(_) => return Ok(None),
@@ -2296,11 +2328,15 @@ fn try_load_replay_batches_from_journal(
         let Some(key) = replay_embedding_input_hash(&validated, embedding_spec)? else {
             return Ok(None);
         };
-        let Some((_, embedding)) = replay_item_from_validated_block(&validated, embedding_spec)?
+        let Some((block_item, embedding)) =
+            replay_item_from_validated_block(&validated, embedding_spec)?
         else {
             return Ok(None);
         };
-        items.push(item);
+        if replay_sort_key(&journal_item) != replay_sort_key(&block_item) {
+            return Ok(None);
+        }
+        items.push(block_item);
         embeddings_by_input_hash.insert(key.into_bytes(), embedding);
     }
 
@@ -4981,6 +5017,157 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        server.join();
+    }
+
+    #[test]
+    fn replay_journal_record_normalizes_document_paths() {
+        let item = IndexItem {
+            metadata: vec![],
+            content_ref: ContentRef::Document {
+                path: PathBuf::from(r"C:\temp\alpha.txt"),
+            },
+        };
+
+        let record = replay_journal_record_from_item(BlockHash::from_bytes([7u8; 32]), &item);
+        assert_eq!(
+            record.content_ref,
+            ReplayJournalContentRef::Document {
+                path: "C:/temp/alpha.txt".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn replay_journal_writer_rejects_oversized_payload() {
+        let temp = tempdir().unwrap();
+        let block_store_root = temp.path().join("blocks");
+        prepare_replay_journal(&block_store_root).unwrap();
+
+        let record = ReplayJournalRecord {
+            block_id: BlockHash::from_bytes([9u8; 32]).to_string(),
+            metadata: vec![],
+            content_ref: ReplayJournalContentRef::Inline {
+                media_type: "text/plain".into(),
+                body: vec![b'x'; REPLAY_JOURNAL_RECORD_MAX_BYTES + 1],
+            },
+        };
+
+        let error = append_replay_journal_records(&block_store_root, &[record]).unwrap_err();
+        assert!(matches!(error, RuntimeError::WriteReplayJournal { .. }));
+    }
+
+    #[test]
+    fn replay_journal_reinitializes_segment_with_corrupt_magic() {
+        let temp = tempdir().unwrap();
+        let block_store_root = temp.path().join("blocks");
+        prepare_replay_journal(&block_store_root).unwrap();
+
+        let journal_root = replay_journal_root(&block_store_root);
+        let segment_path = replay_journal_segment_path(&journal_root, 1);
+        fs::write(&segment_path, b"BADMAGIC-corrupt-segment").unwrap();
+
+        let size = initialize_replay_journal_segment(&segment_path).unwrap();
+        assert_eq!(size, REPLAY_JOURNAL_FILE_MAGIC.len() as u64);
+        assert!(replay_journal_segment_has_magic(&segment_path).unwrap());
+    }
+
+    #[tokio::test]
+    async fn clustering_only_falls_back_when_journal_record_mismatches_block() {
+        let temp = tempdir().unwrap();
+        let document_path = temp.path().join("alpha.txt");
+        fs::write(&document_path, "alpha\n").unwrap();
+
+        let server = spawn_embedding_server(1);
+        let request = BatchRequest {
+            environment: EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: server.base_url.clone(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            block_size_target: 65_536,
+            stage: ExecutionStage::IngestionAndEmbedding,
+            max_concurrency: Some(1),
+            items: vec![BatchItemConfig::Document {
+                path: document_path
+                    .strip_prefix(temp.path())
+                    .unwrap()
+                    .to_path_buf(),
+                metadata: BTreeMap::new(),
+            }],
+        };
+        run_request(temp.path(), request).await.unwrap();
+
+        let block_store_root = temp.path().join("blocks");
+        let segment_path = replay_journal_segment_paths(&replay_journal_root(&block_store_root))
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let mut record = load_replay_journal_records(&block_store_root)
+            .unwrap()
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        record.content_ref = ReplayJournalContentRef::Document {
+            path: "bogus.txt".into(),
+        };
+        let mut encoded = Vec::new();
+        ciborium::ser::into_writer(&record, &mut encoded).unwrap();
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&segment_path)
+            .unwrap();
+        file.write_all(REPLAY_JOURNAL_FILE_MAGIC).unwrap();
+        file.write_all(&(encoded.len() as u32).to_le_bytes())
+            .unwrap();
+        file.write_all(&encoded).unwrap();
+        file.sync_data().unwrap();
+
+        let block_store = ConfiguredBlockStore::from_environment(
+            temp.path(),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: String::new(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+        )
+        .unwrap();
+        let embedding_spec = EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        };
+        let progress: ProgressReporter = Arc::new(|_| {});
+        let io = RuntimeIo {
+            local_block_store_root: Some(block_store_root.as_path()),
+            progress: &progress,
+        };
+        let (replay_batches, _) =
+            load_replay_batches_from_store(&block_store, &embedding_spec, 1, io).unwrap();
+        assert_eq!(replay_batches.len(), 1);
+        assert_eq!(replay_batches[0].items.len(), 1);
+        match &replay_batches[0].items[0].content_ref {
+            ContentRef::Document { path } => assert_eq!(path, &document_path),
+            other => panic!("expected document replay item, got {other:?}"),
+        }
         server.join();
     }
 
