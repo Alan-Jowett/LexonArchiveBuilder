@@ -3,8 +3,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted CLI search discovery, and upstream wgpu-acceleration revision compatibility
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, published-profile-based clustering configuration, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics and rooted TNN-recall diagnostics, rooted CLI search over stored trees, upstream wgpu-acceleration revision compatibility, and layer-parallel block-construction evolution
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted CLI search discovery, upstream wgpu-acceleration revision compatibility, and LAB-owned replay-journaled clustering-only recovery
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned replay-journaled split-stage recovery, published-profile-based clustering configuration, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics and rooted TNN-recall diagnostics, rooted CLI search over stored trees, upstream wgpu-acceleration revision compatibility, and layer-parallel block-construction evolution
 
 ## USER-REQUEST
 
@@ -136,8 +136,14 @@
 - **UR-126 [KNOWN]:** LexonGraph has now merged a wgpu acceleration feature, and LexonArchiveBuilder should refresh its pinned upstream LexonGraph revision to include that feature.
 - **UR-127 [KNOWN]:** Opting into this upstream wgpu acceleration should not require a LexonArchiveBuilder API, CLI, request-schema, or published-profile contract change for this increment; refreshing the pinned upstream commit should be sufficient.
 - **UR-128 [INFERRED]:** The approved published profile version `0.1.0`, existing execution-stage contract, and existing MCP search or retrieval behavior should remain unchanged while the upstream dependency revision advances to pick up wgpu acceleration.
-- **UR-129 [KNOWN]:** The target LexonGraph upstream revision for this increment is commit `8f56d720bdafcd5d213a30b8d5d12283f36a6682`.
-- **UR-130 [KNOWN]:** This increment is intended to be a dependency-pin refresh only; no additional requirements, design, validation, API, CLI, or request-schema changes are required unless the target upstream revision proves incompatible during implementation.
+- **UR-129 [KNOWN]:** The target LexonGraph upstream revision for this increment is commit `70a80a2b51b41759217eec05086cb76586c4f1a5`.
+- **UR-130 [KNOWN]:** This increment originated as a dependency-pin refresh, but the approved replay-journal capability is also in scope; beyond those two changes, no unrelated requirements, design, validation, API, CLI, or request-schema changes are required unless the target upstream revision proves incompatible during implementation.
+- **UR-131 [KNOWN]:** LexonArchiveBuilder should own a durable replay journal for successfully persisted replayable leaf outputs so resumed ingestion and clustering-only replay do not need to rediscover all eligible inputs solely by rescanning the entire configured block store.
+- **UR-132 [INFERRED]:** The replay journal should be append-only and should record completion only after the corresponding replayable leaf output has been durably persisted, so crash recovery can distinguish committed replay state from incomplete work.
+- **UR-133 [KNOWN]:** Clustering-only execution should prefer LexonArchiveBuilder-owned journaled replay inputs when available and may fall back to block-store iteration for legacy stores, missing journals, or explicitly rebuilt stores.
+- **UR-134 [INFERRED]:** The replay-journal contract should remain content-type-agnostic and preserve enough replay metadata to support current and future content types without redefining LexonGraph-owned block or embedding semantics.
+- **UR-135 [INFERRED]:** The replay journal should minimize steady-state write and read overhead and support bounded segment rollover for large corpora without requiring in-place mutation of previously committed records.
+- **UR-136 [KNOWN]:** The replay journal is a LexonArchiveBuilder-owned orchestration artifact and must not introduce a new MCP-visible surface or a new required LexonGraph contract.
 
 ## Change Manifest
 
@@ -203,7 +209,11 @@
 | CM-INDEXER-058 | Revise | Replace the current lower-level planning-policy integration target with the higher-level published-profile streaming API and require `0.1.0` for this increment | UR-121, UR-122, UR-123 |
 | CM-INDEXER-059 | Revise | Replace the current external clustering mode, algorithm, and option contract with a profile-based contract pinned to published profile `0.1.0` | UR-121, UR-123, UR-124 |
 | CM-INDEXER-060 | Add | Preserve environment-neutral and content-type-neutral indexing behavior while the approved published-profile version remains fixed across invocation shapes in this increment | UR-118, UR-119, UR-123, UR-125 |
-| CM-INDEXER-061 | Revise | Refresh the pinned LexonGraph upstream revision to commit `8f56d720bdafcd5d213a30b8d5d12283f36a6682` to include merged wgpu acceleration while preserving the approved published-profile contract and existing repository-visible behavior | UR-123, UR-126, UR-127, UR-128, UR-129, UR-130 |
+| CM-INDEXER-061 | Revise | Refresh the pinned LexonGraph upstream revision to commit `70a80a2b51b41759217eec05086cb76586c4f1a5` to include merged wgpu acceleration while preserving the approved published-profile contract and existing repository-visible behavior | UR-123, UR-126, UR-127, UR-128, UR-129, UR-130 |
+| CM-INDEXER-062 | Revise | Change standalone clustering discovery from mandatory whole-store iteration to a journal-preferred replay-input contract with block-store iteration as compatibility fallback | UR-131, UR-133 |
+| CM-INDEXER-063 | Add | Require a LAB-owned durable replay journal for successfully persisted replayable leaf outputs so resumed ingestion and clustering-only replay can reuse repository-owned replay state | UR-131, UR-132, UR-136 |
+| CM-INDEXER-064 | Add | Constrain the replay journal to remain content-type-agnostic, low-overhead, append-only, and segmentable under large-corpus growth | UR-132, UR-134, UR-135 |
+| CM-INDEXER-065 | Revise | Clarify idempotence and recoverability so replay-journaled resume behavior remains subordinate to immutable block semantics rather than redefining LexonGraph recovery ownership | UR-8, UR-131, UR-132, UR-133, UR-136 |
 
 ## Before / After
 
@@ -510,7 +520,27 @@
 ### BA-INDEXER-061
 
 - **Before [KNOWN]:** The requirements pinned LexonGraph to the published-profile-compatible upstream revision, but they did not yet capture adoption of the newly merged upstream wgpu acceleration feature or the exact target upstream commit.
-- **After [KNOWN]:** The requirements now call for refreshing the pinned LexonGraph revision specifically to commit `8f56d720bdafcd5d213a30b8d5d12283f36a6682` to include upstream wgpu acceleration while preserving the approved `0.1.0` published profile and all existing repository-visible contracts.
+- **After [KNOWN]:** The requirements now call for refreshing the pinned LexonGraph revision specifically to commit `70a80a2b51b41759217eec05086cb76586c4f1a5` to include upstream wgpu acceleration while preserving the approved `0.1.0` published profile and all existing repository-visible contracts.
+
+### BA-INDEXER-062
+
+- **Before [KNOWN]:** Standalone clustering input discovery was defined entirely as whole-store iteration through the upstream block-iteration API, so LexonArchiveBuilder had no repository-owned persistent replay catalog for clustering-only replay or resumed ingestion.
+- **After [KNOWN]:** The requirements now prefer a LAB-owned durable replay journal as the primary clustering-only replay-input source while preserving upstream block-store iteration as a compatibility fallback for legacy or explicitly rebuilt stores.
+
+### BA-INDEXER-063
+
+- **Before [KNOWN]:** The requirements did not define any repository-owned durable artifact that records successful replayable leaf completion at ingestion time.
+- **After [KNOWN]:** The requirements now introduce a LAB-owned replay journal that records successful replayable leaf completion only after durable persistence so later resume or clustering-only execution can reuse repository-owned replay state.
+
+### BA-INDEXER-064
+
+- **Before [KNOWN]:** The requirements did not constrain the persistence shape of any repository-owned replay catalog, so append-only write discipline, large-corpus rollover behavior, and low-overhead sequential replay were unspecified.
+- **After [KNOWN]:** The requirements now constrain the replay journal to remain append-only, low-overhead, and segmentable under growth without in-place mutation of committed records.
+
+### BA-INDEXER-065
+
+- **Before [KNOWN]:** Idempotence and recoverability were described only at the immutable-block and upstream-replay-contract level, without a repository-owned requirement for durable partial-progress reuse between split-stage invocations.
+- **After [KNOWN]:** The requirements now clarify that LexonArchiveBuilder may reuse repository-owned replay-journal state for resume and clustering-only replay while remaining subordinate to LexonGraph-owned immutable-block and replay-validation semantics.
 
 ## Requirements
 
@@ -619,23 +649,81 @@ clustering plus block assembly.
 #### RQ-INDEXER-003E - Standalone clustering input discovery
 
 When clustering plus block assembly runs without a preceding ingestion stage in
-the same invocation, LexonArchiveBuilder SHALL derive clustering inputs by iterating
-the configured `BlockStore` through the LexonGraph block-iteration API.
+the same invocation, LexonArchiveBuilder SHALL derive clustering inputs from a
+repository-owned replay-input source that is valid for the configured store
+snapshot.
 
-- **Scope [KNOWN]:** Standalone clustering SHALL examine all clustering-eligible
-  blocks surfaced by that upstream iteration contract for the configured block
-  store rather than only blocks associated with a prior request or summary.
-- **Filtering boundary [INFERRED]:** Blocks not surfaced by the upstream
-  clustering-input iteration contract, including repository-owned artifact
-  classes that are not valid clustering inputs, are outside this requirement's
-  input set.
+- **Preferred source [KNOWN]:** When the selected environment exposes a
+  LexonArchiveBuilder-managed local filesystem block-store root and a valid
+  LexonArchiveBuilder-owned replay journal is available for that configured
+  store snapshot, standalone clustering SHALL reconstruct replay inputs from
+  that journal rather than by rescanning the entire configured block store.
+- **Compatibility fallback [KNOWN]:** When the replay journal is absent,
+  incomplete, incompatible with the configured store snapshot, or intentionally
+  unavailable because the store was rebuilt without journal continuity,
+  standalone clustering MAY derive clustering inputs by iterating the
+  configured `BlockStore` through the LexonGraph block-iteration API.
+- **Scope [KNOWN]:** Regardless of discovery source, standalone clustering
+  SHALL examine all clustering-eligible replayable leaf inputs visible to the
+  selected store snapshot rather than only inputs associated with a prior
+  request or summary.
+- **Filtering boundary [INFERRED]:** Blocks or artifacts outside the approved
+  clustering-input surface, including repository-owned artifact classes that
+  are not valid clustering inputs, are outside this requirement's input set.
 - **Request-shape implication [KNOWN]:** A clustering-only invocation may use an
   empty item collection because input discovery occurs from the configured block
   store rather than from request-supplied sources.
 - **Idempotence implication [INFERRED]:** Repeating the clustering-only stage
   against an unchanged clustering-eligible block-store snapshot is expected to
-  yield the same logical clustering result under unchanged upstream semantics.
-- **Traceability:** UR-39, UR-40
+  yield the same logical clustering result under unchanged upstream semantics
+  whether replay inputs are discovered from a valid replay journal or from
+  compatibility-mode block-store iteration.
+- **Traceability:** UR-39, UR-40, UR-131, UR-133
+
+#### RQ-INDEXER-003E1 - Durable replay journal for split-stage reuse
+
+LexonArchiveBuilder SHALL persist a repository-owned durable replay journal for
+successfully persisted replayable leaf outputs when the selected environment
+exposes a LexonArchiveBuilder-managed local filesystem block-store root.
+
+- **Write boundary [KNOWN]:** A journal record SHALL become durable only after
+  the corresponding replayable leaf output has been durably persisted through
+  the approved storage boundary.
+- **Reuse scope [KNOWN]:** The journal SHALL support at least:
+  1. resumed ingestion that can recognize already completed replayable leaf
+     outputs
+  2. clustering-only replay that can reconstruct delegated replay inputs
+     without requiring whole-store discovery in the common case
+- **Environment scope [KNOWN]:** Environments that do not expose a
+  LexonArchiveBuilder-managed local filesystem block-store root remain on the
+  compatibility fallback path until an equivalent journal location is approved.
+- **Ownership boundary [KNOWN]:** The journal is a LexonArchiveBuilder-owned
+  orchestration artifact and SHALL NOT redefine LexonGraph-owned block
+  identity, embedding, or replay-validation semantics.
+- **Content-model constraint [INFERRED]:** The journal contract SHALL remain
+  generic enough that future content types can emit replayable completion
+  records without reshaping the batch contract around mailbox-only or
+  document-only assumptions.
+- **Traceability:** UR-131, UR-132, UR-134, UR-136
+
+#### RQ-INDEXER-003E2 - Append-only and segmentable replay-journal behavior
+
+The LexonArchiveBuilder replay journal SHALL optimize for low-overhead
+sequential append and replay under large-corpus operation.
+
+- **Mutation constraint [KNOWN]:** Committed journal records SHALL be append-only
+  and SHALL NOT require in-place mutation for ordinary progress recording.
+- **Growth constraint [KNOWN]:** The journal SHALL support bounded segment
+  rollover so one logical indexing corpus does not require unbounded growth of
+  a single journal file.
+- **Recovery implication [INFERRED]:** Crash recovery MUST tolerate a partial or
+  incomplete trailing write without invalidating earlier committed journal
+  records.
+- **Format boundary [UNKNOWN]:** The compact machine-readable encoding used by
+  the journal is not yet fixed at the requirements layer, so downstream design
+  must decide whether the first implementation should standardize on CBOR or a
+  different binary framing while preserving the above invariants.
+- **Traceability:** UR-132, UR-135
 
 #### RQ-INDEXER-003F - Published profile adoption for clustering-enabled execution
 
@@ -721,7 +809,7 @@ behavior.
   - projection of the latest upstream live telemetry and heartbeat events onto that same repository-owned progress surface
   - unchanged MCP search-serving and retrieval behavior for already-indexed content
 - **Regression rule [INFERRED]:** If the latest upstream surface removes or weakens one of those capabilities, LexonArchiveBuilder SHALL treat that as a compatibility finding requiring explicit design and implementation handling, not as permission to drop the affected repository behavior.
-- **Acceleration adoption rule [KNOWN]:** When the latest upstream revision adds wgpu acceleration without requiring a caller-surface change, LexonArchiveBuilder SHALL adopt commit `8f56d720bdafcd5d213a30b8d5d12283f36a6682` by refreshing the pinned LexonGraph dependency set rather than introducing repository-local API or contract changes for this increment.
+- **Acceleration adoption rule [KNOWN]:** When the latest upstream revision adds wgpu acceleration without requiring a caller-surface change, LexonArchiveBuilder SHALL adopt commit `70a80a2b51b41759217eec05086cb76586c4f1a5` by refreshing the pinned LexonGraph dependency set rather than introducing repository-local API or contract changes for this increment.
 - **Boundary [KNOWN]:** This requirement does not force LexonArchiveBuilder to re-implement upstream planning internals in-repo; it constrains adaptation and regression reporting at the repository boundary.
 - **Traceability:** UR-47, UR-61, UR-63, UR-64, UR-65, UR-66, UR-67, UR-68, UR-69, UR-71, UR-126, UR-127, UR-128, UR-129, UR-130
 
@@ -840,11 +928,15 @@ LexonArchiveBuilder SHALL preserve idempotent rerun behavior for repeated indexi
 - **Standalone clustering implication [INFERRED]:** Repeating the clustering-only
   stage against the same clustering-eligible block-store snapshot must not
   change the logical clustering result under unchanged upstream semantics.
+- **Replay-journal implication [INFERRED]:** Reusing a valid replay journal for
+  resumed ingestion or clustering-only replay must not create a distinct
+  logical outcome from the same immutable leaf set merely because the runtime
+  avoided whole-store rediscovery.
 - **Clustering-configuration implication [INFERRED]:** Repeating a clustering-enabled
   run against unchanged inputs under the same approved published profile
   version must not change the logical clustering result merely because profile
   selection or resolution differed across invocations.
-- **Traceability:** UR-8, UR-16, UR-36, UR-121, UR-123, UR-124
+- **Traceability:** UR-8, UR-16, UR-36, UR-121, UR-123, UR-124, UR-131, UR-132, UR-133
 
 #### RQ-INDEXER-008A - Local integration composition
 
@@ -1187,6 +1279,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Caller-visible indexing and MCP contracts remain stable across the upstream API migration | Preserved with approved contract change | The stage surface and MCP retrieval semantics remain stable while clustering-enabled indexing adopts the approved published-profile contract in place of the retired low-level planning controls |
 | Clustering configuration remains explicit and replayable | Preserved with revised contract | Requirements now treat the approved published profile version as the replay-relevant clustering input rather than a repository-local mode, algorithm, and option tuple |
 | Clustering-size behavior remains deterministic under the approved profile | Preserved with revised ownership | Requirements now assign clustering cardinality to the approved published profile version `0.1.0` rather than to repository-local auto-sizing or caller overrides |
+| Clustering-only replay does not require whole-store rediscovery in the common case | Revised with LAB-owned recovery artifact | Requirements now permit a LAB-owned replay journal to replace common-case whole-store rescans while preserving block-store iteration as a compatibility fallback |
 | Required repository capabilities remain distinguishable from upstream regressions during the latest upgrade | Preserved with clarified scope | The requirements now force the upgrade to classify missing capabilities explicitly instead of silently narrowing split-stage replay, published-profile adoption, progress projection, or MCP-facing behavior |
 | Latest upstream telemetry remains subordinate to the existing runtime progress surface | Preserved with clarified scope | Requirements now constrain richer live telemetry and heartbeat events to the same repository-owned log stream rather than a new telemetry interface |
 | Operator-visible progress counts remain understandable across upstream telemetry changes | Preserved with clarified scope | Requirements now distinguish invocation-total delegated-item counts from stage-local or layer-local telemetry counts so upstream count-shape changes do not create misleading logs |
@@ -1210,6 +1303,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - **Q-INDEXER-068 [UNKNOWN]:** Should the rooted CLI search tool treat the caller-supplied embedding endpoint as the complete query-embedding configuration, or must it also accept repository-specific embedding-spec inputs such as dimensions or encoding overrides at the CLI boundary?
 - **Q-INDEXER-069 [UNKNOWN]:** For corpus-based TNN-recall histograms, should a future increment keep repository-owned default histogram buckets or expose bucket configuration as an operator-visible parameter?
 - **Q-INDEXER-070 [UNKNOWN]:** Does published profile `0.1.0` preserve repository-acceptable tree-shape and retrieval-quality behavior across the expected corpus sizes, or will a later increment need additional approved published profiles for materially different workloads?
+- **Q-INDEXER-071 [UNKNOWN]:** Should the first replay-journal implementation store only stable replay metadata plus persisted leaf identifiers, or should it also persist raw embedding payloads so clustering-only replay can avoid rereading leaf blocks entirely?
 
 ## Coverage Notes
 

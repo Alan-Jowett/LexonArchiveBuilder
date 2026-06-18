@@ -11,7 +11,8 @@ regression assessment, replay-submission and streaming-status observability,
 clustering-failure diagnostics, rooted block-tree quality assessment with
 rooted TNN-recall diagnostics, rooted CLI search over stored trees,
 replay-stable fingerprinting, upstream wgpu-acceleration revision
-compatibility, and layer-parallel block-construction evolution in
+compatibility, LAB-owned replay-journaled split-stage recovery, and
+layer-parallel block-construction evolution in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md`.
 
 ## Scope
@@ -29,7 +30,8 @@ replay-submission observability, streaming-status observability,
 telemetry-count-semantics clarity, clustering-failure diagnostics,
 rooted block-tree quality assessment with rooted TNN-recall diagnostics,
 rooted CLI search over stored trees, replay-stable delegated item identity,
-and layer-parallel delegated block construction for the local/testing profile.
+LAB-owned replay-journaled split-stage recovery, and layer-parallel delegated
+block construction for the local/testing profile.
 
 This document is layered on top of:
 
@@ -216,19 +218,28 @@ mode so stage selection does not create a second result-schema family.
 
 When the caller selects clustering plus block assembly without a preceding
 ingestion phase in the same invocation, LexonArchiveBuilder derives its clustering
-candidate set by iterating the configured `BlockStore` through the upstream
-LexonGraph block-iteration API.
+candidate set from a repository-owned replay-input source that is valid for the
+configured store snapshot.
 
-LexonArchiveBuilder treats the upstream iteration contract as the authority for which
-stored blocks are clustering-eligible. Repository-owned artifacts that are not
-surfaced by that upstream clustering-input iteration contract remain outside the
-standalone clustering input set.
+When the selected environment exposes a LAB-managed local filesystem block-store
+root, the preferred source is a LAB-owned replay journal emitted during
+successful leaf persistence. When that journal is absent, incompatible,
+incomplete, or intentionally unavailable because the store was rebuilt without
+journal continuity, the runtime falls back to iterating the configured
+`BlockStore` through the upstream LexonGraph block-iteration API.
+
+LexonArchiveBuilder treats the approved replay-journal contract plus the upstream
+iteration contract as the authorities for which stored inputs are
+clustering-eligible. Repository-owned artifacts that are not surfaced by the
+approved replay-input surface remain outside the standalone clustering input
+set.
 
 Standalone clustering therefore operates over all clustering-eligible blocks
-visible in the configured store at invocation time rather than over a
-repository-local per-run manifest.
+visible in the configured store snapshot at invocation time rather than over a
+request-local summary artifact.
 
-**Traces to:** RQ-INDEXER-003E, RQ-INDEXER-010A
+**Traces to:** RQ-INDEXER-003E, RQ-INDEXER-003E1, RQ-INDEXER-003E2,
+RQ-INDEXER-010A
 
 ### DSG-LFI-001F `Replay staging for split-stage execution`
 
@@ -244,7 +255,31 @@ request-supplied collection items.
 This design fixes the replay-safety contract but does not freeze a specific
 serialization schema for the staging artifact in the specification layer.
 
-**Traces to:** RQ-INDEXER-003A, RQ-INDEXER-003E, RQ-INDEXER-004F
+**Traces to:** RQ-INDEXER-003A, RQ-INDEXER-003E, RQ-INDEXER-003E1,
+RQ-INDEXER-004F
+
+### DSG-LFI-001F1 `Replay-journal write and growth discipline`
+
+For environments that expose a LAB-managed local filesystem block-store root,
+LexonArchiveBuilder realizes the repository-owned replay staging artifact as a
+durable replay journal whose committed records are append-only and emitted only
+after the corresponding replayable leaf output has been durably persisted
+through the approved storage boundary.
+
+The journal is optimized for sequential append and sequential replay rather than
+random in-place mutation. Growth is controlled through bounded journal segments
+or equivalent rollover units so large corpora do not require one unbounded
+monolithic file.
+
+Crash recovery treats a partial trailing record as incomplete local progress and
+preserves all earlier committed records as valid replay state.
+
+The specification intentionally leaves the first compact binary encoding choice
+open at the design layer boundary, provided the implementation preserves the
+append-only, low-overhead, and segmentable requirements approved upstream of
+this document.
+
+**Traces to:** RQ-INDEXER-003E1, RQ-INDEXER-003E2, RQ-INDEXER-008
 
 ### DSG-LFI-001G `Published-profile planning seam`
 
@@ -304,7 +339,7 @@ status-observer telemetry surfaces as a mechanical adaptation boundary, not as
 permission to narrow the approved repository contract.
 
 For this increment, that boundary is the LexonGraph dependency refresh to commit
-`8f56d720bdafcd5d213a30b8d5d12283f36a6682`, which is intended to pick up
+`70a80a2b51b41759217eec05086cb76586c4f1a5`, which is intended to pick up
 upstream wgpu acceleration without changing the repository-visible
 published-profile, CLI, request-schema, or MCP-facing contracts.
 
@@ -322,7 +357,7 @@ upgrade whenever the latest upstream contract still supports them semantically:
   that same repository-owned progress surface
 - unchanged MCP search-serving behavior for already-indexed content
 - dependency-pin-only adoption of upstream wgpu acceleration at commit
-  `8f56d720bdafcd5d213a30b8d5d12283f36a6682`
+  `70a80a2b51b41759217eec05086cb76586c4f1a5`
 
 If any of those capabilities proves unavailable on the latest upstream surface,
 the implementation must surface that as an explicit compatibility finding or
@@ -352,8 +387,10 @@ Within that runtime shape, any stage that includes ingestion may advance mailbox
 by mailbox through replay staging and streaming-pass preparation rather than
 waiting for all delegated work to accumulate behind one final terminal call. A
 clustering-only request may leave the collection empty and instead derive its
-input from the configured block store through the separate standalone
-clustering-discovery seam plus replay-staging seam.
+input from the configured store snapshot through the separate standalone
+clustering-discovery seam plus replay-staging seam, which prefers the
+repository-owned replay journal and only falls back to whole-store discovery for
+compatibility cases.
 
 **Traces to:** RQ-INDEXER-001, RQ-INDEXER-002, RQ-INDEXER-003A,
 RQ-INDEXER-003D, RQ-INDEXER-003E
@@ -1154,8 +1191,9 @@ delegated LexonGraph contract.
 
 For standalone clustering, the comparable invariant is store-snapshot stability:
 repeating the clustering-only stage against the same clustering-eligible block
-set surfaced by the upstream iteration contract is expected to produce the same
-logical clustering result under unchanged upstream semantics.
+set is expected to produce the same logical clustering result under unchanged
+upstream semantics whether replay inputs come from a valid replay journal or
+from compatibility-mode whole-store iteration.
 
 The same stability expectation applies to clustering configuration resolution:
 repeating a clustering-enabled run with the same approved published profile
@@ -1187,12 +1225,13 @@ LexonArchiveBuilder-owned verification artifacts validate:
 - correct stage-selectable execution across CLI and request-file invocation
   without exposing the raw upstream lifecycle
 - correct leaf-layer concurrency scheduling with cross-layer barriers
-- correct standalone clustering input discovery through the upstream block-
-  iteration contract
+- correct standalone clustering input discovery through the repository-owned
+  replay journal with upstream block-iteration fallback
 - correct adoption of the upstream published-profile API with repository pinning
   to profile `0.1.0` and explicit rejection of retired low-level clustering
   controls
 - correct deterministic replay staging and replay-stable content fingerprinting
+- correct replay-journal append, rollover, and crash-tolerance behavior
 - correct selection and use of content-resolution, block-store, and
   embedding-provider adapters
 - correct interoperability of the local filesystem-backed block-store profile
