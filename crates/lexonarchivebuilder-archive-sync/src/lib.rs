@@ -945,7 +945,7 @@ mod tests {
             Path::new(".")
         );
         assert_eq!(
-            journal_parent_directory(Path::new("nested\\journal.json")),
+            journal_parent_directory(&Path::new("nested").join("journal.json")),
             Path::new("nested")
         );
     }
