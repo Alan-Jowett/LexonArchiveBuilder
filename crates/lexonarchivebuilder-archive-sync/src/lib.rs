@@ -140,6 +140,18 @@ impl WorkInventory {
     }
 }
 
+fn workflow_stage_rank(stage: WorkflowStage) -> u8 {
+    match stage {
+        WorkflowStage::SourceAcquisition => 0,
+        WorkflowStage::MailboxAdmission => 1,
+        WorkflowStage::ChunkDerivation => 2,
+        WorkflowStage::Embedding => 3,
+        WorkflowStage::PublishedRootGeneration => 4,
+        WorkflowStage::RootHistoryPublication => 5,
+        WorkflowStage::TerminalSuccess | WorkflowStage::TerminalFailure => 6,
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkInventories {
     #[serde(default)]
@@ -347,6 +359,46 @@ impl WorkflowJournal {
             &self.terminal_outcome,
             &self.generation.completed_at,
         )?;
+        Self::validate_stage_ordered_state(self.current_stage, &self.work, &self.audit)?;
+        Ok(())
+    }
+
+    fn validate_stage_ordered_state(
+        current_stage: WorkflowStage,
+        work: &WorkInventories,
+        audit: &AuditState,
+    ) -> Result<(), WorkflowJournalError> {
+        let publication_barrier_reached = matches!(
+            current_stage,
+            WorkflowStage::PublishedRootGeneration
+                | WorkflowStage::RootHistoryPublication
+                | WorkflowStage::TerminalSuccess
+        );
+        if publication_barrier_reached && !audit.work_set_frozen {
+            return Err(WorkflowJournalError::InconsistentState {
+                detail: "published-root generation and later success stages require a frozen work set",
+            });
+        }
+        if publication_barrier_reached && !work.embedding.pending.is_empty() {
+            return Err(WorkflowJournalError::InconsistentState {
+                detail: "published-root generation and later success stages require no pending embedding work",
+            });
+        }
+        if matches!(
+            current_stage,
+            WorkflowStage::RootHistoryPublication | WorkflowStage::TerminalSuccess
+        ) && audit.published_root_id.is_none()
+        {
+            return Err(WorkflowJournalError::MissingField {
+                field: "audit.published_root_id",
+            });
+        }
+        if current_stage == WorkflowStage::TerminalSuccess && audit.root_history_entry_id.is_none()
+        {
+            return Err(WorkflowJournalError::MissingField {
+                field: "audit.root_history_entry_id",
+            });
+        }
         Ok(())
     }
 
@@ -375,7 +427,9 @@ impl WorkflowJournal {
         let recorded_at = require_non_empty_owned("checkpoint.recorded_at", recorded_at.into())?;
         let inserted = self.inventory_mut(work_kind).checkpoint(item_id.clone());
         if inserted {
-            self.current_stage = stage;
+            if workflow_stage_rank(stage) > workflow_stage_rank(self.current_stage) {
+                self.current_stage = stage;
+            }
             self.checkpoints.push(CheckpointRecord {
                 stage,
                 work_kind,
@@ -965,8 +1019,15 @@ mod tests {
         store.save(&first).unwrap();
 
         let mut second = sample_journal();
+        second.freeze_work_set("work-set-002").unwrap();
         second
-            .queue_work(WorkKind::Embedding, "chunk:ietf-2:0")
+            .record_published_root(
+                "root-00000000000000000000000000000002",
+                "2026-06-19T09:24:59Z",
+            )
+            .unwrap();
+        second
+            .record_root_history_entry("entry-002", "2026-06-19T09:24:59Z")
             .unwrap();
         second
             .record_terminal_success("2026-06-19T09:25:00Z")
@@ -982,7 +1043,6 @@ mod tests {
                 .pending
                 .contains("mailbox:ietf-1")
         );
-        assert!(loaded.work.embedding.pending.contains("chunk:ietf-2:0"));
         assert_eq!(
             loaded.terminal_outcome.as_ref().map(|outcome| outcome.kind),
             Some(TerminalOutcomeKind::Success)
@@ -1106,6 +1166,31 @@ mod tests {
             .unwrap();
 
         assert!(!inserted);
+        assert_eq!(
+            journal.current_stage,
+            WorkflowStage::PublishedRootGeneration
+        );
+        assert_eq!(journal.checkpoints.len(), 1);
+    }
+
+    #[test]
+    fn late_checkpoint_does_not_regress_current_stage() {
+        let mut journal = sample_journal();
+        journal.set_stage(WorkflowStage::PublishedRootGeneration);
+        journal
+            .queue_work(WorkKind::MailboxAdmission, "mailbox:ietf-9")
+            .unwrap();
+
+        let inserted = journal
+            .record_checkpoint(
+                WorkflowStage::MailboxAdmission,
+                WorkKind::MailboxAdmission,
+                "mailbox:ietf-9",
+                "2026-06-19T09:06:00Z",
+            )
+            .unwrap();
+
+        assert!(inserted);
         assert_eq!(
             journal.current_stage,
             WorkflowStage::PublishedRootGeneration
@@ -1412,6 +1497,79 @@ mod tests {
         assert!(matches!(
             error,
             WorkflowJournalError::InconsistentState { detail: _ }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_published_root_stage_with_pending_embeddings() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.current_stage = WorkflowStage::PublishedRootGeneration;
+        journal.freeze_work_set("work-set-001").unwrap();
+        journal
+            .queue_work(WorkKind::Embedding, "chunk:ietf-1:0")
+            .unwrap();
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::InconsistentState {
+                detail: "published-root generation and later success stages require no pending embedding work"
+            }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_terminal_success_without_published_root_audit() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.freeze_work_set("work-set-001").unwrap();
+        journal
+            .record_terminal_success("2026-06-19T09:20:00Z")
+            .unwrap();
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::MissingField {
+                field: "audit.published_root_id"
+            }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_terminal_success_without_root_history_audit() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.freeze_work_set("work-set-001").unwrap();
+        journal
+            .record_published_root(
+                "root-00000000000000000000000000000003",
+                "2026-06-19T09:19:59Z",
+            )
+            .unwrap();
+        journal
+            .record_terminal_success("2026-06-19T09:20:00Z")
+            .unwrap();
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::MissingField {
+                field: "audit.root_history_entry_id"
+            }
         ));
     }
 }
