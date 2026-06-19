@@ -307,6 +307,31 @@ impl WorkflowJournal {
         validate_generation_state(&self.generation)?;
         validate_source_snapshot_state(&self.source_snapshot)?;
         validate_effective_indexing_configuration(&self.effective_indexing_configuration)?;
+        validate_work_inventory(
+            "work.mailbox_admission.pending",
+            "work.mailbox_admission.completed",
+            &self.work.mailbox_admission,
+        )?;
+        validate_work_inventory(
+            "work.chunking.pending",
+            "work.chunking.completed",
+            &self.work.chunking,
+        )?;
+        validate_work_inventory(
+            "work.embedding.pending",
+            "work.embedding.completed",
+            &self.work.embedding,
+        )?;
+        validate_work_inventory(
+            "work.indexing.pending",
+            "work.indexing.completed",
+            &self.work.indexing,
+        )?;
+        validate_work_inventory(
+            "work.publication.pending",
+            "work.publication.completed",
+            &self.work.publication,
+        )?;
         let mut subordinate_keys = BTreeSet::new();
         for subordinate in &self.subordinate_journals {
             require_non_empty(
@@ -379,6 +404,17 @@ impl WorkflowJournal {
             if !checkpoint_keys.insert(key) {
                 return Err(WorkflowJournalError::InconsistentState {
                     detail: "checkpoints must not contain duplicate work_kind/item_id pairs",
+                });
+            }
+            let inventory = self.inventory(checkpoint.work_kind);
+            if !inventory.completed.contains(&checkpoint.item_id) {
+                return Err(WorkflowJournalError::InconsistentState {
+                    detail: "checkpointed item must appear in the completed work inventory",
+                });
+            }
+            if inventory.pending.contains(&checkpoint.item_id) {
+                return Err(WorkflowJournalError::InconsistentState {
+                    detail: "checkpointed item must not remain pending in the work inventory",
                 });
             }
             let checkpoint_stage_rank = workflow_stage_rank(checkpoint.stage);
@@ -627,6 +663,16 @@ impl WorkflowJournal {
         Ok(())
     }
 
+    fn inventory(&self, work_kind: WorkKind) -> &WorkInventory {
+        match work_kind {
+            WorkKind::MailboxAdmission => &self.work.mailbox_admission,
+            WorkKind::Chunking => &self.work.chunking,
+            WorkKind::Embedding => &self.work.embedding,
+            WorkKind::Indexing => &self.work.indexing,
+            WorkKind::Publication => &self.work.publication,
+        }
+    }
+
     fn inventory_mut(&mut self, work_kind: WorkKind) -> &mut WorkInventory {
         match work_kind {
             WorkKind::MailboxAdmission => &mut self.work.mailbox_admission,
@@ -783,6 +829,25 @@ fn validate_checkpoint_record(checkpoint: &CheckpointRecord) -> Result<(), Workf
     }
     require_non_empty("checkpoint.item_id", &checkpoint.item_id)?;
     require_non_empty("checkpoint.recorded_at", &checkpoint.recorded_at)?;
+    Ok(())
+}
+
+fn validate_work_inventory(
+    pending_field: &'static str,
+    completed_field: &'static str,
+    inventory: &WorkInventory,
+) -> Result<(), WorkflowJournalError> {
+    for item_id in &inventory.pending {
+        require_non_empty(pending_field, item_id)?;
+        if inventory.completed.contains(item_id) {
+            return Err(WorkflowJournalError::InconsistentState {
+                detail: "work inventory item must not appear in both pending and completed",
+            });
+        }
+    }
+    for item_id in &inventory.completed {
+        require_non_empty(completed_field, item_id)?;
+    }
     Ok(())
 }
 
@@ -1524,6 +1589,11 @@ mod tests {
         let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
         let mut journal = sample_journal();
         journal.current_stage = WorkflowStage::MailboxAdmission;
+        journal
+            .work
+            .embedding
+            .completed
+            .insert("chunk:ietf-1:0".into());
         journal.checkpoints.push(CheckpointRecord {
             stage: WorkflowStage::Embedding,
             work_kind: WorkKind::Embedding,
@@ -1593,6 +1663,77 @@ mod tests {
         assert!(matches!(
             error,
             WorkflowJournalError::InconsistentState { detail: _ }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_invalid_work_inventory_item_ids() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.work.embedding.pending.insert(String::new());
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::EmptyField {
+                field: "work.embedding.pending"
+            }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_work_inventory_overlap() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal
+            .work
+            .embedding
+            .pending
+            .insert("chunk:ietf-11:0".into());
+        journal
+            .work
+            .embedding
+            .completed
+            .insert("chunk:ietf-11:0".into());
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::InconsistentState {
+                detail: "work inventory item must not appear in both pending and completed"
+            }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_checkpoint_missing_completed_inventory_entry() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.checkpoints.push(CheckpointRecord {
+            stage: WorkflowStage::Embedding,
+            work_kind: WorkKind::Embedding,
+            item_id: "chunk:ietf-12:0".into(),
+            recorded_at: "2026-06-19T09:04:00Z".into(),
+        });
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::InconsistentState {
+                detail: "checkpointed item must appear in the completed work inventory"
+            }
         ));
     }
 
