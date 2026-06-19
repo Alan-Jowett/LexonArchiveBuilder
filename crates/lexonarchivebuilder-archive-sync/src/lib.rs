@@ -415,6 +415,12 @@ impl WorkflowJournal {
         let implementation =
             require_non_empty_owned("subordinate_journal.implementation", implementation.into())?;
         let location = require_non_empty_owned("subordinate_journal.location", location.into())?;
+        if let Some(last_observed_generation_id) = &last_observed_generation_id {
+            require_non_empty(
+                "subordinate_journal.last_observed_generation_id",
+                last_observed_generation_id,
+            )?;
+        }
         if let Some(existing) = self
             .subordinate_journals
             .iter_mut()
@@ -987,6 +993,27 @@ mod tests {
         fs::write(store.path(), format!("{serialized}\n")).unwrap();
 
         let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::EmptyField {
+                field: "subordinate_journal.last_observed_generation_id"
+            }
+        ));
+    }
+
+    #[test]
+    fn upsert_subordinate_journal_rejects_empty_generation_id() {
+        let mut journal = sample_journal();
+
+        let error = journal
+            .upsert_subordinate_journal(
+                "lexonarchivebuilder-indexer-replay",
+                "C:\\data\\blocks.replay-journal",
+                Some(String::new()),
+                BTreeMap::new(),
+            )
+            .unwrap_err();
 
         assert!(matches!(
             error,
