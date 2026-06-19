@@ -668,9 +668,9 @@ fn validate_terminal_state(
             field: "terminal_outcome",
         });
     }
-    if (stage_is_terminal || terminal_outcome.is_some()) && completed_at.is_none() {
-        return Err(WorkflowJournalError::MissingField {
-            field: "generation.completed_at",
+    if !stage_is_terminal && terminal_outcome.is_some() {
+        return Err(WorkflowJournalError::InconsistentState {
+            detail: "non-terminal stage must not carry a terminal outcome",
         });
     }
     if !stage_is_terminal && completed_at.is_some() {
@@ -678,9 +678,9 @@ fn validate_terminal_state(
             detail: "non-terminal stage must not carry generation.completed_at",
         });
     }
-    if !stage_is_terminal && terminal_outcome.is_some() {
-        return Err(WorkflowJournalError::InconsistentState {
-            detail: "non-terminal stage must not carry a terminal outcome",
+    if (stage_is_terminal || terminal_outcome.is_some()) && completed_at.is_none() {
+        return Err(WorkflowJournalError::MissingField {
+            field: "generation.completed_at",
         });
     }
     if let Some(terminal_outcome) = terminal_outcome {
@@ -698,7 +698,16 @@ fn validate_terminal_state(
                     detail: "terminal failure stage requires a non-recoverable failure terminal outcome",
                 });
             }
-            _ => {}
+            (WorkflowStage::SourceAcquisition, _)
+            | (WorkflowStage::MailboxAdmission, _)
+            | (WorkflowStage::ChunkDerivation, _)
+            | (WorkflowStage::Embedding, _)
+            | (WorkflowStage::PublishedRootGeneration, _)
+            | (WorkflowStage::RootHistoryPublication, _) => {
+                return Err(WorkflowJournalError::InconsistentState {
+                    detail: "non-terminal stage must not carry a terminal outcome",
+                });
+            }
         }
     }
 
@@ -1258,7 +1267,6 @@ mod tests {
         let temp = tempdir().unwrap();
         let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
         let mut journal = sample_journal();
-        journal.generation.completed_at = Some("2026-06-19T09:20:00Z".into());
         journal.terminal_outcome = Some(TerminalOutcome {
             kind: TerminalOutcomeKind::Success,
             recorded_at: "2026-06-19T09:20:00Z".into(),
@@ -1271,7 +1279,9 @@ mod tests {
 
         assert!(matches!(
             error,
-            WorkflowJournalError::InconsistentState { detail: _ }
+            WorkflowJournalError::InconsistentState {
+                detail: "non-terminal stage must not carry a terminal outcome"
+            }
         ));
     }
 
