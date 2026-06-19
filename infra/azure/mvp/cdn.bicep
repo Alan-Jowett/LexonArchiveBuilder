@@ -48,6 +48,9 @@ param enableUrlRewrite bool = true
 @description('Optional custom domain hostname.')
 param customDomainHostName string = ''
 
+@description('Whether to emit the generated origin query string as a module output.')
+param outputOriginQueryString bool = false
+
 var sasPermissions = includeSasListPermission ? 'rl' : 'r'
 var sasConfig = {
   canonicalizedResource: '/blob/${storageAccountName}/${containerName}'
@@ -165,5 +168,4 @@ resource customDomain 'Microsoft.Cdn/profiles/endpoints/customDomains@2021-06-01
 output profileName string = profile.name
 output endpointName string = endpoint.name
 output hostName string = endpoint.properties.hostName
-output originQueryString string = originQueryString
-
+output originQueryString string = outputOriginQueryString ? originQueryString : ''

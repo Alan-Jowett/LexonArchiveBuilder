@@ -163,13 +163,15 @@ provisions the storage private endpoint and private DNS zone link for
 
 ### VAL-LFD-005A
 
-Inspect VM-subnet policy for the indexing and embedding runtimes.
+Inspect VM network policy for the indexing and embedding runtimes.
 
 **Pass condition:** the indexing VM and embedding VM receive only the approved
 minimum ingress or egress surface, including optional SSH or embedding-port
 exposure only when enabled by deployment parameters, while retaining required
 outbound access and approved storage-origin reachability through the selected
-public-endpoint or optional private-endpoint path.
+public-endpoint or optional private-endpoint path. Embedding ingress, when
+enabled, is scoped to the embedding VM rather than to every NIC on the shared VM
+subnet.
 
 **Traces to:** RQ-DEPLOY-014, RQ-DEPLOY-017, RQ-DEPLOY-022, DSG-LFD-006A,
 DSG-LFD-007A

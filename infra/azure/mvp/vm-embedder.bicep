@@ -31,8 +31,12 @@ param embeddingPort int = 8080
 @description('Optional storage-access configuration hint exported to the embedding container.')
 param storageAccessConfiguration string = ''
 
+@description('Whether to allow inbound embedding API traffic directly to this VM NIC.')
+param enablePublicIngress bool = false
+
 var nicName = '${vmName}-nic'
 var publicIpName = '${vmName}-pip'
+var ingressNsgName = '${vmName}-ingress-nsg'
 var cloudInit = '''
 #cloud-config
 package_update: true
@@ -70,26 +74,56 @@ resource publicIp 'Microsoft.Network/publicIPAddresses@2023-09-01' = if (enableP
   }
 }
 
-resource nic 'Microsoft.Network/networkInterfaces@2023-09-01' = {
-  name: nicName
+resource ingressNsg 'Microsoft.Network/networkSecurityGroups@2023-09-01' = if (enablePublicIngress) {
+  name: ingressNsgName
   location: location
   tags: tags
   properties: {
-    ipConfigurations: [
+    securityRules: [
       {
-        name: 'ipconfig1'
+        name: 'allow-embedder-api'
         properties: {
-          privateIPAllocationMethod: 'Dynamic'
-          subnet: {
-            id: subnetId
-          }
-          publicIPAddress: enablePublicIp ? {
-            id: publicIp.id
-          } : null
+          access: 'Allow'
+          direction: 'Inbound'
+          priority: 100
+          protocol: 'Tcp'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: string(embeddingPort)
         }
       }
     ]
   }
+}
+
+resource nic 'Microsoft.Network/networkInterfaces@2023-09-01' = {
+  name: nicName
+  location: location
+  tags: tags
+  properties: union(
+    {
+      ipConfigurations: [
+        {
+          name: 'ipconfig1'
+          properties: {
+            privateIPAllocationMethod: 'Dynamic'
+            subnet: {
+              id: subnetId
+            }
+            publicIPAddress: enablePublicIp ? {
+              id: publicIp.id
+            } : null
+          }
+        }
+      ]
+    },
+    enablePublicIngress ? {
+      networkSecurityGroup: {
+        id: ingressNsg.id
+      }
+    } : {}
+  )
 }
 
 resource vm 'Microsoft.Compute/virtualMachines@2023-09-01' = {

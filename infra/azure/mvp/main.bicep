@@ -153,8 +153,6 @@ module network 'network.bicep' = {
     privateEndpointSubnetPrefix: privateEndpointSubnetPrefix
     enableSshAccess: enableSshAccess
     sshSourcePrefixes: sshSourcePrefixes
-    embeddingPort: embeddingPort
-    enableEmbedderPublicIngress: enableEmbedderPublicIngress
     enableStoragePrivateEndpoint: enableStoragePrivateEndpoint
   }
 }
@@ -197,6 +195,7 @@ module cdn 'cdn.bicep' = {
     queryStringCachingBehavior: cdnQueryStringCachingBehavior
     enableUrlRewrite: enableUrlRewrite
     customDomainHostName: cdnCustomDomainHostName
+    outputOriginQueryString: outputSasToken
   }
 }
 
@@ -245,6 +244,7 @@ module embedderVm 'vm-embedder.bicep' = {
     imageReference: embedderImageReference
     embeddingPort: embeddingPort
     storageAccessConfiguration: embedderStorageAccessConfiguration
+    enablePublicIngress: enableEmbedderPublicIngress
   }
 }
 

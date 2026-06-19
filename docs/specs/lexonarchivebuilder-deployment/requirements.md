@@ -11,7 +11,7 @@
 - **UR-DEPLOY-1 [KNOWN]:** Create a new deployment specification boundary owned by a new `lexonarchivebuilder-deployment` spec package.
 - **UR-DEPLOY-2 [KNOWN]:** The MVP deployment uses one parameterized Azure resource group.
 - **UR-DEPLOY-3 [KNOWN]:** The storage layer uses one standard general-purpose v2 storage account with hierarchical namespace off.
-- **UR-DEPLOY-4 [KNOWN]:** Public network access to the storage account must be disabled.
+- **UR-DEPLOY-4 [KNOWN]:** The original request required public network access to the storage account to be disabled, but the later approved Azure CDN Standard (Akamai) hidden-origin path superseded that with an enabled public endpoint plus default-deny firewall allowlisting.
 - **UR-DEPLOY-5 [KNOWN]:** The storage account must expose a private blob container with a parameterized name.
 - **UR-DEPLOY-6 [KNOWN]:** The deployment must use an ARM-generated container SAS token with read permission, optional list permission, and long expiry.
 - **UR-DEPLOY-7 [KNOWN]:** The SAS token must be stored in Key Vault or configured directly on the CDN origin, and it must never be exposed to clients.
@@ -41,7 +41,7 @@
 |---|---|---|---|
 | CM-DEPLOY-001 | Add | Introduce a new repository-owned production deployment boundary under `docs/specs/lexonarchivebuilder-deployment/requirements.md` | UR-DEPLOY-1, UR-DEPLOY-25 |
 | CM-DEPLOY-002 | Add | Define one parameterized Azure resource-group and module-oriented IaC package for the MVP deployment | UR-DEPLOY-2, UR-DEPLOY-17, UR-DEPLOY-18 |
-| CM-DEPLOY-003 | Add | Define a private Azure Blob publication origin with parameterized container, origin secret generation, and no client-visible SAS exposure | UR-DEPLOY-3, UR-DEPLOY-4, UR-DEPLOY-5, UR-DEPLOY-6, UR-DEPLOY-7 |
+| CM-DEPLOY-003 | Add | Define a hidden Azure Blob publication origin with parameterized container, origin secret generation, and no client-visible SAS exposure | UR-DEPLOY-3, UR-DEPLOY-4, UR-DEPLOY-5, UR-DEPLOY-6, UR-DEPLOY-7 |
 | CM-DEPLOY-004 | Add | Define a CDN edge boundary that exposes the public hostname while isolating direct blob access and preserving origin-only credentials | UR-DEPLOY-8, UR-DEPLOY-9, UR-DEPLOY-21 |
 | CM-DEPLOY-005 | Add | Define an explicit VM-hosted indexing runtime for one-shot batch execution and restartable reindex runs | UR-DEPLOY-10, UR-DEPLOY-11, UR-DEPLOY-19 |
 | CM-DEPLOY-006 | Add | Define an explicit VM-hosted embedding-service runtime for continuous API availability with restart policy | UR-DEPLOY-12, UR-DEPLOY-13, UR-DEPLOY-20 |
@@ -66,7 +66,7 @@
 ### BA-DEPLOY-003
 
 - **Before [KNOWN]:** The production direction named Azure Blob Storage, but it did not define how public content would be served through a CDN while preventing direct blob access and keeping origin credentials off the client surface.
-- **After [KNOWN]:** The deployment requirements define a CDN-backed private blob-origin model with origin-only secret handling and direct-blob denial as first-class requirements.
+- **After [KNOWN]:** The deployment requirements define a CDN-backed hidden blob-origin model with origin-only secret handling and direct-blob denial as first-class requirements.
 
 ### BA-DEPLOY-004
 
