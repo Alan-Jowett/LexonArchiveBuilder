@@ -13,6 +13,8 @@ pub const WORKFLOW_JOURNAL_SCHEMA_VERSION: u32 = 1;
 pub enum WorkflowJournalError {
     #[error("workflow journal field `{field}` must not be empty")]
     EmptyField { field: &'static str },
+    #[error("workflow journal field `{field}` is required")]
+    MissingField { field: &'static str },
     #[error("workflow journal schema version {actual} is not supported; expected {expected}")]
     UnsupportedSchemaVersion { expected: u32, actual: u32 },
     #[error("workflow journal file {path} could not be read: {source}")]
@@ -270,20 +272,44 @@ impl WorkflowJournal {
                 &subordinate.implementation,
             )?;
             require_non_empty("subordinate_journal.location", &subordinate.location)?;
+            require_optional_non_empty(
+                "subordinate_journal.last_observed_generation_id",
+                &subordinate.last_observed_generation_id,
+            )?;
             if subordinate.authority != JournalAuthority::Subordinate {
                 return Err(WorkflowJournalError::InvalidSubordinateAuthority {
                     implementation: subordinate.implementation.clone(),
                 });
             }
         }
-        if let Some(work_set_id) = &self.audit.work_set_id {
-            require_non_empty("audit.work_set_id", work_set_id)?;
+        if self.audit.work_set_frozen && self.audit.work_set_id.is_none() {
+            return Err(WorkflowJournalError::MissingField {
+                field: "audit.work_set_id",
+            });
         }
-        if let Some(root_id) = &self.audit.published_root_id {
-            require_non_empty("audit.published_root_id", root_id)?;
+        require_optional_non_empty("audit.work_set_id", &self.audit.work_set_id)?;
+        require_optional_non_empty("audit.published_root_id", &self.audit.published_root_id)?;
+        require_optional_non_empty(
+            "audit.published_root_recorded_at",
+            &self.audit.published_root_recorded_at,
+        )?;
+        require_optional_non_empty(
+            "audit.root_history_entry_id",
+            &self.audit.root_history_entry_id,
+        )?;
+        require_optional_non_empty(
+            "audit.root_history_recorded_at",
+            &self.audit.root_history_recorded_at,
+        )?;
+        require_optional_non_empty(
+            "audit.root_change_explanation",
+            &self.audit.root_change_explanation,
+        )?;
+        for checkpoint in &self.checkpoints {
+            validate_checkpoint_record(checkpoint)?;
         }
-        if let Some(entry_id) = &self.audit.root_history_entry_id {
-            require_non_empty("audit.root_history_entry_id", entry_id)?;
+        if let Some(terminal_outcome) = &self.terminal_outcome {
+            validate_terminal_outcome(terminal_outcome)?;
         }
         Ok(())
     }
@@ -488,7 +514,7 @@ impl WorkflowJournalStore {
 
     pub fn save(&self, journal: &WorkflowJournal) -> Result<(), WorkflowJournalError> {
         journal.validate()?;
-        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        let parent = journal_parent_directory(&self.path);
         fs::create_dir_all(parent).map_err(|source| WorkflowJournalError::WriteJournal {
             path: self.path.display().to_string(),
             source,
@@ -528,6 +554,13 @@ impl WorkflowJournalStore {
     }
 }
 
+fn journal_parent_directory(path: &Path) -> &Path {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
+}
+
 fn sync_parent_directory(parent: &Path, journal_path: &Path) -> Result<(), WorkflowJournalError> {
     #[cfg(unix)]
     {
@@ -550,6 +583,23 @@ fn sync_parent_directory(parent: &Path, journal_path: &Path) -> Result<(), Workf
         let _ = journal_path;
     }
 
+    Ok(())
+}
+
+fn validate_checkpoint_record(checkpoint: &CheckpointRecord) -> Result<(), WorkflowJournalError> {
+    require_non_empty("checkpoint.item_id", &checkpoint.item_id)?;
+    require_non_empty("checkpoint.recorded_at", &checkpoint.recorded_at)?;
+    Ok(())
+}
+
+fn validate_terminal_outcome(
+    terminal_outcome: &TerminalOutcome,
+) -> Result<(), WorkflowJournalError> {
+    require_non_empty(
+        "terminal_outcome.recorded_at",
+        &terminal_outcome.recorded_at,
+    )?;
+    require_optional_non_empty("terminal_outcome.detail", &terminal_outcome.detail)?;
     Ok(())
 }
 
@@ -621,6 +671,16 @@ fn require_non_empty_owned(
 ) -> Result<String, WorkflowJournalError> {
     require_non_empty(field, &value)?;
     Ok(value)
+}
+
+fn require_optional_non_empty(
+    field: &'static str,
+    value: &Option<String>,
+) -> Result<(), WorkflowJournalError> {
+    if let Some(value) = value {
+        require_non_empty(field, value)?;
+    }
+    Ok(())
 }
 
 fn is_false(value: &bool) -> bool {
@@ -875,6 +935,93 @@ mod tests {
                 expected: WORKFLOW_JOURNAL_SCHEMA_VERSION,
                 actual
             } if actual == WORKFLOW_JOURNAL_SCHEMA_VERSION + 1
+        ));
+    }
+
+    #[test]
+    fn journal_parent_directory_uses_current_directory_for_bare_filename() {
+        assert_eq!(
+            journal_parent_directory(Path::new("journal.json")),
+            Path::new(".")
+        );
+        assert_eq!(
+            journal_parent_directory(Path::new("nested\\journal.json")),
+            Path::new("nested")
+        );
+    }
+
+    #[test]
+    fn load_rejects_incomplete_frozen_work_set_state() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.audit.work_set_frozen = true;
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::MissingField {
+                field: "audit.work_set_id"
+            }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_empty_optional_string_fields() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.audit.published_root_id = Some("root-1".into());
+        journal.audit.published_root_recorded_at = Some(String::new());
+        journal.subordinate_journals.push(SubordinateJournalState {
+            authority: JournalAuthority::Subordinate,
+            implementation: "lexonarchivebuilder-indexer-replay".into(),
+            location: "C:\\data\\blocks.replay-journal".into(),
+            last_observed_generation_id: Some(String::new()),
+            metadata: BTreeMap::new(),
+        });
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::EmptyField {
+                field: "subordinate_journal.last_observed_generation_id"
+            }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_invalid_checkpoint_and_terminal_outcome_fields() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.checkpoints.push(CheckpointRecord {
+            stage: WorkflowStage::Embedding,
+            work_kind: WorkKind::Embedding,
+            item_id: String::new(),
+            recorded_at: "2026-06-19T09:04:00Z".into(),
+        });
+        journal.terminal_outcome = Some(TerminalOutcome {
+            kind: TerminalOutcomeKind::NonRecoverableFailure,
+            recorded_at: "2026-06-19T09:30:00Z".into(),
+            detail: Some(String::new()),
+        });
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::EmptyField {
+                field: "checkpoint.item_id"
+            }
         ));
     }
 }
