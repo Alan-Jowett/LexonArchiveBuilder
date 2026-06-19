@@ -673,6 +673,11 @@ fn validate_terminal_state(
             field: "generation.completed_at",
         });
     }
+    if !stage_is_terminal && completed_at.is_some() {
+        return Err(WorkflowJournalError::InconsistentState {
+            detail: "non-terminal stage must not carry generation.completed_at",
+        });
+    }
     if !stage_is_terminal && terminal_outcome.is_some() {
         return Err(WorkflowJournalError::InconsistentState {
             detail: "non-terminal stage must not carry a terminal outcome",
@@ -1259,6 +1264,23 @@ mod tests {
             recorded_at: "2026-06-19T09:20:00Z".into(),
             detail: None,
         });
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::InconsistentState { detail: _ }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_completed_at_on_non_terminal_stage_without_terminal_outcome() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.generation.completed_at = Some("2026-06-19T09:20:00Z".into());
         let serialized = serde_json::to_string_pretty(&journal).unwrap();
         fs::write(store.path(), format!("{serialized}\n")).unwrap();
 
