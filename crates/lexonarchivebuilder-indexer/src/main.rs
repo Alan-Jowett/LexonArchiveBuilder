@@ -106,9 +106,7 @@ struct BlockStoreArgs {
     #[arg(long, required_if_eq("block_store_profile", "local"))]
     block_store_root: Option<PathBuf>,
     #[arg(long, required_if_eq("block_store_profile", "production"))]
-    block_store_account_url: Option<String>,
-    #[arg(long, required_if_eq("block_store_profile", "production"))]
-    block_store_container: Option<String>,
+    block_store_container_sas_url: Option<String>,
     #[arg(long)]
     block_store_prefix: Option<String>,
 }
@@ -125,14 +123,10 @@ impl BlockStoreArgs {
             },
             BlockStoreProfile::Production => EnvironmentConfig::Production {
                 block_store: ProductionBlockStoreConfig {
-                    account_url: self
-                        .block_store_account_url
+                    container_sas_url: self
+                        .block_store_container_sas_url
                         .clone()
-                        .expect("production account_url is required by clap"),
-                    container: self
-                        .block_store_container
-                        .clone()
-                        .expect("production container is required by clap"),
+                        .expect("production container_sas_url is required by clap"),
                     prefix: self.block_store_prefix.clone(),
                 },
                 embedding: ProductionEmbeddingConfig {
@@ -339,6 +333,46 @@ mod tests {
                 assert_eq!(traversal_width, 7);
                 assert_eq!(block_store.block_store_profile, BlockStoreProfile::Local);
                 assert_eq!(block_store.block_store_root, Some(PathBuf::from("blocks")));
+            }
+            _ => panic!("expected quality command"),
+        }
+    }
+
+    #[test]
+    fn quality_command_parses_production_container_sas_url() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "quality",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--block-store-profile",
+            "production",
+            "--block-store-container-sas-url",
+            "https://example.blob.core.windows.net/archive-sync?sig=test",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Quality { block_store, .. } => {
+                assert_eq!(
+                    block_store.block_store_profile,
+                    BlockStoreProfile::Production
+                );
+                assert_eq!(
+                    block_store.block_store_container_sas_url,
+                    Some("https://example.blob.core.windows.net/archive-sync?sig=test".into())
+                );
+                let environment = block_store.to_environment_config();
+                match environment {
+                    EnvironmentConfig::Production { block_store, .. } => {
+                        assert_eq!(
+                            block_store.container_sas_url,
+                            "https://example.blob.core.windows.net/archive-sync?sig=test"
+                        );
+                        assert_eq!(block_store.prefix, None);
+                    }
+                    EnvironmentConfig::Local { .. } => panic!("expected production environment"),
+                }
             }
             _ => panic!("expected quality command"),
         }

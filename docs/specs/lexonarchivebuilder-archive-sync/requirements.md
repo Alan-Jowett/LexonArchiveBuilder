@@ -3,7 +3,7 @@
 ## Document Status
 
 - **Phase:** Phase 2 - Specification Changes
-- **Status:** Approved requirements baseline being propagated into design and validation for a production-only `lexonarchivebuilder-archive-sync` workflow covering boot-triggered rsync mirroring into Azure Blob Storage, mailbox-to-block persistence, resumable chunking and embedding, published-root generation gating, root-history publication, and terminal VM shutdown
+- **Status:** Approved requirements revision being propagated into design and validation for Azure-backed rsync snapshot acquisition through the updated LexonGraph Azure Blob-backed block storage
 - **Scope:** `lexonarchivebuilder-archive-sync` as a separate production workflow layered on top of existing LexonArchiveBuilder indexing and storage boundaries
 
 ## USER-REQUEST
@@ -45,6 +45,11 @@
 - **UR-ARCHIVE-35 [KNOWN]:** The archive-sync journal should be authoritative at workflow-stage boundaries relative to any subordinate indexer replay journals.
 - **UR-ARCHIVE-36 [KNOWN]:** The work set participating in one publication generation should be fixed before published-root generation begins.
 - **UR-ARCHIVE-37 [KNOWN]:** Source snapshot provenance should preserve enough information to identify the mirrored corpus, not merely a generated snapshot identifier.
+- **UR-ARCHIVE-38 [KNOWN]:** `lexonarchivebuilder-archive-sync` now needs Azure-backed rsync snapshot acquisition.
+- **UR-ARCHIVE-39 [KNOWN]:** LexonGraph has an updated block storage implementation that works over Azure Blob Storage.
+- **UR-ARCHIVE-40 [KNOWN]:** The rsync snapshot payloads and manifests should use the updated Azure-backed LexonGraph `BlockStore` realization rather than a separate workflow-specific Azure Blob storage path.
+- **UR-ARCHIVE-41 [KNOWN]:** This increment should remain production-only and should not change MCP behavior.
+- **UR-ARCHIVE-42 [KNOWN]:** The source-snapshot boundary should stay reusable for future content types and future source types rather than remaining mailbox-source-specific.
 
 ## Change Manifest
 
@@ -52,9 +57,11 @@
 |---|---|---|---|
 | CM-ARCHIVE-001 | Add | Introduce a new production workflow specification package for `lexonarchivebuilder-archive-sync` as a boundary separate from the indexer and MCP server | UR-ARCHIVE-1, UR-ARCHIVE-2, UR-ARCHIVE-15, UR-ARCHIVE-17 |
 | CM-ARCHIVE-002 | Add | Define Docker Compose as the workflow entrypoint and require boot-time automatic start compatibility | UR-ARCHIVE-3, UR-ARCHIVE-4 |
-| CM-ARCHIVE-003 | Add | Define the first production source as `rsync.ietf.org::mailman-archive/` mirrored into Azure Blob Storage | UR-ARCHIVE-5 |
+| CM-ARCHIVE-003 | Add | Define the first production source as `rsync.ietf.org::mailman-archive/` acquired as an Azure Blob-backed durable source snapshot | UR-ARCHIVE-5 |
 | CM-ARCHIVE-003A | Add | Require a formal source snapshot identity for the effective source corpus used by each publication generation | UR-ARCHIVE-24 |
 | CM-ARCHIVE-003B | Add | Require source snapshot identities to be reproducibly bound to the effective mirrored corpus and backed by explicit provenance | UR-ARCHIVE-32, UR-ARCHIVE-37 |
+| CM-ARCHIVE-003C | Revise | Require rsync snapshot payloads and manifests to be durably acquired through the updated Azure-backed LexonGraph `BlockStore` realization instead of a separate workflow-specific Azure Blob storage path | UR-ARCHIVE-38, UR-ARCHIVE-39, UR-ARCHIVE-40 |
+| CM-ARCHIVE-003D | Revise | Preserve the source-snapshot boundary as a reusable acquisition contract for future source and content types while keeping the first increment focused on IETF mailman mailboxes | UR-ARCHIVE-42 |
 | CM-ARCHIVE-004 | Add | Require idempotent mailbox block persistence through the existing `BlockStore` abstraction family | UR-ARCHIVE-6, UR-ARCHIVE-15 |
 | CM-ARCHIVE-005 | Add | Require chunk derivation and chunk persistence only for newly admitted mailbox blocks | UR-ARCHIVE-7 |
 | CM-ARCHIVE-006 | Add | Require embedding generation only for newly admitted chunks | UR-ARCHIVE-8 |
@@ -88,7 +95,7 @@
 ### BA-ARCHIVE-003
 
 - **Before [KNOWN]:** Rsync-backed mailbox acquisition is currently described only as a local scale-test wrapper concern.
-- **After [KNOWN]:** The first production workflow increment explicitly mirrors `rsync.ietf.org::mailman-archive/` into Azure Blob Storage before downstream mailbox admission and indexing work begins.
+- **After [KNOWN]:** The first production workflow increment explicitly acquires `rsync.ietf.org::mailman-archive/` as an Azure Blob-backed durable source snapshot before downstream mailbox admission and indexing work begins.
 
 ### BA-ARCHIVE-004
 
@@ -134,6 +141,16 @@
 
 - **Before [KNOWN]:** Checkpoint durability and immutability expectations were implicit rather than stated as workflow requirements.
 - **After [KNOWN]:** Successfully checkpointed committed work must not require re-execution, and previously published mailbox, chunk, embedding, index, and root artifacts remain immutable.
+
+### BA-ARCHIVE-013
+
+- **Before [KNOWN]:** The requirements required Azure-backed rsync mirroring but left room for a workflow-specific Azure Blob storage path separate from the production `BlockStore` realization used for downstream immutable artifacts.
+- **After [KNOWN]:** The requirements now direct rsync snapshot payloads and manifests through the updated Azure-backed LexonGraph `BlockStore` realization so source acquisition shares the same stable production storage boundary as downstream artifact persistence.
+
+### BA-ARCHIVE-014
+
+- **Before [KNOWN]:** The source-snapshot boundary preserved future extensibility in general terms, but it did not explicitly state that the acquisition contract itself should remain reusable beyond the first mailbox source.
+- **After [KNOWN]:** The requirements explicitly preserve a reusable source-snapshot acquisition boundary for future content and source types while keeping the first increment mailbox-focused and production-only.
 
 ## Glossary
 
@@ -220,14 +237,15 @@ spot-instance interruption semantics.
 
 #### RQ-ARCHIVE-004 - Rsync source acquisition
 
-`lexonarchivebuilder-archive-sync` SHALL mirror
-`rsync.ietf.org::mailman-archive/` into Azure Blob Storage as the first
-workflow stage.
+`lexonarchivebuilder-archive-sync` SHALL acquire
+`rsync.ietf.org::mailman-archive/` as a durable source snapshot whose payloads
+and manifests are stored through the production Azure-backed LexonGraph
+`BlockStore` realization as the first workflow stage.
 
 - **Source baseline [KNOWN]:** The first increment targets the IETF Mailman archive source explicitly named by the user.
-- **Storage target [KNOWN]:** The mirrored archive content must land in Azure Blob Storage before mailbox-admission decisions are made.
-- **Extensibility [INFERRED]:** The workflow boundary should leave room for future additional archive sources without redefining downstream mailbox-processing contracts.
-- **Traceability:** UR-ARCHIVE-5, UR-ARCHIVE-21
+- **Storage target [KNOWN]:** The mirrored archive content, including resumable snapshot-manifest state, must be durably persisted through the updated Azure-backed LexonGraph `BlockStore` realization before mailbox-admission decisions are made.
+- **Extensibility [INFERRED]:** The workflow boundary should leave room for future additional archive sources without redefining downstream mailbox-processing contracts or replacing the source-snapshot acquisition contract.
+- **Traceability:** UR-ARCHIVE-5, UR-ARCHIVE-21, UR-ARCHIVE-38, UR-ARCHIVE-39, UR-ARCHIVE-40, UR-ARCHIVE-42
 
 #### RQ-ARCHIVE-004A - Rsync snapshot durability
 
@@ -236,8 +254,8 @@ interruption without requiring the entire mirrored archive to be re-fetched from
 scratch when the already-copied snapshot is still valid.
 
 - **Spot-instance rationale [INFERRED]:** Resume safety must include the source-acquisition stage because spot eviction can occur before mailbox admission begins.
-- **Boundary [UNKNOWN]:** The exact mirrored-snapshot manifest format and Azure Blob naming policy are not yet fixed in this phase.
-- **Traceability:** UR-ARCHIVE-5, UR-ARCHIVE-12, UR-ARCHIVE-14
+- **Boundary [UNKNOWN]:** The exact mirrored-snapshot manifest format and block-addressing or container-layout policy are not yet fixed in this phase.
+- **Traceability:** UR-ARCHIVE-5, UR-ARCHIVE-12, UR-ARCHIVE-14, UR-ARCHIVE-40
 
 #### RQ-ARCHIVE-004B - Source snapshot identity
 
@@ -256,7 +274,19 @@ the effective mirrored corpus for each source snapshot identity.
 
 - **Minimum provenance [INFERRED]:** This provenance should include the rsync source URI plus acquisition evidence sufficient to distinguish complete versus partial or changed mirror states.
 - **Audit use [KNOWN]:** Source-snapshot provenance must be available to workflow audit and root reproducibility analysis rather than remaining transient acquisition-only state.
-- **Traceability:** UR-ARCHIVE-24, UR-ARCHIVE-37
+- **Traceability:** UR-ARCHIVE-24, UR-ARCHIVE-37, UR-ARCHIVE-42
+
+#### RQ-ARCHIVE-004D - Source snapshot storage boundary reuse
+
+The workflow SHALL store source-snapshot payloads and manifests through the
+same stable production `BlockStore` abstraction family used for immutable
+workflow artifacts when that family provides the required Azure-backed
+realization.
+
+- **Reuse intent [KNOWN]:** The updated LexonGraph Azure Blob-backed block storage is now the preferred durable production storage boundary for source-snapshot acquisition as well as for downstream immutable artifact persistence.
+- **Boundary [INFERRED]:** Source-specific discovery metadata may still evolve independently, but higher workflow stages must not depend on raw Azure Blob API call shapes.
+- **Extensibility [KNOWN]:** This storage-boundary reuse must remain applicable to future source and content types that participate in the same workflow family.
+- **Traceability:** UR-ARCHIVE-15, UR-ARCHIVE-39, UR-ARCHIVE-40, UR-ARCHIVE-42
 
 #### RQ-ARCHIVE-005 - Mailbox block admission
 
@@ -466,7 +496,8 @@ practical instead of inventing a parallel protocol.
 
 - **Authority boundary [KNOWN]:** `BlockStore`, embedding-provider, and delegated indexing semantics remain subordinate to their existing owning crates and repository interfaces.
 - **Allowed evolution [KNOWN]:** Targeted changes to `lexonarchivebuilder-indexer` are permitted when necessary to support the approved workflow.
-- **Traceability:** UR-ARCHIVE-15, UR-ARCHIVE-16, UR-ARCHIVE-21
+- **Updated storage direction [KNOWN]:** The updated Azure-backed LexonGraph `BlockStore` realization is now also an allowed production source-acquisition storage boundary for rsync snapshot payloads and manifests.
+- **Traceability:** UR-ARCHIVE-15, UR-ARCHIVE-16, UR-ARCHIVE-21, UR-ARCHIVE-39, UR-ARCHIVE-40
 
 #### RQ-ARCHIVE-015 - Future content extensibility
 
@@ -477,7 +508,8 @@ redefining the core workflow contract.
 - **Initial focus [KNOWN]:** The first increment is mailbox-focused.
 - **Extensibility [INFERRED]:** Future content-specific derivation logic should fit behind the same journaled orchestration boundary rather than forcing a second workflow family.
 - **Future source-artifact examples [KNOWN]:** Future source artifacts may include RFCs, Internet Drafts, Datatracker metadata, and Working Group metadata.
-- **Traceability:** UR-ARCHIVE-15, UR-ARCHIVE-21
+- **Acquisition extensibility [KNOWN]:** The reusable source-snapshot acquisition boundary should remain applicable when future content or source families are added.
+- **Traceability:** UR-ARCHIVE-15, UR-ARCHIVE-21, UR-ARCHIVE-42
 
 ### Boundary and Invariant Requirements
 
@@ -488,7 +520,7 @@ artifact persistence, embedding, and root publication orchestration and SHALL
 NOT redefine MCP server behavior or search semantics.
 
 - **Rationale [KNOWN]:** The user requested a new workflow, not MCP-surface changes.
-- **Traceability:** UR-ARCHIVE-15, UR-ARCHIVE-20
+- **Traceability:** UR-ARCHIVE-15, UR-ARCHIVE-20, UR-ARCHIVE-41
 
 #### RQ-ARCHIVE-017 - No central control-plane expansion
 
@@ -507,7 +539,8 @@ workflow contract does not depend on Azure-specific call shapes at every stage.
 
 - **Environment direction [KNOWN]:** The first production path targets Azure Blob Storage and the repository's Azure-oriented embedding direction.
 - **Boundary [INFERRED]:** Azure-specific realizations should stay behind stable storage and embedding seams rather than leaking into every higher-level workflow stage contract.
-- **Traceability:** UR-ARCHIVE-15, UR-ARCHIVE-21
+- **Updated storage boundary [KNOWN]:** The production rsync snapshot path should consume Azure Blob Storage through the updated LexonGraph `BlockStore` seam instead of a workflow-specific Azure Blob API surface.
+- **Traceability:** UR-ARCHIVE-15, UR-ARCHIVE-21, UR-ARCHIVE-39, UR-ARCHIVE-40, UR-ARCHIVE-41
 
 #### RQ-ARCHIVE-019 - Immutable artifact preservation
 
@@ -528,7 +561,7 @@ New information SHALL be represented by new immutable artifacts.
 - Inventing a repository-local block-store or embedding abstraction separate from the existing trait families
 - Inventing a second repository-local indexing algorithm instead of reusing or extending the approved indexer path
 - Finalizing exact field names or serialization details for the root-history artifact beyond the required provenance metadata
-- Finalizing the exact on-blob layout or naming scheme for mirrored rsync snapshots, journals, or failure artifacts
+- Finalizing the exact block-addressing, container-layout, or naming scheme for source snapshots, journals, or failure artifacts
 - Generalizing the first source beyond `rsync.ietf.org::mailman-archive/` in this increment
 - Defining non-mailbox content derivation rules for the first increment
 
@@ -537,8 +570,8 @@ New information SHALL be represented by new immutable artifacts.
 | Invariant | Impact | Assessment |
 |---|---|---|
 | Indexing remains separate from search serving | Preserved | The workflow is constrained to ingestion, persistence, embedding, indexing orchestration, and root publication |
-| Environment-specific behavior stays behind stable interfaces | Preserved | Azure Blob Storage and production embeddings remain adapter concerns rather than workflow-wide special cases |
-| Architecture remains extensible to future content types | Preserved | Mailbox-specific stages are defined as the first increment within a reusable orchestration boundary |
+| Environment-specific behavior stays behind stable interfaces | Preserved with clarified storage path | Azure Blob Storage access for both source snapshots and downstream immutable artifacts now remains behind the updated LexonGraph `BlockStore` seam plus the existing embedding seam |
+| Architecture remains extensible to future content types | Preserved with clarified acquisition scope | Mailbox-specific stages remain the first increment within a reusable orchestration boundary that now explicitly includes source-snapshot acquisition |
 | Idempotence and recoverability remain aligned with immutable block semantics | Preserved with clarified scope | The workflow now requires journal-driven resume, durable source snapshot and generation identities, checkpoint-safe committed work, and duplicate-safe reconciliation across mailbox, chunk, embedding, indexing, and publication stages |
 | Repeated runs remain auditable and explainable | Preserved with clarified scope | The journal now serves both restart safety and root reproducibility or drift explanation across repeated runs |
 | Published artifacts remain immutable | Preserved with clarified scope | The workflow may publish new artifacts and root-history entries but must not mutate previously published mailbox, chunk, embedding, index, or root artifacts |
@@ -550,11 +583,12 @@ New information SHALL be represented by new immutable artifacts.
 
 - **Q-ARCHIVE-001 [KNOWN]:** Resolved in Phase 2 revision. Each root-history entry must include provenance metadata for source snapshot identity, generation identity, effective indexing configuration, and publication timestamp.
 - **Q-ARCHIVE-002 [UNKNOWN]:** Given the archive-sync journal's workflow-stage authority, what exact reconciliation data needs to flow between it and any downstream `lexonarchivebuilder-indexer` replay journal when both exist for the same run?
-- **Q-ARCHIVE-003 [UNKNOWN]:** Should source mirroring preserve the raw rsync directory layout byte-for-byte in Azure Blob Storage, or is a normalized blob layout acceptable so long as resume and provenance remain correct?
+- **Q-ARCHIVE-003 [UNKNOWN]:** Within the Azure-backed `BlockStore` snapshot boundary, must the logical rsync directory layout be reproducibly preserved, or is normalized manifest indirection acceptable so long as resume and provenance remain correct?
 - **Q-ARCHIVE-004 [UNKNOWN]:** What criteria classify a failure as terminal and non-recoverable versus restartable on the next boot?
 - **Q-ARCHIVE-005 [KNOWN]:** Resolved in Phase 2 revision. Every successful generation appends a root-history entry even when the published root repeats.
 - **Q-ARCHIVE-006 [UNKNOWN]:** Does the workflow need an explicit operator-visible artifact summarizing pending work counts by stage, or is the durable journal alone sufficient in the first increment?
 - **Q-ARCHIVE-007 [KNOWN]:** Resolved in Phase 2 revision. The workflow must retain source snapshot identity, generation identity, effective indexing configuration identity, publication timestamp, and workflow-owned audit linkage sufficient to explain a changed root.
+- **Q-ARCHIVE-008 [UNKNOWN]:** Does the updated Azure-backed LexonGraph `BlockStore` already expose the manifest-addressable semantics needed for restart-safe rsync snapshot acquisition, or will archive-sync need a repository-owned manifest convention layered on that storage seam?
 
 ## Coverage Notes
 
@@ -577,6 +611,10 @@ New information SHALL be represented by new immutable artifacts.
   - user feedback in this session: "Publication is not considered complete until the history entry is durably recorded." / "History append failures must be recoverable from journal state on resume."
   - user feedback in this session: "The archive-sync journal is authoritative at workflow-stage boundaries; indexer journals are subordinate implementation artifacts."
   - user feedback in this session: "The work set participating in a publication generation SHALL be fixed before published-root generation begins."
+  - user request in this session: "Azure-backed rsync snapshot acquisition for lexonarchivebuilder-archive-sync. LexonGraph has an updated block storage that works over an azure blob store"
+  - user clarification in this session selecting: `Use the updated Azure-backed LexonGraph BlockStore for the rsync snapshot payloads and manifests`
+  - user clarification in this session selecting: `Keep it production-only and leave MCP behavior unchanged`
+  - user clarification in this session selecting: `Establish a reusable source-snapshot boundary for future content types and sources`
   - `README.md:7-13`
   - `README.md:20-28`
   - `README.md:42-49`

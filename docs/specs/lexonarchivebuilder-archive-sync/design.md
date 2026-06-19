@@ -4,16 +4,19 @@
 
 Phase 2 specification patch for the approved production-only
 `lexonarchivebuilder-archive-sync` workflow in
-`docs/specs/lexonarchivebuilder-archive-sync/requirements.md`.
+`docs/specs/lexonarchivebuilder-archive-sync/requirements.md`, including the
+Azure-backed rsync source-snapshot acquisition revision that reuses the updated
+LexonGraph Azure Blob-backed `BlockStore` realization.
 
 ## Scope
 
 This document specifies the LexonArchiveBuilder-owned design for realizing
 `lexonarchivebuilder-archive-sync` as a VM-hosted, boot-triggered, Docker
 Compose-launched production workflow that mirrors
-`rsync.ietf.org::mailman-archive/` into Azure Blob Storage, admits mailbox and
-chunk artifacts through the shared `BlockStore` boundary, generates embeddings
-for newly admitted chunks, gates published-root generation on embedding completion,
+`rsync.ietf.org::mailman-archive/` as a durable Azure-backed source snapshot
+through the shared `BlockStore` boundary, admits mailbox and chunk artifacts
+through that same storage family, generates embeddings for newly admitted
+chunks, gates published-root generation on embedding completion,
 publishes append-only provenance-rich root history, preserves restart-safe and audit-safe
 journal state, and shuts the VM down on terminal success or terminal
 non-recoverable failure.
@@ -41,7 +44,7 @@ Those remain owned by existing LexonArchiveBuilder and LexonGraph boundaries.
 
 - Docker Compose workflow assets and container entrypoint wiring for the new
   production workflow
-- Azure-backed storage, journal, and root-history publication assets
+- Azure-backed `BlockStore` snapshot, journal, and root-history publication assets
 - `lexonarchivebuilder-indexer` orchestration seams or helper surfaces needed to
   support chunking, embedding, replay, and index recomputation in the approved
   workflow order
@@ -65,7 +68,7 @@ The `lexonarchivebuilder-archive-sync` design is intended to be:
 - delta-oriented so already committed work is not repeated
 - auditable enough to explain repeated-root stability or root drift
 - batch-oriented without introducing a long-lived control plane
-- aligned with Azure Blob Storage plus Azure-oriented production embeddings
+- aligned with Azure Blob Storage through shared adapter seams plus Azure-oriented production embeddings
 - extensible to future content types and future source types
 
 ## Boundary Design
@@ -102,7 +105,7 @@ RQ-ARCHIVE-017
 
 The workflow realizes one run as a stage-ordered state machine:
 
-1. acquire or resume the rsync mirror snapshot in Azure Blob Storage
+1. acquire or resume the rsync source snapshot through the Azure-backed `BlockStore` boundary
 2. discover mailbox artifacts from that snapshot
 3. admit missing mailbox blocks through the shared `BlockStore` boundary
 4. derive and persist missing chunk blocks for newly admitted mailboxes
@@ -121,11 +124,13 @@ RQ-ARCHIVE-011, RQ-ARCHIVE-012
 
 ## Source and Artifact Design
 
-### DSG-LAS-004 `Azure-backed rsync mirror snapshot`
+### DSG-LAS-004 `Azure-backed BlockStore rsync source snapshot`
 
 The rsync stage materializes the first approved source
-`rsync.ietf.org::mailman-archive/` into an Azure Blob-backed mirror snapshot
-that is suitable for later mailbox discovery and restart-safe continuation.
+`rsync.ietf.org::mailman-archive/` as an Azure Blob-backed source snapshot
+whose payloads and manifests are persisted through the updated LexonGraph
+`BlockStore` realization and are suitable for later mailbox discovery and
+restart-safe continuation.
 
 The workflow treats this as a source-acquisition concern rather than as an
 indexer concern. The design expects the journal to bind downstream work to a
@@ -160,10 +165,27 @@ without requiring operators to infer corpus identity from a bare snapshot token.
 
 **Traces to:** RQ-ARCHIVE-004C
 
+### DSG-LAS-004C `Shared source-snapshot storage seam`
+
+Source-snapshot payloads and manifests are stored through the same stable
+production `BlockStore` abstraction family used for immutable workflow
+artifacts when the required Azure-backed realization is available.
+
+This keeps source acquisition on the same production storage seam as mailbox,
+chunk, and later immutable publication artifacts while preventing higher-level
+workflow stages from depending on raw Azure Blob API call shapes.
+
+If the updated upstream `BlockStore` surface does not directly expose the
+manifest-addressable semantics archive-sync needs, archive-sync may layer a
+repository-owned manifest convention on that seam without redefining the seam
+itself.
+
+**Traces to:** RQ-ARCHIVE-004D, RQ-ARCHIVE-014, RQ-ARCHIVE-018
+
 ### DSG-LAS-005 `Mailbox admission and delta derivation`
 
-After source mirroring, the workflow discovers mailbox artifacts from the
-mirrored snapshot and attempts mailbox-block admission through the shared
+After source-snapshot acquisition, the workflow discovers mailbox artifacts
+from the acquired snapshot and attempts mailbox-block admission through the shared
 `BlockStore` abstraction family.
 
 Mailbox artifacts already present in the block store are treated as committed
@@ -378,13 +400,11 @@ planning can preserve the approved ownership boundaries.
 
 ### Upstream LexonGraph dependencies
 
-1. Azure Blob-backed `BlockStore` support suitable for the production workflow's
-   mailbox, chunk, and root-publication artifact persistence path
-2. Azure-oriented production embedding support suitable for the approved
+1. Azure-oriented production embedding support suitable for the approved
    embedding-provider boundary
 
-These items are expected to be built in LexonGraph rather than reimplemented in
-LexonArchiveBuilder. Until they exist at the required contract level,
+This item is expected to be built in LexonGraph rather than reimplemented in
+LexonArchiveBuilder. Until it exists at the required contract level,
 `lexonarchivebuilder-archive-sync` can finalize its repository-owned
 orchestration but cannot complete an end-to-end production realization.
 
@@ -393,7 +413,9 @@ orchestration but cannot complete an end-to-end production realization.
 1. Add a new `lexonarchivebuilder-archive-sync` runtime entrypoint and Docker
    Compose workflow distinct from the existing local scale-test wrapper
 2. Implement Azure-backed rsync snapshot acquisition and restart-safe source
-   progress tracking for `rsync.ietf.org::mailman-archive/`
+   progress tracking for `rsync.ietf.org::mailman-archive/` through the updated
+   LexonGraph `BlockStore` seam, adding a repository-owned manifest convention
+   only if the upstream seam does not already expose the required semantics
 3. Implement the workflow-level journal as both a restart checkpoint ledger and
    an audit ledger
 4. Implement delta-oriented mailbox admission, chunk derivation, and embedding
