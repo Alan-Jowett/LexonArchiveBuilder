@@ -140,6 +140,33 @@ impl WorkInventory {
     }
 }
 
+fn work_kind_pending_after_stage(current_stage: WorkflowStage, work_kind: WorkKind) -> bool {
+    match work_kind {
+        WorkKind::MailboxAdmission => matches!(
+            current_stage,
+            WorkflowStage::ChunkDerivation
+                | WorkflowStage::Embedding
+                | WorkflowStage::PublishedRootGeneration
+                | WorkflowStage::RootHistoryPublication
+                | WorkflowStage::TerminalSuccess
+        ),
+        WorkKind::Chunking => matches!(
+            current_stage,
+            WorkflowStage::Embedding
+                | WorkflowStage::PublishedRootGeneration
+                | WorkflowStage::RootHistoryPublication
+                | WorkflowStage::TerminalSuccess
+        ),
+        WorkKind::Embedding => matches!(
+            current_stage,
+            WorkflowStage::PublishedRootGeneration
+                | WorkflowStage::RootHistoryPublication
+                | WorkflowStage::TerminalSuccess
+        ),
+        WorkKind::Indexing | WorkKind::Publication => false,
+    }
+}
+
 fn workflow_stage_rank(stage: WorkflowStage) -> u8 {
     match stage {
         WorkflowStage::SourceAcquisition => 0,
@@ -342,6 +369,7 @@ impl WorkflowJournal {
             &self.audit.root_history_recorded_at,
         )?;
         let mut checkpoint_keys = BTreeSet::new();
+        let mut most_advanced_checkpoint_stage_rank: Option<u8> = None;
         for checkpoint in &self.checkpoints {
             validate_checkpoint_record(checkpoint)?;
             let key = (
@@ -353,6 +381,18 @@ impl WorkflowJournal {
                     detail: "checkpoints must not contain duplicate work_kind/item_id pairs",
                 });
             }
+            let checkpoint_stage_rank = workflow_stage_rank(checkpoint.stage);
+            most_advanced_checkpoint_stage_rank = Some(match most_advanced_checkpoint_stage_rank {
+                Some(current) => current.max(checkpoint_stage_rank),
+                None => checkpoint_stage_rank,
+            });
+        }
+        if let Some(most_advanced_checkpoint_stage_rank) = most_advanced_checkpoint_stage_rank
+            && workflow_stage_rank(self.current_stage) < most_advanced_checkpoint_stage_rank
+        {
+            return Err(WorkflowJournalError::InconsistentState {
+                detail: "current_stage must not precede recorded checkpoint stages",
+            });
         }
         validate_terminal_state(
             self.current_stage,
@@ -368,6 +408,20 @@ impl WorkflowJournal {
         work: &WorkInventories,
         audit: &AuditState,
     ) -> Result<(), WorkflowJournalError> {
+        if work_kind_pending_after_stage(current_stage, WorkKind::MailboxAdmission)
+            && !work.mailbox_admission.pending.is_empty()
+        {
+            return Err(WorkflowJournalError::InconsistentState {
+                detail: "later workflow stages require no pending mailbox admission work",
+            });
+        }
+        if work_kind_pending_after_stage(current_stage, WorkKind::Chunking)
+            && !work.chunking.pending.is_empty()
+        {
+            return Err(WorkflowJournalError::InconsistentState {
+                detail: "later workflow stages require no pending chunking work",
+            });
+        }
         let publication_barrier_reached = matches!(
             current_stage,
             WorkflowStage::PublishedRootGeneration
@@ -423,6 +477,14 @@ impl WorkflowJournal {
         item_id: impl Into<String>,
         recorded_at: impl Into<String>,
     ) -> Result<bool, WorkflowJournalError> {
+        if matches!(
+            stage,
+            WorkflowStage::TerminalSuccess | WorkflowStage::TerminalFailure
+        ) {
+            return Err(WorkflowJournalError::InconsistentState {
+                detail: "checkpoints must not record terminal stages",
+            });
+        }
         let item_id = require_non_empty_owned("checkpoint.item_id", item_id.into())?;
         let recorded_at = require_non_empty_owned("checkpoint.recorded_at", recorded_at.into())?;
         let inserted = self.inventory_mut(work_kind).checkpoint(item_id.clone());
@@ -711,6 +773,14 @@ fn sync_parent_directory(parent: &Path, journal_path: &Path) -> Result<(), Workf
 }
 
 fn validate_checkpoint_record(checkpoint: &CheckpointRecord) -> Result<(), WorkflowJournalError> {
+    if matches!(
+        checkpoint.stage,
+        WorkflowStage::TerminalSuccess | WorkflowStage::TerminalFailure
+    ) {
+        return Err(WorkflowJournalError::InconsistentState {
+            detail: "checkpoint.stage must not be terminal",
+        });
+    }
     require_non_empty("checkpoint.item_id", &checkpoint.item_id)?;
     require_non_empty("checkpoint.recorded_at", &checkpoint.recorded_at)?;
     Ok(())
@@ -1174,6 +1244,30 @@ mod tests {
     }
 
     #[test]
+    fn record_checkpoint_rejects_terminal_stage() {
+        let mut journal = sample_journal();
+        journal
+            .queue_work(WorkKind::Publication, "publication:ietf-1")
+            .unwrap();
+
+        let error = journal
+            .record_checkpoint(
+                WorkflowStage::TerminalSuccess,
+                WorkKind::Publication,
+                "publication:ietf-1",
+                "2026-06-19T09:30:00Z",
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::InconsistentState {
+                detail: "checkpoints must not record terminal stages"
+            }
+        ));
+    }
+
+    #[test]
     fn late_checkpoint_does_not_regress_current_stage() {
         let mut journal = sample_journal();
         journal.set_stage(WorkflowStage::PublishedRootGeneration);
@@ -1425,6 +1519,31 @@ mod tests {
     }
 
     #[test]
+    fn load_rejects_regressed_current_stage_relative_to_checkpoint() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.current_stage = WorkflowStage::MailboxAdmission;
+        journal.checkpoints.push(CheckpointRecord {
+            stage: WorkflowStage::Embedding,
+            work_kind: WorkKind::Embedding,
+            item_id: "chunk:ietf-1:0".into(),
+            recorded_at: "2026-06-19T09:04:00Z".into(),
+        });
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::InconsistentState {
+                detail: "current_stage must not precede recorded checkpoint stages"
+            }
+        ));
+    }
+
+    #[test]
     fn load_rejects_duplicate_subordinate_journal_keys() {
         let temp = tempdir().unwrap();
         let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
@@ -1519,6 +1638,50 @@ mod tests {
             error,
             WorkflowJournalError::InconsistentState {
                 detail: "published-root generation and later success stages require no pending embedding work"
+            }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_chunk_derivation_stage_with_pending_mailbox_admission() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.current_stage = WorkflowStage::ChunkDerivation;
+        journal
+            .queue_work(WorkKind::MailboxAdmission, "mailbox:ietf-7")
+            .unwrap();
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::InconsistentState {
+                detail: "later workflow stages require no pending mailbox admission work"
+            }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_embedding_stage_with_pending_chunking() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.current_stage = WorkflowStage::Embedding;
+        journal
+            .queue_work(WorkKind::Chunking, "mailbox:ietf-8")
+            .unwrap();
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::InconsistentState {
+                detail: "later workflow stages require no pending chunking work"
             }
         ));
     }
