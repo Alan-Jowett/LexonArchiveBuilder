@@ -143,7 +143,7 @@ The durable identity reproducibly bound to one effective source corpus produced
 by a source-acquisition operation.
 
 When the effective source corpus is unchanged, the same source snapshot identity
-is expected.
+is required.
 
 ### Generation Identity
 
@@ -246,7 +246,7 @@ effective source corpus for each source-acquisition operation.
 
 - **Required recording [KNOWN]:** The source snapshot identity must be recorded in the workflow journal, the published root-history artifact, and any workflow-owned audit artifacts used for root reproducibility.
 - **Identity meaning [KNOWN]:** The source snapshot identity must uniquely identify the effective source corpus used for one publication generation.
-- **Determinism intent [KNOWN]:** When the effective source corpus is unchanged, the same source snapshot identity is expected.
+- **Determinism intent [KNOWN]:** When the effective source corpus is unchanged, the workflow must derive the same source snapshot identity.
 - **Traceability:** UR-ARCHIVE-24, UR-ARCHIVE-32
 
 #### RQ-ARCHIVE-004C - Source snapshot provenance
@@ -324,7 +324,8 @@ After each successful publication generation, `lexonarchivebuilder-archive-sync`
 SHALL append one new root-history entry to a JSON artifact stored in Azure Blob
 Storage.
 
-- **Publication discipline [KNOWN]:** The root artifact is append-oriented rather than last-write-wins replacement in this increment.
+- **Publication discipline [KNOWN]:** The root-history artifact is an append-only workflow audit log rather than a last-write-wins replacement record in this increment.
+- **Immutability boundary [KNOWN]:** The append-only root-history artifact is not itself a published root artifact for purposes of immutable root preservation.
 - **Stability visibility [KNOWN]:** Every successful generation appends an entry even when the published root repeats, so periods of stability remain visible in the audit trail.
 - **Boundary [UNKNOWN]:** The exact field names and serialization schema for the root-history artifact are not yet fixed in this phase beyond the required provenance semantics.
 - **Traceability:** UR-ARCHIVE-10, UR-ARCHIVE-25, UR-ARCHIVE-31
@@ -348,7 +349,7 @@ Each publication generation SHALL derive and record an effective indexing
 configuration identity.
 
 - **Identity meaning [KNOWN]:** The effective indexing configuration identity must cover the root-affecting indexing inputs used for that generation.
-- **Minimum scope [INFERRED]:** This identity should include chunking policy identity, embedding-provider or model identity, delegated published-root generation configuration, and any other workflow-owned or delegated indexing inputs that can change the published root.
+- **Minimum scope [KNOWN]:** This identity SHALL include at minimum chunking policy identity, embedding-provider or model identity, delegated published-root generation configuration, and any other workflow-owned or delegated indexing inputs that can change the published root.
 - **Recording requirement [KNOWN]:** The effective indexing configuration identity must be recorded in the workflow journal and each root-history entry.
 - **Traceability:** UR-ARCHIVE-33
 
@@ -408,7 +409,7 @@ configuration, `lexonarchivebuilder-archive-sync` SHALL either:
 2. preserve enough audit evidence to explain why the published root changed
 
 - **Audit minimum [KNOWN]:** The workflow must make root drift diagnosable rather than leaving operators to infer differences indirectly from storage side effects alone.
-- **Determinism intent [INFERRED]:** When the effective source snapshot and effective workflow inputs are unchanged, unchanged roots are the expected baseline.
+- **Determinism intent [INFERRED]:** When the effective source snapshot and effective indexing configuration are unchanged, unchanged roots are the expected baseline.
 - **Boundary [KNOWN]:** The minimum required audit evidence includes source snapshot identity, generation identity, effective indexing configuration identity, publication timestamp, and workflow-owned audit linkage; additional diagnostic fields may evolve without changing this requirement.
 - **Traceability:** UR-ARCHIVE-22, UR-ARCHIVE-23, UR-ARCHIVE-24, UR-ARCHIVE-25, UR-ARCHIVE-28
 

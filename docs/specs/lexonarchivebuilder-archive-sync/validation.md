@@ -285,9 +285,9 @@ ingestion or publication workflow only.
 Inspect artifact persistence across at least two successful generations.
 
 **Pass condition:** previously published mailbox blocks, chunk blocks,
-embeddings, index blocks, and root-history artifacts are not modified in place;
-new information is represented only through new immutable artifacts and appended
-history entries.
+embeddings, index blocks, and published root artifacts are not modified in
+place; new information is represented only through new immutable artifacts and
+appended history entries.
 
 **Traces to:** RQ-ARCHIVE-019, DSG-LAS-010A
 

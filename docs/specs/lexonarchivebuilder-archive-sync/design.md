@@ -144,7 +144,7 @@ The design binds downstream mailbox admission, audit evidence, and root
 publication to that source snapshot identity so repeated runs can prove whether
 they operated on the same effective source corpus.
 
-When the effective mirrored corpus is unchanged, the design expects the same
+When the effective mirrored corpus is unchanged, the design requires the same
 source snapshot identity rather than a fresh execution-local identifier.
 
 **Traces to:** RQ-ARCHIVE-004B, RQ-ARCHIVE-011C
@@ -311,6 +311,9 @@ Publication is not considered fully complete until the root-history entry is
 durably recorded or the journal durably preserves enough information to repair
 that append on resume without regenerating the root.
 
+The append-only root-history log is treated as a workflow audit artifact rather
+than as a mutable published root artifact.
+
 **Traces to:** RQ-ARCHIVE-010, RQ-ARCHIVE-010A, RQ-ARCHIVE-010B,
 RQ-ARCHIVE-010C, RQ-ARCHIVE-011B, RQ-ARCHIVE-011C, RQ-ARCHIVE-011D
 
@@ -332,7 +335,7 @@ journaled checkpoint path.
 ### DSG-LAS-010A `Immutable publication model`
 
 The workflow never mutates previously published mailbox blocks, chunk blocks,
-embeddings, index blocks, or root-history artifacts in place.
+embeddings, index blocks, or published root artifacts in place.
 
 New information is represented by new immutable artifacts and by appended
 publication-history entries.
