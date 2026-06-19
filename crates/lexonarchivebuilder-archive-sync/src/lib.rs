@@ -13,22 +13,38 @@ pub const WORKFLOW_JOURNAL_SCHEMA_VERSION: u32 = 1;
 pub enum WorkflowJournalError {
     #[error("workflow journal field `{field}` must not be empty")]
     EmptyField { field: &'static str },
-    #[error("workflow journal file {path} could not be read")]
-    ReadJournal { path: String, source: io::Error },
-    #[error("workflow journal file {path} could not be parsed")]
+    #[error("workflow journal schema version {actual} is not supported; expected {expected}")]
+    UnsupportedSchemaVersion { expected: u32, actual: u32 },
+    #[error("workflow journal file {path} could not be read: {source}")]
+    ReadJournal {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("workflow journal file {path} could not be parsed: {source}")]
     ParseJournal {
         path: String,
+        #[source]
         source: serde_json::Error,
     },
-    #[error("workflow journal file {path} could not be written")]
-    WriteJournal { path: String, source: io::Error },
-    #[error("workflow journal file {path} could not be serialized")]
+    #[error("workflow journal file {path} could not be written: {source}")]
+    WriteJournal {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("workflow journal file {path} could not be serialized: {source}")]
     SerializeJournal {
         path: String,
+        #[source]
         source: serde_json::Error,
     },
-    #[error("workflow journal file {path} could not be persisted")]
-    PersistJournal { path: String, source: io::Error },
+    #[error("workflow journal file {path} could not be persisted: {source}")]
+    PersistJournal {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
     #[error("workflow journal authority must remain workflow-owned")]
     InvalidWorkflowAuthority,
     #[error("subordinate journal `{implementation}` must not claim workflow authority")]
@@ -236,6 +252,12 @@ impl WorkflowJournal {
     }
 
     pub fn validate(&self) -> Result<(), WorkflowJournalError> {
+        if self.schema_version != WORKFLOW_JOURNAL_SCHEMA_VERSION {
+            return Err(WorkflowJournalError::UnsupportedSchemaVersion {
+                expected: WORKFLOW_JOURNAL_SCHEMA_VERSION,
+                actual: self.schema_version,
+            });
+        }
         if self.authority != JournalAuthority::Workflow {
             return Err(WorkflowJournalError::InvalidWorkflowAuthority);
         }
@@ -289,9 +311,9 @@ impl WorkflowJournal {
     ) -> Result<bool, WorkflowJournalError> {
         let item_id = require_non_empty_owned("checkpoint.item_id", item_id.into())?;
         let recorded_at = require_non_empty_owned("checkpoint.recorded_at", recorded_at.into())?;
-        self.current_stage = stage;
         let inserted = self.inventory_mut(work_kind).checkpoint(item_id.clone());
         if inserted {
+            self.current_stage = stage;
             self.checkpoints.push(CheckpointRecord {
                 stage,
                 work_kind,
@@ -501,8 +523,34 @@ impl WorkflowJournalStore {
                 path: self.path.display().to_string(),
                 source: source.error,
             })?;
+        sync_parent_directory(parent, &self.path)?;
         Ok(())
     }
+}
+
+fn sync_parent_directory(parent: &Path, journal_path: &Path) -> Result<(), WorkflowJournalError> {
+    #[cfg(unix)]
+    {
+        let directory =
+            fs::File::open(parent).map_err(|source| WorkflowJournalError::WriteJournal {
+                path: journal_path.display().to_string(),
+                source,
+            })?;
+        directory
+            .sync_all()
+            .map_err(|source| WorkflowJournalError::WriteJournal {
+                path: journal_path.display().to_string(),
+                source,
+            })?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = parent;
+        let _ = journal_path;
+    }
+
+    Ok(())
 }
 
 fn validate_generation_state(generation: &GenerationState) -> Result<(), WorkflowJournalError> {
@@ -774,5 +822,59 @@ mod tests {
             loaded.subordinate_journals[0].implementation,
             "lexonarchivebuilder-indexer-replay"
         );
+    }
+
+    #[test]
+    fn duplicate_checkpoint_does_not_regress_current_stage() {
+        let mut journal = sample_journal();
+        journal
+            .queue_work(WorkKind::Embedding, "chunk:ietf-3:0")
+            .unwrap();
+        journal
+            .record_checkpoint(
+                WorkflowStage::Embedding,
+                WorkKind::Embedding,
+                "chunk:ietf-3:0",
+                "2026-06-19T09:04:00Z",
+            )
+            .unwrap();
+        journal.set_stage(WorkflowStage::PublishedRootGeneration);
+
+        let inserted = journal
+            .record_checkpoint(
+                WorkflowStage::Embedding,
+                WorkKind::Embedding,
+                "chunk:ietf-3:0",
+                "2026-06-19T09:04:05Z",
+            )
+            .unwrap();
+
+        assert!(!inserted);
+        assert_eq!(
+            journal.current_stage,
+            WorkflowStage::PublishedRootGeneration
+        );
+        assert_eq!(journal.checkpoints.len(), 1);
+    }
+
+    #[test]
+    fn load_rejects_unsupported_schema_version() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.schema_version = WORKFLOW_JOURNAL_SCHEMA_VERSION + 1;
+        store.save(&sample_journal()).unwrap();
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::UnsupportedSchemaVersion {
+                expected: WORKFLOW_JOURNAL_SCHEMA_VERSION,
+                actual
+            } if actual == WORKFLOW_JOURNAL_SCHEMA_VERSION + 1
+        ));
     }
 }
