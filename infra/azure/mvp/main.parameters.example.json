@@ -1,0 +1,44 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "storageAccountName": {
+      "value": "labmvpstorage001"
+    },
+    "containerName": {
+      "value": "blocks"
+    },
+    "sasExpiry": {
+      "value": "2027-06-19T00:00:00Z"
+    },
+    "storageAllowedIpCidrs": {
+      "value": [
+        "203.0.113.0/24"
+      ]
+    },
+    "cdnProfileName": {
+      "value": "lab-mvp-akamai"
+    },
+    "cdnEndpointName": {
+      "value": "ietf-cdn-endpoint"
+    },
+    "indexerVmName": {
+      "value": "lab-indexer-vm"
+    },
+    "embedderVmName": {
+      "value": "lab-embedder-vm"
+    },
+    "sshPublicKey": {
+      "value": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLEKEYREPLACE"
+    },
+    "indexerImageReference": {
+      "value": "ghcr.io/alan-jowett/lexonarchivebuilder-indexer:latest"
+    },
+    "embedderImageReference": {
+      "value": "ghcr.io/substratusai/stapi:v2.2.2-3"
+    },
+    "indexerRequestJson": {
+      "value": "{\n  \"environment\": {\n    \"kind\": \"production\",\n    \"block_store\": {\n      \"account_url\": \"https://labmvpstorage001.blob.core.windows.net\",\n      \"container\": \"blocks\"\n    },\n    \"embedding\": {\n      \"endpoint\": \"http://10.30.0.5:8080\",\n      \"deployment\": \"all-MiniLM-L6-v2\"\n    }\n  },\n  \"embedding_spec\": {\n    \"dims\": 384,\n    \"encoding\": \"f32le\"\n  },\n  \"stage\": \"clustering-and-block-assembly\",\n  \"items\": []\n}"
+    }
+  }
+}
