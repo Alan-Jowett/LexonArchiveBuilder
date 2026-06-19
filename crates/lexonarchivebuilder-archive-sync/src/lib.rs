@@ -279,7 +279,7 @@ impl WorkflowJournal {
         validate_source_snapshot_state(&init.source_snapshot)?;
         validate_effective_indexing_configuration(&init.effective_indexing_configuration)?;
 
-        Ok(Self {
+        let journal = Self {
             schema_version: WORKFLOW_JOURNAL_SCHEMA_VERSION,
             authority: JournalAuthority::Workflow,
             current_stage: init.current_stage,
@@ -291,7 +291,9 @@ impl WorkflowJournal {
             checkpoints: Vec::new(),
             subordinate_journals: Vec::new(),
             terminal_outcome: None,
-        })
+        };
+        journal.validate()?;
+        Ok(journal)
     }
 
     pub fn validate(&self) -> Result<(), WorkflowJournalError> {
@@ -776,12 +778,7 @@ fn persist_overwriting_if_needed(
     #[cfg(windows)]
     {
         if journal_path_exists(destination)? {
-            fs::remove_file(destination).map_err(|source| {
-                WorkflowJournalError::PersistJournal {
-                    path: destination.display().to_string(),
-                    source,
-                }
-            })?;
+            remove_existing_destination_file(destination)?;
         }
     }
 
@@ -791,6 +788,18 @@ fn persist_overwriting_if_needed(
             source: source.error,
         })?;
     Ok(())
+}
+
+#[cfg(windows)]
+fn remove_existing_destination_file(destination: &Path) -> Result<(), WorkflowJournalError> {
+    match fs::remove_file(destination) {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(WorkflowJournalError::PersistJournal {
+            path: destination.display().to_string(),
+            source,
+        }),
+    }
 }
 
 fn sync_parent_directory(parent: &Path, journal_path: &Path) -> Result<(), WorkflowJournalError> {
@@ -1083,6 +1092,33 @@ mod tests {
             effective_indexing_configuration: sample_indexing_configuration_state(),
         })
         .unwrap()
+    }
+
+    #[test]
+    fn workflow_journal_new_rejects_terminal_stage_without_terminal_outcome() {
+        let error = WorkflowJournal::new(WorkflowJournalInit {
+            current_stage: WorkflowStage::TerminalSuccess,
+            generation: sample_generation_state(),
+            source_snapshot: sample_source_snapshot_state(),
+            effective_indexing_configuration: sample_indexing_configuration_state(),
+        })
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::MissingField {
+                field: "terminal_outcome"
+            }
+        ));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn remove_existing_destination_file_tolerates_not_found() {
+        let temp = tempdir().unwrap();
+        let destination = temp.path().join("missing-journal.json");
+
+        remove_existing_destination_file(&destination).unwrap();
     }
 
     #[test]
