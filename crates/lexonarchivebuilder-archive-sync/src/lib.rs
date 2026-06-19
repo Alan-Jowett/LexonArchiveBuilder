@@ -268,6 +268,7 @@ impl WorkflowJournal {
         validate_generation_state(&self.generation)?;
         validate_source_snapshot_state(&self.source_snapshot)?;
         validate_effective_indexing_configuration(&self.effective_indexing_configuration)?;
+        let mut subordinate_keys = BTreeSet::new();
         for subordinate in &self.subordinate_journals {
             require_non_empty(
                 "subordinate_journal.implementation",
@@ -281,6 +282,15 @@ impl WorkflowJournal {
             if subordinate.authority != JournalAuthority::Subordinate {
                 return Err(WorkflowJournalError::InvalidSubordinateAuthority {
                     implementation: subordinate.implementation.clone(),
+                });
+            }
+            let key = (
+                subordinate.implementation.as_str(),
+                subordinate.location.as_str(),
+            );
+            if !subordinate_keys.insert(key) {
+                return Err(WorkflowJournalError::InconsistentState {
+                    detail: "subordinate_journals must not contain duplicate implementation/location pairs",
                 });
             }
         }
@@ -319,8 +329,18 @@ impl WorkflowJournal {
             "audit.root_history_recorded_at",
             &self.audit.root_history_recorded_at,
         )?;
+        let mut checkpoint_keys = BTreeSet::new();
         for checkpoint in &self.checkpoints {
             validate_checkpoint_record(checkpoint)?;
+            let key = (
+                work_kind_key(checkpoint.work_kind),
+                checkpoint.item_id.as_str(),
+            );
+            if !checkpoint_keys.insert(key) {
+                return Err(WorkflowJournalError::InconsistentState {
+                    detail: "checkpoints must not contain duplicate work_kind/item_id pairs",
+                });
+            }
         }
         validate_terminal_state(
             self.current_stage,
@@ -642,6 +662,16 @@ fn validate_checkpoint_record(checkpoint: &CheckpointRecord) -> Result<(), Workf
     Ok(())
 }
 
+fn work_kind_key(work_kind: WorkKind) -> &'static str {
+    match work_kind {
+        WorkKind::MailboxAdmission => "mailbox-admission",
+        WorkKind::Chunking => "chunking",
+        WorkKind::Embedding => "embedding",
+        WorkKind::Indexing => "indexing",
+        WorkKind::Publication => "publication",
+    }
+}
+
 fn validate_terminal_outcome(
     terminal_outcome: &TerminalOutcome,
 ) -> Result<(), WorkflowJournalError> {
@@ -685,6 +715,13 @@ fn validate_terminal_state(
     }
     if let Some(terminal_outcome) = terminal_outcome {
         validate_terminal_outcome(terminal_outcome)?;
+        if let Some(completed_at) = completed_at
+            && completed_at != &terminal_outcome.recorded_at
+        {
+            return Err(WorkflowJournalError::InconsistentState {
+                detail: "generation.completed_at must match terminal_outcome.recorded_at",
+            });
+        }
         match (current_stage, terminal_outcome.kind) {
             (WorkflowStage::TerminalSuccess, TerminalOutcomeKind::Success) => {}
             (WorkflowStage::TerminalFailure, TerminalOutcomeKind::NonRecoverableFailure) => {}
@@ -1291,6 +1328,82 @@ mod tests {
         let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
         let mut journal = sample_journal();
         journal.generation.completed_at = Some("2026-06-19T09:20:00Z".into());
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::InconsistentState { detail: _ }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_duplicate_subordinate_journal_keys() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        let entry = SubordinateJournalState {
+            authority: JournalAuthority::Subordinate,
+            implementation: "lexonarchivebuilder-indexer-replay".into(),
+            location: "C:\\data\\blocks.replay-journal".into(),
+            last_observed_generation_id: Some("gen-2026-06-19-001".into()),
+            metadata: BTreeMap::new(),
+        };
+        journal.subordinate_journals.push(entry.clone());
+        journal.subordinate_journals.push(entry);
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::InconsistentState { detail: _ }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_duplicate_checkpoint_identity() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.checkpoints.push(CheckpointRecord {
+            stage: WorkflowStage::Embedding,
+            work_kind: WorkKind::Embedding,
+            item_id: "chunk:ietf-1:0".into(),
+            recorded_at: "2026-06-19T09:04:00Z".into(),
+        });
+        journal.checkpoints.push(CheckpointRecord {
+            stage: WorkflowStage::PublishedRootGeneration,
+            work_kind: WorkKind::Embedding,
+            item_id: "chunk:ietf-1:0".into(),
+            recorded_at: "2026-06-19T09:05:00Z".into(),
+        });
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::InconsistentState { detail: _ }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_mismatched_terminal_completion_timestamps() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.current_stage = WorkflowStage::TerminalSuccess;
+        journal.generation.completed_at = Some("2026-06-19T09:20:00Z".into());
+        journal.terminal_outcome = Some(TerminalOutcome {
+            kind: TerminalOutcomeKind::Success,
+            recorded_at: "2026-06-19T09:20:01Z".into(),
+            detail: None,
+        });
         let serialized = serde_json::to_string_pretty(&journal).unwrap();
         fs::write(store.path(), format!("{serialized}\n")).unwrap();
 
