@@ -22,6 +22,12 @@ param sshPublicKey string
 @description('Whether to assign a public IP address.')
 param enablePublicIp bool = false
 
+@description('Subscription ID used when the VM deallocates itself after an indexing run.')
+param azureSubscriptionId string
+
+@description('Resource group name used when the VM deallocates itself after an indexing run.')
+param azureResourceGroupName string
+
 @description('Full GHCR image reference for the indexer container.')
 param imageReference string
 
@@ -77,7 +83,8 @@ runcmd:
     EXIT_CODE=$?
     set -e
     echo "${EXIT_CODE}" > /opt/lexonarchivebuilder/indexer/last-exit-code
-    systemctl poweroff --no-block
+    ARM_TOKEN="$(curl -sS -H Metadata:true 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/' | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")"
+    curl -sS -X POST -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Length: 0' "https://management.azure.com/subscriptions/${azureSubscriptionId}/resourceGroups/${azureResourceGroupName}/providers/Microsoft.Compute/virtualMachines/${vmName}/deallocate?api-version=2023-09-01"
     exit "${EXIT_CODE}"
     EOF
     chmod 0755 /usr/local/bin/lexonarchivebuilder-run-indexer.sh

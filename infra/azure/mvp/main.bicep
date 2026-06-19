@@ -224,6 +224,8 @@ module indexerVm 'vm-indexer.bicep' = {
     adminUsername: adminUsername
     sshPublicKey: sshPublicKey
     enablePublicIp: enableIndexerPublicIp
+    azureSubscriptionId: subscription().subscriptionId
+    azureResourceGroupName: resourceGroup().name
     imageReference: indexerImageReference
     requestJson: indexerRequestJson
     indexOutputPath: indexOutputPath

@@ -57,7 +57,7 @@ runcmd:
         image: ${imageReference}
         restart: always
         environment:
-          LAB_STORAGE_ACCESS_CONFIGURATION: "${storageAccessConfiguration}"
+          LAB_STORAGE_ACCESS_CONFIGURATION: '${replace(storageAccessConfiguration, '''', '''''')}'
         ports:
           - "${embeddingPort}:8080"
     EOF
