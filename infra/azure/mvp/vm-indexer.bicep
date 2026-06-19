@@ -68,6 +68,9 @@ runcmd:
     cat > /opt/lexonarchivebuilder/indexer/request.json <<'EOF'
     ${requestJson}
     EOF
+    cat > /usr/local/bin/lexonarchivebuilder-run-indexer.sh <<'EOF'
+    #!/usr/bin/env bash
+    set -euxo pipefail
     docker compose -f /opt/lexonarchivebuilder/indexer/docker-compose.yml pull
     set +e
     docker compose -f /opt/lexonarchivebuilder/indexer/docker-compose.yml up --abort-on-container-exit --exit-code-from indexer
@@ -75,6 +78,24 @@ runcmd:
     set -e
     echo "${EXIT_CODE}" > /opt/lexonarchivebuilder/indexer/last-exit-code
     shutdown -h now
+    EOF
+    chmod 0755 /usr/local/bin/lexonarchivebuilder-run-indexer.sh
+    cat > /etc/systemd/system/lexonarchivebuilder-indexer.service <<'EOF'
+    [Unit]
+    Description=LexonArchiveBuilder one-shot indexing run
+    Wants=network-online.target docker.service
+    After=network-online.target docker.service
+
+    [Service]
+    Type=oneshot
+    ExecStart=/usr/local/bin/lexonarchivebuilder-run-indexer.sh
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+    systemctl daemon-reload
+    systemctl enable lexonarchivebuilder-indexer.service
+    systemctl start lexonarchivebuilder-indexer.service
 '''
 
 resource publicIp 'Microsoft.Network/publicIPAddresses@2023-09-01' = if (enablePublicIp) {
@@ -164,4 +185,3 @@ resource vm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
 
 output vmId string = vm.id
 output publicIpAddress string = enablePublicIp ? publicIp.properties.ipAddress : ''
-

@@ -114,15 +114,16 @@ param enableEmbedderPublicIp bool = false
 param enableSshAccess bool = false
 
 @description('Source prefixes allowed to use SSH when enabled.')
-param sshSourcePrefixes array = [
-  '*'
-]
+param sshSourcePrefixes array = []
 
 @description('Port exposed by the embedding API on the embedding VM.')
 param embeddingPort int = 8080
 
 @description('Whether the VM subnet NSG should allow inbound embedding API traffic.')
 param enableEmbedderPublicIngress bool = false
+
+@description('Source prefixes allowed to reach the embedding API when public ingress is enabled.')
+param embedderIngressSourcePrefixes array = []
 
 @description('The full GHCR image reference for the indexing container.')
 param indexerImageReference string
@@ -245,6 +246,7 @@ module embedderVm 'vm-embedder.bicep' = {
     embeddingPort: embeddingPort
     storageAccessConfiguration: embedderStorageAccessConfiguration
     enablePublicIngress: enableEmbedderPublicIngress
+    ingressSourcePrefixes: embedderIngressSourcePrefixes
   }
 }
 

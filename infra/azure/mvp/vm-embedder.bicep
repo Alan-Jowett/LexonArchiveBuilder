@@ -34,6 +34,9 @@ param storageAccessConfiguration string = ''
 @description('Whether to allow inbound embedding API traffic directly to this VM NIC.')
 param enablePublicIngress bool = false
 
+@description('Source prefixes allowed to reach the embedding API when public ingress is enabled.')
+param ingressSourcePrefixes array = []
+
 var nicName = '${vmName}-nic'
 var publicIpName = '${vmName}-pip'
 var ingressNsgName = '${vmName}-ingress-nsg'
@@ -80,14 +83,14 @@ resource ingressNsg 'Microsoft.Network/networkSecurityGroups@2023-09-01' = if (e
   tags: tags
   properties: {
     securityRules: [
-      {
-        name: 'allow-embedder-api'
+      for (prefix, index) in ingressSourcePrefixes: {
+        name: 'allow-embedder-api-${index}'
         properties: {
           access: 'Allow'
           direction: 'Inbound'
-          priority: 100
+          priority: 100 + index
           protocol: 'Tcp'
-          sourceAddressPrefix: '*'
+          sourceAddressPrefix: prefix
           sourcePortRange: '*'
           destinationAddressPrefix: '*'
           destinationPortRange: string(embeddingPort)
