@@ -13,8 +13,8 @@ This document specifies the LexonArchiveBuilder-owned design for realizing
 Compose-launched production workflow that mirrors
 `rsync.ietf.org::mailman-archive/` into Azure Blob Storage, admits mailbox and
 chunk artifacts through the shared `BlockStore` boundary, generates embeddings
-for newly admitted chunks, gates index recomputation on embedding completion,
-publishes append-only root history, preserves restart-safe and audit-safe
+for newly admitted chunks, gates published-root generation on embedding completion,
+publishes append-only provenance-rich root history, preserves restart-safe and audit-safe
 journal state, and shuts the VM down on terminal success or terminal
 non-recoverable failure.
 
@@ -107,12 +107,13 @@ The workflow realizes one run as a stage-ordered state machine:
 3. admit missing mailbox blocks through the shared `BlockStore` boundary
 4. derive and persist missing chunk blocks for newly admitted mailboxes
 5. generate and durably record missing embeddings for newly admitted chunks
-6. recompute the index tree only after embedding work is complete
-7. append a root-history entry for the successful recomputation
+6. produce a valid published root for the active work set only after embedding work is complete
+7. append a root-history entry for the successful generation
 8. persist final audit state and trigger terminal VM shutdown
 
-The journal records the active state-machine position and the pending or
-completed work inventory needed to resume safely after interruption.
+The journal records the active state-machine position, source snapshot identity,
+generation identity, and the pending or completed work inventory needed to
+resume safely after interruption.
 
 **Traces to:** RQ-ARCHIVE-004, RQ-ARCHIVE-005, RQ-ARCHIVE-006,
 RQ-ARCHIVE-007, RQ-ARCHIVE-008, RQ-ARCHIVE-009, RQ-ARCHIVE-010,
@@ -133,6 +134,17 @@ can reason about one mirrored snapshot rather than about an implicit live rsync
 view.
 
 **Traces to:** RQ-ARCHIVE-004, RQ-ARCHIVE-004A, RQ-ARCHIVE-011C
+
+### DSG-LAS-004A `Source snapshot identity binding`
+
+Each completed or resumable source-acquisition operation produces one source
+snapshot identity for the effective mirrored corpus.
+
+The design binds downstream mailbox admission, audit evidence, and root
+publication to that source snapshot identity so repeated runs can prove whether
+they operated on the same effective source corpus.
+
+**Traces to:** RQ-ARCHIVE-004B, RQ-ARCHIVE-011C
 
 ### DSG-LAS-005 `Mailbox admission and delta derivation`
 
@@ -160,6 +172,7 @@ At minimum, the journal design must preserve:
 
 - current workflow stage
 - source snapshot identity
+- generation identity
 - effective workflow configuration identity
 - pending and completed mailbox, chunk, embedding, indexing, and publication
   work inventories
@@ -171,7 +184,7 @@ The requirements intentionally leave exact serialization open, but the design
 fixes the journal as the workflow-owned authority for both resume and audit.
 
 **Traces to:** RQ-ARCHIVE-011, RQ-ARCHIVE-011A, RQ-ARCHIVE-011B,
-RQ-ARCHIVE-011C, RQ-ARCHIVE-013
+RQ-ARCHIVE-011C, RQ-ARCHIVE-011D, RQ-ARCHIVE-013
 
 ### DSG-LAS-006A `Root reproducibility evidence`
 
@@ -183,32 +196,45 @@ approved reproducibility rule:
 - when a repeated run produces a different root, the recorded evidence must be
   sufficient to explain the difference
 
-The design therefore ties each published root to the effective source snapshot
-and effective workflow configuration rather than treating the root as an
-unexplained terminal value.
+The design therefore ties each published root to the effective source snapshot,
+generation identity, and effective workflow configuration rather than treating
+the root as an unexplained terminal value.
 
-**Traces to:** RQ-ARCHIVE-010, RQ-ARCHIVE-011, RQ-ARCHIVE-011C
+**Traces to:** RQ-ARCHIVE-010, RQ-ARCHIVE-010A, RQ-ARCHIVE-011, RQ-ARCHIVE-011C,
+RQ-ARCHIVE-011D
+
+### DSG-LAS-006B `Checkpoint granularity`
+
+Workflow checkpoints are placed at committed mailbox, chunk, embedding, and
+publication boundaries so a successfully checkpointed committed operation does
+not need to be re-executed after restart.
+
+This design constrains correctness of checkpoint boundaries without fixing a
+timer-based checkpoint cadence.
+
+**Traces to:** RQ-ARCHIVE-011A, RQ-ARCHIVE-011B, RQ-ARCHIVE-011E
 
 ## Integration Design
 
-### DSG-LAS-007 `Embedding-complete indexing barrier`
+### DSG-LAS-007 `Embedding-complete published-root barrier`
 
-Index recomputation is unlocked only when the current journal state contains no
+Published-root generation is unlocked only when the current journal state contains no
 remaining required embedding work for the active work set.
 
 This barrier is workflow-owned. The design does not rely on a best-effort or
 time-based guess that embeddings have probably finished; instead, the workflow
-advances to index recomputation only from a durable `embedding complete for this
-work set` state.
+advances to published-root generation only from a durable `embedding complete
+for this work set` state.
 
 **Traces to:** RQ-ARCHIVE-008, RQ-ARCHIVE-009, RQ-ARCHIVE-011
 
 ### DSG-LAS-008 `Delegated index recomputation seam`
 
-When the workflow reaches the embedding-complete state, it delegates index
-recomputation through existing `lexonarchivebuilder-indexer` capabilities or
-through approved extensions to those capabilities rather than defining a second
-repository-local indexing implementation.
+When the workflow reaches the embedding-complete state, the current design
+realizes published-root generation by delegating index recomputation through
+existing `lexonarchivebuilder-indexer` capabilities or through approved
+extensions to those capabilities rather than defining a second repository-local
+indexing implementation.
 
 The archive-sync workflow owns orchestration and gating. The delegated indexer
 surface remains authoritative for index-construction internals and any
@@ -218,18 +244,29 @@ repository-owned replay details below that seam.
 
 ### DSG-LAS-009 `Append-only root-history publication`
 
-After successful delegated index recomputation, the workflow appends one new
-root-history record to an Azure Blob JSON artifact.
+After each successful generation, the workflow appends one new root-history
+record to an Azure Blob JSON artifact.
 
 The design expects that record to remain linkable to the corresponding journaled
-run identity and source snapshot identity so later audit can explain why a root
-was reproduced or changed.
+generation identity and source snapshot identity so later audit can explain why
+a root was reproduced or changed.
 
-This publication step occurs only after a successful recomputation result is
-available and is itself journaled so restart logic can avoid duplicate
-publication.
+At minimum, the design expects each entry to carry provenance sufficient to
+identify:
 
-**Traces to:** RQ-ARCHIVE-010, RQ-ARCHIVE-011B, RQ-ARCHIVE-011C
+- the published root
+- the source snapshot identity
+- the generation identity
+- the effective indexing configuration identity
+- the publication timestamp
+- a workflow-owned audit linkage such as a journal identifier
+
+This publication step occurs only after a successful published-root result is
+available, occurs once per successful generation even when the root repeats, and
+is itself journaled so restart logic can avoid duplicate publication.
+
+**Traces to:** RQ-ARCHIVE-010, RQ-ARCHIVE-010A, RQ-ARCHIVE-011B,
+RQ-ARCHIVE-011C, RQ-ARCHIVE-011D
 
 ### DSG-LAS-010 `Terminal failure preservation and shutdown`
 
@@ -246,6 +283,16 @@ journaled checkpoint path.
 
 **Traces to:** RQ-ARCHIVE-011A, RQ-ARCHIVE-012, RQ-ARCHIVE-013
 
+### DSG-LAS-010A `Immutable publication model`
+
+The workflow never mutates previously published mailbox blocks, chunk blocks,
+embeddings, index blocks, or root-history artifacts in place.
+
+New information is represented by new immutable artifacts and by appended
+publication-history entries.
+
+**Traces to:** RQ-ARCHIVE-019
+
 ## Extensibility and Invariant Design
 
 ### DSG-LAS-011 `Future content-type extensibility`
@@ -255,9 +302,10 @@ artifact admission, chunk derivation, embedding, index recomputation, and root
 publication stages.
 
 Mailbox-specific logic is the first concrete realization inside those stages.
-Future content types should be addable by extending stage-local derivation logic
-and work-item identity rules without redefining the workflow boundary, journal
-contract, or root-publication contract.
+Future content types and source artifacts such as RFCs, Internet Drafts,
+Datatracker metadata, and Working Group metadata should be addable by extending
+stage-local derivation logic and work-item identity rules without redefining the
+workflow boundary, journal contract, or root-publication contract.
 
 **Traces to:** RQ-ARCHIVE-015, RQ-ARCHIVE-018
 
@@ -301,8 +349,9 @@ orchestration but cannot complete an end-to-end production realization.
    an audit ledger
 4. Implement delta-oriented mailbox admission, chunk derivation, and embedding
    work discovery so previously committed work is not repeated
-5. Integrate the embedding-complete barrier with delegated index recomputation
-   through existing `lexonarchivebuilder-indexer` seams or approved extensions
+5. Integrate the embedding-complete barrier with delegated published-root
+   generation through existing `lexonarchivebuilder-indexer` seams or approved
+   extensions
 6. Implement append-only root-history publication in Azure Blob Storage with
    duplicate-safe resume behavior
 7. Implement terminal success and terminal non-recoverable failure shutdown

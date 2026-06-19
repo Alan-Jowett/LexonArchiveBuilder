@@ -13,8 +13,9 @@ These validation entries define the expected conformance surface for the
 LexonArchiveBuilder-owned `lexonarchivebuilder-archive-sync` workflow boundary.
 
 This package validates workflow-owned orchestration, journal durability,
-auditability, delegated indexer integration, root-history publication, and VM
-shutdown behavior. It does not redefine validation already owned by
+auditability, delegated indexer integration, source snapshot and generation
+identity, provenance-rich root-history publication, immutable artifact behavior,
+and VM shutdown behavior. It does not redefine validation already owned by
 `lexonarchivebuilder-indexer`, LexonGraph, or `lexonarchivebuilder-mcp`.
 
 ## Validation Entries
@@ -50,8 +51,8 @@ workflow state.
 
 **Pass condition:** the workflow realizes the approved stage order of rsync
 mirror acquisition, mailbox discovery or admission, chunk derivation, embedding
-generation, embedding-gated index recomputation, root-history publication, and
-terminal shutdown.
+generation, embedding-gated published-root generation, root-history publication,
+and terminal shutdown.
 
 **Traces to:** RQ-ARCHIVE-004, RQ-ARCHIVE-005, RQ-ARCHIVE-006,
 RQ-ARCHIVE-007, RQ-ARCHIVE-008, RQ-ARCHIVE-009, RQ-ARCHIVE-010,
@@ -67,6 +68,17 @@ mirror snapshot or equivalent recorded progress without requiring a full re-fetc
 when the already copied snapshot remains valid.
 
 **Traces to:** RQ-ARCHIVE-004A, RQ-ARCHIVE-011A, DSG-LAS-004, DSG-LAS-006
+
+### VAL-LAS-003B
+
+Inspect the source-acquisition output and downstream workflow records for one
+successful generation.
+
+**Pass condition:** the workflow assigns one source snapshot identity to the
+effective mirrored corpus and records that identity in the journal, the
+root-history entry, and the related workflow-owned audit artifacts.
+
+**Traces to:** RQ-ARCHIVE-004B, DSG-LAS-004A, DSG-LAS-006A
 
 ### VAL-LAS-004
 
@@ -97,12 +109,33 @@ DSG-LAS-006, DSG-LAS-009, DSG-LAS-010
 Inspect the journal artifact for a completed run.
 
 **Pass condition:** the journal records the active or final workflow stage, the
-effective source snapshot identity, the effective workflow-configuration
-identity, the pending or completed work inventories needed for resume, and the
-published-root outcome needed for audit.
+effective source snapshot identity, the workflow generation identity, the
+effective workflow-configuration identity, the pending or completed work
+inventories needed for resume, and the published-root outcome needed for audit.
 
 **Traces to:** RQ-ARCHIVE-011, RQ-ARCHIVE-011C, DSG-LAS-006,
 DSG-LAS-006A
+
+### VAL-LAS-005A1
+
+Inspect workflow artifacts for one successful generation and one terminal
+failure generation.
+
+**Pass condition:** both the successful and failed workflow records preserve the
+same stable generation identifier across journal artifacts, root-history
+entries when published, and failure artifacts when present.
+
+**Traces to:** RQ-ARCHIVE-011D, DSG-LAS-006, DSG-LAS-009, DSG-LAS-010
+
+### VAL-LAS-005A2
+
+Interrupt the workflow after a successfully checkpointed committed mailbox,
+chunk, embedding, or publication operation, then restart it.
+
+**Pass condition:** no successfully checkpointed committed operation requires
+re-execution after restart.
+
+**Traces to:** RQ-ARCHIVE-011E, DSG-LAS-006B
 
 ### VAL-LAS-005B
 
@@ -119,14 +152,16 @@ or emits enough journaled evidence to explain why the root changed.
 Interrupt the workflow after chunk persistence but before all required
 embeddings are complete, then restart it.
 
-**Pass condition:** the resumed run does not trigger index recomputation until
-all required embeddings for the active work set are durably complete.
+**Pass condition:** the resumed run does not trigger published-root generation
+until all required embeddings for the active work set are durably complete, and
+it does not advance to published-root generation early.
 
 **Traces to:** RQ-ARCHIVE-008, RQ-ARCHIVE-011, DSG-LAS-007
 
 ### VAL-LAS-007
 
-Inspect the delegated indexing seam for a completed indexing stage.
+Inspect the delegated indexing seam for a completed published-root generation
+stage.
 
 **Pass condition:** the workflow delegates index recomputation through existing
 `lexonarchivebuilder-indexer` capabilities or approved indexer extensions rather
@@ -150,12 +185,15 @@ rewritten around Azure-specific call shapes at each step.
 Inspect the root-history publication artifact after one successful run and after
 a later resumed or repeated run.
 
-**Pass condition:** successful index recomputation appends a new root-history
-record in Azure Blob Storage, the publication step is durable across restart,
-and repeated publication does not silently duplicate one logical publish event.
+**Pass condition:** successful published-root generation appends a new
+root-history record in Azure Blob Storage for every successful generation, the
+publication step is durable across restart, repeated stable roots still append
+new generation records, and each entry contains provenance for source snapshot
+identity, generation identity, effective indexing configuration identity,
+publication timestamp, and workflow-owned audit linkage.
 
-**Traces to:** RQ-ARCHIVE-010, RQ-ARCHIVE-011B, RQ-ARCHIVE-011C,
-DSG-LAS-009
+**Traces to:** RQ-ARCHIVE-010, RQ-ARCHIVE-010A, RQ-ARCHIVE-011B,
+RQ-ARCHIVE-011C, RQ-ARCHIVE-011D, DSG-LAS-009
 
 ### VAL-LAS-009
 
@@ -188,6 +226,17 @@ request or response contracts, does not change search semantics, and remains an
 ingestion or publication workflow only.
 
 **Traces to:** RQ-ARCHIVE-016, DSG-LAS-001, DSG-LAS-012
+
+### VAL-LAS-011A
+
+Inspect artifact persistence across at least two successful generations.
+
+**Pass condition:** previously published mailbox blocks, chunk blocks,
+embeddings, index blocks, and root-history artifacts are not modified in place;
+new information is represented only through new immutable artifacts and appended
+history entries.
+
+**Traces to:** RQ-ARCHIVE-019, DSG-LAS-010A
 
 ### VAL-LAS-012
 
