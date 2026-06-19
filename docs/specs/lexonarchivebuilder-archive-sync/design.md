@@ -144,7 +144,21 @@ The design binds downstream mailbox admission, audit evidence, and root
 publication to that source snapshot identity so repeated runs can prove whether
 they operated on the same effective source corpus.
 
+When the effective mirrored corpus is unchanged, the design expects the same
+source snapshot identity rather than a fresh execution-local identifier.
+
 **Traces to:** RQ-ARCHIVE-004B, RQ-ARCHIVE-011C
+
+### DSG-LAS-004B `Source snapshot provenance`
+
+The source-acquisition stage preserves workflow-owned provenance sufficient to
+identify the mirrored corpus behind each source snapshot identity.
+
+That provenance is expected to include the rsync source URI and acquisition
+evidence sufficient to distinguish complete, partial, and changed mirror states
+without requiring operators to infer corpus identity from a bare snapshot token.
+
+**Traces to:** RQ-ARCHIVE-004C
 
 ### DSG-LAS-005 `Mailbox admission and delta derivation`
 
@@ -173,7 +187,7 @@ At minimum, the journal design must preserve:
 - current workflow stage
 - source snapshot identity
 - generation identity
-- effective workflow configuration identity
+- effective indexing configuration identity
 - pending and completed mailbox, chunk, embedding, indexing, and publication
   work inventories
 - enough provenance to connect a published root back to the mirrored source
@@ -191,13 +205,13 @@ RQ-ARCHIVE-011C, RQ-ARCHIVE-011D, RQ-ARCHIVE-013
 The audit portion of the journal must preserve enough evidence to support the
 approved reproducibility rule:
 
-- when the logical source snapshot and effective configuration are unchanged,
+- when the logical source snapshot and effective indexing configuration are unchanged,
   repeated runs are expected to reproduce the same published root
 - when a repeated run produces a different root, the recorded evidence must be
   sufficient to explain the difference
 
 The design therefore ties each published root to the effective source snapshot,
-generation identity, and effective workflow configuration rather than treating
+generation identity, and effective indexing configuration rather than treating
 the root as an unexplained terminal value.
 
 **Traces to:** RQ-ARCHIVE-010, RQ-ARCHIVE-010A, RQ-ARCHIVE-011, RQ-ARCHIVE-011C,
@@ -214,6 +228,20 @@ timer-based checkpoint cadence.
 
 **Traces to:** RQ-ARCHIVE-011A, RQ-ARCHIVE-011B, RQ-ARCHIVE-011E
 
+### DSG-LAS-006C `Workflow journal authority`
+
+The archive-sync journal is authoritative for workflow-stage control and resume
+decisions.
+
+Any downstream `lexonarchivebuilder-indexer` replay journal remains subordinate
+to that authority and exists to support delegated indexing behavior below the
+workflow-stage boundary rather than to redefine stage ownership.
+
+The design therefore requires explicit reconciliation logic between these
+journal layers instead of treating them as independent peer authorities.
+
+**Traces to:** RQ-ARCHIVE-011F
+
 ## Integration Design
 
 ### DSG-LAS-007 `Embedding-complete published-root barrier`
@@ -228,6 +256,17 @@ for this work set` state.
 
 **Traces to:** RQ-ARCHIVE-008, RQ-ARCHIVE-009, RQ-ARCHIVE-011
 
+### DSG-LAS-007A `Work-set freeze boundary`
+
+Before published-root generation begins, the workflow freezes the active work
+set for that generation.
+
+Any newly discovered source or derived artifacts after that boundary are queued
+for a later generation rather than modifying the generation already progressing
+toward publication.
+
+**Traces to:** RQ-ARCHIVE-008A
+
 ### DSG-LAS-008 `Delegated index recomputation seam`
 
 When the workflow reaches the embedding-complete state, the current design
@@ -240,7 +279,10 @@ The archive-sync workflow owns orchestration and gating. The delegated indexer
 surface remains authoritative for index-construction internals and any
 repository-owned replay details below that seam.
 
-**Traces to:** RQ-ARCHIVE-009, RQ-ARCHIVE-014, RQ-ARCHIVE-018
+The workflow records one effective indexing configuration identity for the
+root-affecting inputs that participate in this delegated realization seam.
+
+**Traces to:** RQ-ARCHIVE-009, RQ-ARCHIVE-010B, RQ-ARCHIVE-014, RQ-ARCHIVE-018
 
 ### DSG-LAS-009 `Append-only root-history publication`
 
@@ -265,8 +307,12 @@ This publication step occurs only after a successful published-root result is
 available, occurs once per successful generation even when the root repeats, and
 is itself journaled so restart logic can avoid duplicate publication.
 
-**Traces to:** RQ-ARCHIVE-010, RQ-ARCHIVE-010A, RQ-ARCHIVE-011B,
-RQ-ARCHIVE-011C, RQ-ARCHIVE-011D
+Publication is not considered fully complete until the root-history entry is
+durably recorded or the journal durably preserves enough information to repair
+that append on resume without regenerating the root.
+
+**Traces to:** RQ-ARCHIVE-010, RQ-ARCHIVE-010A, RQ-ARCHIVE-010B,
+RQ-ARCHIVE-010C, RQ-ARCHIVE-011B, RQ-ARCHIVE-011C, RQ-ARCHIVE-011D
 
 ### DSG-LAS-010 `Terminal failure preservation and shutdown`
 
@@ -349,14 +395,16 @@ orchestration but cannot complete an end-to-end production realization.
    an audit ledger
 4. Implement delta-oriented mailbox admission, chunk derivation, and embedding
    work discovery so previously committed work is not repeated
-5. Integrate the embedding-complete barrier with delegated published-root
-   generation through existing `lexonarchivebuilder-indexer` seams or approved
-   extensions
-6. Implement append-only root-history publication in Azure Blob Storage with
-   duplicate-safe resume behavior
-7. Implement terminal success and terminal non-recoverable failure shutdown
+5. Integrate the embedding-complete barrier and work-set freeze with delegated
+   published-root generation through existing `lexonarchivebuilder-indexer`
+   seams or approved extensions
+6. Define and persist effective indexing configuration identity for each
+   successful or failed generation
+7. Implement append-only root-history publication in Azure Blob Storage with
+   duplicate-safe resume behavior and durable history-repair semantics
+8. Implement terminal success and terminal non-recoverable failure shutdown
    handling that preserves audit state before VM shutdown
-8. Document the boot-launch assumptions and operational handoff needed to run
+9. Document the boot-launch assumptions and operational handoff needed to run
    the Compose workflow automatically on VM startup
 
 ### Ownership notes

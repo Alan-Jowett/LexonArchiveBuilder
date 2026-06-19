@@ -39,6 +39,12 @@
 - **UR-ARCHIVE-29 [KNOWN]:** Checkpoint semantics should guarantee that successfully checkpointed mailbox, chunk, embedding, and publication work does not need to be re-executed.
 - **UR-ARCHIVE-30 [KNOWN]:** The workflow should explicitly preserve immutable mailbox blocks, chunk blocks, embeddings, index blocks, and root artifacts.
 - **UR-ARCHIVE-31 [KNOWN]:** Every successful generation should append a root-history entry even when the root repeats, so periods of stability remain visible in the audit trail.
+- **UR-ARCHIVE-32 [KNOWN]:** Source snapshot identity should be reproducibly bound to the effective source corpus rather than acting only as an execution identifier.
+- **UR-ARCHIVE-33 [KNOWN]:** The specification should define effective indexing configuration identity rather than referring to it implicitly.
+- **UR-ARCHIVE-34 [KNOWN]:** Root-history publication needs explicit durability or repair semantics when history append and publication are not one physical storage operation.
+- **UR-ARCHIVE-35 [KNOWN]:** The archive-sync journal should be authoritative at workflow-stage boundaries relative to any subordinate indexer replay journals.
+- **UR-ARCHIVE-36 [KNOWN]:** The work set participating in one publication generation should be fixed before published-root generation begins.
+- **UR-ARCHIVE-37 [KNOWN]:** Source snapshot provenance should preserve enough information to identify the mirrored corpus, not merely a generated snapshot identifier.
 
 ## Change Manifest
 
@@ -48,14 +54,18 @@
 | CM-ARCHIVE-002 | Add | Define Docker Compose as the workflow entrypoint and require boot-time automatic start compatibility | UR-ARCHIVE-3, UR-ARCHIVE-4 |
 | CM-ARCHIVE-003 | Add | Define the first production source as `rsync.ietf.org::mailman-archive/` mirrored into Azure Blob Storage | UR-ARCHIVE-5 |
 | CM-ARCHIVE-003A | Add | Require a formal source snapshot identity for the effective source corpus used by each publication generation | UR-ARCHIVE-24 |
+| CM-ARCHIVE-003B | Add | Require source snapshot identities to be reproducibly bound to the effective mirrored corpus and backed by explicit provenance | UR-ARCHIVE-32, UR-ARCHIVE-37 |
 | CM-ARCHIVE-004 | Add | Require idempotent mailbox block persistence through the existing `BlockStore` abstraction family | UR-ARCHIVE-6, UR-ARCHIVE-15 |
 | CM-ARCHIVE-005 | Add | Require chunk derivation and chunk persistence only for newly admitted mailbox blocks | UR-ARCHIVE-7 |
 | CM-ARCHIVE-006 | Add | Require embedding generation only for newly admitted chunks | UR-ARCHIVE-8 |
 | CM-ARCHIVE-007 | Revise | Gate published-root generation on completion of all required embedding work without fixing one implementation strategy | UR-ARCHIVE-9, UR-ARCHIVE-13, UR-ARCHIVE-26, UR-ARCHIVE-27 |
+| CM-ARCHIVE-007A | Add | Require each publication generation's work set to be fixed before published-root generation begins | UR-ARCHIVE-27, UR-ARCHIVE-36 |
 | CM-ARCHIVE-008 | Revise | Require append-only root publication to a JSON artifact in Azure Blob Storage with generation and provenance metadata per successful generation | UR-ARCHIVE-10, UR-ARCHIVE-25, UR-ARCHIVE-31 |
+| CM-ARCHIVE-008A | Add | Require effective indexing configuration identity and explicit history-durability semantics for successful publication generations | UR-ARCHIVE-33, UR-ARCHIVE-34 |
 | CM-ARCHIVE-009 | Add | Require a durable resume journal that records stage, work inventories, and checkpoint-safe progress | UR-ARCHIVE-12, UR-ARCHIVE-14 |
 | CM-ARCHIVE-009A | Add | Require the journal to double as an audit artifact that explains root reproducibility or root drift across repeated runs | UR-ARCHIVE-22, UR-ARCHIVE-23 |
-| CM-ARCHIVE-009B | Add | Require a stable generation identifier and durable checkpoint granularity across workflow artifacts | UR-ARCHIVE-27, UR-ARCHIVE-28, UR-ARCHIVE-29 |
+| CM-ARCHIVE-009B | Add | Require a stable generation identifier and durable checkpoint granularity across workflow artifacts | UR-ARCHIVE-28, UR-ARCHIVE-29 |
+| CM-ARCHIVE-009C | Add | Require the workflow journal to remain authoritative at workflow-stage boundaries even when subordinate indexer journals exist | UR-ARCHIVE-35 |
 | CM-ARCHIVE-010 | Add | Require VM shutdown on terminal success and terminal non-recoverable failure | UR-ARCHIVE-11, UR-ARCHIVE-19 |
 | CM-ARCHIVE-011 | Add | Preserve compatibility with spot-instance eviction by requiring resume from durable checkpoints instead of in-memory state | UR-ARCHIVE-12, UR-ARCHIVE-14 |
 | CM-ARCHIVE-012 | Add | Preserve indexer reuse and allow targeted `lexonarchivebuilder-indexer` evolution without moving this workflow into the indexer boundary | UR-ARCHIVE-15, UR-ARCHIVE-16 |
@@ -129,13 +139,22 @@
 
 ### Source Snapshot Identity
 
-The durable identity assigned to one effective source corpus produced by a
-source-acquisition operation.
+The durable identity reproducibly bound to one effective source corpus produced
+by a source-acquisition operation.
+
+When the effective source corpus is unchanged, the same source snapshot identity
+is expected.
 
 ### Generation Identity
 
 The stable identity assigned to one workflow execution or publication
 generation.
+
+### Effective Indexing Configuration Identity
+
+The durable identity of the effective chunking, embedding, delegated published-
+root generation, and other root-affecting indexing inputs that participate in
+one publication generation.
 
 ### Work Set
 
@@ -222,12 +241,22 @@ scratch when the already-copied snapshot is still valid.
 
 #### RQ-ARCHIVE-004B - Source snapshot identity
 
-The workflow SHALL assign a unique source snapshot identity to each source
-acquisition operation.
+The workflow SHALL assign a source snapshot identity reproducibly bound to the
+effective source corpus for each source-acquisition operation.
 
 - **Required recording [KNOWN]:** The source snapshot identity must be recorded in the workflow journal, the published root-history artifact, and any workflow-owned audit artifacts used for root reproducibility.
 - **Identity meaning [KNOWN]:** The source snapshot identity must uniquely identify the effective source corpus used for one publication generation.
-- **Traceability:** UR-ARCHIVE-24
+- **Determinism intent [KNOWN]:** When the effective source corpus is unchanged, the same source snapshot identity is expected.
+- **Traceability:** UR-ARCHIVE-24, UR-ARCHIVE-32
+
+#### RQ-ARCHIVE-004C - Source snapshot provenance
+
+The workflow SHALL preserve sufficient source-snapshot provenance to identify
+the effective mirrored corpus for each source snapshot identity.
+
+- **Minimum provenance [INFERRED]:** This provenance should include the rsync source URI plus acquisition evidence sufficient to distinguish complete versus partial or changed mirror states.
+- **Audit use [KNOWN]:** Source-snapshot provenance must be available to workflow audit and root reproducibility analysis rather than remaining transient acquisition-only state.
+- **Traceability:** UR-ARCHIVE-24, UR-ARCHIVE-37
 
 #### RQ-ARCHIVE-005 - Mailbox block admission
 
@@ -269,6 +298,15 @@ complete.
 - **Recovery implication [INFERRED]:** Resume logic must be able to distinguish `pending embedding` from `ready to publish`.
 - **Traceability:** UR-ARCHIVE-9, UR-ARCHIVE-12, UR-ARCHIVE-13, UR-ARCHIVE-26, UR-ARCHIVE-27
 
+#### RQ-ARCHIVE-008A - Work-set freeze before publication
+
+The work set participating in one publication generation SHALL be fixed before
+published-root generation begins.
+
+- **Generation boundary [KNOWN]:** Source artifacts or derived artifacts discovered after this boundary participate in a later generation rather than modifying the in-flight generation.
+- **Audit rationale [INFERRED]:** Fixing the work set before publication keeps generation boundaries explicit for reproducibility analysis.
+- **Traceability:** UR-ARCHIVE-27, UR-ARCHIVE-36
+
 #### RQ-ARCHIVE-009 - Published root generation
 
 Once the current work set reaches the embedding-complete state,
@@ -303,6 +341,27 @@ Every published root-history entry SHALL contain enough metadata to identify:
 - **Audit linkage [INFERRED]:** The entry should also carry a journal identity or equivalent workflow-owned audit link so later diagnosis can connect the published root to its durable workflow record.
 - **Schema boundary [KNOWN]:** This requirement fixes required provenance semantics without freezing exact JSON field names.
 - **Traceability:** UR-ARCHIVE-25, UR-ARCHIVE-28, UR-ARCHIVE-31
+
+#### RQ-ARCHIVE-010B - Effective indexing configuration identity
+
+Each publication generation SHALL derive and record an effective indexing
+configuration identity.
+
+- **Identity meaning [KNOWN]:** The effective indexing configuration identity must cover the root-affecting indexing inputs used for that generation.
+- **Minimum scope [INFERRED]:** This identity should include chunking policy identity, embedding-provider or model identity, delegated published-root generation configuration, and any other workflow-owned or delegated indexing inputs that can change the published root.
+- **Recording requirement [KNOWN]:** The effective indexing configuration identity must be recorded in the workflow journal and each root-history entry.
+- **Traceability:** UR-ARCHIVE-33
+
+#### RQ-ARCHIVE-010C - Root-history durability or repair
+
+A successful published root generation SHALL NOT be considered complete unless
+either:
+
+1. the corresponding root-history entry has been durably recorded, or
+2. the workflow journal durably preserves enough information to complete or repair the missing root-history append on resume without regenerating the root
+
+- **Failure-window rationale [KNOWN]:** This requirement closes the gap between successful root generation and later durable history append.
+- **Traceability:** UR-ARCHIVE-34
 
 #### RQ-ARCHIVE-011 - Durable workflow journal
 
@@ -342,7 +401,7 @@ blocks, embeddings, and published roots are not duplicated.
 
 #### RQ-ARCHIVE-011C - Root reproducibility and drift auditability
 
-For repeated runs over the same logical source snapshot and effective workflow
+For repeated runs over the same logical source snapshot and effective indexing
 configuration, `lexonarchivebuilder-archive-sync` SHALL either:
 
 1. reproduce the same published root block, or
@@ -369,6 +428,15 @@ re-execution after a successful checkpoint has been recorded.
 - **Granularity boundary [KNOWN]:** This requirement constrains correctness of checkpoint boundaries without mandating a specific timer-based checkpoint cadence.
 - **Spot-instance rationale [KNOWN]:** This requirement preserves compatibility with abrupt eviction by ensuring committed work does not drift backward after restart.
 - **Traceability:** UR-ARCHIVE-29
+
+#### RQ-ARCHIVE-011F - Workflow journal authority
+
+At workflow-stage boundaries, the `lexonarchivebuilder-archive-sync` journal
+SHALL remain the authoritative source for workflow resume decisions.
+
+- **Subordinate journal boundary [KNOWN]:** Any downstream `lexonarchivebuilder-indexer` replay journal or equivalent delegated journal remains a subordinate implementation artifact rather than a peer workflow authority.
+- **Design implication [INFERRED]:** When journal states disagree, workflow-stage control must be resolved through the archive-sync journal's authority plus any required reconciliation logic.
+- **Traceability:** UR-ARCHIVE-35
 
 #### RQ-ARCHIVE-012 - Terminal VM shutdown
 
@@ -480,7 +548,7 @@ New information SHALL be represented by new immutable artifacts.
 ## Discovery Gaps and Resolution Notes
 
 - **Q-ARCHIVE-001 [KNOWN]:** Resolved in Phase 2 revision. Each root-history entry must include provenance metadata for source snapshot identity, generation identity, effective indexing configuration, and publication timestamp.
-- **Q-ARCHIVE-002 [UNKNOWN]:** What is the exact authority boundary between the workflow journal and any downstream `lexonarchivebuilder-indexer` replay journal when both exist for the same run?
+- **Q-ARCHIVE-002 [UNKNOWN]:** Given the archive-sync journal's workflow-stage authority, what exact reconciliation data needs to flow between it and any downstream `lexonarchivebuilder-indexer` replay journal when both exist for the same run?
 - **Q-ARCHIVE-003 [UNKNOWN]:** Should source mirroring preserve the raw rsync directory layout byte-for-byte in Azure Blob Storage, or is a normalized blob layout acceptable so long as resume and provenance remain correct?
 - **Q-ARCHIVE-004 [UNKNOWN]:** What criteria classify a failure as terminal and non-recoverable versus restartable on the next boot?
 - **Q-ARCHIVE-005 [KNOWN]:** Resolved in Phase 2 revision. Every successful generation appends a root-history entry even when the published root repeats.
@@ -503,6 +571,11 @@ New information SHALL be represented by new immutable artifacts.
   - user review in this session: "Each workflow execution SHALL be assigned a stable generation identifier."
   - user review in this session: "No committed mailbox, chunk, embedding, or publication operation may require re-execution after a successful checkpoint has been recorded."
   - user review in this session: "The workflow SHALL NOT modify previously published mailbox blocks, chunk blocks, embeddings, index blocks, or root artifacts."
+  - user feedback in this session: "The workflow SHALL assign a source snapshot identity derived from or uniquely bound to the effective source corpus. Identical effective source corpora SHOULD produce the same source snapshot identity."
+  - user feedback in this session: "The specification should define Effective Indexing Configuration Identity."
+  - user feedback in this session: "Publication is not considered complete until the history entry is durably recorded." / "History append failures must be recoverable from journal state on resume."
+  - user feedback in this session: "The archive-sync journal is authoritative at workflow-stage boundaries; indexer journals are subordinate implementation artifacts."
+  - user feedback in this session: "The work set participating in a publication generation SHALL be fixed before published-root generation begins."
   - `README.md:7-13`
   - `README.md:20-28`
   - `README.md:42-49`

@@ -80,6 +80,16 @@ root-history entry, and the related workflow-owned audit artifacts.
 
 **Traces to:** RQ-ARCHIVE-004B, DSG-LAS-004A, DSG-LAS-006A
 
+### VAL-LAS-003C
+
+Inspect two source-acquisition runs over an unchanged effective mirrored corpus.
+
+**Pass condition:** the workflow derives the same source snapshot identity for
+the unchanged effective corpus and preserves source-snapshot provenance
+sufficient to justify that identity.
+
+**Traces to:** RQ-ARCHIVE-004B, RQ-ARCHIVE-004C, DSG-LAS-004A, DSG-LAS-004B
+
 ### VAL-LAS-004
 
 Run the workflow against a snapshot containing a mix of already present and
@@ -110,7 +120,7 @@ Inspect the journal artifact for a completed run.
 
 **Pass condition:** the journal records the active or final workflow stage, the
 effective source snapshot identity, the workflow generation identity, the
-effective workflow-configuration identity, the pending or completed work
+effective indexing configuration identity, the pending or completed work
 inventories needed for resume, and the published-root outcome needed for audit.
 
 **Traces to:** RQ-ARCHIVE-011, RQ-ARCHIVE-011C, DSG-LAS-006,
@@ -137,10 +147,20 @@ re-execution after restart.
 
 **Traces to:** RQ-ARCHIVE-011E, DSG-LAS-006B
 
+### VAL-LAS-005A3
+
+Inspect the workflow journal and root-history entry for one successful
+generation.
+
+**Pass condition:** both artifacts record the same effective indexing
+configuration identity for the generation.
+
+**Traces to:** RQ-ARCHIVE-010B, DSG-LAS-006, DSG-LAS-008, DSG-LAS-009
+
 ### VAL-LAS-005B
 
 Repeat the workflow against the same logical source snapshot and effective
-configuration, then compare outcomes.
+indexing configuration, then compare outcomes.
 
 **Pass condition:** the repeated run either reproduces the same published root
 or emits enough journaled evidence to explain why the root changed.
@@ -157,6 +177,17 @@ until all required embeddings for the active work set are durably complete, and
 it does not advance to published-root generation early.
 
 **Traces to:** RQ-ARCHIVE-008, RQ-ARCHIVE-011, DSG-LAS-007
+
+### VAL-LAS-006A
+
+Inspect publication generation boundaries around the transition from embedding
+completion to published-root generation.
+
+**Pass condition:** the work set is fixed before published-root generation
+begins, and newly discovered source or derived artifacts are deferred to a later
+generation.
+
+**Traces to:** RQ-ARCHIVE-008A, DSG-LAS-007A
 
 ### VAL-LAS-007
 
@@ -195,6 +226,17 @@ publication timestamp, and workflow-owned audit linkage.
 **Traces to:** RQ-ARCHIVE-010, RQ-ARCHIVE-010A, RQ-ARCHIVE-011B,
 RQ-ARCHIVE-011C, RQ-ARCHIVE-011D, DSG-LAS-009
 
+### VAL-LAS-008A
+
+Force a failure after published-root generation succeeds but before the
+root-history entry is durably visible, then restart the workflow.
+
+**Pass condition:** the workflow either had not yet marked the generation
+complete, or it repairs the missing root-history append from journal state on
+resume without regenerating the root.
+
+**Traces to:** RQ-ARCHIVE-010C, DSG-LAS-009
+
 ### VAL-LAS-009
 
 Force an abrupt stop equivalent to spot-instance interruption during any
@@ -205,6 +247,17 @@ require in-memory recovery, and can continue toward the same terminal outcome
 without redoing already committed work.
 
 **Traces to:** RQ-ARCHIVE-011A, RQ-ARCHIVE-011B, DSG-LAS-006, DSG-LAS-010
+
+### VAL-LAS-009A
+
+Inspect workflow-stage resume behavior when both the archive-sync journal and a
+subordinate downstream replay journal are present.
+
+**Pass condition:** workflow-stage control remains governed by the
+archive-sync journal, while the downstream replay journal is treated as a
+subordinate implementation artifact.
+
+**Traces to:** RQ-ARCHIVE-011F, DSG-LAS-006C
 
 ### VAL-LAS-010
 
