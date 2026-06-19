@@ -501,7 +501,7 @@ impl WorkflowJournalStore {
     }
 
     pub fn load(&self) -> Result<Option<WorkflowJournal>, WorkflowJournalError> {
-        if !self.path.exists() {
+        if !journal_path_exists(&self.path)? {
             return Ok(None);
         }
         let bytes = fs::read(&self.path).map_err(|source| WorkflowJournalError::ReadJournal {
@@ -550,14 +550,18 @@ impl WorkflowJournalStore {
                 path: self.path.display().to_string(),
                 source,
             })?;
-        temp.persist(&self.path)
-            .map_err(|source| WorkflowJournalError::PersistJournal {
-                path: self.path.display().to_string(),
-                source: source.error,
-            })?;
+        persist_overwriting_if_needed(temp, &self.path)?;
         sync_parent_directory(parent, &self.path)?;
         Ok(())
     }
+}
+
+fn journal_path_exists(path: &Path) -> Result<bool, WorkflowJournalError> {
+    path.try_exists()
+        .map_err(|source| WorkflowJournalError::ReadJournal {
+            path: path.display().to_string(),
+            source,
+        })
 }
 
 fn journal_parent_directory(path: &Path) -> &Path {
@@ -565,6 +569,30 @@ fn journal_parent_directory(path: &Path) -> &Path {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
     }
+}
+
+fn persist_overwriting_if_needed(
+    temp: NamedTempFile,
+    destination: &Path,
+) -> Result<(), WorkflowJournalError> {
+    #[cfg(windows)]
+    {
+        if journal_path_exists(destination)? {
+            fs::remove_file(destination).map_err(|source| {
+                WorkflowJournalError::PersistJournal {
+                    path: destination.display().to_string(),
+                    source,
+                }
+            })?;
+        }
+    }
+
+    temp.persist(destination)
+        .map_err(|source| WorkflowJournalError::PersistJournal {
+            path: destination.display().to_string(),
+            source: source.error,
+        })?;
+    Ok(())
 }
 
 fn sync_parent_directory(parent: &Path, journal_path: &Path) -> Result<(), WorkflowJournalError> {
@@ -797,6 +825,41 @@ mod tests {
             Some("root-00000000000000000000000000000001")
         );
         assert_eq!(loaded.subordinate_journals.len(), 1);
+    }
+
+    #[test]
+    fn repeated_save_overwrites_existing_journal() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut first = sample_journal();
+        first
+            .queue_work(WorkKind::MailboxAdmission, "mailbox:ietf-1")
+            .unwrap();
+        store.save(&first).unwrap();
+
+        let mut second = sample_journal();
+        second
+            .queue_work(WorkKind::Embedding, "chunk:ietf-2:0")
+            .unwrap();
+        second
+            .record_terminal_success("2026-06-19T09:25:00Z")
+            .unwrap();
+        store.save(&second).unwrap();
+
+        let loaded = store.load().unwrap().unwrap();
+
+        assert!(
+            !loaded
+                .work
+                .mailbox_admission
+                .pending
+                .contains("mailbox:ietf-1")
+        );
+        assert!(loaded.work.embedding.pending.contains("chunk:ietf-2:0"));
+        assert_eq!(
+            loaded.terminal_outcome.as_ref().map(|outcome| outcome.kind),
+            Some(TerminalOutcomeKind::Success)
+        );
     }
 
     #[test]
