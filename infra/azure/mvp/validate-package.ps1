@@ -27,17 +27,17 @@ $cdnBicep = Get-Content -LiteralPath (Join-Path $Root 'cdn.bicep') -Raw
 $storageBicep = Get-Content -LiteralPath (Join-Path $Root 'storage.bicep') -Raw
 $parameters = Get-Content -LiteralPath (Join-Path $Root 'main.parameters.example.json') -Raw | ConvertFrom-Json
 
-$requiredMainSnippets = @(
-    "module storage 'storage.bicep'",
-    "module cdn 'cdn.bicep'",
-    "module indexerVm 'vm-indexer.bicep'",
-    "module embedderVm 'vm-embedder.bicep'",
-    'output postDeployOriginConfiguration object'
+$requiredMainPatterns = @(
+    "module\s+storage\s+'storage\.bicep'",
+    "module\s+cdn\s+'cdn\.bicep'",
+    "module\s+indexerVm\s+'vm-indexer\.bicep'",
+    "module\s+embedderVm\s+'vm-embedder\.bicep'",
+    'output\s+postDeployOriginConfiguration\s+object'
 )
 
-foreach ($snippet in $requiredMainSnippets) {
-    if (-not $mainBicep.Contains($snippet)) {
-        throw "main.bicep is missing expected content: $snippet"
+foreach ($pattern in $requiredMainPatterns) {
+    if (-not [regex]::IsMatch($mainBicep, $pattern)) {
+        throw "main.bicep is missing expected content matching pattern: $pattern"
     }
 }
 

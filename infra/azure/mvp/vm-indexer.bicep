@@ -47,7 +47,7 @@ runcmd:
     systemctl enable docker
     systemctl start docker
     mkdir -p /opt/lexonarchivebuilder/indexer
-    mkdir -p ${indexOutputPath}
+    mkdir -p "${indexOutputPath}"
     cat > /opt/lexonarchivebuilder/indexer/docker-compose.yml <<'EOF'
     services:
       indexer:
@@ -57,7 +57,7 @@ runcmd:
           LAB_STORAGE_ACCESS_MODE: ${storageAccessMode}
         volumes:
           - /opt/lexonarchivebuilder/indexer/request.json:/workspace/request.json:ro
-          - ${indexOutputPath}:/workspace/output
+          - "${indexOutputPath}:/workspace/output"
         command:
           - run
           - --request
@@ -77,7 +77,8 @@ runcmd:
     EXIT_CODE=$?
     set -e
     echo "${EXIT_CODE}" > /opt/lexonarchivebuilder/indexer/last-exit-code
-    shutdown -h now
+    systemctl poweroff --no-block
+    exit "${EXIT_CODE}"
     EOF
     chmod 0755 /usr/local/bin/lexonarchivebuilder-run-indexer.sh
     cat > /etc/systemd/system/lexonarchivebuilder-indexer.service <<'EOF'
