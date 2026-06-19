@@ -1,5 +1,9 @@
 [workspace]
-members = ["crates/lexonarchivebuilder-indexer", "crates/lexonarchivebuilder-mcp"]
+members = [
+    "crates/lexonarchivebuilder-archive-sync",
+    "crates/lexonarchivebuilder-indexer",
+    "crates/lexonarchivebuilder-mcp",
+]
 resolver = "3"
 
 [workspace.package]

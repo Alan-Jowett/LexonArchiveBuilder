@@ -910,6 +910,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lexonarchivebuilder-archive-sync"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "lexonarchivebuilder-indexer"
 version = "0.1.0"
 dependencies = [
