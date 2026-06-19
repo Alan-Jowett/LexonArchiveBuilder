@@ -51,6 +51,8 @@ pub enum WorkflowJournalError {
     InvalidWorkflowAuthority,
     #[error("subordinate journal `{implementation}` must not claim workflow authority")]
     InvalidSubordinateAuthority { implementation: String },
+    #[error("workflow journal state is inconsistent: {detail}")]
+    InconsistentState { detail: &'static str },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -305,12 +307,26 @@ impl WorkflowJournal {
             "audit.root_change_explanation",
             &self.audit.root_change_explanation,
         )?;
+        require_paired_optional_fields(
+            "audit.published_root_id",
+            &self.audit.published_root_id,
+            "audit.published_root_recorded_at",
+            &self.audit.published_root_recorded_at,
+        )?;
+        require_paired_optional_fields(
+            "audit.root_history_entry_id",
+            &self.audit.root_history_entry_id,
+            "audit.root_history_recorded_at",
+            &self.audit.root_history_recorded_at,
+        )?;
         for checkpoint in &self.checkpoints {
             validate_checkpoint_record(checkpoint)?;
         }
-        if let Some(terminal_outcome) = &self.terminal_outcome {
-            validate_terminal_outcome(terminal_outcome)?;
-        }
+        validate_terminal_state(
+            self.current_stage,
+            &self.terminal_outcome,
+            &self.generation.completed_at,
+        )?;
         Ok(())
     }
 
@@ -637,6 +653,53 @@ fn validate_terminal_outcome(
     Ok(())
 }
 
+fn validate_terminal_state(
+    current_stage: WorkflowStage,
+    terminal_outcome: &Option<TerminalOutcome>,
+    completed_at: &Option<String>,
+) -> Result<(), WorkflowJournalError> {
+    let stage_is_terminal = matches!(
+        current_stage,
+        WorkflowStage::TerminalSuccess | WorkflowStage::TerminalFailure
+    );
+
+    if stage_is_terminal && terminal_outcome.is_none() {
+        return Err(WorkflowJournalError::MissingField {
+            field: "terminal_outcome",
+        });
+    }
+    if (stage_is_terminal || terminal_outcome.is_some()) && completed_at.is_none() {
+        return Err(WorkflowJournalError::MissingField {
+            field: "generation.completed_at",
+        });
+    }
+    if !stage_is_terminal && terminal_outcome.is_some() {
+        return Err(WorkflowJournalError::InconsistentState {
+            detail: "non-terminal stage must not carry a terminal outcome",
+        });
+    }
+    if let Some(terminal_outcome) = terminal_outcome {
+        validate_terminal_outcome(terminal_outcome)?;
+        match (current_stage, terminal_outcome.kind) {
+            (WorkflowStage::TerminalSuccess, TerminalOutcomeKind::Success) => {}
+            (WorkflowStage::TerminalFailure, TerminalOutcomeKind::NonRecoverableFailure) => {}
+            (WorkflowStage::TerminalSuccess, TerminalOutcomeKind::NonRecoverableFailure) => {
+                return Err(WorkflowJournalError::InconsistentState {
+                    detail: "terminal success stage requires a success terminal outcome",
+                });
+            }
+            (WorkflowStage::TerminalFailure, TerminalOutcomeKind::Success) => {
+                return Err(WorkflowJournalError::InconsistentState {
+                    detail: "terminal failure stage requires a non-recoverable failure terminal outcome",
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
 fn validate_generation_state(generation: &GenerationState) -> Result<(), WorkflowJournalError> {
     require_non_empty("generation.generation_id", &generation.generation_id)?;
     require_non_empty("generation.journal_id", &generation.journal_id)?;
@@ -715,6 +778,19 @@ fn require_optional_non_empty(
         require_non_empty(field, value)?;
     }
     Ok(())
+}
+
+fn require_paired_optional_fields(
+    left_field: &'static str,
+    left_value: &Option<String>,
+    right_field: &'static str,
+    right_value: &Option<String>,
+) -> Result<(), WorkflowJournalError> {
+    match (left_value.is_some(), right_value.is_some()) {
+        (true, false) => Err(WorkflowJournalError::MissingField { field: right_field }),
+        (false, true) => Err(WorkflowJournalError::MissingField { field: left_field }),
+        _ => Ok(()),
+    }
 }
 
 fn is_false(value: &bool) -> bool {
@@ -1112,6 +1188,85 @@ mod tests {
             WorkflowJournalError::EmptyField {
                 field: "checkpoint.item_id"
             }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_unpaired_published_root_audit_fields() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.audit.published_root_id = Some("root-1".into());
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::MissingField {
+                field: "audit.published_root_recorded_at"
+            }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_unpaired_root_history_audit_fields() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.audit.root_history_recorded_at = Some("2026-06-19T09:10:01Z".into());
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::MissingField {
+                field: "audit.root_history_entry_id"
+            }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_inconsistent_terminal_state() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.current_stage = WorkflowStage::TerminalSuccess;
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::MissingField {
+                field: "terminal_outcome"
+            }
+        ));
+    }
+
+    #[test]
+    fn load_rejects_terminal_outcome_on_non_terminal_stage() {
+        let temp = tempdir().unwrap();
+        let store = WorkflowJournalStore::new(temp.path().join("journal.json"));
+        let mut journal = sample_journal();
+        journal.generation.completed_at = Some("2026-06-19T09:20:00Z".into());
+        journal.terminal_outcome = Some(TerminalOutcome {
+            kind: TerminalOutcomeKind::Success,
+            recorded_at: "2026-06-19T09:20:00Z".into(),
+            detail: None,
+        });
+        let serialized = serde_json::to_string_pretty(&journal).unwrap();
+        fs::write(store.path(), format!("{serialized}\n")).unwrap();
+
+        let error = store.load().unwrap_err();
+
+        assert!(matches!(
+            error,
+            WorkflowJournalError::InconsistentState { detail: _ }
         ));
     }
 }
