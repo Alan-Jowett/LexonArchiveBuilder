@@ -106,7 +106,7 @@ LexonArchiveBuilder SHALL provide a separate production deployment boundary name
 
 The MVP deployment SHALL place all required Azure resources in one parameterized resource group.
 
-- **Constraint [KNOWN]:** The resource-group name must be caller-supplied through the deployment parameter surface.
+- **Constraint [KNOWN]:** The selected resource group must be caller-supplied through the deployment invocation boundary, whether by deployment scope selection or by an equivalent top-level orchestration input.
 - **Traceability:** UR-DEPLOY-2, UR-DEPLOY-18
 
 #### RQ-DEPLOY-004 - Module-oriented IaC package
@@ -128,18 +128,19 @@ The MVP deployment SHALL be specified as a module-oriented Bicep or ARM package 
 
 The top-level deployment package SHALL expose a parameter surface that includes:
 
-1. resource-group name
-2. storage-account name
-3. blob-container name
-4. SAS expiry
-5. CDN endpoint name
-6. VM sizes
-7. GHCR image tags
-8. VNet address ranges
-9. index-output path
-10. storage-access mode for VM workloads, including SAS-backed and managed-identity-capable deployment modes
-11. embedding API port
-12. embedder storage-access configuration when the embedding runtime requires storage access
+1. storage-account name
+2. blob-container name
+3. SAS expiry
+4. CDN endpoint name
+5. VM sizes
+6. GHCR image tags
+7. VNet address ranges
+8. index-output path
+9. storage-access mode for VM workloads, including SAS-backed and managed-identity-capable deployment modes
+10. embedding API port
+11. embedder storage-access configuration when the embedding runtime requires storage access
+
+- **Constraint [KNOWN]:** Resource-group selection may be carried by the deployment scope rather than a template parameter when `main.bicep` targets an existing resource group directly.
 
 The top-level deployment package SHALL output:
 

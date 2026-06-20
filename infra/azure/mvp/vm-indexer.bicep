@@ -49,7 +49,7 @@ runcmd:
   - |
     set -euxo pipefail
     apt-get update
-    apt-get install -y --no-install-recommends ca-certificates curl docker.io docker-compose-plugin
+    apt-get install -y --no-install-recommends ca-certificates curl docker.io docker-compose-plugin python3
     systemctl enable docker
     systemctl start docker
     mkdir -p /opt/lexonarchivebuilder/indexer
