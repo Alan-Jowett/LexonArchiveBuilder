@@ -107,11 +107,8 @@ impl RsyncRunner for CommandRsyncRunner {
         source_uri: &str,
         destination: &Path,
     ) -> Result<(), SourceSnapshotAcquisitionError> {
-        let status = Command::new(&self.executable)
-            .arg("-a")
-            .arg("--delete")
-            .arg(source_uri)
-            .arg(destination)
+        let status = self
+            .build_command(source_uri, destination)
             .status()
             .map_err(|error| SourceSnapshotAcquisitionError::RsyncFailed {
                 detail: format!(
@@ -136,6 +133,19 @@ impl RsyncRunner for CommandRsyncRunner {
                 ),
             })
         }
+    }
+}
+
+impl CommandRsyncRunner {
+    fn build_command(&self, source_uri: &str, destination: &Path) -> Command {
+        let mut command = Command::new(&self.executable);
+        command
+            .arg("-a")
+            .arg("--delete")
+            .arg("--partial")
+            .arg(source_uri)
+            .arg(destination);
+        command
     }
 }
 
@@ -293,11 +303,22 @@ fn collect_snapshot_entries<S: BlockStore>(
     children.sort();
 
     for child in children {
-        if child.is_dir() {
+        let file_type = fs::symlink_metadata(&child)
+            .map_err(
+                |source| SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
+                    path: child.display().to_string(),
+                    source,
+                },
+            )?
+            .file_type();
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
             entries.extend(collect_snapshot_entries(store, snapshot_root, &child)?);
             continue;
         }
-        if !child.is_file() {
+        if !file_type.is_file() {
             continue;
         }
         let relative_path = normalize_relative_path(snapshot_root, &child);
@@ -568,6 +589,30 @@ mod tests {
         ));
         assert_eq!(journal.current_stage, WorkflowStage::SourceAcquisition);
         assert_eq!(journal.source_snapshot.acquisition_completed_at, None);
+    }
+
+    #[test]
+    fn command_rsync_runner_adds_partial_resume_flag() {
+        let runner = CommandRsyncRunner::new("rsync");
+        let command = runner.build_command(
+            "rsync://example.invalid/mailman",
+            Path::new("C:\\snapshot-root"),
+        );
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            args,
+            vec![
+                "-a".to_string(),
+                "--delete".to_string(),
+                "--partial".to_string(),
+                "rsync://example.invalid/mailman".to_string(),
+                "C:\\snapshot-root".to_string(),
+            ]
+        );
     }
 
     fn sample_journal() -> WorkflowJournal {
