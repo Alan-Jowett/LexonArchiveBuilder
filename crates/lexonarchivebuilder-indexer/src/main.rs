@@ -107,7 +107,10 @@ struct BlockStoreArgs {
     block_store_root: Option<PathBuf>,
     #[arg(long, required_if_eq("block_store_profile", "production"))]
     block_store_container_sas_url: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Reserved for non-Azure block store backends. Production Azure Blob configuration rejects non-empty prefixes."
+    )]
     block_store_prefix: Option<String>,
 }
 

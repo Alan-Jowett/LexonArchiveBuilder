@@ -80,6 +80,14 @@ pub enum SourceSnapshotAcquisitionError {
         #[source]
         source: serde_json::Error,
     },
+    #[error(
+        "source snapshot manifest block `{block_id}` uses schema version {actual}, expected {expected}"
+    )]
+    UnsupportedManifestSchemaVersion {
+        block_id: String,
+        expected: u32,
+        actual: u32,
+    },
     #[error("failed to store source snapshot manifest: {source}")]
     StoreManifest {
         #[source]
@@ -257,6 +265,7 @@ pub fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner>(
     journal.source_snapshot.acquisition_started_at = Some(acquired_at.to_string());
     journal.source_snapshot.acquisition_completed_at = None;
     journal.source_snapshot.corpus_manifest_identity = None;
+    journal.source_snapshot.additional_provenance.clear();
 
     runner.sync(source_uri, snapshot_root)?;
 
@@ -292,10 +301,6 @@ pub fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner>(
         .source_snapshot
         .additional_provenance
         .insert("entry_count".into(), manifest.entries.len().to_string());
-    journal
-        .source_snapshot
-        .additional_provenance
-        .insert("snapshot_root".into(), snapshot_root.display().to_string());
     for entry in &manifest.entries {
         journal
             .queue_work(WorkKind::MailboxAdmission, entry.relative_path.clone())
@@ -432,12 +437,23 @@ fn load_source_snapshot_manifest<S: BlockStore>(
             },
         );
     }
-    serde_json::from_slice(&entry.content.body).map_err(|source| {
-        SourceSnapshotAcquisitionError::ParseManifest {
-            block_id: manifest_block_id.to_string(),
-            source,
-        }
-    })
+    let manifest: SourceSnapshotManifest =
+        serde_json::from_slice(&entry.content.body).map_err(|source| {
+            SourceSnapshotAcquisitionError::ParseManifest {
+                block_id: manifest_block_id.to_string(),
+                source,
+            }
+        })?;
+    if manifest.schema_version != SNAPSHOT_MANIFEST_SCHEMA_VERSION {
+        return Err(
+            SourceSnapshotAcquisitionError::UnsupportedManifestSchemaVersion {
+                block_id: manifest_block_id.to_string(),
+                expected: SNAPSHOT_MANIFEST_SCHEMA_VERSION,
+                actual: manifest.schema_version,
+            },
+        );
+    }
+    Ok(manifest)
 }
 
 fn snapshot_block(media_type: &str, body: Vec<u8>) -> Block {
@@ -752,6 +768,45 @@ mod tests {
     }
 
     #[test]
+    fn fresh_acquisition_replaces_stale_provenance_keys() {
+        let temp = tempdir().unwrap();
+        let source_root = temp.path().join("source");
+        fs::create_dir_all(source_root.join("ietf")).unwrap();
+        fs::write(source_root.join("ietf").join("2026-01.mbox"), b"mailbox-a").unwrap();
+
+        let store = FilesystemBlockStore::new(temp.path().join("blocks")).unwrap();
+        let runner = CopyTreeRsyncRunner::new(source_root);
+        let mut journal = sample_journal();
+        journal
+            .source_snapshot
+            .additional_provenance
+            .insert("stale".into(), "value".into());
+
+        acquire_source_snapshot(
+            &store,
+            &mut journal,
+            "rsync://example.invalid/mailman",
+            &temp.path().join("mirror"),
+            "2026-06-19T22:00:00Z",
+            &runner,
+        )
+        .unwrap();
+
+        assert!(
+            !journal
+                .source_snapshot
+                .additional_provenance
+                .contains_key("stale")
+        );
+        assert!(
+            !journal
+                .source_snapshot
+                .additional_provenance
+                .contains_key("snapshot_root")
+        );
+    }
+
+    #[test]
     fn acquisition_failure_leaves_journal_in_source_acquisition_stage() {
         let temp = tempdir().unwrap();
         let store = FilesystemBlockStore::new(temp.path().join("blocks")).unwrap();
@@ -812,6 +867,33 @@ mod tests {
 
         assert_eq!(block.embedding_spec.dims, 0);
         assert_eq!(entry.embedding, Vec::<u8>::new());
+    }
+
+    #[test]
+    fn manifest_loader_rejects_unsupported_schema_versions() {
+        let temp = tempdir().unwrap();
+        let store = FilesystemBlockStore::new(temp.path().join("blocks")).unwrap();
+        let manifest_block_id = store
+            .put(&snapshot_block(
+                "application/json",
+                serde_json::to_vec(&SourceSnapshotManifest {
+                    schema_version: SNAPSHOT_MANIFEST_SCHEMA_VERSION + 1,
+                    source_uri: "rsync://example.invalid/mailman".into(),
+                    source_snapshot_id: "snapshot-123".into(),
+                    acquired_at: "2026-06-19T22:00:00Z".into(),
+                    entries: Vec::new(),
+                })
+                .unwrap(),
+            ))
+            .unwrap()
+            .to_string();
+
+        let error = load_source_snapshot_manifest(&store, &manifest_block_id).unwrap_err();
+
+        assert!(matches!(
+            error,
+            SourceSnapshotAcquisitionError::UnsupportedManifestSchemaVersion { .. }
+        ));
     }
 
     fn sample_journal() -> WorkflowJournal {
