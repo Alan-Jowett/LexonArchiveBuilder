@@ -76,7 +76,7 @@ runcmd:
     EOF
     cat > /usr/local/bin/lexonarchivebuilder-run-indexer.sh <<'EOF'
     #!/usr/bin/env bash
-    set -euxo pipefail
+    set -euo pipefail
     docker compose -f /opt/lexonarchivebuilder/indexer/docker-compose.yml pull
     set +e
     docker compose -f /opt/lexonarchivebuilder/indexer/docker-compose.yml up --abort-on-container-exit --exit-code-from indexer
