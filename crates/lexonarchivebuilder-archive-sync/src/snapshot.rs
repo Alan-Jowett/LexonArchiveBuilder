@@ -238,10 +238,16 @@ pub fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner>(
             .clone()
             .ok_or(SourceSnapshotAcquisitionError::MissingCompletedManifestIdentity)?;
         let manifest = load_source_snapshot_manifest(store, &manifest_block_id)?;
-        for entry in &manifest.entries {
-            journal
-                .queue_work(WorkKind::MailboxAdmission, entry.relative_path.clone())
-                .map_err(|source| SourceSnapshotAcquisitionError::UpdateJournal { source })?;
+        journal.source_snapshot.source_snapshot_id = manifest.source_snapshot_id.clone();
+        if matches!(
+            journal.current_stage,
+            WorkflowStage::SourceAcquisition | WorkflowStage::MailboxAdmission
+        ) {
+            for entry in &manifest.entries {
+                journal
+                    .queue_work(WorkKind::MailboxAdmission, entry.relative_path.clone())
+                    .map_err(|source| SourceSnapshotAcquisitionError::UpdateJournal { source })?;
+            }
         }
         if journal.current_stage == WorkflowStage::SourceAcquisition {
             journal.set_stage(WorkflowStage::MailboxAdmission);
@@ -732,8 +738,7 @@ mod tests {
         .unwrap();
 
         let mut resumed_journal = sample_journal();
-        resumed_journal.source_snapshot.source_snapshot_id =
-            first_snapshot.source_snapshot_id.clone();
+        resumed_journal.source_snapshot.source_snapshot_id = "stale-source-snapshot".into();
         resumed_journal.source_snapshot.acquisition_completed_at =
             Some("2026-06-19T22:00:00Z".into());
         resumed_journal.source_snapshot.corpus_manifest_identity =
@@ -765,6 +770,67 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["ietf/2026-01.mbox".to_string()]
         );
+        assert_eq!(
+            resumed_journal.source_snapshot.source_snapshot_id,
+            first_snapshot.source_snapshot_id
+        );
+    }
+
+    #[test]
+    fn completed_manifest_reuse_after_mailbox_stage_keeps_journal_consistent() {
+        let temp = tempdir().unwrap();
+        let source_root = temp.path().join("source");
+        fs::create_dir_all(source_root.join("ietf")).unwrap();
+        fs::write(source_root.join("ietf").join("2026-01.mbox"), b"mailbox-a").unwrap();
+
+        let store = FilesystemBlockStore::new(temp.path().join("blocks")).unwrap();
+        let runner = CopyTreeRsyncRunner::new(source_root.clone());
+        let mut first_journal = sample_journal();
+        let first_snapshot = acquire_source_snapshot(
+            &store,
+            &mut first_journal,
+            "rsync://example.invalid/mailman",
+            &temp.path().join("mirror-a"),
+            "2026-06-19T22:00:00Z",
+            &runner,
+        )
+        .unwrap();
+
+        let mut resumed_journal = sample_journal();
+        resumed_journal.current_stage = WorkflowStage::ChunkDerivation;
+        resumed_journal.source_snapshot.source_snapshot_id = "stale-source-snapshot".into();
+        resumed_journal.source_snapshot.acquisition_completed_at =
+            Some("2026-06-19T22:00:00Z".into());
+        resumed_journal.source_snapshot.corpus_manifest_identity =
+            Some(first_snapshot.manifest_block_id.clone());
+        resumed_journal
+            .work
+            .mailbox_admission
+            .completed
+            .insert("ietf/2026-01.mbox".into());
+
+        let snapshot = acquire_source_snapshot(
+            &store,
+            &mut resumed_journal,
+            "rsync://example.invalid/mailman",
+            &temp.path().join("mirror-b"),
+            "2026-06-19T22:15:00Z",
+            &runner,
+        )
+        .unwrap();
+
+        assert!(snapshot.reused_existing);
+        assert_eq!(runner.call_count(), 1);
+        assert_eq!(
+            resumed_journal.current_stage,
+            WorkflowStage::ChunkDerivation
+        );
+        assert!(resumed_journal.work.mailbox_admission.pending.is_empty());
+        assert_eq!(
+            resumed_journal.source_snapshot.source_snapshot_id,
+            first_snapshot.source_snapshot_id
+        );
+        resumed_journal.validate().unwrap();
     }
 
     #[test]
