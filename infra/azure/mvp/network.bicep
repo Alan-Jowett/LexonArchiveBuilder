@@ -30,23 +30,21 @@ resource vmSubnetNsg 'Microsoft.Network/networkSecurityGroups@2023-09-01' = {
   location: location
   tags: tags
   properties: {
-    securityRules: concat(
-      enableSshAccess ? [
-        for (prefix, index) in sshSourcePrefixes: {
-          name: 'allow-ssh-${index}'
-          properties: {
-            access: 'Allow'
-            direction: 'Inbound'
-            priority: 100 + index
-            protocol: 'Tcp'
-            sourceAddressPrefix: prefix
-            sourcePortRange: '*'
-            destinationAddressPrefix: '*'
-            destinationPortRange: '22'
-          }
+    securityRules: enableSshAccess ? [
+      for (prefix, index) in sshSourcePrefixes: {
+        name: 'allow-ssh-${index}'
+        properties: {
+          access: 'Allow'
+          direction: 'Inbound'
+          priority: 100 + index
+          protocol: 'Tcp'
+          sourceAddressPrefix: prefix
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '22'
         }
-      ] : []
-    )
+      }
+    ] : []
   }
 }
 

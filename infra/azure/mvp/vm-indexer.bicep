@@ -60,7 +60,7 @@ runcmd:
         image: ${imageReference}
         restart: "no"
         environment:
-          LAB_STORAGE_ACCESS_MODE: ${storageAccessMode}
+          LAB_STORAGE_ACCESS_MODE: '${replace(storageAccessMode, '''', '''''')}'
         volumes:
           - /opt/lexonarchivebuilder/indexer/request.json:/workspace/request.json:ro
           - "${indexOutputPath}:/workspace/output"
@@ -85,9 +85,10 @@ runcmd:
     echo "${EXIT_CODE}" > /opt/lexonarchivebuilder/indexer/last-exit-code
     ARM_TOKEN="$(curl -sS -H Metadata:true 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/' | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")"
     DEALLOCATE_EXIT_CODE=0
-    if ! curl --fail -sS -X POST -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Length: 0' "https://management.azure.com/subscriptions/${azureSubscriptionId}/resourceGroups/${azureResourceGroupName}/providers/Microsoft.Compute/virtualMachines/${vmName}/deallocate?api-version=2023-09-01"; then
-      DEALLOCATE_EXIT_CODE=$?
-    fi
+    set +e
+    curl --fail -sS -X POST -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Length: 0' "https://management.azure.com/subscriptions/${azureSubscriptionId}/resourceGroups/${azureResourceGroupName}/providers/Microsoft.Compute/virtualMachines/${vmName}/deallocate?api-version=2023-09-01"
+    DEALLOCATE_EXIT_CODE=$?
+    set -e
     echo "${DEALLOCATE_EXIT_CODE}" > /opt/lexonarchivebuilder/indexer/last-deallocate-exit-code
     if [ "${EXIT_CODE}" -ne 0 ]; then
       exit "${EXIT_CODE}"
