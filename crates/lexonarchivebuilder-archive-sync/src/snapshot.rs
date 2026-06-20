@@ -3,7 +3,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use lexongraph_block::{Block, Content, EmbeddingSpec, LeafBlock, LeafEntry, VERSION_1};
+use lexongraph_block::{Block, BlockHash, Content, EmbeddingSpec, LeafBlock, LeafEntry, VERSION_1};
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -12,7 +12,6 @@ use thiserror::Error;
 use crate::{WorkKind, WorkflowJournal, WorkflowJournalError, WorkflowStage};
 
 const SNAPSHOT_MANIFEST_SCHEMA_VERSION: u32 = 1;
-const SNAPSHOT_EMBEDDING_BYTES: [u8; 4] = [0, 0, 0, 0];
 
 #[derive(Debug, Error)]
 pub enum SourceSnapshotAcquisitionError {
@@ -31,6 +30,21 @@ pub enum SourceSnapshotAcquisitionError {
         "workflow journal has completed source acquisition but is missing corpus_manifest_identity"
     )]
     MissingCompletedManifestIdentity,
+    #[error("workflow journal manifest block ID `{block_id}` is not a valid block hash")]
+    InvalidManifestBlockId { block_id: String },
+    #[error("workflow journal references missing manifest block `{block_id}`")]
+    MissingManifestBlock { block_id: String },
+    #[error("workflow journal manifest block `{block_id}` is not a leaf block")]
+    ManifestBlockNotLeaf { block_id: String },
+    #[error("workflow journal manifest block `{block_id}` is missing a content entry")]
+    ManifestBlockMissingContent { block_id: String },
+    #[error(
+        "workflow journal manifest block `{block_id}` has unexpected media type `{media_type}`"
+    )]
+    ManifestBlockWrongMediaType {
+        block_id: String,
+        media_type: String,
+    },
     #[error("failed to create snapshot root {path}: {source}")]
     CreateSnapshotRoot {
         path: String,
@@ -60,8 +74,20 @@ pub enum SourceSnapshotAcquisitionError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("failed to parse source snapshot manifest block `{block_id}`: {source}")]
+    ParseManifest {
+        block_id: String,
+        #[source]
+        source: serde_json::Error,
+    },
     #[error("failed to store source snapshot manifest: {source}")]
     StoreManifest {
+        #[source]
+        source: BlockStoreError,
+    },
+    #[error("failed to load source snapshot manifest block `{block_id}`: {source}")]
+    LoadManifest {
+        block_id: String,
         #[source]
         source: BlockStoreError,
     },
@@ -143,6 +169,7 @@ impl CommandRsyncRunner {
             .arg("-a")
             .arg("--delete")
             .arg("--partial")
+            .arg("--")
             .arg(source_uri)
             .arg(destination);
         command
@@ -196,18 +223,25 @@ pub fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner>(
         });
     }
 
-    if journal.current_stage != WorkflowStage::SourceAcquisition
-        && journal.source_snapshot.acquisition_completed_at.is_some()
-    {
+    if journal.source_snapshot.acquisition_completed_at.is_some() {
         let manifest_block_id = journal
             .source_snapshot
             .corpus_manifest_identity
             .clone()
             .ok_or(SourceSnapshotAcquisitionError::MissingCompletedManifestIdentity)?;
+        let manifest = load_source_snapshot_manifest(store, &manifest_block_id)?;
+        for entry in &manifest.entries {
+            journal
+                .queue_work(WorkKind::MailboxAdmission, entry.relative_path.clone())
+                .map_err(|source| SourceSnapshotAcquisitionError::UpdateJournal { source })?;
+        }
+        if journal.current_stage == WorkflowStage::SourceAcquisition {
+            journal.set_stage(WorkflowStage::MailboxAdmission);
+        }
         return Ok(AcquiredSourceSnapshot {
-            source_snapshot_id: journal.source_snapshot.source_snapshot_id.clone(),
+            source_snapshot_id: manifest.source_snapshot_id.clone(),
             manifest_block_id,
-            manifest: None,
+            manifest: Some(manifest),
             reused_existing: true,
         });
     }
@@ -366,16 +400,56 @@ fn derive_source_snapshot_id(
     Ok(hex_encode(&digest))
 }
 
+fn load_source_snapshot_manifest<S: BlockStore>(
+    store: &S,
+    manifest_block_id: &str,
+) -> Result<SourceSnapshotManifest, SourceSnapshotAcquisitionError> {
+    let manifest_hash = parse_block_hash(manifest_block_id)?;
+    let validated = store
+        .get(&manifest_hash)
+        .map_err(|source| SourceSnapshotAcquisitionError::LoadManifest {
+            block_id: manifest_block_id.to_string(),
+            source,
+        })?
+        .ok_or_else(|| SourceSnapshotAcquisitionError::MissingManifestBlock {
+            block_id: manifest_block_id.to_string(),
+        })?;
+    let Block::Leaf(block) = validated.block else {
+        return Err(SourceSnapshotAcquisitionError::ManifestBlockNotLeaf {
+            block_id: manifest_block_id.to_string(),
+        });
+    };
+    let entry = block.entries.first().ok_or_else(|| {
+        SourceSnapshotAcquisitionError::ManifestBlockMissingContent {
+            block_id: manifest_block_id.to_string(),
+        }
+    })?;
+    if entry.content.media_type != "application/json" {
+        return Err(
+            SourceSnapshotAcquisitionError::ManifestBlockWrongMediaType {
+                block_id: manifest_block_id.to_string(),
+                media_type: entry.content.media_type.clone(),
+            },
+        );
+    }
+    serde_json::from_slice(&entry.content.body).map_err(|source| {
+        SourceSnapshotAcquisitionError::ParseManifest {
+            block_id: manifest_block_id.to_string(),
+            source,
+        }
+    })
+}
+
 fn snapshot_block(media_type: &str, body: Vec<u8>) -> Block {
     Block::Leaf(LeafBlock {
         version: VERSION_1,
         level: 0,
         embedding_spec: EmbeddingSpec {
-            dims: 1,
+            dims: 0,
             encoding: "f32le".into(),
         },
         entries: vec![LeafEntry {
-            embedding: SNAPSHOT_EMBEDDING_BYTES.to_vec(),
+            embedding: Vec::new(),
             metadata: Vec::new(),
             content: Content {
                 media_type: media_type.into(),
@@ -397,6 +471,40 @@ fn normalize_relative_path(root: &Path, path: &Path) -> String {
 
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn parse_block_hash(value: &str) -> Result<BlockHash, SourceSnapshotAcquisitionError> {
+    if value.len() != BlockHash::LEN * 2 {
+        return Err(SourceSnapshotAcquisitionError::InvalidManifestBlockId {
+            block_id: value.to_string(),
+        });
+    }
+
+    let mut bytes = [0u8; BlockHash::LEN];
+    for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        let high = decode_hex_nibble(chunk[0]).ok_or_else(|| {
+            SourceSnapshotAcquisitionError::InvalidManifestBlockId {
+                block_id: value.to_string(),
+            }
+        })?;
+        let low = decode_hex_nibble(chunk[1]).ok_or_else(|| {
+            SourceSnapshotAcquisitionError::InvalidManifestBlockId {
+                block_id: value.to_string(),
+            }
+        })?;
+        bytes[index] = (high << 4) | low;
+    }
+
+    Ok(BlockHash::from_bytes(bytes))
+}
+
+fn decode_hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -544,13 +652,27 @@ mod tests {
     #[test]
     fn completed_source_acquisition_is_reused_without_running_rsync_again() {
         let temp = tempdir().unwrap();
+        let source_root = temp.path().join("source");
+        fs::create_dir_all(source_root.join("ietf")).unwrap();
+        fs::write(source_root.join("ietf").join("2026-01.mbox"), b"mailbox-a").unwrap();
         let store = FilesystemBlockStore::new(temp.path().join("blocks")).unwrap();
-        let runner = CopyTreeRsyncRunner::new(temp.path().join("source"));
+        let runner = CopyTreeRsyncRunner::new(source_root.clone());
+        let mut first_journal = sample_journal();
+        let first_snapshot = acquire_source_snapshot(
+            &store,
+            &mut first_journal,
+            "rsync://example.invalid/mailman",
+            &temp.path().join("mirror-a"),
+            "2026-06-19T22:00:00Z",
+            &runner,
+        )
+        .unwrap();
         let mut journal = sample_journal();
         journal.current_stage = WorkflowStage::MailboxAdmission;
-        journal.source_snapshot.source_snapshot_id = "snapshot-123".into();
+        journal.source_snapshot.source_snapshot_id = first_snapshot.source_snapshot_id.clone();
         journal.source_snapshot.acquisition_completed_at = Some("2026-06-19T22:00:00Z".into());
-        journal.source_snapshot.corpus_manifest_identity = Some("manifest-123".into());
+        journal.source_snapshot.corpus_manifest_identity =
+            Some(first_snapshot.manifest_block_id.clone());
 
         let snapshot = acquire_source_snapshot(
             &store,
@@ -563,8 +685,70 @@ mod tests {
         .unwrap();
 
         assert!(snapshot.reused_existing);
-        assert_eq!(snapshot.manifest, None);
-        assert_eq!(runner.call_count(), 0);
+        assert_eq!(
+            snapshot
+                .manifest
+                .as_ref()
+                .map(|manifest| manifest.source_snapshot_id.as_str()),
+            Some(first_snapshot.source_snapshot_id.as_str())
+        );
+        assert_eq!(runner.call_count(), 1);
+    }
+
+    #[test]
+    fn completed_manifest_reuse_recovers_mailbox_work_without_rerunning_rsync() {
+        let temp = tempdir().unwrap();
+        let source_root = temp.path().join("source");
+        fs::create_dir_all(source_root.join("ietf")).unwrap();
+        fs::write(source_root.join("ietf").join("2026-01.mbox"), b"mailbox-a").unwrap();
+
+        let store = FilesystemBlockStore::new(temp.path().join("blocks")).unwrap();
+        let runner = CopyTreeRsyncRunner::new(source_root.clone());
+        let mut first_journal = sample_journal();
+        let first_snapshot = acquire_source_snapshot(
+            &store,
+            &mut first_journal,
+            "rsync://example.invalid/mailman",
+            &temp.path().join("mirror-a"),
+            "2026-06-19T22:00:00Z",
+            &runner,
+        )
+        .unwrap();
+
+        let mut resumed_journal = sample_journal();
+        resumed_journal.source_snapshot.source_snapshot_id =
+            first_snapshot.source_snapshot_id.clone();
+        resumed_journal.source_snapshot.acquisition_completed_at =
+            Some("2026-06-19T22:00:00Z".into());
+        resumed_journal.source_snapshot.corpus_manifest_identity =
+            Some(first_snapshot.manifest_block_id.clone());
+
+        let snapshot = acquire_source_snapshot(
+            &store,
+            &mut resumed_journal,
+            "rsync://example.invalid/mailman",
+            &temp.path().join("mirror-b"),
+            "2026-06-19T22:15:00Z",
+            &runner,
+        )
+        .unwrap();
+
+        assert!(snapshot.reused_existing);
+        assert_eq!(runner.call_count(), 1);
+        assert_eq!(
+            resumed_journal.current_stage,
+            WorkflowStage::MailboxAdmission
+        );
+        assert_eq!(
+            resumed_journal
+                .work
+                .mailbox_admission
+                .pending
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["ietf/2026-01.mbox".to_string()]
+        );
     }
 
     #[test]
@@ -609,10 +793,25 @@ mod tests {
                 "-a".to_string(),
                 "--delete".to_string(),
                 "--partial".to_string(),
+                "--".to_string(),
                 "rsync://example.invalid/mailman".to_string(),
                 "C:\\snapshot-root".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn snapshot_blocks_use_zero_dimensional_artifact_embeddings() {
+        let Block::Leaf(block) = snapshot_block("application/json", b"{}".to_vec()) else {
+            panic!("snapshot blocks should be leaves");
+        };
+        let entry = block
+            .entries
+            .first()
+            .expect("snapshot block should have content");
+
+        assert_eq!(block.embedding_spec.dims, 0);
+        assert_eq!(entry.embedding, Vec::<u8>::new());
     }
 
     fn sample_journal() -> WorkflowJournal {
