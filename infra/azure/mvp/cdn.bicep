@@ -65,7 +65,7 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
   name: storageAccountName
 }
 
-var originQueryString = '?${storage.listServiceSas(storage.apiVersion, sasConfig).serviceSasToken}'
+var originQueryString = outputOriginQueryString ? '?${storage.listServiceSas(storage.apiVersion, sasConfig).serviceSasToken}' : ''
 var deliveryRules = concat(
   [
     {

@@ -84,7 +84,7 @@ runcmd:
     set -e
     echo "${EXIT_CODE}" > /opt/lexonarchivebuilder/indexer/last-exit-code
     ARM_TOKEN="$(curl -sS -H Metadata:true 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/' | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")"
-    curl -sS -X POST -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Length: 0' "https://management.azure.com/subscriptions/${azureSubscriptionId}/resourceGroups/${azureResourceGroupName}/providers/Microsoft.Compute/virtualMachines/${vmName}/deallocate?api-version=2023-09-01"
+    curl --fail -sS -X POST -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Length: 0' "https://management.azure.com/subscriptions/${azureSubscriptionId}/resourceGroups/${azureResourceGroupName}/providers/Microsoft.Compute/virtualMachines/${vmName}/deallocate?api-version=2023-09-01"
     exit "${EXIT_CODE}"
     EOF
     chmod 0755 /usr/local/bin/lexonarchivebuilder-run-indexer.sh
@@ -188,6 +188,16 @@ resource vm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
         }
       ]
     }
+  }
+}
+
+resource selfDeallocateRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(vm.id, 'self-deallocate-role-assignment')
+  scope: vm
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '9980e02c-c2be-4d73-94e8-173b1dc7cf3c')
+    principalId: vm.identity.principalId
+    principalType: 'ServicePrincipal'
   }
 }
 
