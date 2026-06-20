@@ -84,8 +84,15 @@ runcmd:
     set -e
     echo "${EXIT_CODE}" > /opt/lexonarchivebuilder/indexer/last-exit-code
     ARM_TOKEN="$(curl -sS -H Metadata:true 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/' | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")"
-    curl --fail -sS -X POST -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Length: 0' "https://management.azure.com/subscriptions/${azureSubscriptionId}/resourceGroups/${azureResourceGroupName}/providers/Microsoft.Compute/virtualMachines/${vmName}/deallocate?api-version=2023-09-01"
-    exit "${EXIT_CODE}"
+    DEALLOCATE_EXIT_CODE=0
+    if ! curl --fail -sS -X POST -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Length: 0' "https://management.azure.com/subscriptions/${azureSubscriptionId}/resourceGroups/${azureResourceGroupName}/providers/Microsoft.Compute/virtualMachines/${vmName}/deallocate?api-version=2023-09-01"; then
+      DEALLOCATE_EXIT_CODE=$?
+    fi
+    echo "${DEALLOCATE_EXIT_CODE}" > /opt/lexonarchivebuilder/indexer/last-deallocate-exit-code
+    if [ "${EXIT_CODE}" -ne 0 ]; then
+      exit "${EXIT_CODE}"
+    fi
+    exit "${DEALLOCATE_EXIT_CODE}"
     EOF
     chmod 0755 /usr/local/bin/lexonarchivebuilder-run-indexer.sh
     cat > /etc/systemd/system/lexonarchivebuilder-indexer.service <<'EOF'
