@@ -4,7 +4,7 @@
 
 - **Phase:** Phase 2 - Specification Changes
 - **Status:** Approved requirements patch being propagated into design and validation
-- **Scope:** `lexonarchivebuilder-scale-test` local stress-test wrapper for rsync-backed mailbox acquisition, caller-selected delegated clustering mode and configuration, and delegated block-tree generation
+- **Scope:** `lexonarchivebuilder-scale-test` local stress-test wrapper for rsync-backed mailbox acquisition, repository-pinned published-profile delegated indexing, and delegated block-tree generation
 
 ## USER-REQUEST
 
@@ -28,16 +28,17 @@
 - **UR-SCALE-18 [INFERRED]:** Docker Compose must be a supported user-facing entrypoint for the same local stress-test workflow rather than a second divergent workflow.
 - **UR-SCALE-19 [KNOWN]:** Mailbox discovery for fetched rsync mirrors must work when the mirrored archive exposes mailbox files with the `.mail` extension as well as the `.mbox` extension.
 - **UR-SCALE-20 [KNOWN]:** For this increment, mailbox discovery compatibility should be limited to exactly `.mail` and `.mbox` rather than broadened to arbitrary mailbox archive extensions.
-- **UR-SCALE-21 [KNOWN]:** Update the scale test so the caller can select the delegated clustering algorithm used by the delegated indexer.
-- **UR-SCALE-22 [KNOWN]:** Update the scale test so the caller can pass delegated clustering options into the delegated indexer.
-- **UR-SCALE-23 [KNOWN]:** The scale-test caller contract should expose the existing indexer clustering controls as first-class wrapper flags and pass them through to the delegated indexer.
-- **UR-SCALE-24 [INFERRED]:** The scale-test wrapper should reuse the delegated indexer's supported clustering algorithm names and option meanings rather than inventing wrapper-local clustering semantics.
+- **UR-SCALE-21 [KNOWN]:** Update the scale test so delegated clustering uses the downstream repository-pinned published-profile contract instead of caller-selected low-level clustering controls.
+- **UR-SCALE-22 [KNOWN]:** Update the scale test so it does not accept low-level delegated clustering tuning flags when the repository-pinned published profile is sufficient.
+- **UR-SCALE-23 [KNOWN]:** The scale-test caller contract should align with the existing indexer published-profile contract rather than re-exposing retired clustering controls as first-class wrapper flags.
+- **UR-SCALE-24 [INFERRED]:** The scale-test wrapper should reuse the delegated indexer's approved published-profile behavior rather than inventing wrapper-local clustering semantics.
 - **UR-SCALE-25 [KNOWN]:** Generic arbitrary extra indexer argument passthrough is not the approved caller contract for this increment.
-- **UR-SCALE-26 [KNOWN]:** The upstream LexonGraph clustering surface now allows either aggregation-based or divisive clustering, and the scale-test wrapper should expose that delegated clustering-mode choice as well.
-- **UR-SCALE-27 [KNOWN]:** Aggregation-based clustering should be the default wrapper behavior, with divisive clustering available as an explicit opt-in.
-- **UR-SCALE-28 [KNOWN]:** The same delegated clustering-mode contract should apply across both the direct shell and Docker Compose entrypoints.
-- **UR-SCALE-29 [KNOWN]:** Existing delegated algorithm-specific clustering controls should continue to be exposed by the wrapper under the selected clustering mode instead of being hidden by the wrapper.
-- **UR-SCALE-30 [KNOWN]:** The wrapper should continue to mirror the downstream indexer clustering contract as a content-type-agnostic control surface rather than adding content-type-specific clustering-mode logic.
+- **UR-SCALE-26 [KNOWN]:** The upstream LexonGraph clustering surface may support multiple clustering strategies internally, but the scale-test wrapper should not expose repository-local clustering-mode selection while the downstream contract is pinned to one approved published profile.
+- **UR-SCALE-27 [KNOWN]:** The repository-pinned published profile version `0.1.0` is the approved wrapper clustering behavior for this increment.
+- **UR-SCALE-28 [KNOWN]:** The same published-profile clustering contract should apply across both the direct shell and Docker Compose entrypoints.
+- **UR-SCALE-29 [KNOWN]:** Retired delegated clustering mode, algorithm, and option flags should remain unexposed by the wrapper and should be rejected clearly if supplied.
+- **UR-SCALE-30 [KNOWN]:** The wrapper should continue to mirror the downstream indexer clustering contract as a content-type-agnostic published-profile surface rather than adding content-type-specific clustering logic.
+- **UR-SCALE-31 [KNOWN]:** Clean up dead wrapper requirements and downstream specifications that still describe the superseded caller-selectable clustering-control path instead of the approved published-profile path.
 
 ## Change Manifest
 
@@ -54,10 +55,10 @@
 | CM-SCALE-009 | Add | Require a Docker Compose user entrypoint suitable for Windows-hosted local usage | UR-SCALE-15, UR-SCALE-16, UR-SCALE-17 |
 | CM-SCALE-010 | Add | Preserve one shared workflow and artifact model across the bash and Docker Compose entrypoints | UR-SCALE-17, UR-SCALE-18 |
 | CM-SCALE-011 | Revise | Expand mailbox discovery compatibility so fetched rsync mirrors may contribute mailbox files ending in `.mail` or `.mbox` without widening the first increment beyond those two extensions | UR-SCALE-19, UR-SCALE-20 |
-| CM-SCALE-012 | Add | Require the wrapper caller contract to expose delegated clustering-algorithm selection for scale-test runs that include clustering | UR-SCALE-21, UR-SCALE-23, UR-SCALE-24 |
-| CM-SCALE-013 | Add | Require first-class wrapper exposure of supported delegated clustering options rather than arbitrary opaque extra-argument passthrough | UR-SCALE-22, UR-SCALE-23, UR-SCALE-25 |
-| CM-SCALE-014 | Add | Preserve one explicit delegated clustering configuration across the bash and Docker Compose entrypoints for reproducible local stress-test runs | UR-SCALE-21, UR-SCALE-22, UR-SCALE-23, UR-SCALE-24 |
-| CM-SCALE-015 | Revise | Extend the mirrored delegated clustering surface to include clustering-mode selection, with aggregation as the default and divisive as an explicit opt-in across both wrapper entrypoints | UR-SCALE-26, UR-SCALE-27, UR-SCALE-28, UR-SCALE-29, UR-SCALE-30 |
+| CM-SCALE-012 | Revise | Require delegated clustering runs to use the downstream repository-pinned published-profile contract rather than caller-selected clustering algorithms | UR-SCALE-21, UR-SCALE-23, UR-SCALE-24 |
+| CM-SCALE-013 | Revise | Retire first-class wrapper exposure of low-level delegated clustering options and reject unsupported tuning flags rather than passing them through | UR-SCALE-22, UR-SCALE-23, UR-SCALE-25, UR-SCALE-29 |
+| CM-SCALE-014 | Revise | Preserve one published-profile-based delegated clustering contract across the bash and Docker Compose entrypoints for reproducible local stress-test runs | UR-SCALE-21, UR-SCALE-23, UR-SCALE-24, UR-SCALE-28, UR-SCALE-30 |
+| CM-SCALE-015 | Revise | Remove stale mirrored clustering-mode requirements and keep the wrapper aligned to the repository-pinned published-profile path | UR-SCALE-26, UR-SCALE-27, UR-SCALE-28, UR-SCALE-29, UR-SCALE-30, UR-SCALE-31 |
 
 ## Before / After
 
@@ -103,23 +104,23 @@
 
 ### BA-SCALE-009
 
-- **Before [KNOWN]:** The wrapper caller contract did not define any way for a scale-test operator to choose the delegated clustering algorithm.
-- **After [KNOWN]:** The wrapper caller contract explicitly allows the operator to select the delegated clustering algorithm for runs that include clustering.
+- **Before [KNOWN]:** The wrapper caller contract was still being evaluated as a possible place to expose delegated clustering-algorithm selection.
+- **After [KNOWN]:** The wrapper caller contract now relies on the downstream repository-pinned published profile instead of exposing delegated clustering-algorithm selection.
 
 ### BA-SCALE-010
 
-- **Before [KNOWN]:** The wrapper did not define how scale-test callers could provide delegated clustering options, which left the request shape and CLI surface effectively fixed at repository defaults.
-- **After [KNOWN]:** The wrapper requirements explicitly allow scale-test callers to provide supported delegated clustering options through first-class wrapper inputs.
+- **Before [KNOWN]:** The wrapper requirements still entertained a first-class surface for delegated clustering tuning options.
+- **After [KNOWN]:** The wrapper requirements now retire low-level delegated clustering tuning inputs and keep the request shape fixed to the downstream published-profile contract.
 
 ### BA-SCALE-011
 
 - **Before [KNOWN]:** The wrapper could have grown a generic opaque downstream-argument passthrough that diverged between direct shell and Docker Compose launch paths.
-- **After [KNOWN]:** The wrapper requirements constrain this increment to one explicit, first-class delegated clustering surface that remains consistent across both supported entrypoints.
+- **After [KNOWN]:** The wrapper requirements constrain this increment to one explicit published-profile-based delegated clustering contract that remains consistent across both supported entrypoints.
 
 ### BA-SCALE-012
 
-- **Before [KNOWN]:** The wrapper requirements exposed delegated clustering algorithm and option forwarding, but they did not capture the newer upstream aggregation-based versus divisive clustering mode as part of the mirrored caller contract.
-- **After [KNOWN]:** The wrapper requirements now define delegated clustering-mode exposure with aggregation as the default and divisive as an explicit opt-in, while preserving wrapper parity across shell and Docker Compose entrypoints and keeping downstream algorithm-specific controls subordinate to the selected mode.
+- **Before [KNOWN]:** The wrapper requirements still carried forward a transient caller-selectable clustering surface, including mode, algorithm, and option exposure, from an earlier exploration path.
+- **After [KNOWN]:** The wrapper requirements now align entirely to the repository-pinned published-profile path, preserve parity across shell and Docker Compose entrypoints, and treat low-level delegated clustering flags as retired.
 
 ## Requirements
 
@@ -184,35 +185,36 @@ The bash and Docker Compose entrypoints SHALL preserve the same wrapper-owned wo
 - **Constraint [INFERRED]:** Docker Compose must not introduce a second, divergent `lexonarchivebuilder-scale-test` contract.
 - **Traceability:** UR-SCALE-17, UR-SCALE-18
 
-#### RQ-SCALE-003E - Caller-selectable delegated clustering mode and algorithm
+#### RQ-SCALE-003E - Repository-pinned published profile for delegated clustering
 
 For any `lexonarchivebuilder-scale-test` run that includes delegated clustering,
-the wrapper SHALL allow the caller to select the delegated clustering mode and
-the delegated clustering algorithm.
+the wrapper SHALL use the downstream repository-pinned published-profile
+contract rather than allowing the caller to select delegated clustering mode or
+delegated clustering algorithm.
 
-- **Approved algorithm family [KNOWN]:** The wrapper surface for this increment follows the existing delegated indexer clustering choices rather than inventing a wrapper-local algorithm taxonomy.
-- **Default mode [KNOWN]:** When the caller omits delegated clustering mode, the
-  wrapper SHALL preserve aggregation-based clustering as the downstream default
-  behavior.
-- **Entry-point parity [KNOWN]:** The same mode-and-algorithm selection contract
-  applies to both the direct shell and Docker Compose entrypoints.
-- **Mode boundary [KNOWN]:** The wrapper mirrors the downstream indexer's
-  aggregation-based versus divisive mode choice rather than inventing wrapper-
-  local clustering-mode semantics.
-- **Traceability:** UR-SCALE-21, UR-SCALE-23, UR-SCALE-24, UR-SCALE-26, UR-SCALE-27, UR-SCALE-28
+- **Approved profile [KNOWN]:** For this increment, the wrapper relies on the
+  downstream repository-pinned published profile version `0.1.0`.
+- **Entry-point parity [KNOWN]:** The same published-profile contract applies to
+  both the direct shell and Docker Compose entrypoints.
+- **Boundary [KNOWN]:** The wrapper does not define wrapper-local clustering
+  semantics or reconstruct lower-level delegated planning choices.
+- **Traceability:** UR-SCALE-21, UR-SCALE-23, UR-SCALE-24, UR-SCALE-26, UR-SCALE-27, UR-SCALE-28, UR-SCALE-30
 
-#### RQ-SCALE-003F - First-class delegated clustering option exposure
+#### RQ-SCALE-003F - Retired low-level clustering flag rejection
 
-`lexonarchivebuilder-scale-test` SHALL expose supported delegated clustering
-options as first-class wrapper inputs.
+`lexonarchivebuilder-scale-test` SHALL NOT expose low-level delegated
+clustering mode, algorithm, or tuning options as approved wrapper inputs.
 
-- **Approved caller contract [KNOWN]:** This increment uses named wrapper inputs for delegated clustering controls rather than a generic arbitrary downstream-argument passthrough.
-- **Defaulting [KNOWN]:** Omitted delegated clustering options may continue to rely on the downstream indexer's approved defaults.
-- **Mode implication [KNOWN]:** The wrapper's delegated clustering control family
-  includes clustering mode alongside algorithm choice and supported algorithm-
-  specific options.
-- **Boundary [INFERRED]:** The supported option set should track the delegated indexer's supported clustering controls for the selected algorithm.
-- **Traceability:** UR-SCALE-22, UR-SCALE-23, UR-SCALE-24, UR-SCALE-25, UR-SCALE-26, UR-SCALE-29
+- **Approved caller contract [KNOWN]:** The wrapper's approved clustering
+  contract is the downstream repository-pinned published profile rather than a
+  wrapper-visible family of low-level clustering flags.
+- **Rejection rule [KNOWN]:** If callers supply retired low-level clustering
+  flags, the wrapper should fail clearly instead of silently ignoring or
+  forwarding them.
+- **Boundary [INFERRED]:** Future expansion, if any, should come from an
+  approved published-profile-based contract rather than ad hoc wrapper-local
+  tuning inputs.
+- **Traceability:** UR-SCALE-22, UR-SCALE-23, UR-SCALE-25, UR-SCALE-26, UR-SCALE-29, UR-SCALE-31
 
 #### RQ-SCALE-004 - Delegated parser/indexer use
 
@@ -221,17 +223,19 @@ options as first-class wrapper inputs.
 - **Required property [KNOWN]:** The tool stress-tests existing parser/indexer behavior through generated inputs.
 - **Traceability:** UR-SCALE-2, UR-SCALE-6, UR-SCALE-7, UR-SCALE-13
 
-#### RQ-SCALE-004A - Delegated clustering configuration pass-through
+#### RQ-SCALE-004A - Delegated clustering contract preservation
 
-When the caller selects a delegated clustering mode, selects a delegated
-clustering algorithm, or provides supported delegated clustering options,
-`lexonarchivebuilder-scale-test` SHALL pass that configuration through to the
-existing LexonArchiveBuilder indexer entrypoint without redefining clustering
-semantics in the wrapper.
+When `lexonarchivebuilder-scale-test` runs delegated clustering, it SHALL rely
+on the existing LexonArchiveBuilder indexer entrypoint's repository-pinned
+published-profile contract without redefining clustering semantics in the
+wrapper.
 
-- **Authority boundary [KNOWN]:** The downstream indexer remains the authority for delegated clustering validation, defaulting, and execution semantics.
-- **Constraint [INFERRED]:** The wrapper remains responsible only for exposing and forwarding the approved caller inputs coherently across its supported entrypoints.
-- **Traceability:** UR-SCALE-21, UR-SCALE-22, UR-SCALE-23, UR-SCALE-24, UR-SCALE-26, UR-SCALE-27, UR-SCALE-28, UR-SCALE-29, UR-SCALE-30
+- **Authority boundary [KNOWN]:** The downstream indexer remains the authority
+  for clustering validation, defaulting, and execution semantics.
+- **Constraint [INFERRED]:** The wrapper remains responsible only for generating
+  compatible requests and invoking the downstream indexer consistently across
+  its supported entrypoints.
+- **Traceability:** UR-SCALE-21, UR-SCALE-23, UR-SCALE-24, UR-SCALE-27, UR-SCALE-28, UR-SCALE-30, UR-SCALE-31
 
 #### RQ-SCALE-005 - Mailbox discovery expansion
 
@@ -306,9 +310,13 @@ The addition of Docker Compose support SHALL NOT remove the direct Linux shell e
 delegated clustering configuration per run across its supported local
 entrypoints.
 
-- **Rationale [INFERRED]:** Comparable stress-test runs require the delegated algorithm choice and supported option values to remain stable for the lifetime of one wrapper invocation.
-- **Boundary [KNOWN]:** This requirement constrains wrapper contract consistency; it does not redefine how the downstream indexer serializes or internally applies clustering settings.
-- **Traceability:** UR-SCALE-21, UR-SCALE-22, UR-SCALE-23, UR-SCALE-24
+- **Rationale [INFERRED]:** Comparable stress-test runs require the approved
+  published profile behavior to remain stable for the lifetime of one wrapper
+  invocation.
+- **Boundary [KNOWN]:** This requirement constrains wrapper contract
+  consistency; it does not redefine how the downstream indexer serializes or
+  internally applies published-profile settings.
+- **Traceability:** UR-SCALE-21, UR-SCALE-23, UR-SCALE-24, UR-SCALE-27, UR-SCALE-28, UR-SCALE-30
 
 #### RQ-SCALE-011 - Combined run output
 
@@ -360,7 +368,7 @@ When multiple rsync URLs are provided in one run, `lexonarchivebuilder-scale-tes
 | Indexing remains separate from search serving | Preserved | The wrapper is limited to local orchestration and delegated execution |
 | `lexonarchivebuilder-indexer` remains focused on indexing contracts | Preserved | The rsync stress-test flow is explicitly outside the indexer boundary |
 | Local/testing remains self-contained and batch-oriented | Preserved | The wrapper remains stage-ordered and container-oriented while supporting both direct Linux shell use and Docker Compose launch |
-| Entry-point parity remains intact | Preserved | The delegated clustering-mode, algorithm, and option contract is required to stay consistent across shell and Docker Compose launch modes |
+| Entry-point parity remains intact | Preserved | The repository-pinned published-profile clustering contract is required to stay consistent across shell and Docker Compose launch modes |
 | Production seams remain open | Preserved | Production orchestration remains a separate future workflow |
 | Future content extensibility remains intact | Preserved | The wrapper adds mailbox stress testing now without closing off later document handling |
 | LexonArchiveBuilder remains subordinate to LexonGraph contracts | Preserved | The wrapper drives existing downstream flows rather than redefining block construction |
@@ -373,12 +381,13 @@ When multiple rsync URLs are provided in one run, `lexonarchivebuilder-scale-tes
 - **Q-SCALE-004 [UNKNOWN]:** If one rsync source is unreachable during a multi-source run, should the wrapper fail the whole run or allow partial stress-test completion?
 - **Q-SCALE-005 [UNKNOWN]:** Should the Docker Compose entrypoint wrap the existing bash implementation inside a Linux container, or should Compose invoke a dedicated container command path that reproduces the same workflow semantics without host bash?
 - **Q-SCALE-006 [UNKNOWN]:** How should rsync source inputs be passed into the Docker Compose entrypoint for Windows users: a mounted sources file, inline environment variables, or both?
-- **Q-SCALE-007 [UNKNOWN]:** Should the effective delegated clustering algorithm and option values be persisted in a dedicated machine-consumable run artifact in addition to the existing generated request and summary outputs?
-- **Q-SCALE-008 [UNKNOWN]:** What is the exact downstream-supported compatibility matrix between aggregation-based versus divisive clustering mode and the delegated algorithms or algorithm-specific option families mirrored by the wrapper?
+- **Q-SCALE-007 [UNKNOWN]:** If future increments approve more than one published profile version, should the effective profile version be persisted in a dedicated machine-consumable run artifact in addition to the existing generated request and summary outputs?
+- **Q-SCALE-008 [UNKNOWN]:** If future increments approve additional published profiles, should the wrapper expose caller-visible profile selection or remain repository-pinned until workload segmentation demands it?
 
 ## Coverage Notes
 
 - **Covered sources [KNOWN]:**
+  - user request in this session: "clean up the dead spec/code that is unrelated to the new profile version based path. It has left over stuff from the previous path where we tried to define it at this layer."
   - user request in this session: "the upstream LexonGraph API has evolved to allow either divisive or aggregation based clustering. We need to expose this as an option at this layer as well"
   - user clarification in this session: "I think it is important to both. Aggregate should be the default with an option to try out divisive (but I suspect that won't be interesting)"
   - `README.md:91-168`
