@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
+pub mod snapshot;
+
 pub const WORKFLOW_JOURNAL_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Error)]

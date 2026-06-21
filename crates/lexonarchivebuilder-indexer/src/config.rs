@@ -104,8 +104,7 @@ pub struct LocalEmbeddingConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ProductionBlockStoreConfig {
-    pub account_url: String,
-    pub container: String,
+    pub container_sas_url: String,
     #[serde(default)]
     pub prefix: Option<String>,
 }
@@ -156,6 +155,10 @@ pub enum ConfigError {
     InvalidMaxConcurrency,
     #[error("local embedding base_url must not be empty")]
     MissingLocalEmbeddingBaseUrl,
+    #[error("production block_store.container_sas_url must not be empty")]
+    MissingProductionContainerSasUrl,
+    #[error("production block_store.prefix is not supported by the Azure Blob block store")]
+    UnsupportedProductionBlockStorePrefix,
 }
 
 impl BatchRequest {
@@ -165,6 +168,9 @@ impl BatchRequest {
         }
         if matches!(self.max_concurrency, Some(0)) {
             return Err(ConfigError::InvalidMaxConcurrency);
+        }
+        if let EnvironmentConfig::Production { block_store, .. } = &self.environment {
+            block_store.validate()?;
         }
         Ok(())
     }
@@ -206,6 +212,22 @@ impl EnvironmentConfig {
             }
             Self::Production { .. } => Ok(None),
         }
+    }
+}
+
+impl ProductionBlockStoreConfig {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.container_sas_url.trim().is_empty() {
+            return Err(ConfigError::MissingProductionContainerSasUrl);
+        }
+        if self
+            .prefix
+            .as_deref()
+            .is_some_and(|prefix| !prefix.trim().is_empty())
+        {
+            return Err(ConfigError::UnsupportedProductionBlockStorePrefix);
+        }
+        Ok(())
     }
 }
 
@@ -512,6 +534,111 @@ mod tests {
         };
 
         assert!(request.validate().is_ok());
+    }
+
+    #[test]
+    fn production_request_requires_non_empty_container_sas_url() {
+        let request = BatchRequest {
+            environment: EnvironmentConfig::Production {
+                block_store: ProductionBlockStoreConfig {
+                    container_sas_url: String::new(),
+                    prefix: None,
+                },
+                embedding: ProductionEmbeddingConfig {
+                    endpoint: "https://example.openai.azure.com".into(),
+                    deployment: "embeddings".into(),
+                    api_version: default_azure_api_version(),
+                    api_key_env: None,
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 384,
+                encoding: "f32le".into(),
+            },
+            block_size_target: default_block_size_target(),
+            stage: ExecutionStage::FullPipeline,
+            max_concurrency: None,
+            items: vec![BatchItemConfig::Document {
+                path: PathBuf::from("docs").join("sample.txt"),
+                metadata: BTreeMap::new(),
+            }],
+        };
+
+        assert!(matches!(
+            request.validate(),
+            Err(ConfigError::MissingProductionContainerSasUrl)
+        ));
+    }
+
+    #[test]
+    fn production_request_rejects_non_empty_prefix() {
+        let request = BatchRequest {
+            environment: EnvironmentConfig::Production {
+                block_store: ProductionBlockStoreConfig {
+                    container_sas_url:
+                        "https://example.blob.core.windows.net/archive-sync?sig=test".into(),
+                    prefix: Some("archive-sync".into()),
+                },
+                embedding: ProductionEmbeddingConfig {
+                    endpoint: "https://example.openai.azure.com".into(),
+                    deployment: "embeddings".into(),
+                    api_version: default_azure_api_version(),
+                    api_key_env: None,
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 384,
+                encoding: "f32le".into(),
+            },
+            block_size_target: default_block_size_target(),
+            stage: ExecutionStage::FullPipeline,
+            max_concurrency: None,
+            items: vec![BatchItemConfig::Document {
+                path: PathBuf::from("docs").join("sample.txt"),
+                metadata: BTreeMap::new(),
+            }],
+        };
+
+        assert!(matches!(
+            request.validate(),
+            Err(ConfigError::UnsupportedProductionBlockStorePrefix)
+        ));
+    }
+
+    #[test]
+    fn production_request_deserializes_container_sas_url() {
+        let request: BatchRequest = serde_json::from_value(json!({
+            "environment": {
+                "kind": "production",
+                "block_store": {
+                    "container_sas_url": "https://example.blob.core.windows.net/archive-sync?sig=test"
+                },
+                "embedding": {
+                    "endpoint": "https://example.openai.azure.com",
+                    "deployment": "embeddings"
+                }
+            },
+            "embedding_spec": {
+                "dims": 384,
+                "encoding": "f32le"
+            },
+            "items": [{
+                "kind": "document",
+                "path": "docs/sample.txt"
+            }]
+        }))
+        .unwrap();
+
+        match request.environment {
+            EnvironmentConfig::Production { block_store, .. } => {
+                assert_eq!(
+                    block_store.container_sas_url,
+                    "https://example.blob.core.windows.net/archive-sync?sig=test"
+                );
+                assert_eq!(block_store.prefix, None);
+            }
+            EnvironmentConfig::Local { .. } => panic!("expected production environment"),
+        }
     }
 
     #[test]

@@ -5,7 +5,9 @@
 Phase 2 validation patch for the approved production-only
 `lexonarchivebuilder-archive-sync` workflow in
 `docs/specs/lexonarchivebuilder-archive-sync/requirements.md` and
-`docs/specs/lexonarchivebuilder-archive-sync/design.md`.
+`docs/specs/lexonarchivebuilder-archive-sync/design.md`, including the
+Azure-backed rsync source-snapshot acquisition revision that reuses the updated
+LexonGraph Azure Blob-backed `BlockStore` realization.
 
 ## Validation Scope
 
@@ -50,9 +52,10 @@ Execute or inspect a representative production run that starts from an empty
 workflow state.
 
 **Pass condition:** the workflow realizes the approved stage order of rsync
-mirror acquisition, mailbox discovery or admission, chunk derivation, embedding
-generation, embedding-gated published-root generation, root-history publication,
-and terminal shutdown.
+source-snapshot acquisition through the Azure-backed `BlockStore` seam, mailbox
+discovery or admission, chunk derivation, embedding generation,
+embedding-gated published-root generation, root-history publication, and
+terminal shutdown.
 
 **Traces to:** RQ-ARCHIVE-004, RQ-ARCHIVE-005, RQ-ARCHIVE-006,
 RQ-ARCHIVE-007, RQ-ARCHIVE-008, RQ-ARCHIVE-009, RQ-ARCHIVE-010,
@@ -60,12 +63,13 @@ RQ-ARCHIVE-012, DSG-LAS-003
 
 ### VAL-LAS-003A
 
-Inspect the Azure-backed source mirror state across an interrupted and resumed
+Inspect the Azure-backed source snapshot state across an interrupted and resumed
 run.
 
 **Pass condition:** the workflow can resume source acquisition from a durable
-mirror snapshot or equivalent recorded progress without requiring a full re-fetch
-when the already copied snapshot remains valid.
+source snapshot whose payloads and manifests are persisted through the
+Azure-backed `BlockStore` seam, or from equivalent recorded progress, without
+requiring a full re-fetch when the already copied snapshot remains valid.
 
 **Traces to:** RQ-ARCHIVE-004A, RQ-ARCHIVE-011A, DSG-LAS-004, DSG-LAS-006
 
@@ -89,6 +93,19 @@ the unchanged effective corpus and preserves source-snapshot provenance
 sufficient to justify that identity.
 
 **Traces to:** RQ-ARCHIVE-004B, RQ-ARCHIVE-004C, DSG-LAS-004A, DSG-LAS-004B
+
+### VAL-LAS-003D
+
+Inspect the source-snapshot payload and manifest persistence seam for one
+successful run and one resumed run.
+
+**Pass condition:** the workflow stores source-snapshot payloads and manifests
+through the shared Azure-backed `BlockStore` seam used for immutable workflow
+artifacts, higher-level workflow stages do not depend on raw Azure Blob API
+call shapes, and any repository-owned manifest convention remains layered on
+that seam rather than replacing it.
+
+**Traces to:** RQ-ARCHIVE-004D, RQ-ARCHIVE-014, RQ-ARCHIVE-018, DSG-LAS-004C
 
 ### VAL-LAS-004
 
@@ -206,10 +223,11 @@ Inspect the production storage and embedding integration seams used by
 `lexonarchivebuilder-archive-sync`.
 
 **Pass condition:** Azure Blob Storage and production embedding realizations stay
-behind stable workflow integration boundaries, so stage contracts are not
-rewritten around Azure-specific call shapes at each step.
+behind stable workflow integration boundaries, including the source-snapshot
+path's use of the shared Azure-backed `BlockStore` seam, so stage contracts are
+not rewritten around Azure-specific call shapes at each step.
 
-**Traces to:** RQ-ARCHIVE-014, RQ-ARCHIVE-018, DSG-LAS-001, DSG-LAS-008
+**Traces to:** RQ-ARCHIVE-014, RQ-ARCHIVE-018, DSG-LAS-001, DSG-LAS-004C, DSG-LAS-008
 
 ### VAL-LAS-008
 
@@ -296,7 +314,8 @@ appended history entries.
 Add a future non-mailbox content type to the workflow design hypothetically.
 
 **Pass condition:** the new content type can fit by extending source or
-stage-local derivation logic behind the existing journaled workflow stages
+stage-local derivation logic behind the existing journaled workflow stages and
+the reusable source-snapshot acquisition boundary
 without redefining the top-level workflow boundary or the root-publication
 contract.
 

@@ -11,6 +11,7 @@ clap.workspace = true
 half.workspace = true
 lexongraph-block.workspace = true
 lexongraph-block-store.workspace = true
+lexongraph-block-store-azure.workspace = true
 lexongraph-block-store-fs.workspace = true
 lexongraph-embeddings-trait.workspace = true
 lexongraph-search.workspace = true
