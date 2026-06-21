@@ -63,6 +63,8 @@ pub enum SourceSnapshotAcquisitionError {
         #[source]
         source: io::Error,
     },
+    #[error("snapshot file {path} is outside snapshot root {root}")]
+    SnapshotPathOutsideRoot { root: String, path: String },
     #[error("failed to store snapshot payload for {path}: {source}")]
     StoreSnapshotPayload {
         path: String,
@@ -87,6 +89,14 @@ pub enum SourceSnapshotAcquisitionError {
         block_id: String,
         expected: u32,
         actual: u32,
+    },
+    #[error(
+        "source snapshot manifest block `{block_id}` source URI `{manifest_source_uri}` does not match requested source URI `{requested_source_uri}`"
+    )]
+    ManifestSourceUriMismatch {
+        block_id: String,
+        manifest_source_uri: String,
+        requested_source_uri: String,
     },
     #[error("failed to store source snapshot manifest: {source}")]
     StoreManifest {
@@ -224,7 +234,8 @@ pub fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner>(
     if acquired_at.is_empty() {
         return Err(SourceSnapshotAcquisitionError::EmptyAcquiredAt);
     }
-    if journal.source_snapshot.source_uri != source_uri {
+    let journal_source_uri = journal.source_snapshot.source_uri.trim();
+    if journal_source_uri != source_uri {
         return Err(SourceSnapshotAcquisitionError::SourceUriMismatch {
             journal_source_uri: journal.source_snapshot.source_uri.clone(),
             requested_source_uri: source_uri.to_string(),
@@ -238,6 +249,13 @@ pub fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner>(
             .clone()
             .ok_or(SourceSnapshotAcquisitionError::MissingCompletedManifestIdentity)?;
         let manifest = load_source_snapshot_manifest(store, &manifest_block_id)?;
+        if manifest.source_uri != source_uri {
+            return Err(SourceSnapshotAcquisitionError::ManifestSourceUriMismatch {
+                block_id: manifest_block_id,
+                manifest_source_uri: manifest.source_uri,
+                requested_source_uri: source_uri.to_string(),
+            });
+        }
         journal.source_snapshot.source_snapshot_id = manifest.source_snapshot_id.clone();
         if matches!(
             journal.current_stage,
@@ -366,7 +384,7 @@ fn collect_snapshot_entries<S: BlockStore>(
         if !file_type.is_file() {
             continue;
         }
-        let relative_path = normalize_relative_path(snapshot_root, &child);
+        let relative_path = normalize_relative_path(snapshot_root, &child)?;
         let bytes = fs::read(&child).map_err(|source| {
             SourceSnapshotAcquisitionError::ReadSnapshotFile {
                 path: child.display().to_string(),
@@ -482,13 +500,21 @@ fn snapshot_block(media_type: &str, body: Vec<u8>) -> Block {
     })
 }
 
-fn normalize_relative_path(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
+fn normalize_relative_path(
+    root: &Path,
+    path: &Path,
+) -> Result<String, SourceSnapshotAcquisitionError> {
+    let relative = path.strip_prefix(root).map_err(|_| {
+        SourceSnapshotAcquisitionError::SnapshotPathOutsideRoot {
+            root: root.display().to_string(),
+            path: path.display().to_string(),
+        }
+    })?;
+    Ok(relative
         .components()
         .map(|component| component.as_os_str().to_string_lossy().into_owned())
         .collect::<Vec<_>>()
-        .join("/")
+        .join("/"))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -834,6 +860,70 @@ mod tests {
     }
 
     #[test]
+    fn source_uri_comparison_ignores_journal_whitespace() {
+        let temp = tempdir().unwrap();
+        let source_root = temp.path().join("source");
+        fs::create_dir_all(source_root.join("ietf")).unwrap();
+        fs::write(source_root.join("ietf").join("2026-01.mbox"), b"mailbox-a").unwrap();
+
+        let store = FilesystemBlockStore::new(temp.path().join("blocks")).unwrap();
+        let runner = CopyTreeRsyncRunner::new(source_root);
+        let mut journal = sample_journal();
+        journal.source_snapshot.source_uri = "  rsync://example.invalid/mailman  ".into();
+
+        let snapshot = acquire_source_snapshot(
+            &store,
+            &mut journal,
+            "rsync://example.invalid/mailman",
+            &temp.path().join("mirror"),
+            "2026-06-19T22:00:00Z",
+            &runner,
+        )
+        .unwrap();
+
+        assert!(!snapshot.reused_existing);
+    }
+
+    #[test]
+    fn completed_manifest_reuse_rejects_mismatched_manifest_source_uri() {
+        let temp = tempdir().unwrap();
+        let store = FilesystemBlockStore::new(temp.path().join("blocks")).unwrap();
+        let manifest_block_id = store
+            .put(&snapshot_block(
+                "application/json",
+                serde_json::to_vec(&SourceSnapshotManifest {
+                    schema_version: SNAPSHOT_MANIFEST_SCHEMA_VERSION,
+                    source_uri: "rsync://example.invalid/other".into(),
+                    source_snapshot_id: "snapshot-123".into(),
+                    acquired_at: "2026-06-19T22:00:00Z".into(),
+                    entries: Vec::new(),
+                })
+                .unwrap(),
+            ))
+            .unwrap()
+            .to_string();
+        let runner = CopyTreeRsyncRunner::new(temp.path().join("source"));
+        let mut journal = sample_journal();
+        journal.source_snapshot.acquisition_completed_at = Some("2026-06-19T22:00:00Z".into());
+        journal.source_snapshot.corpus_manifest_identity = Some(manifest_block_id);
+
+        let error = acquire_source_snapshot(
+            &store,
+            &mut journal,
+            "rsync://example.invalid/mailman",
+            &temp.path().join("mirror"),
+            "2026-06-19T22:15:00Z",
+            &runner,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            SourceSnapshotAcquisitionError::ManifestSourceUriMismatch { .. }
+        ));
+    }
+
+    #[test]
     fn fresh_acquisition_replaces_stale_provenance_keys() {
         let temp = tempdir().unwrap();
         let source_root = temp.path().join("source");
@@ -959,6 +1049,19 @@ mod tests {
         assert!(matches!(
             error,
             SourceSnapshotAcquisitionError::UnsupportedManifestSchemaVersion { .. }
+        ));
+    }
+
+    #[test]
+    fn normalize_relative_path_rejects_paths_outside_snapshot_root() {
+        let root = Path::new("C:\\snapshot-root");
+        let path = Path::new("C:\\different-root\\ietf\\2026-01.mbox");
+
+        let error = normalize_relative_path(root, path).unwrap_err();
+
+        assert!(matches!(
+            error,
+            SourceSnapshotAcquisitionError::SnapshotPathOutsideRoot { .. }
         ));
     }
 
