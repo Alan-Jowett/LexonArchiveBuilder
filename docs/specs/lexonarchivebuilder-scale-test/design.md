@@ -3,7 +3,7 @@
 ## Status
 
 Phase 2 specification patch for the approved local rsync-driven stress-test
-wrapper with caller-selectable delegated clustering mode and configuration in
+wrapper with repository-pinned published-profile delegated clustering in
 `docs/specs/lexonarchivebuilder-scale-test/requirements.md`.
 
 ## Scope
@@ -11,11 +11,11 @@ wrapper with caller-selectable delegated clustering mode and configuration in
 This document specifies the LexonArchiveBuilder-owned design for realizing
 `lexonarchivebuilder-scale-test` as a lightweight local wrapper that fetches
 mailbox archives from rsync, discovers `.mail` and `.mbox` mailbox inputs,
-generates an indexer-compatible request/config artifact, derives one explicit
-delegated clustering-mode and clustering configuration from caller-selected
-wrapper inputs when needed, and delegates block-tree generation to existing
-LexonArchiveBuilder indexing behavior through one shared local workflow with both
-direct shell and Docker Compose entrypoints.
+generates an indexer-compatible request/config artifact, relies on the
+repository-pinned published-profile clustering contract already owned by the
+downstream indexer, and delegates block-tree generation to existing
+LexonArchiveBuilder indexing behavior through one shared local workflow with
+both direct shell and Docker Compose entrypoints.
 
 This document is layered on top of:
 
@@ -60,7 +60,7 @@ The `lexonarchivebuilder-scale-test` design is intended to be:
 - Windows-friendly through Docker Compose while preserving Linux bash use
 - suitable for large-scale parser stress testing
 - deterministic enough for repeatable local runs
-- aligned with the delegated indexer clustering contract
+- aligned with the downstream published-profile clustering contract
 - extensible to future content-discovery classes
 
 ## Boundary Design
@@ -115,8 +115,8 @@ The wrapper realizes one run as a staged pipeline:
 1. acquire rsync-backed mailbox content
 2. discover mailbox files from the fetched mirror set
 3. generate an indexer-compatible request/config artifact
-4. invoke the existing LexonArchiveBuilder batch/indexer entrypoint with any
-   caller-selected delegated clustering-mode and clustering configuration
+4. invoke the existing LexonArchiveBuilder batch/indexer entrypoint through the
+   repository-pinned published-profile clustering path
 5. capture and publish root handoff output for the resulting block tree
 
 The wrapper remains batch-oriented and does not introduce a long-lived control
@@ -177,21 +177,18 @@ independent index tree per rsync source in the first increment.
 
 **Traces to:** RQ-SCALE-011
 
-### DSG-LST-005B `Wrapper-owned delegated clustering control surface`
+### DSG-LST-005B `Wrapper-preserved published-profile clustering contract`
 
-`lexonarchivebuilder-scale-test` exposes one first-class wrapper input family
-for delegated clustering configuration rather than a generic opaque downstream-
-argument passthrough.
+`lexonarchivebuilder-scale-test` preserves the downstream indexer's approved
+published-profile clustering contract rather than exposing a first-class
+wrapper-owned low-level clustering configuration surface.
 
-The wrapper-owned delegated clustering control surface is aligned to the
-existing delegated indexer clustering surface and is limited to:
+For this increment, that preserved contract is limited to:
 
-- one delegated clustering-mode selector using the downstream-supported mode
-  names
-- one delegated clustering algorithm selector using the downstream-supported
-  algorithm names
-- the shared delegated clustering controls supported by the downstream indexer
-- the approved algorithm-specific delegated clustering option families
+- the repository-pinned published profile version `0.1.0`
+- rejection of retired low-level clustering mode, algorithm, and tuning flags
+- reuse of the downstream indexer request shape without a wrapper-local
+  clustering schema
 
 The generated request artifact remains focused on discovered mailbox items,
 environment configuration, and other existing indexer-request concerns. This
@@ -218,21 +215,21 @@ instead of creating a second indexing surface.
 **Traces to:** RQ-SCALE-004, RQ-SCALE-004A, RQ-SCALE-010, RQ-SCALE-012,
 RQ-SCALE-013
 
-### DSG-LST-006A `Explicit delegated clustering forwarding`
+### DSG-LST-006A `Published-profile-preserving delegated invocation`
 
-When the caller supplies delegated clustering selections, the wrapper forwards
-those selections to the existing LexonArchiveBuilder indexer entrypoint using the
-same mode names, algorithm names, and option meanings already owned by the
-downstream indexer contract.
+When the wrapper runs delegated clustering, it invokes the existing
+LexonArchiveBuilder indexer entrypoint through the same repository-pinned
+published-profile path already owned by the downstream indexer contract.
 
-The wrapper does not reinterpret algorithm-specific settings, synthesize a new
-wrapper-local clustering policy, or redefine downstream validation rules for
-unsupported mode, algorithm, or option combinations. Downstream indexer
-validation and defaulting remain authoritative.
+The wrapper does not reinterpret low-level clustering settings, synthesize a
+new wrapper-local clustering policy, or reintroduce retired mode, algorithm, or
+option combinations. Downstream indexer validation of the published-profile
+contract remains authoritative, and the wrapper remains responsible for clearly
+rejecting retired low-level flags at its own boundary.
 
-For one logical wrapper run, the same effective delegated clustering
-configuration is forwarded regardless of whether the user launches through the
-direct shell entrypoint or the Docker Compose entrypoint.
+For one logical wrapper run, the same effective published-profile contract is
+preserved regardless of whether the user launches through the direct shell
+entrypoint or the Docker Compose entrypoint.
 
 **Traces to:** RQ-SCALE-003D, RQ-SCALE-003E, RQ-SCALE-003F, RQ-SCALE-004A,
 RQ-SCALE-010A
@@ -294,8 +291,8 @@ and minimizes the surface area that future changes must keep in sync.
 
 ### DSG-LST-010A `No wrapper-local clustering protocol`
 
-The wrapper reuses the delegated indexer's clustering-control vocabulary and
-effective defaulting behavior rather than introducing a scale-test-specific
+The wrapper reuses the delegated indexer's published-profile contract and
+retired-flag rejection behavior rather than introducing a scale-test-specific
 clustering protocol or a generic extra-argument escape hatch.
 
 This keeps the wrapper subordinate to the delegated indexer contract and
@@ -328,7 +325,7 @@ LexonArchiveBuilder-owned verification artifacts validate:
 - wrapper-owned rsync acquisition and mailbox discovery behavior
 - equivalent workflow semantics across the bash and Docker Compose entrypoints
 - generated request/config compatibility with the downstream indexer contract
-- caller-selectable delegated clustering controls and their forwarding contract
+- repository-pinned published-profile clustering behavior and retired-flag rejection behavior
 - delegated execution of the existing parser/indexer path
 - production of a machine-consumable root handoff artifact
 - local-only execution plus the approved Linux and Docker Compose entrypoints

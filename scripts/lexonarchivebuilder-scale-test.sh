@@ -92,12 +92,6 @@ validate_run_name() {
   fi
 }
 
-append_indexer_option() {
-  local option_name="$1"
-  local option_value="$2"
-  INDEXER_ARGS+=("$option_name" "$option_value")
-}
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SCALE_TEST_COMPOSE_PROJECT_NAME="${SCALE_TEST_COMPOSE_PROJECT_NAME:-lexonarchivebuilder}"
@@ -137,7 +131,6 @@ fi
 SOURCES_FILE=""
 RUN_NAME=""
 declare -a RSYNC_URLS=()
-declare -a INDEXER_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -312,13 +305,6 @@ fi
 
 printf 'Discovered %d mailbox files\n' "${#MAILBOX_PATHS[@]}"
 printf 'Generated request: %s\n' "${REQUEST_PATH#${REPO_ROOT}/}"
-if [[ ${#INDEXER_ARGS[@]} -gt 0 ]]; then
-  printf 'Forwarding delegated clustering flags to indexer:'
-  for indexer_arg in "${INDEXER_ARGS[@]}"; do
-    printf ' %q' "$indexer_arg"
-  done
-  printf '\n'
-fi
 
 if [[ "$SCALE_TEST_INDEXER_MODE" == "docker-compose" ]]; then
   (cd "$REPO_ROOT" && COMPOSE_PROJECT_NAME="$SCALE_TEST_COMPOSE_PROJECT_NAME" docker compose up -d stapi)
@@ -327,9 +313,9 @@ fi
 wait_for_tcp_port "$SCALE_TEST_WAIT_HOST" "$SCALE_TEST_WAIT_PORT" "$SCALE_TEST_WAIT_TIMEOUT_SECS"
 
 if [[ "$SCALE_TEST_INDEXER_MODE" == "docker-compose" ]]; then
-  (cd "$REPO_ROOT" && COMPOSE_PROJECT_NAME="$SCALE_TEST_COMPOSE_PROJECT_NAME" docker compose run --build --rm --no-deps indexer run --request "$CONTAINER_REQUEST" --summary-out "$CONTAINER_SUMMARY" "${INDEXER_ARGS[@]}")
+  (cd "$REPO_ROOT" && COMPOSE_PROJECT_NAME="$SCALE_TEST_COMPOSE_PROJECT_NAME" docker compose run --build --rm --no-deps indexer run --request "$CONTAINER_REQUEST" --summary-out "$CONTAINER_SUMMARY")
 else
-  lexonarchivebuilder-indexer run --request "$REQUEST_PATH" --summary-out "$SUMMARY_PATH" "${INDEXER_ARGS[@]}"
+  lexonarchivebuilder-indexer run --request "$REQUEST_PATH" --summary-out "$SUMMARY_PATH"
 fi
 
 printf 'Summary written to: %s\n' "${SUMMARY_PATH#${REPO_ROOT}/}"

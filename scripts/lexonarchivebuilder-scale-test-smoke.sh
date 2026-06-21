@@ -24,6 +24,11 @@ mkdir -p "$SOURCE_ONE" "$SOURCE_TWO"
 cp "$FIXTURE_MAILBOX" "${SOURCE_ONE}/2026-01.mail"
 cp "$FIXTURE_MAILBOX" "${SOURCE_TWO}/2026-02.mbox"
 
+if bash "$SCALE_TEST_SCRIPT" --clustering-algorithm directional-pca "$SOURCE_ONE" >/dev/null 2>&1; then
+  printf 'error: retired clustering flag was accepted by scale-test wrapper\n' >&2
+  exit 1
+fi
+
 bash "$SCALE_TEST_SCRIPT" \
   --run-name "$RUN_NAME" \
   "$SOURCE_ONE" "$SOURCE_TWO"
