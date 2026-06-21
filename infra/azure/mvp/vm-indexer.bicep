@@ -90,10 +90,24 @@ runcmd:
     DEALLOCATE_EXIT_CODE=$?
     set -e
     echo "${DEALLOCATE_EXIT_CODE}" > /opt/lexonarchivebuilder/indexer/last-deallocate-exit-code
+    SHUTDOWN_EXIT_CODE=0
+    if [ "${DEALLOCATE_EXIT_CODE}" -ne 0 ]; then
+      set +e
+      systemctl poweroff --no-block
+      SHUTDOWN_EXIT_CODE=$?
+      set -e
+      echo "${SHUTDOWN_EXIT_CODE}" > /opt/lexonarchivebuilder/indexer/last-shutdown-exit-code
+    fi
     if [ "${EXIT_CODE}" -ne 0 ]; then
       exit "${EXIT_CODE}"
     fi
-    exit "${DEALLOCATE_EXIT_CODE}"
+    if [ "${DEALLOCATE_EXIT_CODE}" -ne 0 ]; then
+      if [ "${SHUTDOWN_EXIT_CODE}" -ne 0 ]; then
+        exit "${SHUTDOWN_EXIT_CODE}"
+      fi
+      exit "${DEALLOCATE_EXIT_CODE}"
+    fi
+    exit 0
     EOF
     chmod 0755 /usr/local/bin/lexonarchivebuilder-run-indexer.sh
     cat > /etc/systemd/system/lexonarchivebuilder-indexer.service <<'EOF'
