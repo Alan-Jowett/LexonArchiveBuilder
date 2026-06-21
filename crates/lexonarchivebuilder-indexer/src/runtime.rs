@@ -121,7 +121,7 @@ struct EffectiveClusteringDiagnostics {
     packing_strategy_id: Option<String>,
     hierarchy_strategy_id: String,
     summary_policy_id: String,
-    cluster_count: u32,
+    cluster_count: Option<u32>,
     random_seed: Option<u64>,
 }
 
@@ -628,17 +628,23 @@ fn effective_clustering_diagnostics(
     })
 }
 
-fn published_profile_cluster_count(profile: &PublishedIndexingProfile) -> u32 {
+fn published_profile_cluster_count(profile: &PublishedIndexingProfile) -> Option<u32> {
+    #[allow(unreachable_patterns)]
     match &profile.planning_strategy {
-        PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => settings.cluster_count,
-        PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => settings.cluster_count,
+        PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => {
+            Some(settings.cluster_count)
+        }
+        PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => Some(settings.cluster_count),
+        _ => None,
     }
 }
 
 fn published_profile_random_seed(profile: &PublishedIndexingProfile) -> Option<u64> {
+    #[allow(unreachable_patterns)]
     match &profile.planning_strategy {
         PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => settings.random_seed,
         PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => settings.random_seed,
+        _ => None,
     }
 }
 
@@ -4130,7 +4136,7 @@ mod tests {
                 packing_strategy_id: Some("cluster-order-balanced-range-packer-v1".into()),
                 hierarchy_strategy_id: "greedy-pack".into(),
                 summary_policy_id: "exact-centroid".into(),
-                cluster_count: 157,
+                cluster_count: Some(157),
                 random_seed: Some(11),
             },
             embedding_health: embedding_health.clone(),
@@ -4235,7 +4241,7 @@ mod tests {
         );
         assert_eq!(diagnostics.hierarchy_strategy_id, "greedy-pack");
         assert_eq!(diagnostics.summary_policy_id, "exact-centroid");
-        assert_eq!(diagnostics.cluster_count, 157);
+        assert_eq!(diagnostics.cluster_count, Some(157));
         assert_eq!(diagnostics.random_seed, Some(11));
     }
 
