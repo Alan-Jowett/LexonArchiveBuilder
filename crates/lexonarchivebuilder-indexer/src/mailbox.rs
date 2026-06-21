@@ -843,6 +843,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::FullPipeline,
+            profile_version: lexongraph_streaming_indexer::PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
             items: vec![
                 BatchItemConfig::Mailbox {

@@ -5,12 +5,14 @@
 Specification patch for the approved email-artifact, chunk-level
 indexing, local filesystem block-store interoperability, replay-based
 streaming delegated indexing, stage-selectable execution, standalone
-clustering input discovery, published-profile API adoption, published-profile
-contract pinning, latest published-profile and telemetry compatibility, upstream
-regression assessment, replay-submission and streaming-status observability,
+clustering input discovery, published-profile API adoption,
+published-profile version selection, latest published-profile and
+telemetry compatibility, upstream regression assessment,
+replay-submission and streaming-status observability,
 clustering-failure diagnostics, rooted block-tree quality assessment with
 rooted TNN-recall diagnostics, rooted CLI search over stored trees,
-replay-stable fingerprinting, upstream wgpu-acceleration revision
+replay-stable fingerprinting, temporary upstream `main` tracking for
+rapid profile validation, upstream wgpu-acceleration revision
 compatibility, LAB-owned replay-journaled split-stage recovery, and
 layer-parallel block-construction evolution in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md`.
@@ -23,9 +25,11 @@ indexer requirements, including the email-ingestion refinement from `.mail` and
 units plus the local filesystem block-store interoperability correction,
 replay-based streaming delegated indexing adoption, stage-selectable execution,
 standalone clustering input discovery, delegated published-profile adoption,
-repository-pinned published-profile configuration, latest published-profile and
-telemetry compatibility, upstream wgpu-acceleration revision compatibility, upstream regression
-assessment, embedding-phase batch-progress observability,
+caller-selectable published-profile configuration with default `0.1.0`,
+latest published-profile and telemetry compatibility, temporary upstream
+`main` tracking for rapid profile validation, upstream
+wgpu-acceleration revision compatibility, upstream regression assessment,
+embedding-phase batch-progress observability,
 replay-submission observability, streaming-status observability,
 telemetry-count-semantics clarity, clustering-failure diagnostics,
 rooted block-tree quality assessment with rooted TNN-recall diagnostics,
@@ -287,8 +291,9 @@ For any execution stage that includes clustering, LexonArchiveBuilder resolves
 one explicit upstream published indexing profile before the first streaming
 planning pass or standalone clustering replay begins.
 
-For this increment, the selected profile is the upstream published profile
-version `0.1.0`.
+The resolved profile version comes from the approved caller-visible
+profile-selection contract; when omitted, it defaults to upstream published
+profile version `0.1.0`.
 
 LexonArchiveBuilder treats the upstream LexonGraph streaming indexer as the
 authority for the planning, packing, hierarchy, summary, and clustering
@@ -301,8 +306,8 @@ batch invocation so replay passes, planning completion, and final
 materialization do not observe intra-run clustering-configuration drift.
 
 **[KNOWN]:** The upstream published-profile surface exposes this increment's
-approved contract through `PublishedProfileVersion`, the
-`PUBLISHED_PROFILE_V0_1_0` constant, and the higher-level
+approved contract through `PublishedProfileVersion`, the current default
+constant `PUBLISHED_PROFILE_V0_1_0`, and the higher-level
 `with_published_profile(...)` construction path.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-008, RQ-INDEXER-010A
@@ -315,8 +320,8 @@ indexer.
 
 In this increment, that normalization means:
 
-- clustering-enabled execution resolves to the repository-pinned published
-  profile version `0.1.0`
+- clustering-enabled execution resolves to one selected published profile
+  version, defaulting to `0.1.0` when the caller omits the selector
 - no repository-local clustering mode, clustering algorithm, `cluster_count`,
   or algorithm-specific tuning values are forwarded as active upstream planning
   inputs
@@ -338,10 +343,11 @@ LexonArchiveBuilder treats the latest upstream published-profile and
 status-observer telemetry surfaces as a mechanical adaptation boundary, not as
 permission to narrow the approved repository contract.
 
-For this increment, that boundary is the LexonGraph dependency refresh to commit
-`70a80a2b51b41759217eec05086cb76586c4f1a5`, which is intended to pick up
-upstream wgpu acceleration without changing the repository-visible
-published-profile, CLI, request-schema, or MCP-facing contracts.
+For this increment, that boundary is temporary explicit tracking of the
+LexonGraph `main` branch, which is intended to pick up newly published
+profiles and upstream wgpu acceleration quickly without changing the
+repository-visible MCP-facing contract or reintroducing low-level clustering
+controls.
 
 The design therefore preserves these repository-required capabilities across the
 upgrade whenever the latest upstream contract still supports them semantically:
@@ -349,15 +355,16 @@ upgrade whenever the latest upstream contract still supports them semantically:
 - the external stage contract
 - deterministic split-stage replay
 - adoption of the published-profile API for clustering-enabled execution
-- repository pinning to published profile `0.1.0`
+- defaulting to published profile `0.1.0` while permitting explicit selection
+  of another upstream-published profile version for evaluation
 - retirement of the old low-level clustering control family from the approved
   external contract
 - repository-owned progress projection over upstream lifecycle events
 - projection of richer live hierarchy-stage telemetry and heartbeat events onto
   that same repository-owned progress surface
 - unchanged MCP search-serving behavior for already-indexed content
-- dependency-pin-only adoption of upstream wgpu acceleration at commit
-  `70a80a2b51b41759217eec05086cb76586c4f1a5`
+- temporary explicit tracking of upstream `main` to pick up new published
+  profiles and wgpu acceleration quickly
 
 If any of those capabilities proves unavailable on the latest upstream surface,
 the implementation must surface that as an explicit compatibility finding or
@@ -1061,17 +1068,17 @@ The approved operator-facing behavior is:
 
 - callers continue to choose whether clustering runs by selecting the execution
   stage
-- any clustering-enabled stage resolves to the repository-pinned published
-  profile version `0.1.0`
+- callers may also select the published profile version for clustering-enabled
+  stages, with omission resolving to the default `0.1.0` profile
 - the request-file-driven runtime shape remains preserved for batch items,
-  environment selection, and stage selection
+  environment selection, stage selection, and profile-version selection
 - any legacy low-level clustering flags that remain in old automation fail
   validation explicitly so operators are not misled into believing they still
   tune active upstream planning behavior
 
-This increment therefore does not require a persistent profile-selection field
-in `BatchRequest`; the approved contract is the repository-pinned profile
-version rather than a caller-selected profile matrix.
+This increment therefore requires one persistent profile-version field in
+`BatchRequest` and one matching CLI selector for `run`, while still avoiding a
+broader repository-local clustering-policy matrix.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-007,
 RQ-INDEXER-010
@@ -1196,7 +1203,7 @@ upstream semantics whether replay inputs come from a valid replay journal or
 from compatibility-mode whole-store iteration.
 
 The same stability expectation applies to clustering configuration resolution:
-repeating a clustering-enabled run with the same approved published profile
+repeating a clustering-enabled run with the same selected published profile
 version must resolve to the same effective upstream planning behavior.
 
 For rooted block-tree quality assessment, the comparable invariant is rooted
@@ -1227,9 +1234,9 @@ LexonArchiveBuilder-owned verification artifacts validate:
 - correct leaf-layer concurrency scheduling with cross-layer barriers
 - correct standalone clustering input discovery through the repository-owned
   replay journal with upstream block-iteration fallback
-- correct adoption of the upstream published-profile API with repository pinning
-  to profile `0.1.0` and explicit rejection of retired low-level clustering
-  controls
+- correct adoption of the upstream published-profile API with defaulted and
+  explicit profile-version selection plus explicit rejection of retired
+  low-level clustering controls
 - correct deterministic replay staging and replay-stable content fingerprinting
 - correct replay-journal append, rollover, and crash-tolerance behavior
 - correct selection and use of content-resolution, block-store, and

@@ -27,10 +27,12 @@ thiserror = "2.0.17"
 tokio = { version = "1.52.3", features = ["io-std", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
 
 lexonarchivebuilder-indexer = { path = "crates/lexonarchivebuilder-indexer" }
-lexongraph-block = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90c885ab78cf6292c83bf17bdfed79de6fbeda99", package = "lexongraph-block" }
-lexongraph-block-store = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90c885ab78cf6292c83bf17bdfed79de6fbeda99", package = "lexongraph-block-store" }
-lexongraph-block-store-azure = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90c885ab78cf6292c83bf17bdfed79de6fbeda99", package = "lexongraph-block-store-azure" }
-lexongraph-block-store-fs = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90c885ab78cf6292c83bf17bdfed79de6fbeda99", package = "lexongraph-block-store-fs" }
-lexongraph-embeddings-trait = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90c885ab78cf6292c83bf17bdfed79de6fbeda99", package = "lexongraph-embeddings-trait" }
-lexongraph-search = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90c885ab78cf6292c83bf17bdfed79de6fbeda99", package = "lexongraph-search" }
-lexongraph-streaming-indexer = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90c885ab78cf6292c83bf17bdfed79de6fbeda99", package = "lexongraph-streaming-indexer" }
+# Temporary during profile evaluation: follow LexonGraph main so new published
+# profiles are available for rapid testing without per-profile pin refreshes.
+lexongraph-block = { git = "https://github.com/Alan-Jowett/LexonGraph", branch = "main", package = "lexongraph-block" }
+lexongraph-block-store = { git = "https://github.com/Alan-Jowett/LexonGraph", branch = "main", package = "lexongraph-block-store" }
+lexongraph-block-store-azure = { git = "https://github.com/Alan-Jowett/LexonGraph", branch = "main", package = "lexongraph-block-store-azure" }
+lexongraph-block-store-fs = { git = "https://github.com/Alan-Jowett/LexonGraph", branch = "main", package = "lexongraph-block-store-fs" }
+lexongraph-embeddings-trait = { git = "https://github.com/Alan-Jowett/LexonGraph", branch = "main", package = "lexongraph-embeddings-trait" }
+lexongraph-search = { git = "https://github.com/Alan-Jowett/LexonGraph", branch = "main", package = "lexongraph-search" }
+lexongraph-streaming-indexer = { git = "https://github.com/Alan-Jowett/LexonGraph", branch = "main", package = "lexongraph-streaming-indexer" }

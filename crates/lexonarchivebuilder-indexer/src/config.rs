@@ -4,9 +4,8 @@ use std::path::{Path, PathBuf};
 use ciborium::Value;
 use clap::{Args, ValueEnum};
 use lexongraph_block::EmbeddingSpec;
-use lexongraph_streaming_indexer::{
-    IndexItem, Metadata, PUBLISHED_PROFILE_V0_1_0, PublishedProfileVersion,
-};
+use lexongraph_streaming_indexer::{IndexItem, Metadata};
+pub use lexongraph_streaming_indexer::{PUBLISHED_PROFILE_V0_1_0, PublishedProfileVersion};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -40,7 +39,14 @@ impl ExecutionStage {
 }
 
 #[derive(Args, Clone, Debug, Default, PartialEq)]
-pub struct ClusteringConfigOverrides {}
+pub struct ClusteringConfigOverrides {
+    #[arg(
+        long,
+        value_name = "MAJOR.MINOR.PATCH",
+        value_parser = parse_published_profile_version
+    )]
+    pub profile_version: Option<PublishedProfileVersion>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ConfiguredClustering {
@@ -52,10 +58,13 @@ impl ClusteringConfigOverrides {
         Ok(())
     }
 
-    pub(crate) fn to_configured_clustering(&self) -> Result<ConfiguredClustering, ConfigError> {
+    pub(crate) fn to_configured_clustering(
+        &self,
+        request_profile_version: PublishedProfileVersion,
+    ) -> Result<ConfiguredClustering, ConfigError> {
         self.validate()?;
         Ok(ConfiguredClustering {
-            profile_version: PUBLISHED_PROFILE_V0_1_0,
+            profile_version: self.profile_version.unwrap_or(request_profile_version),
         })
     }
 }
@@ -68,6 +77,11 @@ pub struct BatchRequest {
     pub block_size_target: usize,
     #[serde(default)]
     pub stage: ExecutionStage,
+    #[serde(
+        default = "default_profile_version",
+        deserialize_with = "deserialize_published_profile_version"
+    )]
+    pub profile_version: PublishedProfileVersion,
     #[serde(default)]
     pub max_concurrency: Option<usize>,
     #[serde(default)]
@@ -294,6 +308,10 @@ fn default_block_size_target() -> usize {
     DEFAULT_BLOCK_SIZE_TARGET
 }
 
+fn default_profile_version() -> PublishedProfileVersion {
+    PUBLISHED_PROFILE_V0_1_0
+}
+
 fn default_local_model() -> String {
     "all-MiniLM-L6-v2".to_string()
 }
@@ -337,6 +355,47 @@ fn default_azure_api_version() -> String {
     "2024-02-01".to_string()
 }
 
+fn deserialize_published_profile_version<'de, D>(
+    deserializer: D,
+) -> Result<PublishedProfileVersion, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    parse_published_profile_version(&value).map_err(serde::de::Error::custom)
+}
+
+fn parse_published_profile_version(value: &str) -> Result<PublishedProfileVersion, String> {
+    let trimmed = value.trim();
+    let Some((major, remainder)) = trimmed.split_once('.') else {
+        return Err(format!(
+            "invalid published profile version '{trimmed}': expected <major>.<minor>.<patch>"
+        ));
+    };
+    let Some((minor, patch)) = remainder.split_once('.') else {
+        return Err(format!(
+            "invalid published profile version '{trimmed}': expected <major>.<minor>.<patch>"
+        ));
+    };
+    if major.is_empty() || minor.is_empty() || patch.is_empty() || patch.contains('.') {
+        return Err(format!(
+            "invalid published profile version '{trimmed}': expected <major>.<minor>.<patch>"
+        ));
+    }
+
+    let major = major.parse::<u64>().map_err(|_| {
+        format!("invalid published profile version '{trimmed}': major must be an unsigned integer")
+    })?;
+    let minor = minor.parse::<u64>().map_err(|_| {
+        format!("invalid published profile version '{trimmed}': minor must be an unsigned integer")
+    })?;
+    let patch = patch.parse::<u64>().map_err(|_| {
+        format!("invalid published profile version '{trimmed}': patch must be an unsigned integer")
+    })?;
+
+    Ok(PublishedProfileVersion::new(major, minor, patch))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,6 +423,7 @@ mod tests {
             },
             block_size_target: default_block_size_target(),
             stage: ExecutionStage::FullPipeline,
+            profile_version: default_profile_version(),
             max_concurrency: None,
             items: vec![BatchItemConfig::Document {
                 path: relative_document_path.clone(),
@@ -402,6 +462,7 @@ mod tests {
             },
             block_size_target: default_block_size_target(),
             stage: ExecutionStage::FullPipeline,
+            profile_version: default_profile_version(),
             max_concurrency: Some(0),
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
@@ -435,6 +496,7 @@ mod tests {
             },
             block_size_target: default_block_size_target(),
             stage: ExecutionStage::FullPipeline,
+            profile_version: default_profile_version(),
             max_concurrency: Some(7),
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
@@ -477,6 +539,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(request.stage, ExecutionStage::FullPipeline);
+        assert_eq!(request.profile_version, PUBLISHED_PROFILE_V0_1_0);
     }
 
     #[test]
@@ -499,6 +562,7 @@ mod tests {
             },
             block_size_target: default_block_size_target(),
             stage: ExecutionStage::ClusteringAndBlockAssembly,
+            profile_version: default_profile_version(),
             max_concurrency: None,
             items: vec![],
         };
@@ -526,6 +590,7 @@ mod tests {
             },
             block_size_target: default_block_size_target(),
             stage: ExecutionStage::ClusteringAndBlockAssembly,
+            profile_version: default_profile_version(),
             max_concurrency: None,
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
@@ -557,6 +622,7 @@ mod tests {
             },
             block_size_target: default_block_size_target(),
             stage: ExecutionStage::FullPipeline,
+            profile_version: default_profile_version(),
             max_concurrency: None,
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
@@ -592,6 +658,7 @@ mod tests {
             },
             block_size_target: default_block_size_target(),
             stage: ExecutionStage::FullPipeline,
+            profile_version: default_profile_version(),
             max_concurrency: None,
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
@@ -622,6 +689,7 @@ mod tests {
                 "dims": 384,
                 "encoding": "f32le"
             },
+            "profile_version": "0.2.0",
             "items": [{
                 "kind": "document",
                 "path": "docs/sample.txt"
@@ -644,9 +712,89 @@ mod tests {
     #[test]
     fn clustering_defaults_to_published_profile_v0_1_0() {
         let clustering = ClusteringConfigOverrides::default()
-            .to_configured_clustering()
+            .to_configured_clustering(default_profile_version())
             .unwrap();
 
         assert_eq!(clustering.profile_version, PUBLISHED_PROFILE_V0_1_0);
+    }
+
+    #[test]
+    fn clustering_override_uses_request_profile_when_cli_omits_selector() {
+        let clustering = ClusteringConfigOverrides::default()
+            .to_configured_clustering(PublishedProfileVersion::new(0, 2, 0))
+            .unwrap();
+
+        assert_eq!(
+            clustering.profile_version,
+            PublishedProfileVersion::new(0, 2, 0)
+        );
+    }
+
+    #[test]
+    fn clustering_override_replaces_request_profile_when_cli_selects_profile() {
+        let clustering = ClusteringConfigOverrides {
+            profile_version: Some(PublishedProfileVersion::new(0, 2, 0)),
+        }
+        .to_configured_clustering(default_profile_version())
+        .unwrap();
+
+        assert_eq!(
+            clustering.profile_version,
+            PublishedProfileVersion::new(0, 2, 0)
+        );
+    }
+
+    #[test]
+    fn request_profile_version_deserializes_from_json_string() {
+        let request: BatchRequest = serde_json::from_value(json!({
+            "environment": {
+                "kind": "local",
+                "block_store_root": "blocks",
+                "embedding": {
+                    "base_url": "http://localhost:8080"
+                }
+            },
+            "embedding_spec": {
+                "dims": 384,
+                "encoding": "f32le"
+            },
+            "profile_version": "0.2.0",
+            "items": [{
+                "kind": "document",
+                "path": "docs/sample.txt"
+            }]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            request.profile_version,
+            PublishedProfileVersion::new(0, 2, 0)
+        );
+    }
+
+    #[test]
+    fn request_profile_version_rejects_invalid_strings() {
+        let error = serde_json::from_value::<BatchRequest>(json!({
+            "environment": {
+                "kind": "local",
+                "block_store_root": "blocks",
+                "embedding": {
+                    "base_url": "http://localhost:8080"
+                }
+            },
+            "embedding_spec": {
+                "dims": 384,
+                "encoding": "f32le"
+            },
+            "profile_version": "0.2",
+            "items": [{
+                "kind": "document",
+                "path": "docs/sample.txt"
+            }]
+        }))
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("expected <major>.<minor>.<patch>"));
     }
 }
