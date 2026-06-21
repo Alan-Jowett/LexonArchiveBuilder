@@ -40,12 +40,13 @@ impl ExecutionStage {
 
 #[derive(Args, Clone, Debug, Default, PartialEq)]
 pub struct ClusteringConfigOverrides {
-    #[arg(long, value_name = "MAJOR.MINOR.PATCH")]
-    pub profile_version: Option<PublishedProfileVersionArg>,
+    #[arg(
+        long,
+        value_name = "MAJOR.MINOR.PATCH",
+        value_parser = parse_published_profile_version
+    )]
+    pub profile_version: Option<PublishedProfileVersion>,
 }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PublishedProfileVersionArg(PublishedProfileVersion);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ConfiguredClustering {
@@ -63,10 +64,7 @@ impl ClusteringConfigOverrides {
     ) -> Result<ConfiguredClustering, ConfigError> {
         self.validate()?;
         Ok(ConfiguredClustering {
-            profile_version: self
-                .profile_version
-                .map(PublishedProfileVersionArg::into_inner)
-                .unwrap_or(request_profile_version),
+            profile_version: self.profile_version.unwrap_or(request_profile_version),
         })
     }
 }
@@ -304,20 +302,6 @@ pub(crate) fn metadata_to_lexongraph(
 
 pub(crate) fn metadata_to_text_map(metadata: &Metadata) -> BTreeMap<String, String> {
     metadata_values_to_text_map(metadata)
-}
-
-impl PublishedProfileVersionArg {
-    pub fn into_inner(self) -> PublishedProfileVersion {
-        self.0
-    }
-}
-
-impl std::str::FromStr for PublishedProfileVersionArg {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        parse_published_profile_version(value).map(Self)
-    }
 }
 
 fn default_block_size_target() -> usize {
@@ -749,9 +733,7 @@ mod tests {
     #[test]
     fn clustering_override_replaces_request_profile_when_cli_selects_profile() {
         let clustering = ClusteringConfigOverrides {
-            profile_version: Some(PublishedProfileVersionArg(PublishedProfileVersion::new(
-                0, 2, 0,
-            ))),
+            profile_version: Some(PublishedProfileVersion::new(0, 2, 0)),
         }
         .to_configured_clustering(default_profile_version())
         .unwrap();

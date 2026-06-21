@@ -299,7 +299,7 @@ mod tests {
         match cli.command {
             Command::Run { clustering, .. } => {
                 assert_eq!(
-                    clustering.profile_version.map(|value| value.into_inner()),
+                    clustering.profile_version,
                     Some(lexongraph_streaming_indexer::PublishedProfileVersion::new(
                         0, 2, 0
                     ))
