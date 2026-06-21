@@ -30,9 +30,11 @@ $parameters = Get-Content -LiteralPath (Join-Path $Root 'main.parameters.example
 $requiredMainPatterns = @(
     "module\s+storage\s+'storage\.bicep'",
     "module\s+cdn\s+'cdn\.bicep'",
+    "module\s+keyVault\s+'keyvault\.bicep'",
     "module\s+indexerVm\s+'vm-indexer\.bicep'",
     "module\s+embedderVm\s+'vm-embedder\.bicep'",
-    'output\s+postDeployOriginConfiguration\s+object'
+    'output\s+postDeployOriginConfiguration\s+object',
+    '@maxLength\(32000\)\s*param\s+indexerRequestJson\s+string'
 )
 
 foreach ($pattern in $requiredMainPatterns) {
@@ -45,7 +47,7 @@ if (-not $cdnBicep.Contains("Standard_Akamai")) {
     throw 'cdn.bicep is missing the Standard_Akamai SKU selection.'
 }
 
-if (-not $cdnBicep.Contains('originQueryString')) {
+if (-not [regex]::IsMatch($cdnBicep, 'output\s+originQueryString\s+string')) {
     throw 'cdn.bicep is missing the originQueryString output for the post-deploy Akamai step.'
 }
 

@@ -32,6 +32,7 @@ param azureResourceGroupName string
 param imageReference string
 
 @description('JSON request payload written to the indexing VM.')
+@maxLength(32000)
 param requestJson string
 
 @description('Host directory used for indexer summary output.')

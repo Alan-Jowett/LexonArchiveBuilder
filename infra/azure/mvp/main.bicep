@@ -135,6 +135,7 @@ param embedderImageReference string
 param indexOutputPath string = '/opt/lexonarchivebuilder/indexer/output'
 
 @description('JSON request payload written to the indexing VM before the indexer container runs.')
+@maxLength(32000)
 param indexerRequestJson string
 
 @description('Storage-access mode hint exported to the indexing VM bootstrap.')
