@@ -83,12 +83,22 @@ runcmd:
     EXIT_CODE=$?
     set -e
     echo "${EXIT_CODE}" > /opt/lexonarchivebuilder/indexer/last-exit-code
-    ARM_TOKEN="$(curl -sS -H Metadata:true 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/' | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")"
-    DEALLOCATE_EXIT_CODE=0
+    ARM_TOKEN=''
+    TOKEN_EXIT_CODE=0
     set +e
-    curl --fail -sS -X POST -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Length: 0' "https://management.azure.com/subscriptions/${azureSubscriptionId}/resourceGroups/${azureResourceGroupName}/providers/Microsoft.Compute/virtualMachines/${vmName}/deallocate?api-version=2023-09-01"
-    DEALLOCATE_EXIT_CODE=$?
+    ARM_TOKEN="$(curl --fail -sS -H Metadata:true 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/' | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")"
+    TOKEN_EXIT_CODE=$?
     set -e
+    echo "${TOKEN_EXIT_CODE}" > /opt/lexonarchivebuilder/indexer/last-token-exit-code
+    DEALLOCATE_EXIT_CODE=0
+    if [ "${TOKEN_EXIT_CODE}" -eq 0 ]; then
+      set +e
+      curl --fail -sS -X POST -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Length: 0' "https://management.azure.com/subscriptions/${azureSubscriptionId}/resourceGroups/${azureResourceGroupName}/providers/Microsoft.Compute/virtualMachines/${vmName}/deallocate?api-version=2023-09-01"
+      DEALLOCATE_EXIT_CODE=$?
+      set -e
+    else
+      DEALLOCATE_EXIT_CODE="${TOKEN_EXIT_CODE}"
+    fi
     echo "${DEALLOCATE_EXIT_CODE}" > /opt/lexonarchivebuilder/indexer/last-deallocate-exit-code
     SHUTDOWN_EXIT_CODE=0
     if [ "${DEALLOCATE_EXIT_CODE}" -ne 0 ]; then

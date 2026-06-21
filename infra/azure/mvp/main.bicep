@@ -260,7 +260,7 @@ output postDeployOriginConfiguration object = {
   profileName: cdn.outputs.profileName
   endpointName: cdn.outputs.endpointName
   storageBlobHostName: storage.outputs.blobHostName
-  originPath: '/${containerName}'
+  originPath: enableUrlRewrite ? '' : '/${containerName}'
   originQueryString: outputSasToken ? cdn.outputs.originQueryString : ''
   originQueryStringSource: outputSasToken ? 'deployment output' : (enableKeyVault ? 'Key Vault secret cdn-origin-sas' : 'generate manually from the storage account')
   note: 'Azure CDN Standard (Akamai) requires a post-deploy origin-query-string step to attach the hidden-origin SAS because this package does not use Azure Front Door Private Link.'
