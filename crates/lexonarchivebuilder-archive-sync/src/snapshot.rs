@@ -263,7 +263,10 @@ pub fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner>(
         ) {
             for entry in &manifest.entries {
                 journal
-                    .queue_work(WorkKind::MailboxAdmission, entry.relative_path.clone())
+                    .queue_work(
+                        WorkKind::MailboxAdmission,
+                        mailbox_work_item_id(&entry.relative_path),
+                    )
                     .map_err(|source| SourceSnapshotAcquisitionError::UpdateJournal { source })?;
             }
         }
@@ -327,7 +330,10 @@ pub fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner>(
         .insert("entry_count".into(), manifest.entries.len().to_string());
     for entry in &manifest.entries {
         journal
-            .queue_work(WorkKind::MailboxAdmission, entry.relative_path.clone())
+            .queue_work(
+                WorkKind::MailboxAdmission,
+                mailbox_work_item_id(&entry.relative_path),
+            )
             .map_err(|source| SourceSnapshotAcquisitionError::UpdateJournal { source })?;
     }
     journal.set_stage(WorkflowStage::MailboxAdmission);
@@ -500,6 +506,10 @@ fn snapshot_block(media_type: &str, body: Vec<u8>) -> Block {
     })
 }
 
+fn mailbox_work_item_id(relative_path: &str) -> String {
+    format!("mailbox:{relative_path}")
+}
+
 fn normalize_relative_path(
     root: &Path,
     path: &Path,
@@ -650,8 +660,8 @@ mod tests {
                 .cloned()
                 .collect::<Vec<_>>(),
             vec![
-                "ietf/2026-01.mbox".to_string(),
-                "ietf/2026-02.mbox".to_string()
+                "mailbox:ietf/2026-01.mbox".to_string(),
+                "mailbox:ietf/2026-02.mbox".to_string()
             ]
         );
         assert!(
@@ -794,7 +804,7 @@ mod tests {
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>(),
-            vec!["ietf/2026-01.mbox".to_string()]
+            vec!["mailbox:ietf/2026-01.mbox".to_string()]
         );
         assert_eq!(
             resumed_journal.source_snapshot.source_snapshot_id,
@@ -833,7 +843,7 @@ mod tests {
             .work
             .mailbox_admission
             .completed
-            .insert("ietf/2026-01.mbox".into());
+            .insert("mailbox:ietf/2026-01.mbox".into());
 
         let snapshot = acquire_source_snapshot(
             &store,
