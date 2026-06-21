@@ -331,6 +331,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::FullPipeline,
+            profile_version: lexonarchivebuilder_indexer::config::PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
             items: vec![BatchItemConfig::Document {
                 path: document_path
@@ -432,6 +433,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::FullPipeline,
+            profile_version: lexonarchivebuilder_indexer::config::PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
             items: vec![BatchItemConfig::Mailbox {
                 path: mailbox_path

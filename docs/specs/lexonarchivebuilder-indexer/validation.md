@@ -5,14 +5,15 @@
 Validation patch for the approved email-artifact, chunk-level
 indexing, local filesystem block-store interoperability, replay-based
 streaming delegated indexing, stage-selectable execution, standalone
-clustering input discovery, published-profile API adoption, published-profile
-contract pinning, latest published-profile and telemetry compatibility, upstream
-regression assessment, replay-submission and streaming-status observability,
-clustering-failure diagnostics, rooted block-tree quality assessment with
-rooted TNN-recall diagnostics, rooted CLI search over stored trees,
-replay-stable fingerprinting, upstream wgpu-acceleration revision
-compatibility, LAB-owned replay-journaled split-stage recovery, and
-layer-parallel block-construction evolution in
+clustering input discovery, published-profile API adoption,
+published-profile version selection, latest published-profile and telemetry
+compatibility, upstream regression assessment, replay-submission and
+streaming-status observability, clustering-failure diagnostics, rooted
+block-tree quality assessment with rooted TNN-recall diagnostics, rooted
+CLI search over stored trees, replay-stable fingerprinting, temporary
+upstream `main` tracking for rapid profile validation, upstream
+wgpu-acceleration revision compatibility, LAB-owned replay-journaled
+split-stage recovery, and layer-parallel block-construction evolution in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md` and
 `docs/specs/lexonarchivebuilder-indexer/design.md`.
 
@@ -22,9 +23,11 @@ These validation entries define the expected conformance surface for the
 LexonArchiveBuilder-owned indexer boundary, including local filesystem
 block-store interoperability, replay-based streaming delegated indexing,
 stage-selectable execution, standalone clustering input discovery,
-published-profile API adoption, repository-pinned published-profile
-configuration, latest published-profile and telemetry compatibility, upstream
-wgpu-acceleration revision compatibility, upstream regression assessment, embedding-phase batch-progress observability,
+published-profile API adoption, caller-selectable published-profile
+configuration with default `0.1.0`, latest published-profile and telemetry
+compatibility, temporary upstream `main` tracking for rapid profile
+validation, upstream wgpu-acceleration revision compatibility, upstream
+regression assessment, embedding-phase batch-progress observability,
 replay-submission observability, streaming-status observability,
 telemetry-count-semantics clarity, clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted CLI
@@ -186,27 +189,29 @@ both executions remain contract-equivalent at the LexonArchiveBuilder boundary.
 
 ### VAL-LFI-002K
 
-Inspect the clustering-enabled CLI surface for a representative `run`
-invocation.
+Inspect the clustering-enabled profile-selection surface for a representative
+`run` invocation and request payload.
 
 **Pass condition:** the CLI preserves the existing request-file-driven runtime
-shape and stage selector, clustering-enabled execution resolves to the approved
-published profile version `0.1.0`, and any retired low-level clustering flags
-or equivalent stale automation inputs are rejected explicitly instead of being
-silently ignored.
+shape and stage selector, clustering-enabled execution exposes one
+profile-version selector across CLI and `BatchRequest`, omission resolves to
+default profile `0.1.0`, explicit selection preserves the same contract shape,
+and any retired low-level clustering flags or equivalent stale automation
+inputs are rejected explicitly instead of being silently ignored.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, DSG-LFI-001G,
 DSG-LFI-001H, DSG-LFI-007C
 
 ### VAL-LFI-002L
 
-Run clustering-enabled execution twice through the approved published-profile
-path against the same representative input snapshot.
+Run clustering-enabled execution twice through the same selected
+published-profile path against the same representative input snapshot.
 
-**Pass condition:** both invocations resolve to the same approved published
-profile version `0.1.0` and therefore to the same effective delegated planning
+**Pass condition:** both invocations resolve to the same selected published
+profile version and therefore to the same effective delegated planning
 behavior, so the profile-based contract remains deterministic and does not
-create hidden replay drift.
+create hidden replay drift. When the selector is omitted, that resolved version
+is `0.1.0`.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003H,
 RQ-INDEXER-008, DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-010
@@ -218,7 +223,7 @@ path and once with one of the retired low-level clustering controls such as
 `cluster_count` supplied explicitly.
 
 **Pass condition:** the normal published-profile invocation succeeds through the
-approved `0.1.0` profile path, and the invocation that supplies a retired
+selected published-profile path, and the invocation that supplies a retired
 low-level clustering control fails explicitly rather than being merged into or
 silently overriding the published profile.
 
@@ -230,17 +235,16 @@ Inspect the latest LexonGraph upgrade boundary against the repository-required
 indexer contract.
 
 **Pass condition:** the upgrade preserves the approved external stage contract,
-published-profile API adoption for clustering-enabled execution, repository
-pinning to published profile `0.1.0`, retirement of the old low-level
-clustering control family, deterministic split-stage replay, repository-owned
-progress projection, projection of the latest upstream live telemetry and
-heartbeat events, unchanged MCP search-serving behavior for already-indexed
-content, and dependency-pin-only adoption of LexonGraph commit
-`70a80a2b51b41759217eec05086cb76586c4f1a5` for upstream wgpu acceleration
-without new repository-visible controls, or else any missing capability is
-classified explicitly as an
-upstream regression or compatibility finding rather than being silently
-dropped.
+published-profile API adoption for clustering-enabled execution, default
+profile `0.1.0` plus explicit profile-version selection, retirement of the old
+low-level clustering control family, deterministic split-stage replay,
+repository-owned progress projection, projection of the latest upstream live
+telemetry and heartbeat events, unchanged MCP search-serving behavior for
+already-indexed content, and temporary explicit tracking of LexonGraph `main`
+for rapid profile validation and upstream wgpu acceleration without new
+repository-visible low-level controls, or else any missing capability is
+classified explicitly as an upstream regression or compatibility finding rather
+than being silently dropped.
 
 **Traces to:** RQ-INDEXER-003I, DSG-LFI-001I
 
@@ -519,7 +523,7 @@ block-store snapshot.
 approved replay-input source produces the same logical clustering result on
 repeated standalone clustering runs, whether discovery uses the replay journal
 or the compatibility fallback path, without requiring repository-local
-duplicate-suppression logic, as long as the approved published profile version
+duplicate-suppression logic, as long as the selected published profile version
 is unchanged.
 
 **Traces to:** RQ-INDEXER-003E, RQ-INDEXER-003F, RQ-INDEXER-003G,

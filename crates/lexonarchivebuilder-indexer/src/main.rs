@@ -285,6 +285,31 @@ mod tests {
     }
 
     #[test]
+    fn run_command_parses_profile_version_override() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "run",
+            "--request",
+            "request.json",
+            "--profile-version",
+            "0.2.0",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Run { clustering, .. } => {
+                assert_eq!(
+                    clustering.profile_version.map(|value| value.into_inner()),
+                    Some(lexongraph_streaming_indexer::PublishedProfileVersion::new(
+                        0, 2, 0
+                    ))
+                );
+            }
+            _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
     fn run_command_rejects_retired_low_level_clustering_flags() {
         let error = Cli::try_parse_from([
             "lexonarchivebuilder-indexer",

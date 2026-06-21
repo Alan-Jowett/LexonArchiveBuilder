@@ -13,9 +13,10 @@ use lexongraph_block::{
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_streaming_indexer::{
-    ContentResolver, IndexItem, PlanningStage, PublishedIndexingProfile, StreamingIndexerError,
-    StreamingIndexingPhase, StreamingIndexingRun, StreamingIndexingStatus,
-    StreamingIndexingStatusObserver, StreamingIndexingStatusState, published_indexing_profile,
+    BuiltInPlanningDirection, ContentResolver, IndexItem, PlanningStage, PublishedIndexingProfile,
+    PublishedPlanningStrategy, StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingRun,
+    StreamingIndexingStatus, StreamingIndexingStatusObserver, StreamingIndexingStatusState,
+    published_indexing_profile,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -115,12 +116,13 @@ struct ClusteringFailureEmbeddingSpec {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct EffectiveClusteringDiagnostics {
     profile_version: String,
-    leaf_algorithm_id: String,
-    packing_strategy_id: String,
+    planning_algorithm_id: String,
+    planning_direction: Option<String>,
+    packing_strategy_id: Option<String>,
     hierarchy_strategy_id: String,
     summary_policy_id: String,
-    leaf_cluster_count: u32,
-    leaf_random_seed: Option<u64>,
+    cluster_count: u32,
+    random_seed: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -614,13 +616,38 @@ fn effective_clustering_diagnostics(
     let profile = resolved_published_profile(clustering).ok()?;
     Some(EffectiveClusteringDiagnostics {
         profile_version: profile.version.to_string(),
-        leaf_algorithm_id: profile.leaf_algorithm_id.to_string(),
-        packing_strategy_id: profile.packing_strategy_id.to_string(),
+        planning_algorithm_id: profile.planning_algorithm_id.to_string(),
+        planning_direction: profile
+            .planning_direction
+            .map(published_planning_direction_name),
+        packing_strategy_id: profile.packing_strategy_id.map(str::to_string),
         hierarchy_strategy_id: profile.hierarchy_strategy_id.to_string(),
         summary_policy_id: profile.summary_policy_id.to_string(),
-        leaf_cluster_count: profile.leaf_cluster_count,
-        leaf_random_seed: profile.leaf_random_seed,
+        cluster_count: published_profile_cluster_count(&profile),
+        random_seed: published_profile_random_seed(&profile),
     })
+}
+
+fn published_profile_cluster_count(profile: &PublishedIndexingProfile) -> u32 {
+    match &profile.planning_strategy {
+        PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => settings.cluster_count,
+        PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => settings.cluster_count,
+    }
+}
+
+fn published_profile_random_seed(profile: &PublishedIndexingProfile) -> Option<u64> {
+    match &profile.planning_strategy {
+        PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => settings.random_seed,
+        PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => settings.random_seed,
+    }
+}
+
+fn published_planning_direction_name(direction: BuiltInPlanningDirection) -> String {
+    match direction {
+        BuiltInPlanningDirection::Divisive => "divisive",
+        BuiltInPlanningDirection::Agglomerative => "agglomerative",
+    }
+    .to_string()
 }
 
 const SUSPICIOUS_INPUT_SAMPLE_LIMIT: usize = 5;
@@ -1266,7 +1293,7 @@ where
 {
     let progress: ProgressReporter = Arc::new(progress);
     request.validate()?;
-    let clustering = clustering_overrides.to_configured_clustering()?;
+    let clustering = clustering_overrides.to_configured_clustering(request.profile_version)?;
     let stage = request.stage;
     let block_store = ConfiguredBlockStore::from_environment(request_dir, &request.environment)?;
     let local_block_store_root = request.environment.resolve_block_store_root(request_dir);
@@ -2812,6 +2839,7 @@ mod tests {
 
     use ciborium::value::Value;
     use lexongraph_block::Content;
+    use lexongraph_streaming_indexer::PUBLISHED_PROFILE_V0_1_0;
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -2852,6 +2880,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::FullPipeline,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
             items: vec![
                 BatchItemConfig::Mailbox {
@@ -2914,6 +2943,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::FullPipeline,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
             items: vec![BatchItemConfig::Document {
                 path: Path::new("doc.txt").to_path_buf(),
@@ -2962,6 +2992,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::FullPipeline,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
             items: vec![
                 BatchItemConfig::Mailbox {
@@ -3081,6 +3112,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::FullPipeline,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
             items,
         };
@@ -3104,6 +3136,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::ClusteringAndBlockAssembly,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
             items: vec![],
         };
@@ -3160,6 +3193,7 @@ mod tests {
             },
             block_size_target: serialized_branch_size(&embedding_spec, 2).unwrap(),
             stage: ExecutionStage::ClusteringAndBlockAssembly,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
             items: vec![],
         }
@@ -3312,10 +3346,13 @@ mod tests {
             ClusteringFailureInput::Document { source_path, .. } if source_path.ends_with("alpha.txt")
         )));
         assert_eq!(diagnostics.clustering.profile_version, "0.1.0");
-        assert_eq!(diagnostics.clustering.leaf_algorithm_id, "spherical-kmeans");
+        assert_eq!(
+            diagnostics.clustering.planning_algorithm_id,
+            "spherical-kmeans"
+        );
         assert_eq!(
             diagnostics.clustering.packing_strategy_id,
-            "cluster-order-balanced-range-packer-v1"
+            Some("cluster-order-balanced-range-packer-v1".into())
         );
 
         let progress = progress.lock().unwrap();
@@ -3360,7 +3397,7 @@ mod tests {
             .join("summary.clustering-failure-diagnostics.json");
         let written = fs::read_to_string(&diagnostics_path).unwrap();
         assert!(written.contains("\"profile_version\": \"0.1.0\""));
-        assert!(written.contains("\"leaf_algorithm_id\": \"spherical-kmeans\""));
+        assert!(written.contains("\"planning_algorithm_id\": \"spherical-kmeans\""));
         assert!(written.contains("\"embedding_health\""));
         assert!(written.contains("\"failing_subset\""));
         assert!(written.contains("\"provenance\": \"exact\""));
@@ -3480,6 +3517,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::IngestionAndEmbedding,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
             items: vec![
                 BatchItemConfig::Document {
@@ -3527,6 +3565,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::FullPipeline,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
             items: vec![
                 BatchItemConfig::Document {
@@ -3559,6 +3598,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::ClusteringAndBlockAssembly,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
             items: vec![],
         };
@@ -3605,6 +3645,7 @@ mod tests {
                 },
                 block_size_target: 65_536,
                 stage: ExecutionStage::FullPipeline,
+                profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: None,
                 items: vec![
                     BatchItemConfig::Document {
@@ -3744,6 +3785,56 @@ mod tests {
                     "dims": 2,
                     "encoding": "f32le"
                 },
+                "items": [
+                    { "kind": "document", "path": "alpha.txt" },
+                    { "kind": "document", "path": "beta.txt" },
+                    { "kind": "document", "path": "gamma.txt" }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let summary = run_request_file_with_overrides(
+            &request_path,
+            None,
+            ClusteringConfigOverrides::default(),
+        )
+        .await
+        .unwrap();
+
+        assert!(!summary.block_ids.is_empty());
+        server.join();
+    }
+
+    #[tokio::test]
+    async fn alternate_published_profile_runs_end_to_end() {
+        let temp = tempdir().unwrap();
+        for name in ["alpha", "beta", "gamma"] {
+            fs::write(temp.path().join(format!("{name}.txt")), format!("{name}\n")).unwrap();
+        }
+
+        let server = spawn_distinct_embedding_server(3);
+        let request_path = temp.path().join("request.json");
+        fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&json!({
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": {
+                        "base_url": server.base_url,
+                        "model": "all-MiniLM-L6-v2",
+                        "request_timeout_secs": 5,
+                        "max_retries": 0,
+                        "retry_delay_ms": 1
+                    }
+                },
+                "embedding_spec": {
+                    "dims": 2,
+                    "encoding": "f32le"
+                },
+                "profile_version": "0.2.0",
                 "items": [
                     { "kind": "document", "path": "alpha.txt" },
                     { "kind": "document", "path": "beta.txt" },
@@ -3981,7 +4072,7 @@ mod tests {
         let written = fs::read_to_string(&output_path).unwrap();
         assert!(written.contains("\"stage\": \"full-pipeline\""));
         assert!(written.contains("\"profile_version\": \"0.1.0\""));
-        assert!(written.contains("\"leaf_algorithm_id\": \"spherical-kmeans\""));
+        assert!(written.contains("\"planning_algorithm_id\": \"spherical-kmeans\""));
         assert!(written.contains("\"embedding_health\""));
         assert!(written.contains("\"source_path\": \"alpha.txt\""));
     }
@@ -4034,12 +4125,13 @@ mod tests {
             block_size_target: 65_536,
             clustering: EffectiveClusteringDiagnostics {
                 profile_version: "0.1.0".into(),
-                leaf_algorithm_id: "spherical-kmeans".into(),
-                packing_strategy_id: "cluster-order-balanced-range-packer-v1".into(),
+                planning_algorithm_id: "spherical-kmeans".into(),
+                planning_direction: None,
+                packing_strategy_id: Some("cluster-order-balanced-range-packer-v1".into()),
                 hierarchy_strategy_id: "greedy-pack".into(),
                 summary_policy_id: "exact-centroid".into(),
-                leaf_cluster_count: 157,
-                leaf_random_seed: Some(11),
+                cluster_count: 157,
+                random_seed: Some(11),
             },
             embedding_health: embedding_health.clone(),
             failing_subset: Some(FailingSubsetDiagnostics {
@@ -4129,21 +4221,22 @@ mod tests {
     #[test]
     fn effective_clustering_diagnostics_uses_published_profile_metadata() {
         let clustering = ClusteringConfigOverrides::default()
-            .to_configured_clustering()
+            .to_configured_clustering(lexongraph_streaming_indexer::PUBLISHED_PROFILE_V0_1_0)
             .expect("published profile config");
         let diagnostics =
             effective_clustering_diagnostics(&clustering).expect("published profile diagnostics");
 
         assert_eq!(diagnostics.profile_version, "0.1.0");
-        assert_eq!(diagnostics.leaf_algorithm_id, "spherical-kmeans");
+        assert_eq!(diagnostics.planning_algorithm_id, "spherical-kmeans");
+        assert_eq!(diagnostics.planning_direction, None);
         assert_eq!(
             diagnostics.packing_strategy_id,
-            "cluster-order-balanced-range-packer-v1"
+            Some("cluster-order-balanced-range-packer-v1".into())
         );
         assert_eq!(diagnostics.hierarchy_strategy_id, "greedy-pack");
         assert_eq!(diagnostics.summary_policy_id, "exact-centroid");
-        assert_eq!(diagnostics.leaf_cluster_count, 157);
-        assert_eq!(diagnostics.leaf_random_seed, Some(11));
+        assert_eq!(diagnostics.cluster_count, 157);
+        assert_eq!(diagnostics.random_seed, Some(11));
     }
 
     #[test]
@@ -4409,6 +4502,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::FullPipeline,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(1),
             items: vec![
                 BatchItemConfig::Document {
@@ -4486,6 +4580,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::FullPipeline,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(1),
             items: vec![BatchItemConfig::Mailbox {
                 path: mailbox_path
@@ -4543,6 +4638,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::FullPipeline,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(3),
             items: vec![
                 BatchItemConfig::Document {
@@ -4601,6 +4697,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::FullPipeline,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(3),
             items,
         };
@@ -4646,6 +4743,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::IngestionAndEmbedding,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(3),
             items,
         };
@@ -4684,6 +4782,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::FullPipeline,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
             items: vec![
                 BatchItemConfig::Document {
@@ -4716,6 +4815,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::ClusteringAndBlockAssembly,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
             items: vec![],
         };
@@ -4764,6 +4864,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::FullPipeline,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
             items,
         };
@@ -4839,6 +4940,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::IngestionAndEmbedding,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
             items,
         };
@@ -4925,6 +5027,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::IngestionAndEmbedding,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(1),
             items: vec![BatchItemConfig::Document {
                 path: document_path
@@ -4982,6 +5085,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::IngestionAndEmbedding,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(1),
             items: vec![BatchItemConfig::Document {
                 path: document_path
@@ -5092,6 +5196,7 @@ mod tests {
             },
             block_size_target: 65_536,
             stage: ExecutionStage::IngestionAndEmbedding,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(1),
             items: vec![BatchItemConfig::Document {
                 path: document_path
