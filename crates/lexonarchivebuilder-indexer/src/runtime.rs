@@ -3877,7 +3877,7 @@ mod tests {
                     "dims": 2,
                     "encoding": "f32le"
                 },
-                "profile_version": "0.4.0",
+                "profile_version": "0.5.0",
                 "items": [
                     { "kind": "document", "path": "alpha.txt" },
                     { "kind": "document", "path": "beta.txt" },

@@ -172,9 +172,13 @@ scripts/lexonarchivebuilder-scale-test.sh \
 ```
 
 To evaluate the current named experiment target after refreshing the
-LexonGraph dependency state, pass `--profile-version 0.4.0` to the indexer or
-set `"profile_version": "0.4.0"` in the request JSON. The earlier `0.3.0`
-alignment remains historical context for prior experiments.
+LexonGraph dependency state, pass `--profile-version 0.5.0` to the indexer or
+set `"profile_version": "0.5.0"` in the request JSON. Earlier `0.4.x`
+alignment remains comparison context for prior experiments, and `0.3.0`
+remains historical context.
+
+On Windows, run `.\test.ps1` from the repository root to sweep the current
+`0.5.x` series through the clustering-plus-quality workflow.
 
 On Linux, you can also launch the same workflow through Docker Compose:
 

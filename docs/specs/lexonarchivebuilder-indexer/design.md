@@ -13,7 +13,8 @@ clustering-failure diagnostics, rooted block-tree quality assessment with
 rooted TNN-recall diagnostics, rooted CLI search over stored trees,
 replay-stable fingerprinting, temporary upstream `main` tracking for
 rapid profile validation, upstream wgpu-acceleration revision
-compatibility, LAB-owned replay-journaled split-stage recovery, and
+compatibility, 0.5.x published-profile evaluation, local testing sweep
+automation, LAB-owned replay-journaled split-stage recovery, and
 layer-parallel block-construction evolution in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md`.
 
@@ -29,6 +30,7 @@ caller-selectable published-profile configuration with default `0.1.0`,
 latest published-profile and telemetry compatibility, temporary upstream
 `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, upstream regression assessment,
+0.5.x published-profile evaluation, local testing sweep automation,
 embedding-phase batch-progress observability,
 replay-submission observability, streaming-status observability,
 telemetry-count-semantics clarity, clustering-failure diagnostics,
@@ -310,12 +312,13 @@ approved contract through `PublishedProfileVersion`, the current default
 constant `PUBLISHED_PROFILE_V0_1_0`, and the higher-level
 `with_published_profile(...)` construction path.
 
-When the temporarily tracked upstream `main` branch publishes an additional
-profile version such as `0.4.0`, LexonArchiveBuilder refreshes its adopted
-dependency state so that the same selector surface can target that version
-immediately, without changing the repository default away from `0.1.0`. The
-earlier `0.3.0` alignment remains historical context for prior experiments,
-not the current named selector target.
+When the temporarily tracked upstream `main` branch publishes additional
+profile versions in the active `0.5.x` experiment series, LexonArchiveBuilder
+refreshes its adopted dependency state so that the same selector surface can
+target those versions immediately, without changing the repository default
+away from `0.1.0`. Earlier `0.4.x` alignment remains prior comparison context
+for evaluation, while `0.3.0` remains historical context for older
+experiments, not the current named selector target.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-008, RQ-INDEXER-010A
 
@@ -330,8 +333,9 @@ In this increment, that normalization means:
 - clustering-enabled execution resolves to one selected published profile
   version, defaulting to `0.1.0` when the caller omits the selector
 - refreshing the adopted upstream dependency state may add newly published
-  selector targets such as `0.4.0`, but does not change omitted-selector
-  behavior unless a later approved increment changes the default explicitly
+  selector targets in the active `0.5.x` series, but does not change
+  omitted-selector behavior unless a later approved increment changes the
+  default explicitly
 - no repository-local clustering mode, clustering algorithm, `cluster_count`,
   or algorithm-specific tuning values are forwarded as active upstream planning
   inputs
@@ -368,10 +372,14 @@ upgrade whenever the latest upstream contract still supports them semantically:
 - defaulting to published profile `0.1.0` while permitting explicit selection
   of another upstream-published profile version for evaluation
 - refreshing the adopted upstream dependency state so newly published versions
-  such as `0.4.0` become selectable without redefining the repository default,
-  while retaining earlier `0.3.0` alignment as historical context
+  in the active `0.5.x` series become selectable without redefining the
+  repository default, while retaining earlier `0.4.x` alignment as prior
+  comparison context and `0.3.0` alignment as historical context
 - retirement of the old low-level clustering control family from the approved
   external contract
+- repository-local local/testing automation that reuses the approved batch and
+  rooted-quality surfaces to sweep the current profile experiment set without
+  per-profile code edits
 - repository-owned progress projection over upstream lifecycle events
 - projection of richer live hierarchy-stage telemetry and heartbeat events onto
   that same repository-owned progress surface
@@ -1149,6 +1157,30 @@ and writes the full machine-readable JSON result output for downstream
 automation.
 
 **Traces to:** RQ-INDEXER-008E, RQ-INDEXER-009
+
+### DSG-LFI-007F `Local published-profile sweep automation surface`
+
+LexonArchiveBuilder preserves one repository-local operator automation surface,
+currently the runnable root `test.ps1` script, for evaluating the active
+published-profile experiment set in the local/testing environment.
+
+That surface is intentionally outside the batch request schema and production
+deployment contract. It composes the already-approved `run` and rooted-quality
+CLI boundaries rather than defining a testing-only indexing API.
+
+In this increment, the automation surface:
+
+- carries an operator-editable published-profile list whose active named target
+  is the upstream `0.5.x` series
+- may include prior comparison baselines such as `0.4.x` in the same sweep
+  without changing the omitted-selector default or widening the runtime
+  contract
+- emits per-profile run artifacts, per-profile rooted-quality artifacts, and a
+  comparable summary output suitable for side-by-side evaluation
+- remains version-series-agnostic so later published-profile series can be
+  substituted without reshaping the repository contract
+
+**Traces to:** RQ-INDEXER-003J
 
 ### DSG-LFI-008 `Local and production parity boundary`
 

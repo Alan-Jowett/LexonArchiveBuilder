@@ -12,7 +12,8 @@ streaming-status observability, clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 CLI search over stored trees, replay-stable fingerprinting, temporary
 upstream `main` tracking for rapid profile validation, upstream
-wgpu-acceleration revision compatibility, LAB-owned replay-journaled
+wgpu-acceleration revision compatibility, 0.5.x published-profile
+evaluation, local testing sweep automation, LAB-owned replay-journaled
 split-stage recovery, and layer-parallel block-construction evolution in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md` and
 `docs/specs/lexonarchivebuilder-indexer/design.md`.
@@ -26,7 +27,8 @@ stage-selectable execution, standalone clustering input discovery,
 published-profile API adoption, caller-selectable published-profile
 configuration with default `0.1.0`, latest published-profile and telemetry
 compatibility, temporary upstream `main` tracking for rapid profile
-validation, upstream wgpu-acceleration revision compatibility, upstream
+validation, upstream wgpu-acceleration revision compatibility, 0.5.x
+published-profile evaluation, local testing sweep automation, upstream
 regression assessment, embedding-phase batch-progress observability,
 replay-submission observability, streaming-status observability,
 telemetry-count-semantics clarity, clustering-failure diagnostics, rooted
@@ -196,8 +198,9 @@ Inspect the clustering-enabled profile-selection surface for a representative
 shape and stage selector, clustering-enabled execution exposes one
 profile-version selector across CLI and `BatchRequest`, omission resolves to
 default profile `0.1.0`, explicit selection preserves the same contract shape,
-refreshing the adopted upstream dependency state can add a newly published
-selector target such as `0.4.0` without changing that default behavior, and
+refreshing the adopted upstream dependency state can add newly published
+selector targets in the active `0.5.x` series without changing that default
+behavior, and
 any retired low-level clustering flags or equivalent stale automation inputs
 are rejected explicitly instead of being silently ignored.
 
@@ -245,13 +248,28 @@ telemetry and heartbeat events, unchanged MCP search-serving behavior for
 already-indexed content, and temporary explicit tracking of LexonGraph `main`
 for rapid profile validation and upstream wgpu acceleration without new
 repository-visible low-level controls. This includes refreshing the adopted
-dependency state so a newly published profile version such as `0.4.0` becomes
-selectable while omitted selectors still resolve to `0.1.0`, with the earlier
-`0.3.0` alignment retained only as historical context, or else any missing
-capability is classified explicitly as an upstream regression or
-compatibility finding rather than being silently dropped.
+dependency state so newly published profile versions in the active `0.5.x`
+series become selectable while omitted selectors still resolve
+to `0.1.0`, with earlier `0.4.x` alignment retained only as prior comparison
+context and `0.3.0` retained as historical context, or else any missing
+capability is classified explicitly as an upstream regression or compatibility
+finding rather than being silently dropped.
 
 **Traces to:** RQ-INDEXER-003I, DSG-LFI-001I
+
+### VAL-LFI-002N1
+
+Run the repository-local published-profile sweep automation against a
+representative local/testing corpus.
+
+**Pass condition:** the runnable `test.ps1` workflow reuses the approved batch
+and rooted-quality operator surfaces, can target the active `0.5.x`
+published-profile series without per-profile code edits, emits per-profile
+artifacts plus comparable summary output, and keeps any optional `0.4.x`
+baseline comparison in the same local/testing-only automation surface rather
+than changing the batch request contract or MCP behavior.
+
+**Traces to:** RQ-INDEXER-003J, DSG-LFI-001I, DSG-LFI-007F
 
 ### VAL-LFI-002O
 
