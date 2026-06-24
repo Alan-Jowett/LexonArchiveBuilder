@@ -1107,7 +1107,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-adaptive-planning-policy"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#ae4c741ecbd1e7852beaabc4f2117e8fe29cd39e"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#845179992095be22bfb3c51d5fb59ae3076f7b55"
 dependencies = [
  "lexongraph-directional-pca",
  "lexongraph-pca",
@@ -1117,7 +1117,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#ae4c741ecbd1e7852beaabc4f2117e8fe29cd39e"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#845179992095be22bfb3c51d5fb59ae3076f7b55"
 dependencies = [
  "ciborium",
  "sha2 0.11.0",
@@ -1126,7 +1126,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#ae4c741ecbd1e7852beaabc4f2117e8fe29cd39e"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#845179992095be22bfb3c51d5fb59ae3076f7b55"
 dependencies = [
  "lexongraph-block",
 ]
@@ -1134,7 +1134,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store-azure"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#ae4c741ecbd1e7852beaabc4f2117e8fe29cd39e"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#845179992095be22bfb3c51d5fb59ae3076f7b55"
 dependencies = [
  "lexongraph-block",
  "lexongraph-block-store",
@@ -1146,7 +1146,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store-fs"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#ae4c741ecbd1e7852beaabc4f2117e8fe29cd39e"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#845179992095be22bfb3c51d5fb59ae3076f7b55"
 dependencies = [
  "lexongraph-block",
  "lexongraph-block-store",
@@ -1156,7 +1156,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-dcbc-streaming"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#ae4c741ecbd1e7852beaabc4f2117e8fe29cd39e"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#845179992095be22bfb3c51d5fb59ae3076f7b55"
 dependencies = [
  "lexongraph-streaming-clustering",
  "sha2 0.11.0",
@@ -1165,7 +1165,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-directional-pca"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#ae4c741ecbd1e7852beaabc4f2117e8fe29cd39e"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#845179992095be22bfb3c51d5fb59ae3076f7b55"
 dependencies = [
  "lexongraph-pca",
  "lexongraph-streaming-clustering",
@@ -1175,7 +1175,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-embeddings-trait"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#ae4c741ecbd1e7852beaabc4f2117e8fe29cd39e"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#845179992095be22bfb3c51d5fb59ae3076f7b55"
 dependencies = [
  "lexongraph-block",
  "pollster",
@@ -1184,7 +1184,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-linear-algebra-acceleration"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#ae4c741ecbd1e7852beaabc4f2117e8fe29cd39e"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#845179992095be22bfb3c51d5fb59ae3076f7b55"
 dependencies = [
  "serde",
 ]
@@ -1192,7 +1192,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-pca"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#ae4c741ecbd1e7852beaabc4f2117e8fe29cd39e"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#845179992095be22bfb3c51d5fb59ae3076f7b55"
 dependencies = [
  "nalgebra",
 ]
@@ -1200,7 +1200,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-search"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#ae4c741ecbd1e7852beaabc4f2117e8fe29cd39e"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#845179992095be22bfb3c51d5fb59ae3076f7b55"
 dependencies = [
  "lexongraph-block",
  "lexongraph-block-store",
@@ -1209,7 +1209,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-spherical-kmeans"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#ae4c741ecbd1e7852beaabc4f2117e8fe29cd39e"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#845179992095be22bfb3c51d5fb59ae3076f7b55"
 dependencies = [
  "lexongraph-linear-algebra-acceleration",
  "lexongraph-streaming-clustering",
@@ -1220,12 +1220,12 @@ dependencies = [
 [[package]]
 name = "lexongraph-streaming-clustering"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#ae4c741ecbd1e7852beaabc4f2117e8fe29cd39e"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#845179992095be22bfb3c51d5fb59ae3076f7b55"
 
 [[package]]
 name = "lexongraph-streaming-indexer"
-version = "0.2.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#ae4c741ecbd1e7852beaabc4f2117e8fe29cd39e"
+version = "0.3.0"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?branch=main#845179992095be22bfb3c51d5fb59ae3076f7b55"
 dependencies = [
  "ciborium",
  "half",
@@ -1235,6 +1235,7 @@ dependencies = [
  "lexongraph-dcbc-streaming",
  "lexongraph-directional-pca",
  "lexongraph-embeddings-trait",
+ "lexongraph-pca",
  "lexongraph-spherical-kmeans",
  "lexongraph-streaming-clustering",
  "pollster",
