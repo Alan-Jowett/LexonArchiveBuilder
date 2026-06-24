@@ -171,6 +171,11 @@ scripts/lexonarchivebuilder-scale-test.sh \
   rsync.ietf.org::mailman-archive/ipsec/
 ```
 
+To evaluate the current named experiment target after refreshing the
+LexonGraph dependency state, pass `--profile-version 0.4.0` to the indexer or
+set `"profile_version": "0.4.0"` in the request JSON. The earlier `0.3.0`
+alignment remains historical context for prior experiments.
+
 On Linux, you can also launch the same workflow through Docker Compose:
 
 ```bash

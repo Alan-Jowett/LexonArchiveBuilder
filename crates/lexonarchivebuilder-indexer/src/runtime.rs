@@ -2856,6 +2856,43 @@ mod tests {
 
     use super::*;
 
+    #[allow(clippy::too_many_arguments)]
+    fn test_streaming_status(
+        phase: StreamingIndexingPhase,
+        state: StreamingIndexingStatusState,
+        item_count: usize,
+        phase_total_unit_count: Option<usize>,
+        completed_unit_count: usize,
+        remaining_unit_count: Option<usize>,
+        elapsed: Duration,
+        error: Option<&str>,
+    ) -> StreamingIndexingStatus {
+        StreamingIndexingStatus {
+            phase,
+            state,
+            item_count,
+            phase_total_unit_count,
+            completed_unit_count,
+            remaining_unit_count,
+            progress_unit_kind: None,
+            discovered_unit_count: None,
+            current_unit_elapsed: None,
+            current_partition_path: None,
+            current_partition_size: None,
+            current_recursion_depth: None,
+            started_subproblem_count: None,
+            completed_subproblem_count: None,
+            visited_partition_count: None,
+            finalized_partition_count: None,
+            terminal_partition_count: None,
+            completed_planner_invocation_count: None,
+            fallback_count: None,
+            elapsed,
+            last_progress_at: None,
+            error: error.map(str::to_owned),
+        }
+    }
+
     #[tokio::test]
     async fn repeated_runs_are_idempotent_for_unchanged_content() {
         let temp = tempdir().unwrap();
@@ -3840,7 +3877,7 @@ mod tests {
                     "dims": 2,
                     "encoding": "f32le"
                 },
-                "profile_version": "0.2.0",
+                "profile_version": "0.4.0",
                 "items": [
                     { "kind": "document", "path": "alpha.txt" },
                     { "kind": "document", "path": "beta.txt" },
@@ -4165,18 +4202,18 @@ mod tests {
     #[test]
     fn failing_subset_diagnostics_marks_exact_top_level_match() {
         let diagnostics = build_failing_subset_diagnostics(
-            &StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::HierarchyPlanning {
+            &test_streaming_status(
+                StreamingIndexingPhase::HierarchyPlanning {
                     stage: PlanningStage::Single,
                 },
-                state: StreamingIndexingStatusState::Failed,
-                item_count: 3,
-                phase_total_unit_count: Some(3),
-                completed_unit_count: 0,
-                remaining_unit_count: Some(3),
-                elapsed: Duration::from_secs(1),
-                error: Some("boom".into()),
-            },
+                StreamingIndexingStatusState::Failed,
+                3,
+                Some(3),
+                0,
+                Some(3),
+                Duration::from_secs(1),
+                Some("boom"),
+            ),
             3,
             &sample_clustering_failure_diagnostics().embedding_health,
         );
@@ -4196,18 +4233,18 @@ mod tests {
     #[test]
     fn failing_subset_diagnostics_falls_back_to_narrowest_provable_top_level_subset() {
         let diagnostics = build_failing_subset_diagnostics(
-            &StreamingIndexingStatus {
-                phase: StreamingIndexingPhase::HierarchyPlanning {
+            &test_streaming_status(
+                StreamingIndexingPhase::HierarchyPlanning {
                     stage: PlanningStage::Single,
                 },
-                state: StreamingIndexingStatusState::Failed,
-                item_count: 1,
-                phase_total_unit_count: Some(1),
-                completed_unit_count: 0,
-                remaining_unit_count: Some(1),
-                elapsed: Duration::from_secs(1),
-                error: Some("boom".into()),
-            },
+                StreamingIndexingStatusState::Failed,
+                1,
+                Some(1),
+                0,
+                Some(1),
+                Duration::from_secs(1),
+                Some("boom"),
+            ),
             3,
             &sample_clustering_failure_diagnostics().embedding_health,
         );
@@ -4281,18 +4318,18 @@ mod tests {
 
     #[test]
     fn hierarchy_planning_progress_reports_stage_local_counts() {
-        let status = StreamingIndexingStatus {
-            phase: StreamingIndexingPhase::HierarchyPlanning {
+        let status = test_streaming_status(
+            StreamingIndexingPhase::HierarchyPlanning {
                 stage: PlanningStage::Custom,
             },
-            state: StreamingIndexingStatusState::InProgress,
-            item_count: 7,
-            phase_total_unit_count: None,
-            completed_unit_count: 7,
-            remaining_unit_count: None,
-            elapsed: Duration::from_millis(125),
-            error: None,
-        };
+            StreamingIndexingStatusState::InProgress,
+            7,
+            None,
+            7,
+            None,
+            Duration::from_millis(125),
+            None,
+        );
 
         assert_eq!(
             format_indexing_status(status),
@@ -4302,16 +4339,16 @@ mod tests {
 
     #[test]
     fn final_materialization_progress_reports_replay_totals_when_available() {
-        let status = StreamingIndexingStatus {
-            phase: StreamingIndexingPhase::FinalMaterializationReplay,
-            state: StreamingIndexingStatusState::InProgress,
-            item_count: 9,
-            phase_total_unit_count: Some(9),
-            completed_unit_count: 4,
-            remaining_unit_count: Some(5),
-            elapsed: Duration::from_millis(250),
-            error: None,
-        };
+        let status = test_streaming_status(
+            StreamingIndexingPhase::FinalMaterializationReplay,
+            StreamingIndexingStatusState::InProgress,
+            9,
+            Some(9),
+            4,
+            Some(5),
+            Duration::from_millis(250),
+            None,
+        );
 
         assert_eq!(
             format_indexing_status(status),
@@ -4321,16 +4358,16 @@ mod tests {
 
     #[test]
     fn bottom_up_assembly_progress_distinguishes_input_blocks_from_groups() {
-        let status = StreamingIndexingStatus {
-            phase: StreamingIndexingPhase::BottomUpAssembly { layer_index: 2 },
-            state: StreamingIndexingStatusState::Completed,
-            item_count: 12,
-            phase_total_unit_count: Some(3),
-            completed_unit_count: 3,
-            remaining_unit_count: Some(0),
-            elapsed: Duration::from_millis(88),
-            error: None,
-        };
+        let status = test_streaming_status(
+            StreamingIndexingPhase::BottomUpAssembly { layer_index: 2 },
+            StreamingIndexingStatusState::Completed,
+            12,
+            Some(3),
+            3,
+            Some(0),
+            Duration::from_millis(88),
+            None,
+        );
 
         assert_eq!(
             format_indexing_status(status),
@@ -4340,16 +4377,16 @@ mod tests {
 
     #[test]
     fn bottom_up_assembly_progress_handles_unknown_group_total() {
-        let status = StreamingIndexingStatus {
-            phase: StreamingIndexingPhase::BottomUpAssembly { layer_index: 1 },
-            state: StreamingIndexingStatusState::InProgress,
-            item_count: 8,
-            phase_total_unit_count: None,
-            completed_unit_count: 2,
-            remaining_unit_count: None,
-            elapsed: Duration::from_millis(44),
-            error: None,
-        };
+        let status = test_streaming_status(
+            StreamingIndexingPhase::BottomUpAssembly { layer_index: 1 },
+            StreamingIndexingStatusState::InProgress,
+            8,
+            None,
+            2,
+            None,
+            Duration::from_millis(44),
+            None,
+        );
 
         assert_eq!(
             format_indexing_status(status),
@@ -4359,16 +4396,16 @@ mod tests {
 
     #[test]
     fn bottom_up_assembly_started_message_omits_elapsed_clause() {
-        let status = StreamingIndexingStatus {
-            phase: StreamingIndexingPhase::BottomUpAssembly { layer_index: 2 },
-            state: StreamingIndexingStatusState::Started,
-            item_count: 12,
-            phase_total_unit_count: Some(3),
-            completed_unit_count: 0,
-            remaining_unit_count: Some(3),
-            elapsed: Duration::from_millis(0),
-            error: None,
-        };
+        let status = test_streaming_status(
+            StreamingIndexingPhase::BottomUpAssembly { layer_index: 2 },
+            StreamingIndexingStatusState::Started,
+            12,
+            Some(3),
+            0,
+            Some(3),
+            Duration::from_millis(0),
+            None,
+        );
 
         assert_eq!(
             format_indexing_status(status),
@@ -4378,16 +4415,16 @@ mod tests {
 
     #[test]
     fn bottom_up_assembly_started_message_handles_unknown_group_total() {
-        let status = StreamingIndexingStatus {
-            phase: StreamingIndexingPhase::BottomUpAssembly { layer_index: 1 },
-            state: StreamingIndexingStatusState::Started,
-            item_count: 8,
-            phase_total_unit_count: None,
-            completed_unit_count: 0,
-            remaining_unit_count: None,
-            elapsed: Duration::from_millis(0),
-            error: None,
-        };
+        let status = test_streaming_status(
+            StreamingIndexingPhase::BottomUpAssembly { layer_index: 1 },
+            StreamingIndexingStatusState::Started,
+            8,
+            None,
+            0,
+            None,
+            Duration::from_millis(0),
+            None,
+        );
 
         assert_eq!(
             format_indexing_status(status),
@@ -4397,18 +4434,18 @@ mod tests {
 
     #[test]
     fn hierarchy_planning_failure_uses_single_temporal_clause() {
-        let status = StreamingIndexingStatus {
-            phase: StreamingIndexingPhase::HierarchyPlanning {
+        let status = test_streaming_status(
+            StreamingIndexingPhase::HierarchyPlanning {
                 stage: PlanningStage::Custom,
             },
-            state: StreamingIndexingStatusState::Failed,
-            item_count: 7,
-            phase_total_unit_count: None,
-            completed_unit_count: 3,
-            remaining_unit_count: None,
-            elapsed: Duration::from_millis(125),
-            error: Some("boom".into()),
-        };
+            StreamingIndexingStatusState::Failed,
+            7,
+            None,
+            3,
+            None,
+            Duration::from_millis(125),
+            Some("boom"),
+        );
 
         assert_eq!(
             format_indexing_status(status),
@@ -4418,16 +4455,16 @@ mod tests {
 
     #[test]
     fn bottom_up_assembly_failure_uses_single_temporal_clause() {
-        let status = StreamingIndexingStatus {
-            phase: StreamingIndexingPhase::BottomUpAssembly { layer_index: 2 },
-            state: StreamingIndexingStatusState::Failed,
-            item_count: 12,
-            phase_total_unit_count: Some(3),
-            completed_unit_count: 2,
-            remaining_unit_count: Some(1),
-            elapsed: Duration::from_millis(88),
-            error: Some("boom".into()),
-        };
+        let status = test_streaming_status(
+            StreamingIndexingPhase::BottomUpAssembly { layer_index: 2 },
+            StreamingIndexingStatusState::Failed,
+            12,
+            Some(3),
+            2,
+            Some(1),
+            Duration::from_millis(88),
+            Some("boom"),
+        );
 
         assert_eq!(
             format_indexing_status(status),

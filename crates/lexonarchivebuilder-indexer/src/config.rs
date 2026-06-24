@@ -689,7 +689,7 @@ mod tests {
                 "dims": 384,
                 "encoding": "f32le"
             },
-            "profile_version": "0.2.0",
+            "profile_version": "0.4.0",
             "items": [{
                 "kind": "document",
                 "path": "docs/sample.txt"
@@ -721,26 +721,26 @@ mod tests {
     #[test]
     fn clustering_override_uses_request_profile_when_cli_omits_selector() {
         let clustering = ClusteringConfigOverrides::default()
-            .to_configured_clustering(PublishedProfileVersion::new(0, 2, 0))
+            .to_configured_clustering(PublishedProfileVersion::new(0, 4, 0))
             .unwrap();
 
         assert_eq!(
             clustering.profile_version,
-            PublishedProfileVersion::new(0, 2, 0)
+            PublishedProfileVersion::new(0, 4, 0)
         );
     }
 
     #[test]
     fn clustering_override_replaces_request_profile_when_cli_selects_profile() {
         let clustering = ClusteringConfigOverrides {
-            profile_version: Some(PublishedProfileVersion::new(0, 2, 0)),
+            profile_version: Some(PublishedProfileVersion::new(0, 4, 0)),
         }
         .to_configured_clustering(default_profile_version())
         .unwrap();
 
         assert_eq!(
             clustering.profile_version,
-            PublishedProfileVersion::new(0, 2, 0)
+            PublishedProfileVersion::new(0, 4, 0)
         );
     }
 
@@ -758,7 +758,7 @@ mod tests {
                 "dims": 384,
                 "encoding": "f32le"
             },
-            "profile_version": "0.2.0",
+            "profile_version": "0.4.0",
             "items": [{
                 "kind": "document",
                 "path": "docs/sample.txt"
@@ -768,7 +768,7 @@ mod tests {
 
         assert_eq!(
             request.profile_version,
-            PublishedProfileVersion::new(0, 2, 0)
+            PublishedProfileVersion::new(0, 4, 0)
         );
     }
 

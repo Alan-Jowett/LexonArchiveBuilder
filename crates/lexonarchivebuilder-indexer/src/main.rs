@@ -292,7 +292,7 @@ mod tests {
             "--request",
             "request.json",
             "--profile-version",
-            "0.2.0",
+            "0.4.0",
         ])
         .unwrap();
 
@@ -301,7 +301,7 @@ mod tests {
                 assert_eq!(
                     clustering.profile_version,
                     Some(lexongraph_streaming_indexer::PublishedProfileVersion::new(
-                        0, 2, 0
+                        0, 4, 0
                     ))
                 );
             }

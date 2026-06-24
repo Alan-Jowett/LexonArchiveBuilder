@@ -310,6 +310,13 @@ approved contract through `PublishedProfileVersion`, the current default
 constant `PUBLISHED_PROFILE_V0_1_0`, and the higher-level
 `with_published_profile(...)` construction path.
 
+When the temporarily tracked upstream `main` branch publishes an additional
+profile version such as `0.4.0`, LexonArchiveBuilder refreshes its adopted
+dependency state so that the same selector surface can target that version
+immediately, without changing the repository default away from `0.1.0`. The
+earlier `0.3.0` alignment remains historical context for prior experiments,
+not the current named selector target.
+
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-008, RQ-INDEXER-010A
 
 ### DSG-LFI-001H `Published-profile contract normalization`
@@ -322,6 +329,9 @@ In this increment, that normalization means:
 
 - clustering-enabled execution resolves to one selected published profile
   version, defaulting to `0.1.0` when the caller omits the selector
+- refreshing the adopted upstream dependency state may add newly published
+  selector targets such as `0.4.0`, but does not change omitted-selector
+  behavior unless a later approved increment changes the default explicitly
 - no repository-local clustering mode, clustering algorithm, `cluster_count`,
   or algorithm-specific tuning values are forwarded as active upstream planning
   inputs
@@ -357,6 +367,9 @@ upgrade whenever the latest upstream contract still supports them semantically:
 - adoption of the published-profile API for clustering-enabled execution
 - defaulting to published profile `0.1.0` while permitting explicit selection
   of another upstream-published profile version for evaluation
+- refreshing the adopted upstream dependency state so newly published versions
+  such as `0.4.0` become selectable without redefining the repository default,
+  while retaining earlier `0.3.0` alignment as historical context
 - retirement of the old low-level clustering control family from the approved
   external contract
 - repository-owned progress projection over upstream lifecycle events

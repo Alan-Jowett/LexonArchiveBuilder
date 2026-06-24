@@ -196,8 +196,10 @@ Inspect the clustering-enabled profile-selection surface for a representative
 shape and stage selector, clustering-enabled execution exposes one
 profile-version selector across CLI and `BatchRequest`, omission resolves to
 default profile `0.1.0`, explicit selection preserves the same contract shape,
-and any retired low-level clustering flags or equivalent stale automation
-inputs are rejected explicitly instead of being silently ignored.
+refreshing the adopted upstream dependency state can add a newly published
+selector target such as `0.4.0` without changing that default behavior, and
+any retired low-level clustering flags or equivalent stale automation inputs
+are rejected explicitly instead of being silently ignored.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, DSG-LFI-001G,
 DSG-LFI-001H, DSG-LFI-007C
@@ -242,9 +244,12 @@ repository-owned progress projection, projection of the latest upstream live
 telemetry and heartbeat events, unchanged MCP search-serving behavior for
 already-indexed content, and temporary explicit tracking of LexonGraph `main`
 for rapid profile validation and upstream wgpu acceleration without new
-repository-visible low-level controls, or else any missing capability is
-classified explicitly as an upstream regression or compatibility finding rather
-than being silently dropped.
+repository-visible low-level controls. This includes refreshing the adopted
+dependency state so a newly published profile version such as `0.4.0` becomes
+selectable while omitted selectors still resolve to `0.1.0`, with the earlier
+`0.3.0` alignment retained only as historical context, or else any missing
+capability is classified explicitly as an upstream regression or
+compatibility finding rather than being silently dropped.
 
 **Traces to:** RQ-INDEXER-003I, DSG-LFI-001I
 
