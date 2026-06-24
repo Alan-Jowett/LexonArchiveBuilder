@@ -150,6 +150,8 @@
 - **UR-140 [KNOWN]:** For now, LexonArchiveBuilder should track LexonGraph upstream `main` explicitly, with a repository-visible note that this is temporary and is intended to accelerate validation of new upstream published profiles.
 - **UR-141 [INFERRED]:** The new profile-version selector should remain an indexing-time control on the existing batch-entry surfaces and must not alter MCP search or retrieval behavior for already-indexed content.
 - **UR-142 [INFERRED]:** Profile-version selection should remain environment-neutral and content-type-neutral so local/testing and production-shaped requests, plus current and future content types, use the same published-profile contract.
+- **UR-143 [KNOWN]:** Once LexonGraph publishes profile version `0.3.0`, LexonArchiveBuilder should refresh its adopted upstream dependency state so callers can select `0.3.0` immediately while the repository default remains `0.1.0`.
+- **UR-144 [KNOWN]:** Once LexonGraph publishes profile version `0.4.0`, LexonArchiveBuilder should refresh its adopted upstream dependency state so callers can select `0.4.0` immediately while the repository default remains `0.1.0`, and repository-owned specifications and docs should treat the earlier `0.3.0` alignment as historical context rather than the current named experiment target.
 
 ## Change Manifest
 
@@ -223,6 +225,8 @@
 | CM-INDEXER-066 | Revise | Remove contradictory leftover requirements that still describe repository-local clustering controls after published-profile adoption | UR-115, UR-120, UR-137, UR-138 |
 | CM-INDEXER-067 | Revise | Expand the published-profile contract from a repository-fixed version to a caller-selectable profile-version surface, while keeping low-level clustering controls retired | UR-139, UR-141, UR-142 |
 | CM-INDEXER-068 | Revise | Replace the current fixed LexonGraph revision target with explicit temporary tracking of upstream `main` so new published profiles can be validated quickly | UR-140 |
+| CM-INDEXER-069 | Revise | Refresh the adopted upstream dependency state so the published-profile selector can target upstream `0.3.0` immediately while preserving `0.1.0` as the repository default | UR-143 |
+| CM-INDEXER-070 | Revise | Refresh the adopted upstream dependency state and repository-owned narrative so the current named experiment target is upstream `0.4.0` while preserving `0.1.0` as the repository default and retaining `0.3.0` only as historical context | UR-144 |
 
 ## Before / After
 
@@ -566,6 +570,16 @@
 - **Before [KNOWN]:** The requirements targeted a fixed upstream LexonGraph revision or commit when adopting new profile behavior.
 - **After [KNOWN]:** The requirements now call for explicit temporary tracking of LexonGraph `main`, with a repository-visible note that this is solely to accelerate validation of newly exposed upstream published profiles.
 
+### BA-INDEXER-069
+
+- **Before [KNOWN]:** The requirements allowed caller-selectable published profile versions in general, but they did not explicitly require LexonArchiveBuilder to refresh its adopted upstream dependency state promptly when LexonGraph published version `0.3.0`.
+- **After [KNOWN]:** The requirements now call for refreshing the adopted upstream dependency state so callers can select published profile version `0.3.0` immediately, while preserving `0.1.0` as the repository default for omitted selectors.
+
+### BA-INDEXER-070
+
+- **Before [KNOWN]:** The requirements named published profile version `0.3.0` as the current explicit experiment target and did not distinguish that alignment from later published-profile experiments.
+- **After [KNOWN]:** The requirements now name published profile version `0.4.0` as the current explicit experiment target, preserve `0.1.0` as the repository default for omitted selectors, and retain the earlier `0.3.0` alignment only as historical context.
+
 ## Requirements
 
 ### Functional Requirements
@@ -765,6 +779,11 @@ published profile version, defaulting to `0.1.0`, for this increment.
 - **Evaluation rule [KNOWN]:** Callers may select a different upstream-published
   profile version for evaluation without reintroducing repository-local
   clustering algorithms, planning policies, or tuning controls.
+- **Published-profile availability [KNOWN]:** When temporary upstream `main`
+  tracking exposes a newly published profile version such as `0.4.0`,
+  LexonArchiveBuilder SHALL refresh its adopted upstream dependency state so
+  callers can select that version without changing the omitted-selector default
+  away from `0.1.0`.
 - **Compatibility rule [KNOWN]:** LexonArchiveBuilder SHALL adopt that profile
   directly rather than reconstructing an equivalent repository-local
   planning-policy configuration from lower-level clustering controls.
@@ -775,7 +794,7 @@ published profile version, defaulting to `0.1.0`, for this increment.
   planning and hierarchy construction behavior to LexonGraph and does not
   define repository-local clustering profiles or planning semantics in this
   increment.
-- **Traceability:** UR-39, UR-44, UR-61, UR-62, UR-121, UR-122, UR-123, UR-124, UR-139, UR-141, UR-142
+- **Traceability:** UR-39, UR-44, UR-61, UR-62, UR-121, UR-122, UR-123, UR-124, UR-139, UR-141, UR-142, UR-143, UR-144
 
 #### RQ-INDEXER-003G - Profile-based clustering contract on the CLI and `BatchRequest`
 
@@ -834,6 +853,9 @@ behavior.
   - defaulting clustering-enabled execution to published profile `0.1.0` while
     permitting explicit selection of another upstream-published profile version
     for evaluation
+  - refreshing the adopted upstream dependency state promptly enough that newly
+    published upstream profile versions such as `0.4.0` become selectable
+    without redefining the repository default
   - removal of the retired low-level clustering mode, algorithm, and numeric tuning controls from the approved external contract
   - runtime progress projection that keeps raw upstream lifecycle details behind the repository-owned progress surface
   - projection of the latest upstream live telemetry and heartbeat events onto that same repository-owned progress surface
@@ -848,7 +870,7 @@ behavior.
   SHALL pick that up through the same temporary `main` tracking rather than by
   introducing repository-local API or contract changes for this increment.
 - **Boundary [KNOWN]:** This requirement does not force LexonArchiveBuilder to re-implement upstream planning internals in-repo; it constrains adaptation and regression reporting at the repository boundary.
-- **Traceability:** UR-47, UR-61, UR-63, UR-64, UR-65, UR-66, UR-67, UR-68, UR-69, UR-71, UR-126, UR-127, UR-128, UR-129, UR-130, UR-140
+- **Traceability:** UR-47, UR-61, UR-63, UR-64, UR-65, UR-66, UR-67, UR-68, UR-69, UR-71, UR-126, UR-127, UR-128, UR-129, UR-130, UR-140, UR-143, UR-144
 
 #### RQ-INDEXER-004 - Content resolution integration
 
