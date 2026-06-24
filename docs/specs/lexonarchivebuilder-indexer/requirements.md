@@ -584,7 +584,7 @@
 ### BA-INDEXER-070
 
 - **Before [KNOWN]:** The requirements named published profile version `0.3.0` as the current explicit experiment target and did not distinguish that alignment from later published-profile experiments.
-- **After [KNOWN]:** The requirements now name published profile version `0.4.0` as the current explicit experiment target, preserve `0.1.0` as the repository default for omitted selectors, and retain the earlier `0.3.0` alignment only as historical context.
+- **After [KNOWN]:** The requirements then named published profile version `0.4.0` as the current explicit experiment target, preserved `0.1.0` as the repository default for omitted selectors, and retained the earlier `0.3.0` alignment only as historical context.
 
 ### BA-INDEXER-071
 
