@@ -179,6 +179,9 @@ remains historical context.
 
 On Windows, run `.\test.ps1` from the repository root to sweep the current
 `0.5.x` series through the clustering-plus-quality workflow.
+Build the release indexer first, and override `-RequestPath`, `-BlockStoreRoot`,
+or `-OutputRoot` when your local inputs do not live under the default `C:\data3`
+layout.
 
 On Linux, you can also launch the same workflow through Docker Compose:
 
