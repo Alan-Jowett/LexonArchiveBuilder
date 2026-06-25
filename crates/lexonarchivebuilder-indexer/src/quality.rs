@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use half::f16;
 use lexongraph_block::{
-    Block, BlockHash, BranchBlock, BranchEntry, EmbeddingSpec, LeafBlock, LeafEntry,
-    parse_branch_ebcp_descriptor, reconstruct_logical_branch_embedding_f32,
+    Block, BlockHash, BranchBlock, BranchEntry, EbcpDescriptor, EmbeddingSpec, LeafBlock,
+    LeafEntry, parse_branch_ebcp_descriptor, reconstruct_logical_branch_embedding_f32,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_search::{
@@ -1261,29 +1261,48 @@ fn block_metrics(
     parent_block_id: Option<BlockHash>,
     reachable_depth: usize,
 ) -> Result<BlockQualityMetrics, TreeQualityError> {
-    let comparison_embedding_spec = comparison_embedding_spec_for_block(Some(block_id), block)?;
-    let (kind, level, embedding_spec, entry_count, computed) = match block {
-        Block::Branch(branch) => (
-            "branch",
-            branch.level,
-            EmbeddingSpecReport {
-                dims: branch.embedding_spec.dims,
-                encoding: branch.embedding_spec.encoding.clone(),
-            },
-            branch.entries.len(),
-            compute_block_metrics(block_id, block, &comparison_embedding_spec)?,
-        ),
-        Block::Leaf(leaf) => (
-            "leaf",
-            leaf.level,
-            EmbeddingSpecReport {
-                dims: leaf.embedding_spec.dims,
-                encoding: leaf.embedding_spec.encoding.clone(),
-            },
-            leaf.entries.len(),
-            compute_block_metrics(block_id, block, &comparison_embedding_spec)?,
-        ),
-    };
+    let (kind, level, embedding_spec, entry_count, comparison_embedding_spec, computed) =
+        match block {
+            Block::Branch(branch) => {
+                let (comparison_embedding_spec, descriptor) =
+                    branch_embedding_decode_context(Some(block_id), branch)?;
+                (
+                    "branch",
+                    branch.level,
+                    EmbeddingSpecReport {
+                        dims: branch.embedding_spec.dims,
+                        encoding: branch.embedding_spec.encoding.clone(),
+                    },
+                    branch.entries.len(),
+                    comparison_embedding_spec.clone(),
+                    compute_branch_block_metrics(
+                        block_id,
+                        branch,
+                        &comparison_embedding_spec,
+                        descriptor.as_ref(),
+                    )?,
+                )
+            }
+            Block::Leaf(leaf) => {
+                let comparison_embedding_spec = leaf.embedding_spec.clone();
+                (
+                    "leaf",
+                    leaf.level,
+                    EmbeddingSpecReport {
+                        dims: leaf.embedding_spec.dims,
+                        encoding: leaf.embedding_spec.encoding.clone(),
+                    },
+                    leaf.entries.len(),
+                    comparison_embedding_spec.clone(),
+                    compute_leaf_block_metrics(
+                        block_id,
+                        &leaf.embedding_spec,
+                        leaf.entries.iter().map(|entry| &entry.embedding),
+                        &comparison_embedding_spec,
+                    )?,
+                )
+            }
+        };
 
     Ok(BlockQualityMetrics {
         block_id: block_id.to_string(),
@@ -1308,37 +1327,62 @@ fn comparison_embedding_spec_for_block(
     block: &Block,
 ) -> Result<EmbeddingSpec, TreeQualityError> {
     match block {
-        Block::Branch(branch) => {
-            parse_branch_ebcp_descriptor(&branch.embedding_spec, branch.ext.as_ref())
-                .map(|descriptor| {
-                    descriptor
-                        .map(|descriptor| descriptor.logical_embedding_spec)
-                        .unwrap_or_else(|| branch.embedding_spec.clone())
-                })
-                .map_err(|error| TreeQualityError::EmbeddingReconstruction {
-                    block_id: block_id
-                        .map(|value| value.to_string())
-                        .unwrap_or_else(|| "<unknown>".into()),
-                    message: error.to_string(),
-                })
-        }
+        Block::Branch(branch) => branch_embedding_decode_context(block_id, branch)
+            .map(|(comparison_embedding_spec, _)| comparison_embedding_spec),
         Block::Leaf(leaf) => Ok(leaf.embedding_spec.clone()),
     }
 }
 
-fn compute_block_metrics(
+fn branch_embedding_decode_context(
+    block_id: Option<BlockHash>,
+    branch: &BranchBlock,
+) -> Result<(EmbeddingSpec, Option<EbcpDescriptor>), TreeQualityError> {
+    parse_branch_ebcp_descriptor(&branch.embedding_spec, branch.ext.as_ref())
+        .map(|descriptor| {
+            let comparison_embedding_spec = descriptor
+                .as_ref()
+                .map(|descriptor| descriptor.logical_embedding_spec.clone())
+                .unwrap_or_else(|| branch.embedding_spec.clone());
+            (comparison_embedding_spec, descriptor)
+        })
+        .map_err(|error| TreeQualityError::EmbeddingReconstruction {
+            block_id: block_id
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "<unknown>".into()),
+            message: error.to_string(),
+        })
+}
+
+fn compute_branch_block_metrics(
     block_id: BlockHash,
-    block: &Block,
+    branch: &BranchBlock,
     comparison_spec: &EmbeddingSpec,
+    descriptor: Option<&EbcpDescriptor>,
 ) -> Result<BlockComputedMetrics, TreeQualityError> {
-    let decoded = match block {
-        Block::Branch(branch) => decode_branch_embeddings(block_id, branch)?,
-        Block::Leaf(leaf) => decode_leaf_embeddings(
-            block_id,
-            &leaf.embedding_spec,
-            leaf.entries.iter().map(|entry| &entry.embedding),
-        )?,
-    };
+    let decoded = decode_branch_embeddings(block_id, branch, descriptor)?;
+    let spread = spread_metrics(&decoded, comparison_spec);
+    let centered = centered_vectors(&decoded, &spread.centroid);
+    let (principal_axis, pca_first_component_variance_fraction) =
+        principal_axis_strength(&centered, comparison_spec.dims as usize);
+    let quantile_occupancy = quantile_occupancy_metrics(&centered, &principal_axis);
+
+    Ok(BlockComputedMetrics {
+        spread,
+        pca_first_component_variance_fraction,
+        quantile_occupancy,
+    })
+}
+
+fn compute_leaf_block_metrics<'a, I>(
+    block_id: BlockHash,
+    embedding_spec: &EmbeddingSpec,
+    embeddings: I,
+    comparison_spec: &EmbeddingSpec,
+) -> Result<BlockComputedMetrics, TreeQualityError>
+where
+    I: Iterator<Item = &'a Vec<u8>>,
+{
+    let decoded = decode_leaf_embeddings(block_id, embedding_spec, embeddings)?;
     let spread = spread_metrics(&decoded, comparison_spec);
     let centered = centered_vectors(&decoded, &spread.centroid);
     let (principal_axis, pca_first_component_variance_fraction) =
@@ -1355,18 +1399,14 @@ fn compute_block_metrics(
 fn decode_branch_embeddings(
     block_id: BlockHash,
     branch: &BranchBlock,
+    descriptor: Option<&EbcpDescriptor>,
 ) -> Result<Vec<Vec<f32>>, TreeQualityError> {
-    let descriptor = parse_branch_ebcp_descriptor(&branch.embedding_spec, branch.ext.as_ref())
-        .map_err(|error| TreeQualityError::EmbeddingReconstruction {
-            block_id: block_id.to_string(),
-            message: error.to_string(),
-        })?;
     let mut decoded = Vec::with_capacity(branch.entries.len());
     for entry in &branch.entries {
         let values = reconstruct_logical_branch_embedding_f32(
             &entry.embedding,
             &branch.embedding_spec,
-            descriptor.as_ref(),
+            descriptor,
         )
         .map_err(|error| TreeQualityError::EmbeddingReconstruction {
             block_id: block_id.to_string(),
