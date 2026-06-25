@@ -1,0 +1,8 @@
+{
+  "container_name": "ietf-mailing-lists-sample",
+  "sources": [
+    "rsync.ietf.org::mailman-archive/ipsec/",
+    "rsync.ietf.org::mailman-archive/tcpm/",
+    "rsync.ietf.org::mailman-archive/dnsop/"
+  ]
+}
