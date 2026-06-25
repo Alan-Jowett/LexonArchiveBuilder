@@ -3,8 +3,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.5.x published-profile evaluation, local testing sweep automation, upstream embedding-readback API adoption, and LAB-owned replay-journaled clustering-only recovery
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned replay-journaled split-stage recovery, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics and rooted TNN-recall diagnostics, rooted CLI search over stored trees, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.5.x published-profile evaluation through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, and layer-parallel block-construction evolution
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, upstream embedding-readback API adoption, and LAB-owned replay-journaled clustering-only recovery
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned replay-journaled split-stage recovery, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics and rooted TNN-recall diagnostics, rooted CLI search over stored trees, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, and layer-parallel block-construction evolution
 
 ## USER-REQUEST
 
@@ -152,9 +152,9 @@
 - **UR-142 [INFERRED]:** Profile-version selection should remain environment-neutral and content-type-neutral so local/testing and production-shaped requests, plus current and future content types, use the same published-profile contract.
 - **UR-143 [KNOWN]:** Once LexonGraph publishes profile version `0.3.0`, LexonArchiveBuilder should refresh its adopted upstream dependency state so callers can select `0.3.0` immediately while the repository default remains `0.1.0`.
 - **UR-144 [KNOWN]:** Once LexonGraph publishes profile version `0.4.0`, LexonArchiveBuilder should refresh its adopted upstream dependency state so callers can select `0.4.0` immediately while the repository default remains `0.1.0`, and repository-owned specifications and docs should treat the earlier `0.3.0` alignment as historical context rather than the current named experiment target.
-- **UR-145 [KNOWN]:** LexonGraph now has a published-profile `0.5.x` series, and LexonArchiveBuilder should refresh its adopted upstream dependency state plus repository-owned validation narrative so callers can test those `0.5.x` profiles immediately while the repository default remains `0.1.0`.
-- **UR-146 [INFERRED]:** The existing local profile-evaluation workflow should evolve rather than be replaced, so the repository can compare the current `0.5.x` experiments against prior evaluation baselines without changing the external indexing contract.
-- **UR-147 [KNOWN]:** Provide or update a repository-local runnable `test.ps1` script so a Windows local/testing workflow can execute the approved profile-evaluation sweep across the target `0.5.x` profiles and emit per-profile artifacts plus comparable summary output.
+- **UR-145 [KNOWN]:** LexonGraph now has a published-profile `0.6.x` series, and LexonArchiveBuilder should refresh its adopted upstream dependency state plus repository-owned validation narrative so callers can test those `0.6.x` profiles immediately while the repository default remains `0.1.0`.
+- **UR-146 [INFERRED]:** The existing local profile-evaluation workflow should evolve rather than be replaced, so the repository can compare the current `0.6.x` experiments against prior evaluation baselines without changing the external indexing contract.
+- **UR-147 [KNOWN]:** Provide or update a repository-local runnable `test.ps1` script so a Windows local/testing workflow can execute the approved profile-evaluation sweep across the target `0.6.x` profiles and emit per-profile artifacts plus comparable summary output.
 - **UR-148 [INFERRED]:** This profile-sweep automation is a local/testing operator aid only; it must remain outside the production runtime contract and must not change MCP search or retrieval behavior for already-indexed content.
 - **UR-149 [KNOWN]:** Update LexonArchiveBuilder to use the new LexonGraph API for reading back stored embeddings instead of decoding stored embedding payloads inside LexonArchiveBuilder.
 - **UR-150 [INFERRED]:** Repository-owned tools that read stored embeddings for quality assessment, rooted search, or diagnostics should rely on the same upstream decode or reconstruction semantics as LexonGraph itself so new embedding encodings do not require duplicated repository-local decoder updates.
@@ -235,7 +235,7 @@
 | CM-INDEXER-068 | Revise | Replace the current fixed LexonGraph revision target with explicit temporary tracking of upstream `main` so new published profiles can be validated quickly | UR-140 |
 | CM-INDEXER-069 | Revise | Refresh the adopted upstream dependency state so the published-profile selector can target upstream `0.3.0` immediately while preserving `0.1.0` as the repository default | UR-143 |
 | CM-INDEXER-070 | Revise | Refresh the adopted upstream dependency state and repository-owned narrative so the current named experiment target is upstream `0.4.0` while preserving `0.1.0` as the repository default and retaining `0.3.0` only as historical context | UR-144 |
-| CM-INDEXER-071 | Revise | Refresh the adopted upstream dependency state and repository-owned narrative so the current named experiment target expands to the upstream `0.5.x` profile series while preserving `0.1.0` as the repository default and retaining `0.4.x` only as prior comparison context | UR-145, UR-146 |
+| CM-INDEXER-071 | Revise | Refresh the adopted upstream dependency state and repository-owned narrative so the current named experiment target expands to the upstream `0.6.x` profile series while preserving `0.1.0` as the repository default and retaining `0.5.x` only as prior comparison context | UR-145, UR-146 |
 | CM-INDEXER-072 | Add | Require repository-local runnable sweep automation, currently `test.ps1`, for local/testing evaluation of the active published-profile experiment set without changing production or MCP-facing contracts | UR-147, UR-148 |
 | CM-INDEXER-073 | Revise | Move stored-embedding readback for repository-owned quality, search, and diagnostic consumers behind the new upstream LexonGraph embedding reconstruction API instead of repository-local decoding logic | UR-149, UR-150, UR-152 |
 | CM-INDEXER-074 | Add | Preserve existing CLI and MCP-visible contracts while making upstream LexonGraph the authority for supported stored embedding encodings and reconstruction semantics | UR-150, UR-151, UR-152 |
@@ -594,8 +594,8 @@
 
 ### BA-INDEXER-071
 
-- **Before [KNOWN]:** The requirements treated `0.4.0` as the current named published-profile experiment target and did not describe how the newer `0.5.x` series should fit into the existing evaluation narrative.
-- **After [KNOWN]:** The requirements now treat the upstream `0.5.x` series as the current named published-profile experiment target, preserve `0.1.0` as the repository default for omitted selectors, and retain `0.4.x` only as prior comparison context for evaluation.
+- **Before [KNOWN]:** The requirements treated `0.5.x` as the current named published-profile experiment target and did not describe how the newer `0.6.x` series should fit into the existing evaluation narrative.
+- **After [KNOWN]:** The requirements now treat the upstream `0.6.x` series as the current named published-profile experiment target, preserve `0.1.0` as the repository default for omitted selectors, and retain `0.5.x` only as prior comparison context for evaluation.
 
 ### BA-INDEXER-072
 
@@ -812,7 +812,7 @@ published profile version, defaulting to `0.1.0`, for this increment.
   profile version for evaluation without reintroducing repository-local
   clustering algorithms, planning policies, or tuning controls.
 - **Published-profile availability [KNOWN]:** When temporary upstream `main`
-  tracking exposes the current named experiment target in the `0.5.x` series,
+  tracking exposes the current named experiment target in the `0.6.x` series,
   LexonArchiveBuilder SHALL refresh its adopted upstream dependency state so
   callers can select that version without changing the omitted-selector default
   away from `0.1.0`.
@@ -886,7 +886,7 @@ behavior.
     permitting explicit selection of another upstream-published profile version
     for evaluation
   - refreshing the adopted upstream dependency state promptly enough that newly
-    published upstream profile versions in the current `0.5.x` experiment series
+    published upstream profile versions in the current `0.6.x` experiment series
     become selectable
     without redefining the repository default
   - repository-local local/testing automation that can exercise the current
@@ -919,11 +919,11 @@ experiment set without changing repository code for each tested profile.
   evaluation and does not define a production runtime entrypoint, request
   schema, or deployment contract.
 - **Current experiment target [KNOWN]:** The active named experiment target is
-  the upstream `0.5.x` published-profile series, and the automation SHALL allow
+  the upstream `0.6.x` published-profile series, and the automation SHALL allow
   operators to run the approved evaluation flow across that series.
 - **Comparison rule [INFERRED]:** The automation should continue to emit
-  per-profile artifacts and comparable summary output so `0.5.x` results can be
-  compared against earlier baselines such as `0.4.x` when those profiles are
+  per-profile artifacts and comparable summary output so `0.6.x` results can be
+  compared against earlier baselines such as `0.5.x` when those profiles are
   included in the run.
 - **Contract-preservation rule [INFERRED]:** The automation SHALL drive the
   existing batch and rooted-quality tool surfaces instead of introducing a
@@ -1412,7 +1412,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Architecture remains extensible to future content types | Preserved | Collection-oriented input still covers both mailbox and document collections, and stage selection is defined in generic pipeline terms rather than mailbox-specific behavior |
 | Idempotence and recoverability stay aligned with underlying immutable block semantics | Preserved with clarified scope | Requirements extend hash-addressed identity expectations to normalized email artifacts and require clustering-only reruns over the same clustering-eligible block-store snapshot to remain semantically stable under unchanged upstream semantics |
 | Local development remains self-contained and batch-oriented | Preserved | Docker Compose is constrained to compose local dependencies around the batch container rather than changing the runtime model |
-| Local published-profile evaluation remains outside production and serving contracts | Preserved with new local/testing aid | Requirements constrain the `0.5.x` profile sweep to repository-local operator automation that reuses existing batch and quality boundaries rather than adding a production entrypoint or MCP-visible test surface |
+| Local published-profile evaluation remains outside production and serving contracts | Preserved with new local/testing aid | Requirements constrain the `0.6.x` profile sweep to repository-local operator automation that reuses existing batch and quality boundaries rather than adding a production entrypoint or MCP-visible test surface |
 | Long-running batches remain observable without adding a control plane | Preserved with clarified scope | Progress reporting remains on the existing batch-runtime log surface and now explicitly includes the long-running embedding or leaf-materialization gap between mailbox expansion and downstream streaming-status visibility plus clustering-only replay submission progress, the handoff into upstream planning-pass waiting, and failure-only clustering diagnostics on the runtime log plus a request-adjacent artifact |
 | Caller-visible indexing and MCP contracts remain stable across the upstream API migration | Preserved with approved contract change | The stage surface and MCP retrieval semantics remain stable while clustering-enabled indexing adopts a profile-version selector plus defaulted published-profile contract in place of the retired low-level planning controls |
 | Clustering configuration remains explicit and replayable | Preserved with revised contract | Requirements now treat the selected published profile version as the replay-relevant clustering input rather than a repository-local mode, algorithm, and option tuple |
@@ -1443,7 +1443,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - **Q-INDEXER-069 [UNKNOWN]:** For corpus-based TNN-recall histograms, should a future increment keep repository-owned default histogram buckets or expose bucket configuration as an operator-visible parameter?
 - **Q-INDEXER-070 [UNKNOWN]:** Does published profile `0.1.0` preserve repository-acceptable tree-shape and retrieval-quality behavior across the expected corpus sizes, or will a later increment need additional approved published profiles for materially different workloads?
 - **Q-INDEXER-071 [UNKNOWN]:** Should the first replay-journal implementation store only stable replay metadata plus persisted leaf identifiers, or should it also persist raw embedding payloads so clustering-only replay can avoid rereading leaf blocks entirely?
-- **Q-INDEXER-072 [UNKNOWN]:** Should the first `0.5.x` evaluation sweep run only the `0.5.x` series, or should the runnable `test.ps1` preserve an in-band `0.4.x` comparison baseline in the same invocation?
+- **Q-INDEXER-072 [UNKNOWN]:** Should the first `0.6.x` evaluation sweep run only the `0.6.x` series, or should the runnable `test.ps1` preserve an in-band `0.5.x` comparison baseline in the same invocation?
 
 ## Coverage Notes
 
