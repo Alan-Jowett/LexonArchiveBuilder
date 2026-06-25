@@ -269,6 +269,66 @@ GitHub Actions OIDC Azure login:
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
 
+To create the required Azure Entra identity for these workflows, use:
+
+```powershell
+$repo = 'Alan-Jowett/LexonArchiveBuilder'
+$appName = 'lexonarchivebuilder-experiments-gha'
+$subscriptionId = (az account show --query id -o tsv).Trim()
+$tenantId = (az account show --query tenantId -o tsv).Trim()
+$scope = "/subscriptions/$subscriptionId"
+
+$app = az ad app create `
+  --display-name $appName `
+  --sign-in-audience AzureADMyOrg `
+  --query '{appId:appId,id:id}' `
+  -o json | ConvertFrom-Json
+
+az ad sp create --id $app.appId | Out-Null
+
+foreach ($role in @('Contributor', 'User Access Administrator')) {
+  az role assignment create `
+    --assignee $app.appId `
+    --role $role `
+    --scope $scope `
+    --output none
+}
+
+@(
+  @{ name = 'github-main'; subject = "repo:${repo}:ref:refs/heads/main" },
+  @{ name = 'github-hosted-experiment-workflows'; subject = "repo:${repo}:ref:refs/heads/alanjo/hosted-experiment-workflows" }
+) | ForEach-Object {
+  $body = @{
+    name = $_.name
+    issuer = 'https://token.actions.githubusercontent.com'
+    subject = $_.subject
+    audiences = @('api://AzureADTokenExchange')
+  } | ConvertTo-Json -Depth 5
+
+  $tmp = New-TemporaryFile
+  Set-Content -Path $tmp -Value $body -NoNewline
+  az ad app federated-credential create --id $app.id --parameters @$tmp | Out-Null
+  Remove-Item $tmp -Force
+}
+
+Write-Host "AZURE_CLIENT_ID=$($app.appId)"
+Write-Host "AZURE_TENANT_ID=$tenantId"
+Write-Host "AZURE_SUBSCRIPTION_ID=$subscriptionId"
+```
+
+This identity needs:
+
+1. **Contributor** on the subscription because the workflows create resource
+   groups and deploy the experiment infrastructure.
+2. **User Access Administrator** on the subscription because the Bicep package
+   creates a VM-scoped role assignment so the one-shot runner can deallocate
+   itself after completion.
+
+The federated credentials above allow GitHub OIDC access from:
+
+1. `repo:Alan-Jowett/LexonArchiveBuilder:ref:refs/heads/main`
+2. `repo:Alan-Jowett/LexonArchiveBuilder:ref:refs/heads/alanjo/hosted-experiment-workflows`
+
 The hosted workflows always attempt to deallocate the experiment VM when the run
 concludes, but they intentionally leave the Azure resource group in place for
 manual inspection and cleanup.
