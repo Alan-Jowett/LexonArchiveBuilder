@@ -1261,6 +1261,7 @@ fn block_metrics(
     parent_block_id: Option<BlockHash>,
     reachable_depth: usize,
 ) -> Result<BlockQualityMetrics, TreeQualityError> {
+    let comparison_embedding_spec = comparison_embedding_spec_for_block(Some(block_id), block)?;
     let (kind, level, embedding_spec, entry_count, computed) = match block {
         Block::Branch(branch) => (
             "branch",
@@ -1270,7 +1271,7 @@ fn block_metrics(
                 encoding: branch.embedding_spec.encoding.clone(),
             },
             branch.entries.len(),
-            compute_block_metrics(block_id, block)?,
+            compute_block_metrics(block_id, block, &comparison_embedding_spec)?,
         ),
         Block::Leaf(leaf) => (
             "leaf",
@@ -1280,10 +1281,9 @@ fn block_metrics(
                 encoding: leaf.embedding_spec.encoding.clone(),
             },
             leaf.entries.len(),
-            compute_block_metrics(block_id, block)?,
+            compute_block_metrics(block_id, block, &comparison_embedding_spec)?,
         ),
     };
-    let comparison_embedding_spec = comparison_embedding_spec_for_block(Some(block_id), block)?;
 
     Ok(BlockQualityMetrics {
         block_id: block_id.to_string(),
@@ -1329,8 +1329,8 @@ fn comparison_embedding_spec_for_block(
 fn compute_block_metrics(
     block_id: BlockHash,
     block: &Block,
+    comparison_spec: &EmbeddingSpec,
 ) -> Result<BlockComputedMetrics, TreeQualityError> {
-    let comparison_spec = comparison_embedding_spec_for_block(Some(block_id), block)?;
     let decoded = match block {
         Block::Branch(branch) => decode_branch_embeddings(block_id, branch)?,
         Block::Leaf(leaf) => decode_leaf_embeddings(
@@ -1339,7 +1339,7 @@ fn compute_block_metrics(
             leaf.entries.iter().map(|entry| &entry.embedding),
         )?,
     };
-    let spread = spread_metrics(&decoded, &comparison_spec);
+    let spread = spread_metrics(&decoded, comparison_spec);
     let centered = centered_vectors(&decoded, &spread.centroid);
     let (principal_axis, pca_first_component_variance_fraction) =
         principal_axis_strength(&centered, comparison_spec.dims as usize);
