@@ -14,8 +14,9 @@ rooted TNN-recall diagnostics, rooted CLI search over stored trees,
 replay-stable fingerprinting, temporary upstream `main` tracking for
 rapid profile validation, upstream wgpu-acceleration revision
 compatibility, 0.5.x published-profile evaluation, local testing sweep
-automation, LAB-owned replay-journaled split-stage recovery, and
-layer-parallel block-construction evolution in
+automation, upstream embedding-readback API adoption, LAB-owned
+replay-journaled split-stage recovery, and layer-parallel
+block-construction evolution in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md`.
 
 ## Scope
@@ -31,7 +32,8 @@ latest published-profile and telemetry compatibility, temporary upstream
 `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, upstream regression assessment,
 0.5.x published-profile evaluation, local testing sweep automation,
-embedding-phase batch-progress observability,
+upstream embedding-readback API adoption, embedding-phase
+batch-progress observability,
 replay-submission observability, streaming-status observability,
 telemetry-count-semantics clarity, clustering-failure diagnostics,
 rooted block-tree quality assessment with rooted TNN-recall diagnostics,
@@ -614,6 +616,12 @@ through TNN-recall. That evidence is mode-tagged so corpus-based quality
 evaluation remains distinguishable from optional user-query diagnostics in both
 the human-readable summary and the JSON report.
 
+When this flow needs numerical embedding values from stored rooted blocks, it
+does not decode those payloads through a repository-local embedding-encoding
+table. Instead, it treats LexonGraph as the authority for supported stored
+encodings and reconstructs the logical floating-point vectors through the
+upstream embedding readback API.
+
 One required repository-owned heuristic in this increment compares a child's
 centroid-distance spread against its parent's corresponding spread. The design
 therefore requires the report to preserve enough parent-and-child quantitative
@@ -714,7 +722,32 @@ The design keeps the search algorithm subordinate to `lexongraph-search`.
 LexonArchiveBuilder owns CLI orchestration, rooted invocation shaping, output
 rendering, and boundary adaptation only.
 
+Any repository-owned stored-embedding readback needed by this rooted operator
+surface remains subordinate to the same upstream LexonGraph embedding readback
+API rather than to a second repository-local decoder path.
+
 **Traces to:** RQ-INDEXER-008E, RQ-INDEXER-009, RQ-INDEXER-010A
+
+### DSG-LFI-002F `Upstream stored-embedding readback seam`
+
+LexonArchiveBuilder treats stored embedding reconstruction as an upstream-owned
+boundary whenever repository-owned quality, search, or diagnostic flows need
+numerical vectors from persisted blocks.
+
+This seam requires repository-owned consumers to:
+
+- pass stored payloads plus any upstream-owned embedding metadata through the
+  upstream LexonGraph readback API
+- consume the reconstructed logical embedding values returned by that API for
+  downstream distance, centroid, recall, or diagnostic calculations
+- avoid maintaining a parallel repository-local matrix of supported stored
+  encoding names and reconstruction rules
+
+This keeps new stored encodings, such as EBCP-derived forms, behind one
+upstream compatibility surface rather than forcing every downstream repository
+tool to replicate format knowledge independently.
+
+**Traces to:** RQ-INDEXER-008D, RQ-INDEXER-008E, RQ-INDEXER-010
 
 ### DSG-LFI-003 `Collection item normalization`
 

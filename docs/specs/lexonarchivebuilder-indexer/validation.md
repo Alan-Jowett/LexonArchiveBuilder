@@ -13,8 +13,9 @@ block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 CLI search over stored trees, replay-stable fingerprinting, temporary
 upstream `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, 0.5.x published-profile
-evaluation, local testing sweep automation, LAB-owned replay-journaled
-split-stage recovery, and layer-parallel block-construction evolution in
+evaluation, local testing sweep automation, upstream embedding-readback
+API adoption, LAB-owned replay-journaled split-stage recovery, and
+layer-parallel block-construction evolution in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md` and
 `docs/specs/lexonarchivebuilder-indexer/design.md`.
 
@@ -29,7 +30,8 @@ configuration with default `0.1.0`, latest published-profile and telemetry
 compatibility, temporary upstream `main` tracking for rapid profile
 validation, upstream wgpu-acceleration revision compatibility, 0.5.x
 published-profile evaluation, local testing sweep automation, upstream
-regression assessment, embedding-phase batch-progress observability,
+embedding-readback API adoption, upstream regression assessment,
+embedding-phase batch-progress observability,
 replay-submission observability, streaming-status observability,
 telemetry-count-semantics clarity, clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted CLI
@@ -283,9 +285,11 @@ the rooted analysis result without requiring an operator-visible quantile-bin
 configuration surface in this increment. When rooted TNN-recall is enabled, the
 same surface keeps corpus-based evaluation controls, including sample size,
 seed, and traversal width, distinct from optional diagnostic-query recall
-inputs.
+inputs. Any stored embeddings consumed by this flow are reconstructed through
+the upstream LexonGraph embedding readback API rather than through a
+repository-local decoder table.
 
-**Traces to:** RQ-INDEXER-008D, RQ-INDEXER-008D1, RQ-INDEXER-008D2, RQ-INDEXER-008D3, DSG-LFI-002D, DSG-LFI-002D1, DSG-LFI-002D2, DSG-LFI-005B, DSG-LFI-007D
+**Traces to:** RQ-INDEXER-008D, RQ-INDEXER-008D1, RQ-INDEXER-008D2, RQ-INDEXER-008D3, DSG-LFI-002D, DSG-LFI-002D1, DSG-LFI-002D2, DSG-LFI-002F, DSG-LFI-005B, DSG-LFI-007D
 
 ### VAL-LFI-002P
 
@@ -295,9 +299,12 @@ Inspect the rooted CLI search operator surface.
 surface that accepts query text, a caller-provided embedding endpoint, a
 caller-supplied root block identifier, and `k`, does not require request-file
 batch execution or MCP exposure, and emits both operator-readable results and
-machine-readable JSON output for one invocation.
+machine-readable JSON output for one invocation. Any repository-owned
+stored-embedding readback required by the rooted search path is delegated to
+the upstream LexonGraph embedding readback API instead of a repository-local
+decoder.
 
-**Traces to:** RQ-INDEXER-008E, DSG-LFI-002E, DSG-LFI-006A, DSG-LFI-007E
+**Traces to:** RQ-INDEXER-008E, DSG-LFI-002E, DSG-LFI-002F, DSG-LFI-006A, DSG-LFI-007E
 
 ### VAL-LFI-002A
 
@@ -451,10 +458,12 @@ rather than as emitted per-pair warning findings. The same run computes
 corpus-based TNN-recall over the rooted reachable embedding set at Recall@1,
 Recall@5, and Recall@10 using uniform seeded sampling with configurable sample
 size and configurable traversal width, derives mean recall, recall standard
-deviation, and recall histograms from that corpus-based mode only, and records
-the selected traversal width in the emitted recall evidence.
+deviation, and recall histograms from that corpus-based mode only, records the
+selected traversal width in the emitted recall evidence, and obtains any
+numerical embedding values needed for those calculations through the upstream
+LexonGraph embedding readback API rather than a repository-local decoder.
 
-**Traces to:** RQ-INDEXER-005, RQ-INDEXER-008D, RQ-INDEXER-008D1, DSG-LFI-002D, DSG-LFI-002D1, DSG-LFI-005B
+**Traces to:** RQ-INDEXER-005, RQ-INDEXER-008D, RQ-INDEXER-008D1, DSG-LFI-002D, DSG-LFI-002D1, DSG-LFI-002F, DSG-LFI-005B
 
 ### VAL-LFI-005B1
 
@@ -465,9 +474,11 @@ embeddings.
 **Pass condition:** when this optional mode is implemented, the report labels
 the result as `diagnostic recall`, computes Recall@1, Recall@5, and Recall@10
 for each supplied query, emits exact and approximate neighbors for comparison,
-and excludes those results from aggregate recall statistics and histograms.
+excludes those results from aggregate recall statistics and histograms, and
+uses the upstream LexonGraph embedding readback API for any rooted stored
+embedding reconstruction needed by the comparison.
 
-**Traces to:** RQ-INDEXER-008D2, RQ-INDEXER-008D3, DSG-LFI-002D2, DSG-LFI-007D
+**Traces to:** RQ-INDEXER-008D2, RQ-INDEXER-008D3, DSG-LFI-002D2, DSG-LFI-002F, DSG-LFI-007D
 
 ### VAL-LFI-005B2
 
@@ -478,9 +489,10 @@ different traversal-width values.
 **Pass condition:** the corpus-based TNN-recall path accepts each traversal
 width, preserves the rooted corpus and seeded sampling contract, and records
 the selected traversal width in the report so operators can compare measurement
-runs across widths without ambiguity.
+runs across widths without ambiguity while continuing to source any rooted
+stored embedding reconstruction through the upstream LexonGraph readback API.
 
-**Traces to:** RQ-INDEXER-008D1, DSG-LFI-002D1, DSG-LFI-007D
+**Traces to:** RQ-INDEXER-008D1, DSG-LFI-002D1, DSG-LFI-002F, DSG-LFI-007D
 
 ### VAL-LFI-005C
 
