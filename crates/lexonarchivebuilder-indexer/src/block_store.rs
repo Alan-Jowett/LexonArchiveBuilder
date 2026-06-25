@@ -1,11 +1,12 @@
-use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Arc;
 
 use lexongraph_block::{Block, BlockHash};
 use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
 use lexongraph_block_store_azure::AzureBlobBlockStore;
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_block_store_memory::MemoryBlockStore;
+use lexongraph_block_store_overlay::{OverlayBlockStore, OverlayStoreLayer, PassiveLayer};
 
 use crate::config::{EnvironmentConfig, ProductionBlockStoreConfig};
 use crate::paths::resolve_path;
@@ -13,7 +14,7 @@ use crate::paths::resolve_path;
 #[derive(Clone, Debug)]
 pub enum ConfiguredBlockStore {
     Local(FilesystemBlockStore),
-    Overlay(ProductionOverlayBlockStore),
+    Overlay(Arc<OverlayBlockStore>),
 }
 
 impl ConfiguredBlockStore {
@@ -53,11 +54,14 @@ impl ConfiguredBlockStore {
                 .as_ref()
                 .expect("validated overlay caches always include a filesystem cache root"),
         ))?;
-        Ok(Self::Overlay(ProductionOverlayBlockStore {
-            memory_cache,
-            filesystem_cache,
-            azure_backing_store,
-        }))
+        let layers: Vec<Box<dyn OverlayStoreLayer>> = vec![
+            Box::new(PassiveLayer::cache(memory_cache)),
+            Box::new(PassiveLayer::cache(filesystem_cache)),
+            Box::new(PassiveLayer::writable(azure_backing_store)),
+        ];
+        let overlay_store = OverlayBlockStore::new(layers)
+            .map_err(|error| BlockStoreError::BackendFailure(error.to_string()))?;
+        Ok(Self::Overlay(Arc::new(overlay_store)))
     }
 }
 
@@ -85,127 +89,6 @@ impl BlockStore for ConfiguredBlockStore {
             Self::Overlay(store) => store.iter_block_ids(),
         }
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct ProductionOverlayBlockStore {
-    memory_cache: MemoryBlockStore,
-    filesystem_cache: FilesystemBlockStore,
-    azure_backing_store: AzureBlobBlockStore,
-}
-
-impl ProductionOverlayBlockStore {
-    fn refill_memory_cache(&self, block: &Block) {
-        let _ = self.memory_cache.put(block);
-    }
-
-    fn refill_all_caches(&self, block: &Block) {
-        self.refill_memory_cache(block);
-        let _ = self.filesystem_cache.put(block);
-    }
-}
-
-impl BlockStore for ProductionOverlayBlockStore {
-    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
-        put_with_overlay_cache_warm(
-            &self.azure_backing_store,
-            &self.memory_cache,
-            &self.filesystem_cache,
-            block,
-        )
-    }
-
-    fn get(
-        &self,
-        block_id: &BlockHash,
-    ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
-        if let Some(block) = self.memory_cache.get(block_id)? {
-            return Ok(Some(block));
-        }
-
-        if let Some(block) = self.filesystem_cache.get(block_id)? {
-            self.refill_memory_cache(&block.block);
-            return Ok(Some(block));
-        }
-
-        let Some(block) = self.azure_backing_store.get(block_id)? else {
-            return Ok(None);
-        };
-        self.refill_all_caches(&block.block);
-        Ok(Some(block))
-    }
-
-    fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
-        let mut seen = HashSet::new();
-        let cached_block_ids = collect_unique_block_ids(&self.memory_cache, &mut seen)?
-            .into_iter()
-            .chain(collect_unique_block_ids(&self.filesystem_cache, &mut seen)?)
-            .collect::<Vec<_>>();
-        let backing_iter = self.azure_backing_store.iter_block_ids()?;
-        Ok(Box::new(OverlayBlockIdIterator {
-            cached_block_ids: cached_block_ids.into_iter(),
-            seen,
-            backing_iter,
-        }))
-    }
-}
-
-fn collect_unique_block_ids<S: BlockStore>(
-    store: &S,
-    seen: &mut HashSet<BlockHash>,
-) -> Result<Vec<BlockHash>, BlockStoreError> {
-    let mut block_ids = Vec::new();
-    for block_id in store.iter_block_ids()? {
-        let block_id = block_id?;
-        if seen.insert(block_id) {
-            block_ids.push(block_id);
-        }
-    }
-    Ok(block_ids)
-}
-
-struct OverlayBlockIdIterator<'a> {
-    cached_block_ids: std::vec::IntoIter<BlockHash>,
-    seen: HashSet<BlockHash>,
-    backing_iter: BlockIdIterator<'a>,
-}
-
-impl Iterator for OverlayBlockIdIterator<'_> {
-    type Item = Result<BlockHash, BlockStoreError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(block_id) = self.cached_block_ids.next() {
-            return Some(Ok(block_id));
-        }
-        loop {
-            let next = self.backing_iter.next()?;
-            match next {
-                Ok(block_id) => {
-                    if self.seen.insert(block_id) {
-                        return Some(Ok(block_id));
-                    }
-                }
-                Err(error) => return Some(Err(error)),
-            }
-        }
-    }
-}
-
-fn put_with_overlay_cache_warm<B, M, F>(
-    backing_store: &B,
-    memory_cache: &M,
-    filesystem_cache: &F,
-    block: &Block,
-) -> Result<BlockHash, BlockStoreError>
-where
-    B: BlockStore,
-    M: BlockStore,
-    F: BlockStore,
-{
-    let block_id = backing_store.put(block)?;
-    let _ = memory_cache.put(block);
-    let _ = filesystem_cache.put(block);
-    Ok(block_id)
 }
 
 #[cfg(test)]
@@ -282,40 +165,6 @@ mod tests {
     }
 
     #[test]
-    fn overlay_block_id_iterator_streams_backing_store_without_duplicate_ids() {
-        let block_a = sample_block();
-        let block_b = second_sample_block();
-        let id_store = MemoryBlockStore::new(4).unwrap();
-        let block_a_id = id_store.put(&block_a).unwrap();
-        let block_b_id = id_store.put(&block_b).unwrap();
-        let iterator = OverlayBlockIdIterator {
-            cached_block_ids: vec![block_a_id].into_iter(),
-            seen: HashSet::from([block_a_id]),
-            backing_iter: Box::new(vec![Ok(block_a_id), Ok(block_b_id)].into_iter()),
-        };
-
-        let block_ids = iterator.collect::<Result<Vec<_>, _>>().unwrap();
-
-        assert_eq!(block_ids, vec![block_a_id, block_b_id]);
-    }
-
-    #[test]
-    fn put_warms_overlay_cache_layers_after_backing_store_write() {
-        let dir = tempdir().unwrap();
-        let block = sample_block();
-        let backing_store = MemoryBlockStore::new(4).unwrap();
-        let memory_cache = MemoryBlockStore::new(4).unwrap();
-        let filesystem_cache = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
-
-        let block_id =
-            put_with_overlay_cache_warm(&backing_store, &memory_cache, &filesystem_cache, &block)
-                .unwrap();
-
-        assert!(memory_cache.get(&block_id).unwrap().is_some());
-        assert!(filesystem_cache.get(&block_id).unwrap().is_some());
-    }
-
-    #[test]
     fn configured_production_store_requires_overlay_layers() {
         let error = ConfiguredBlockStore::from_environment(
             Path::new("."),
@@ -384,26 +233,6 @@ mod tests {
                 content: Content {
                     media_type: "text/plain".into(),
                     body: b"ignored".to_vec(),
-                },
-            }],
-            ext: None,
-        })
-    }
-
-    fn second_sample_block() -> Block {
-        Block::Leaf(LeafBlock {
-            version: VERSION_1,
-            level: 0,
-            embedding_spec: EmbeddingSpec {
-                dims: 2,
-                encoding: "f32le".into(),
-            },
-            entries: vec![LeafEntry {
-                embedding: vec![1, 2, 3, 4, 5, 6, 7, 8],
-                metadata: vec![],
-                content: Content {
-                    media_type: "text/plain".into(),
-                    body: b"second".to_vec(),
                 },
             }],
             ext: None,
