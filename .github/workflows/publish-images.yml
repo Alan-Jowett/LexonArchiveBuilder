@@ -1,0 +1,69 @@
+---
+name: Publish Docker images
+
+'on':
+  push:
+    branches:
+      - main
+    paths:
+      - .dockerignore
+      - Cargo.toml
+      - Cargo.lock
+      - crates/**
+      - examples/local/**
+      - scripts/lexonarchivebuilder-scale-test.sh
+      - .github/workflows/publish-images.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Publish ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: lexonarchivebuilder-indexer
+            dockerfile: crates/lexonarchivebuilder-indexer/Dockerfile
+          - image: lexonarchivebuilder-scale-test
+            dockerfile: crates/lexonarchivebuilder-indexer/Dockerfile.scale-test
+          - image: lexonarchivebuilder-mcp
+            dockerfile: crates/lexonarchivebuilder-mcp/Dockerfile
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          tags: |
+            type=sha,prefix=sha-
+            type=ref,event=branch
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -12,5 +12,6 @@ RUN apt-get update \
 
 WORKDIR /workspace
 COPY --from=builder /workspace/target/release/lexonarchivebuilder-mcp /usr/local/bin/lexonarchivebuilder-mcp
+COPY examples/local /workspace/examples/local
 
 ENTRYPOINT ["lexonarchivebuilder-mcp"]

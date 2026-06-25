@@ -12,5 +12,9 @@ RUN apt-get update \
 
 WORKDIR /workspace
 COPY --from=builder /workspace/target/release/lexonarchivebuilder-indexer /usr/local/bin/lexonarchivebuilder-indexer
+COPY examples/local /workspace/examples/local
+COPY scripts/lexonarchivebuilder-scale-test.sh /workspace/scripts/lexonarchivebuilder-scale-test.sh
+ENV SCALE_TEST_INDEXER_MODE=direct
+RUN chmod +x /workspace/scripts/lexonarchivebuilder-scale-test.sh
 
 ENTRYPOINT ["bash", "/workspace/scripts/lexonarchivebuilder-scale-test.sh"]
