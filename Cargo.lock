@@ -1071,7 +1071,6 @@ dependencies = [
  "lexongraph-block-store-azure",
  "lexongraph-block-store-fs",
  "lexongraph-block-store-memory",
- "lexongraph-block-store-overlay",
  "lexongraph-embeddings-trait",
  "lexongraph-search",
  "lexongraph-streaming-indexer",
@@ -1158,15 +1157,6 @@ dependencies = [
 
 [[package]]
 name = "lexongraph-block-store-memory"
-version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=17229ac73691a1be11694d26778e3062fcefc711#17229ac73691a1be11694d26778e3062fcefc711"
-dependencies = [
- "lexongraph-block",
- "lexongraph-block-store",
-]
-
-[[package]]
-name = "lexongraph-block-store-overlay"
 version = "0.1.0"
 source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=17229ac73691a1be11694d26778e3062fcefc711#17229ac73691a1be11694d26778e3062fcefc711"
 dependencies = [

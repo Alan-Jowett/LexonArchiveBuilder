@@ -32,7 +32,6 @@ lexongraph-block-store = { git = "https://github.com/Alan-Jowett/LexonGraph", re
 lexongraph-block-store-azure = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "17229ac73691a1be11694d26778e3062fcefc711", package = "lexongraph-block-store-azure" }
 lexongraph-block-store-fs = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "17229ac73691a1be11694d26778e3062fcefc711", package = "lexongraph-block-store-fs" }
 lexongraph-block-store-memory = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "17229ac73691a1be11694d26778e3062fcefc711", package = "lexongraph-block-store-memory" }
-lexongraph-block-store-overlay = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "17229ac73691a1be11694d26778e3062fcefc711", package = "lexongraph-block-store-overlay" }
 lexongraph-embeddings-trait = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "17229ac73691a1be11694d26778e3062fcefc711", package = "lexongraph-embeddings-trait" }
 lexongraph-search = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "17229ac73691a1be11694d26778e3062fcefc711", package = "lexongraph-search" }
 lexongraph-streaming-indexer = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "17229ac73691a1be11694d26778e3062fcefc711", package = "lexongraph-streaming-indexer" }
