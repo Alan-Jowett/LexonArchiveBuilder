@@ -1,0 +1,357 @@
+---
+name: Run indexing experiment
+
+'on':
+  workflow_dispatch:
+    inputs:
+      manifest_path:
+        description: Checked-in manifest path containing rsync URLs and container name
+        required: true
+        default: examples/local/scale-test/manifests/ietf-mailing-lists.sample.json
+        type: string
+      profile_version:
+        description: Published profile version to evaluate
+        required: true
+        default: 0.6.0
+        type: string
+      runner_image_tag:
+        description: Published lexonarchivebuilder-scale-test image tag
+        required: false
+        default: main
+        type: string
+      ssh_public_key:
+        description: SSH public key for break-glass VM access
+        required: true
+        type: string
+      ssh_source_prefixes:
+        description: Optional comma-separated CIDRs allowed to SSH to the VM
+        required: false
+        default: ''
+        type: string
+      block_store_target:
+        description: Block-store target selection
+        required: true
+        default: filesystem
+        type: choice
+        options:
+          - filesystem
+          - overlay
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: indexing-experiment-${{ github.ref }}-${{ inputs.manifest_path }}-${{ inputs.profile_version }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Azure OIDC configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${AZURE_LOCATION:?Repository variable AZURE_LOCATION is required}"
+          : "${AZURE_CLIENT_ID:?Repository variable AZURE_CLIENT_ID is required}"
+          : "${AZURE_TENANT_ID:?Repository variable AZURE_TENANT_ID is required}"
+          : "${AZURE_SUBSCRIPTION_ID:?Repository variable AZURE_SUBSCRIPTION_ID is required}"
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Prepare run metadata and deployment parameters
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          manifest_path='${{ inputs.manifest_path }}'
+          if [[ ! -f "$manifest_path" ]]; then
+            printf 'Manifest not found: %s\n' "$manifest_path" >&2
+            exit 1
+          fi
+
+          ssh_prefixes_input='${{ inputs.ssh_source_prefixes }}'
+          block_store_target='${{ inputs.block_store_target }}'
+          profile_version='${{ inputs.profile_version }}'
+          runner_image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/lexonarchivebuilder-scale-test:${{ inputs.runner_image_tag }}"
+
+          if [[ "$block_store_target" == 'overlay' ]]; then
+            printf 'TODO(overlay-block-store): overlay block-store workflow execution depends on the separate overlay implementation PR and is not wired in this change set yet\n' >&2
+            exit 1
+          fi
+
+          manifest_json_minified="$(python - "$manifest_path" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], 'r', encoding='utf-8') as handle:
+              data = json.load(handle)
+
+          if not isinstance(data.get('container_name'), str) or not data['container_name'].strip():
+              raise SystemExit('manifest must contain non-empty string field "container_name"')
+
+          if not isinstance(data.get('sources'), list) or not data['sources']:
+              raise SystemExit('manifest must contain non-empty array field "sources"')
+
+          print(json.dumps(data, separators=(',', ':'), sort_keys=True))
+          PY
+          )"
+          manifest_hash="$(printf '%s' "$manifest_json_minified" | sha256sum | cut -c1-10)"
+          container_name="$(python - "$manifest_path" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], 'r', encoding='utf-8') as handle:
+              print(json.load(handle)['container_name'].strip())
+          PY
+          )"
+
+          resource_group="lexon-exp-${manifest_hash}"
+          storage_account_name="lexexp${manifest_hash}sa"
+          vnet_name="lexon-exp-${manifest_hash}-vnet"
+          vm_name="lexon-exp-index-${manifest_hash}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          run_name="index-${manifest_hash}-${profile_version//./-}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          artifact_prefix="artifacts/indexing-experiment/${profile_version}/${run_name}"
+          dataset_block_store_prefix="datasets/block-store"
+          dataset_replay_journal_prefix="datasets/block-store.replay-journal"
+          manifest_json_b64="$(printf '%s' "$manifest_json_minified" | base64 -w0)"
+          workload_script_path='infra/azure/experiments/indexing-experiment-bootstrap.sh'
+
+          enable_ssh_access=false
+          ssh_prefixes_json='[]'
+          if [[ -n "$ssh_prefixes_input" ]]; then
+            enable_ssh_access=true
+            ssh_prefixes_json="$(python - "$ssh_prefixes_input" <<'PY'
+            import json
+            import sys
+
+            raw = sys.argv[1]
+            items = [entry.strip() for entry in raw.split(',') if entry.strip()]
+            print(json.dumps(items))
+          PY
+            )"
+          fi
+
+          sas_expiry="$(date -u -d '+30 days' '+%Y-%m-%dT%H:%M:%SZ')"
+
+          workload_env_file="$(
+            printf "%s\n" \
+              "RUN_NAME='${run_name}'" \
+              "RUNNER_IMAGE='${runner_image}'" \
+              "MANIFEST_JSON_B64='${manifest_json_b64}'" \
+              "DATASET_BLOCK_STORE_PREFIX='${dataset_block_store_prefix}'" \
+              "DATASET_REPLAY_JOURNAL_PREFIX='${dataset_replay_journal_prefix}'" \
+              "ARTIFACT_PREFIX='${artifact_prefix}'" \
+              "BLOCK_STORE_TARGET='${block_store_target}'" \
+              "PROFILE_VERSION='${profile_version}'"
+          )"
+
+          python - "$container_name" "$storage_account_name" "$resource_group" "$vnet_name" "$vm_name" "$sas_expiry" "${{ inputs.ssh_public_key }}" "$enable_ssh_access" "$ssh_prefixes_json" "$workload_env_file" "$workload_script_path" > deployment.parameters.json <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+
+          (container_name, storage_account_name, resource_group, vnet_name, vm_name,
+           sas_expiry, ssh_public_key, enable_ssh_access, ssh_prefixes_json,
+           workload_env_file, workload_script_path) = sys.argv[1:12]
+
+          workload_script = pathlib.Path(workload_script_path).read_text(encoding='utf-8')
+
+          params = {
+              "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+              "contentVersion": "1.0.0.0",
+              "parameters": {
+                  "location": {"value": os.environ["AZURE_LOCATION"]},
+                  "vnetName": {"value": vnet_name},
+                  "storageAccountName": {"value": storage_account_name},
+                  "containerName": {"value": container_name},
+                  "sasExpiry": {"value": sas_expiry},
+                  "vmName": {"value": vm_name},
+                  "sshPublicKey": {"value": ssh_public_key},
+                  "enablePublicIp": {"value": True},
+                  "enableSshAccess": {"value": enable_ssh_access.lower() == "true"},
+                  "sshSourcePrefixes": {"value": json.loads(ssh_prefixes_json)},
+                  "workloadEnvironmentFile": {"value": workload_env_file},
+                  "workloadScript": {"value": workload_script},
+                  "tags": {
+                      "value": {
+                          "lexon-workflow": "indexing-experiment",
+                          "lexon-manifest": resource_group,
+                          "github-run-id": os.environ["GITHUB_RUN_ID"],
+                          "github-run-attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+                      }
+                  },
+              },
+          }
+
+          json.dump(params, sys.stdout, indent=2)
+          PY
+
+          {
+            echo "manifest_path=$manifest_path"
+            echo "resource_group=$resource_group"
+            echo "storage_account_name=$storage_account_name"
+            echo "container_name=$container_name"
+            echo "vnet_name=$vnet_name"
+            echo "vm_name=$vm_name"
+            echo "run_name=$run_name"
+            echo "artifact_prefix=$artifact_prefix"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Ensure resource group exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          az group create \
+            --name '${{ steps.prepare.outputs.resource_group }}' \
+            --location "$AZURE_LOCATION" \
+            --tags lexon-workflow=indexing-experiment github-run-id="${GITHUB_RUN_ID}" github-run-attempt="${GITHUB_RUN_ATTEMPT}" >/dev/null
+
+      - name: Deploy experiment runner
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          outputs_json="$(
+            az deployment group create \
+              --resource-group '${{ steps.prepare.outputs.resource_group }}' \
+              --template-file infra/azure/experiments/main.bicep \
+              --parameters @deployment.parameters.json \
+              --query properties.outputs \
+              --output json
+          )"
+
+          python - "$outputs_json" >>"$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+
+          outputs = json.loads(sys.argv[1])
+          for key in ("containerSasUrl", "storageAccountName", "containerName", "vmName", "vmPublicIpAddress"):
+              value = outputs[key]["value"]
+              print(f"{key}={value}")
+          PY
+
+      - name: Wait for experiment artifact
+        id: wait
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p indexing-experiment-artifact
+
+          status_url="$(python - '${{ steps.deploy.outputs.containerSasUrl }}' '${{ steps.prepare.outputs.artifact_prefix }}/status.json' <<'PY'
+          import sys
+          from urllib.parse import urlsplit, urlunsplit
+          parts = urlsplit(sys.argv[1])
+          path = f"{parts.path.rstrip('/')}/{sys.argv[2].lstrip('/')}"
+          print(urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment)))
+          PY
+          )"
+
+          for _ in $(seq 1 240); do
+            if curl --fail --silent --show-error --location "$status_url" --output indexing-experiment-artifact/status.json; then
+              break
+            fi
+            sleep 60
+          done
+
+          if [[ ! -f indexing-experiment-artifact/status.json ]]; then
+            printf 'Timed out waiting for indexing experiment status artifact\n' >&2
+            exit 1
+          fi
+
+          quality_url="$(python - '${{ steps.deploy.outputs.containerSasUrl }}' '${{ steps.prepare.outputs.artifact_prefix }}/quality.json' <<'PY'
+          import sys
+          from urllib.parse import urlsplit, urlunsplit
+          parts = urlsplit(sys.argv[1])
+          path = f"{parts.path.rstrip('/')}/{sys.argv[2].lstrip('/')}"
+          print(urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment)))
+          PY
+          )"
+          summary_url="$(python - '${{ steps.deploy.outputs.containerSasUrl }}' '${{ steps.prepare.outputs.artifact_prefix }}/summary.json' <<'PY'
+          import sys
+          from urllib.parse import urlsplit, urlunsplit
+          parts = urlsplit(sys.argv[1])
+          path = f"{parts.path.rstrip('/')}/{sys.argv[2].lstrip('/')}"
+          print(urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment)))
+          PY
+          )"
+          result_url="$(python - '${{ steps.deploy.outputs.containerSasUrl }}' '${{ steps.prepare.outputs.artifact_prefix }}/result.json' <<'PY'
+          import sys
+          from urllib.parse import urlsplit, urlunsplit
+          parts = urlsplit(sys.argv[1])
+          path = f"{parts.path.rstrip('/')}/{sys.argv[2].lstrip('/')}"
+          print(urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment)))
+          PY
+          )"
+
+          curl --fail --silent --show-error --location "$quality_url" --output indexing-experiment-artifact/quality.json || true
+          curl --fail --silent --show-error --location "$summary_url" --output indexing-experiment-artifact/summary.json || true
+          curl --fail --silent --show-error --location "$result_url" --output indexing-experiment-artifact/result.json || true
+
+          success_flag="$(python - indexing-experiment-artifact/status.json <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], 'r', encoding='utf-8') as handle:
+              print('true' if json.load(handle).get('success') else 'false')
+          PY
+          )"
+
+          echo "success=$success_flag" >>"$GITHUB_OUTPUT"
+          if [[ "$success_flag" != 'true' ]]; then
+            printf 'Indexing experiment reported failure\n' >&2
+            exit 1
+          fi
+
+      - name: Always deallocate VM
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          az vm deallocate \
+            --resource-group '${{ steps.prepare.outputs.resource_group }}' \
+            --name '${{ steps.prepare.outputs.vm_name }}' \
+            --no-wait >/dev/null 2>&1 || true
+
+      - name: Upload indexing experiment artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: indexing-experiment-${{ steps.prepare.outputs.run_name }}
+          path: indexing-experiment-artifact
+          if-no-files-found: warn
+
+      - name: Write workflow summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Indexing experiment'
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Manifest | \`${{ steps.prepare.outputs.manifest_path }}\` |"
+            echo "| Profile | \`${{ inputs.profile_version }}\` |"
+            echo "| Resource group | \`${{ steps.prepare.outputs.resource_group }}\` |"
+            echo "| Storage account | \`${{ steps.deploy.outputs.storageAccountName }}\` |"
+            echo "| Container | \`${{ steps.deploy.outputs.containerName }}\` |"
+            echo "| VM | \`${{ steps.deploy.outputs.vmName }}\` |"
+            echo "| Public IP | \`${{ steps.deploy.outputs.vmPublicIpAddress }}\` |"
+            echo "| Run name | \`${{ steps.prepare.outputs.run_name }}\` |"
+            echo "| Artifact prefix | \`${{ steps.prepare.outputs.artifact_prefix }}\` |"
+          } >>"$GITHUB_STEP_SUMMARY"

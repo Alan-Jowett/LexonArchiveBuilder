@@ -7,14 +7,19 @@ RUN cargo build --release -p lexonarchivebuilder-indexer
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash ca-certificates coreutils findutils rsync \
+    && apt-get install -y --no-install-recommends bash ca-certificates coreutils curl findutils python3 rsync tar gzip \
+    && curl -fsSL https://aka.ms/downloadazcopy-v10-linux -o /tmp/azcopy.tgz \
+    && tar -xzf /tmp/azcopy.tgz -C /tmp \
+    && mv /tmp/azcopy_linux_amd64_*/azcopy /usr/local/bin/azcopy \
+    && chmod +x /usr/local/bin/azcopy \
+    && rm -rf /tmp/azcopy.tgz /tmp/azcopy_linux_amd64_* \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
 COPY --from=builder /workspace/target/release/lexonarchivebuilder-indexer /usr/local/bin/lexonarchivebuilder-indexer
 COPY examples/local /workspace/examples/local
-COPY scripts/lexonarchivebuilder-scale-test.sh /workspace/scripts/lexonarchivebuilder-scale-test.sh
+COPY scripts /workspace/scripts
 ENV SCALE_TEST_INDEXER_MODE=direct
-RUN chmod +x /workspace/scripts/lexonarchivebuilder-scale-test.sh
+RUN chmod +x /workspace/scripts/*.sh
 
 ENTRYPOINT ["bash", "/workspace/scripts/lexonarchivebuilder-scale-test.sh"]

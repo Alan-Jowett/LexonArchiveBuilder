@@ -232,6 +232,51 @@ fixtures, run:
 scripts/lexonarchivebuilder-scale-test-compose-smoke.sh
 ```
 
+### Hosted experiment workflows
+
+The repository also includes two hosted GitHub Actions workflows for Azure-backed
+experiment automation:
+
+1. **Run embedding refresh** refreshes a reusable embedding dataset and replay
+   journal for a checked-in manifest.
+2. **Run indexing experiment** reuses that persisted dataset, runs one
+   published-profile experiment, and uploads the rooted quality report as a
+   workflow artifact.
+
+Both workflows are dispatched manually from GitHub and default to the published
+`main` tag of `ghcr.io/<owner>/lexonarchivebuilder-scale-test`, with an input to
+override the tag for a specific published image.
+
+The checked-in manifest format is currently JSON with:
+
+```json
+{
+  "container_name": "ietf-mailing-lists-sample",
+  "sources": [
+    "rsync.ietf.org::mailman-archive/ipsec/"
+  ]
+}
+```
+
+See `examples/local/scale-test/manifests/ietf-mailing-lists.sample.json` for a
+repository sample.
+
+Before running the hosted workflows, configure these repository variables for
+GitHub Actions OIDC Azure login:
+
+- `AZURE_LOCATION`
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+
+The hosted workflows always attempt to deallocate the experiment VM when the run
+concludes, but they intentionally leave the Azure resource group in place for
+manual inspection and cleanup.
+
+> **TODO(overlay-block-store):** the hosted workflow inputs already reserve a
+> `block_store_target` seam for a future overlay block store. Until that
+> separate implementation lands, only the filesystem-backed path is executable.
+
 ## MCP MVP
 
 The first `lexonarchivebuilder-mcp` MVP is now implemented as a Rust stdio MCP server
