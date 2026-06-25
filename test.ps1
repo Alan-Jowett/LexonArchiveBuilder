@@ -1,8 +1,8 @@
 param(
-    [string[]]$Profiles = @(0..9 | ForEach-Object { '0.5.{0}' -f $_ }),
+    [string[]]$Profiles = @(0..9 | ForEach-Object { '0.6.{0}' -f $_ }),
     [string]$RequestPath = 'C:\data3\request.json',
     [string]$BlockStoreRoot = 'C:\data3\block-store',
-    [string]$OutputRoot = 'C:\data3\v05x-quality',
+    [string]$OutputRoot = 'C:\data3\v06x-quality',
     [int]$TraversalWidth = 16
 )
 
