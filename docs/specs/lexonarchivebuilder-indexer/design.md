@@ -5,7 +5,8 @@
 Specification patch for the approved email-artifact, chunk-level
 indexing, local filesystem block-store interoperability, replay-based
 streaming delegated indexing, stage-selectable execution, standalone
-clustering input discovery, published-profile API adoption,
+clustering input discovery, immutable replay-journal DAG plus mutable
+replay-ref adoption, published-profile API adoption,
 published-profile version selection, latest published-profile and
 telemetry compatibility, upstream regression assessment,
 replay-submission and streaming-status observability,
@@ -229,25 +230,22 @@ ingestion phase in the same invocation, LexonArchiveBuilder derives its clusteri
 candidate set from a repository-owned replay-input source that is valid for the
 configured store snapshot.
 
-When the selected environment exposes a LAB-managed local filesystem block-store
-root, the preferred source is a LAB-owned replay journal emitted during
-successful leaf persistence. When that journal is absent, incompatible,
-incomplete, or intentionally unavailable because the store was rebuilt without
-journal continuity, the runtime falls back to iterating the configured
-`BlockStore` through the upstream LexonGraph block-iteration API.
+The runtime resolves that source to one immutable replay-journal root,
+normally by looking up a repository-owned mutable replay ref. It then walks the
+selected replay-journal snapshot to reconstruct the clustering-eligible replay
+inputs for that invocation.
 
-LexonArchiveBuilder treats the approved replay-journal contract plus the upstream
-iteration contract as the authorities for which stored inputs are
-clustering-eligible. Repository-owned artifacts that are not surfaced by the
-approved replay-input surface remain outside the standalone clustering input
-set.
+LexonArchiveBuilder treats the selected replay-journal snapshot as the
+authority for which stored inputs are clustering-eligible. Repository-owned
+artifacts that are not surfaced by the approved replay-input surface remain
+outside the standalone clustering input set.
 
-Standalone clustering therefore operates over all clustering-eligible blocks
-visible in the configured store snapshot at invocation time rather than over a
-request-local summary artifact.
+Standalone clustering therefore operates over all clustering-eligible inputs
+reachable from the selected replay-journal root rather than over a request-
+local summary artifact or a whole-store inventory.
 
 **Traces to:** RQ-INDEXER-003E, RQ-INDEXER-003E1, RQ-INDEXER-003E2,
-RQ-INDEXER-010A
+RQ-INDEXER-003E3, RQ-INDEXER-010A
 
 ### DSG-LFI-001F `Replay staging for split-stage execution`
 
@@ -256,38 +254,59 @@ or equivalent repository-owned staging artifact that captures deterministic item
 ordering, content-reference identity, and fingerprint inputs needed for later
 streaming replays.
 
-A clustering-only invocation reconstructs its replay batches from stored
-clustering-eligible inputs plus that replay metadata rather than from
+A clustering-only invocation reconstructs its replay batches from the selected
+immutable replay-journal snapshot plus stored replay metadata rather than from
 request-supplied collection items.
+
+Any stage that advances replay-visible progress publishes a new immutable
+replay-journal snapshot that captures the newly completed replay state needed
+for later resume or downstream replay.
 
 This design fixes the replay-safety contract but does not freeze a specific
 serialization schema for the staging artifact in the specification layer.
 
 **Traces to:** RQ-INDEXER-003A, RQ-INDEXER-003E, RQ-INDEXER-003E1,
-RQ-INDEXER-004F
+RQ-INDEXER-003E3, RQ-INDEXER-004F
 
-### DSG-LFI-001F1 `Replay-journal write and growth discipline`
+### DSG-LFI-001F1 `Immutable replay-journal snapshot publication`
 
-For environments that expose a LAB-managed local filesystem block-store root,
-LexonArchiveBuilder realizes the repository-owned replay staging artifact as a
-durable replay journal whose committed records are append-only and emitted only
-after the corresponding replayable leaf output has been durably persisted
-through the approved storage boundary.
+LexonArchiveBuilder realizes the repository-owned replay staging artifact as an
+immutable replay-journal snapshot structure stored through the approved
+`BlockStore` boundary.
 
-The journal is optimized for sequential append and sequential replay rather than
-random in-place mutation. Growth is controlled through bounded journal segments
-or equivalent rollover units so large corpora do not require one unbounded
-monolithic file.
+When a stage completes replay-visible progress, the runtime writes the new
+immutable replay-journal block or root only after the corresponding replayable
+progress has been durably persisted through the approved storage boundary.
 
-Crash recovery treats a partial trailing record as incomplete local progress and
-preserves all earlier committed records as valid replay state.
+New replay-journal snapshots may reference one or more prior immutable
+replay-journal roots so replay history can evolve as a DAG of immutable blocks
+instead of as a mutable local file.
 
-The specification intentionally leaves the first compact binary encoding choice
-open at the design layer boundary, provided the implementation preserves the
-append-only, low-overhead, and segmentable requirements approved upstream of
-this document.
+Crash recovery treats a durably written but not-yet-published snapshot as
+incomplete publication progress and preserves the previously selected snapshot
+as the current replay state.
+
+The specification intentionally leaves the first compact block payload encoding
+choice open at the design layer boundary, provided the implementation preserves
+the approved immutable, low-overhead, and resumable snapshot invariants.
 
 **Traces to:** RQ-INDEXER-003E1, RQ-INDEXER-003E2, RQ-INDEXER-008
+
+### DSG-LFI-001F2 `Replay-ref publication discipline`
+
+LexonArchiveBuilder exposes repository-owned mutable replay refs as the normal
+operator and downstream-selector surface for replay-journal snapshots.
+
+After a new immutable replay-journal snapshot has been durably persisted, the
+runtime may advance the selected replay ref to that new root. Ref advancement
+therefore publishes already-written immutable state rather than creating replay
+state on its own.
+
+The design keeps replay-ref semantics environment-neutral even if the concrete
+ref-publication or lookup mechanism differs between local/testing and
+production-shaped environments.
+
+**Traces to:** RQ-INDEXER-003E3, RQ-INDEXER-008
 
 ### DSG-LFI-001G `Published-profile planning seam`
 
@@ -418,9 +437,8 @@ by mailbox through replay staging and streaming-pass preparation rather than
 waiting for all delegated work to accumulate behind one final terminal call. A
 clustering-only request may leave the collection empty and instead derive its
 input from the configured store snapshot through the separate standalone
-clustering-discovery seam plus replay-staging seam, which prefers the
-repository-owned replay journal and only falls back to whole-store discovery for
-compatibility cases.
+clustering-discovery seam plus replay-staging seam, which resolves a
+repository-owned replay ref to an immutable replay-journal snapshot.
 
 **Traces to:** RQ-INDEXER-001, RQ-INDEXER-002, RQ-INDEXER-003A,
 RQ-INDEXER-003D, RQ-INDEXER-003E
@@ -1231,9 +1249,9 @@ operator-supplied embedding endpoint.
 The MVP realizes this parity boundary by keeping the core orchestration and item
 model environment-neutral even though only the local/testing profile executes in
 the first increment. Standalone clustering continues to rely on the same
-configured `BlockStore` abstraction and the same upstream block-iteration
-contract across environments rather than introducing a local-only discovery
-mechanism.
+configured `BlockStore` abstraction plus the same replay-journal snapshot and
+replay-ref semantics across environments rather than introducing a local-only
+discovery mechanism.
 
 **Traces to:** RQ-INDEXER-007, RQ-INDEXER-010, RQ-INDEXER-003D,
 RQ-INDEXER-003E, RQ-INDEXER-003G
@@ -1276,11 +1294,10 @@ changing the concurrency budget may change throughput, but it does not change
 the logical block set or final root produced for unchanged input under the same
 delegated LexonGraph contract.
 
-For standalone clustering, the comparable invariant is store-snapshot stability:
-repeating the clustering-only stage against the same clustering-eligible block
-set is expected to produce the same logical clustering result under unchanged
-upstream semantics whether replay inputs come from a valid replay journal or
-from compatibility-mode whole-store iteration.
+For standalone clustering, the comparable invariant is replay-snapshot
+stability: repeating the clustering-only stage against the same immutable
+replay-journal root is expected to produce the same logical clustering result
+under unchanged upstream semantics.
 
 The same stability expectation applies to clustering configuration resolution:
 repeating a clustering-enabled run with the same selected published profile
@@ -1313,7 +1330,7 @@ LexonArchiveBuilder-owned verification artifacts validate:
   without exposing the raw upstream lifecycle
 - correct leaf-layer concurrency scheduling with cross-layer barriers
 - correct standalone clustering input discovery through the repository-owned
-  replay journal with upstream block-iteration fallback
+  replay journal and replay-ref selector path
 - correct adoption of the upstream published-profile API with defaulted and
   explicit profile-version selection plus explicit rejection of retired
   low-level clustering controls

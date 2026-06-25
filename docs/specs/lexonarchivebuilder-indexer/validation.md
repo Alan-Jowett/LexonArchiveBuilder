@@ -5,7 +5,8 @@
 Validation patch for the approved email-artifact, chunk-level
 indexing, local filesystem block-store interoperability, replay-based
 streaming delegated indexing, stage-selectable execution, standalone
-clustering input discovery, published-profile API adoption,
+clustering input discovery, immutable replay-journal DAG plus mutable
+replay-ref adoption, published-profile API adoption,
 published-profile version selection, latest published-profile and telemetry
 compatibility, upstream regression assessment, replay-submission and
 streaming-status observability, clustering-failure diagnostics, rooted
@@ -127,13 +128,15 @@ assembly stage for a representative mailbox batch.
 
 **Pass condition:** LexonArchiveBuilder expands mailbox inputs, persists the resulting
 artifacts plus replay-safe delegated staging needed for a later streaming
-replay, emits durable replay-journal state only for successfully persisted
-replayable leaf outputs, does not require clustering or higher-layer final
-materialization in the same invocation, and still returns the existing
-`BatchSummary` shape.
+replay, emits durable immutable replay-journal state only for successfully
+persisted replayable leaf outputs, publishes or advances the selected replay
+ref only after that state is durable, does not require clustering or higher-
+layer final materialization in the same invocation, and still returns the
+existing `BatchSummary` shape.
 
 **Traces to:** RQ-INDEXER-003A, RQ-INDEXER-003D, RQ-INDEXER-003E1,
-DSG-LFI-001A, DSG-LFI-001D, DSG-LFI-001F, DSG-LFI-001F1
+RQ-INDEXER-003E3, DSG-LFI-001A, DSG-LFI-001D, DSG-LFI-001F,
+DSG-LFI-001F1, DSG-LFI-001F2
 
 ### VAL-LFI-002H1
 
@@ -141,44 +144,58 @@ Interrupt a representative ingestion-plus-embedding run after at least one
 replayable leaf output has been durably persisted but before the invocation has
 completed.
 
-**Pass condition:** previously committed replay-journal records remain readable,
-an incomplete trailing write does not invalidate earlier committed records, and
-subsequent resume logic can distinguish completed replayable work from
-uncommitted trailing progress.
+**Pass condition:** the previously selected replay-journal snapshot remains
+readable, an incomplete or unpublished newer snapshot does not invalidate the
+earlier published replay state, and subsequent resume logic can distinguish
+completed replayable work from uncommitted or unpublished trailing progress.
 
-**Traces to:** RQ-INDEXER-003E1, RQ-INDEXER-003E2, RQ-INDEXER-008,
-DSG-LFI-001F1
+**Traces to:** RQ-INDEXER-003E1, RQ-INDEXER-003E2, RQ-INDEXER-003E3,
+RQ-INDEXER-008, DSG-LFI-001F1, DSG-LFI-001F2
+
+### VAL-LFI-002H2
+
+Complete a representative ingestion-plus-embedding run that publishes a new
+immutable replay-journal snapshot over an existing replay ref.
+
+**Pass condition:** the new immutable replay-journal snapshot is durably
+persisted before the replay ref advances, the ref resolves to the new snapshot
+after publication, and the previously published replay-journal root remains
+directly addressable for inspection or replay.
+
+**Traces to:** RQ-INDEXER-003E2, RQ-INDEXER-003E3, DSG-LFI-001F1,
+DSG-LFI-001F2
 
 ### VAL-LFI-002I
 
-Run the clustering-plus-block-assembly stage against a configured local
-filesystem-backed block store that already contains representative delegated
-blocks, replay metadata, a valid replay journal, and an empty request item
-collection.
+Run the clustering-plus-block-assembly stage against a configured block store
+that already contains representative delegated blocks, replay metadata, a valid
+immutable replay-journal snapshot reachable through a replay ref, and an empty
+request item collection.
 
-**Pass condition:** LexonArchiveBuilder prefers the replay journal as the
-clustering-only replay-input source, reconstructs the deterministic replay input
-needed by the streaming indexer without rescanning the whole store in the common
-case, excludes artifacts outside the approved replay-input surface, and performs
+**Pass condition:** LexonArchiveBuilder resolves the selected replay ref to the
+expected immutable replay-journal snapshot, reconstructs the deterministic
+replay input needed by the streaming indexer without rescanning the whole store,
+excludes artifacts outside the approved replay-input surface, and performs
 clustering or block assembly without requiring a prior LexonArchiveBuilder
 summary manifest.
 
 **Traces to:** RQ-INDEXER-002, RQ-INDEXER-003E, RQ-INDEXER-003E1,
-RQ-INDEXER-004F, RQ-INDEXER-010A, DSG-LFI-001E, DSG-LFI-001F,
-DSG-LFI-001F1
+RQ-INDEXER-003E3, RQ-INDEXER-004F, RQ-INDEXER-010A, DSG-LFI-001E,
+DSG-LFI-001F, DSG-LFI-001F1, DSG-LFI-001F2
 
 ### VAL-LFI-002I1
 
 Run the clustering-plus-block-assembly stage against a configured block store
-that contains representative delegated blocks but lacks a valid replay journal
-for the selected store snapshot.
+that contains representative delegated blocks but lacks a valid replay ref or a
+valid immutable replay-journal snapshot for the selected replay ref.
 
-**Pass condition:** LexonArchiveBuilder falls back to the upstream block-iteration
-contract, reconstructs the deterministic replay input needed by the streaming
-indexer from the compatibility path, and preserves the same clustering-only
-result contract rather than failing solely because the journal is absent.
+**Pass condition:** LexonArchiveBuilder fails explicitly at replay-journal
+selection time rather than falling back to whole-store discovery, and the
+failure identifies that the selected replay snapshot could not be resolved or
+validated.
 
-**Traces to:** RQ-INDEXER-003E, RQ-INDEXER-008, DSG-LFI-001E, DSG-LFI-001F
+**Traces to:** RQ-INDEXER-003E, RQ-INDEXER-003E3, RQ-INDEXER-008,
+DSG-LFI-001E, DSG-LFI-001F2
 
 ### VAL-LFI-002J
 
@@ -554,14 +571,13 @@ observer revisions without requiring a separate control-plane service.
 ### VAL-LFI-007B
 
 Run the clustering-only stage twice against an unchanged clustering-eligible
-block-store snapshot.
+replay-journal snapshot.
 
 **Pass condition:** the same clustering-eligible block set surfaced by the
-approved replay-input source produces the same logical clustering result on
-repeated standalone clustering runs, whether discovery uses the replay journal
-or the compatibility fallback path, without requiring repository-local
-duplicate-suppression logic, as long as the selected published profile version
-is unchanged.
+selected immutable replay-journal root produces the same logical clustering
+result on repeated standalone clustering runs, without requiring repository-
+local duplicate-suppression logic, as long as the selected published profile
+version is unchanged.
 
 **Traces to:** RQ-INDEXER-003E, RQ-INDEXER-003F, RQ-INDEXER-003G,
 RQ-INDEXER-008, DSG-LFI-001E, DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-010
