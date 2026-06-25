@@ -591,7 +591,7 @@ fn traverse_block(
                 block_id: block_id.to_string(),
                 parent_block_id: Some(parent_id.to_string()),
                 message: format!(
-                    "child {} embedding spec {}/{} does not match parent {} embedding spec {}/{}",
+                    "child {} logical/comparison embedding spec {}/{} does not match parent {} logical/comparison embedding spec {}/{}",
                     block_id,
                     metrics.comparison_embedding_spec.encoding,
                     metrics.comparison_embedding_spec.dims,
@@ -1266,6 +1266,12 @@ fn block_metrics(
             Block::Branch(branch) => {
                 let (comparison_embedding_spec, descriptor) =
                     branch_embedding_decode_context(Some(block_id), branch)?;
+                let computed = compute_branch_block_metrics(
+                    block_id,
+                    branch,
+                    &comparison_embedding_spec,
+                    descriptor.as_ref(),
+                )?;
                 (
                     "branch",
                     branch.level,
@@ -1274,17 +1280,18 @@ fn block_metrics(
                         encoding: branch.embedding_spec.encoding.clone(),
                     },
                     branch.entries.len(),
-                    comparison_embedding_spec.clone(),
-                    compute_branch_block_metrics(
-                        block_id,
-                        branch,
-                        &comparison_embedding_spec,
-                        descriptor.as_ref(),
-                    )?,
+                    comparison_embedding_spec,
+                    computed,
                 )
             }
             Block::Leaf(leaf) => {
                 let comparison_embedding_spec = leaf.embedding_spec.clone();
+                let computed = compute_leaf_block_metrics(
+                    block_id,
+                    &leaf.embedding_spec,
+                    leaf.entries.iter().map(|entry| &entry.embedding),
+                    &comparison_embedding_spec,
+                )?;
                 (
                     "leaf",
                     leaf.level,
@@ -1293,13 +1300,8 @@ fn block_metrics(
                         encoding: leaf.embedding_spec.encoding.clone(),
                     },
                     leaf.entries.len(),
-                    comparison_embedding_spec.clone(),
-                    compute_leaf_block_metrics(
-                        block_id,
-                        &leaf.embedding_spec,
-                        leaf.entries.iter().map(|entry| &entry.embedding),
-                        &comparison_embedding_spec,
-                    )?,
+                    comparison_embedding_spec,
+                    computed,
                 )
             }
         };
