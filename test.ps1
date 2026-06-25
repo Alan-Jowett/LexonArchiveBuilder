@@ -8,7 +8,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-Set-Location 'C:\dev\LexonArchiveBuilder'
+Set-Location $PSScriptRoot
 
 $exe = Join-Path $PSScriptRoot 'target\release\lexonarchivebuilder-indexer.exe'
 if (-not (Test-Path -Path $exe)) { throw "Indexer binary not found at '$exe'. Build with: cargo build --release -p lexonarchivebuilder-indexer" }

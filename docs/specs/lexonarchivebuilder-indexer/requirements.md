@@ -3,8 +3,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.5.x published-profile evaluation, local testing sweep automation, and LAB-owned replay-journaled clustering-only recovery
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned replay-journaled split-stage recovery, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics and rooted TNN-recall diagnostics, rooted CLI search over stored trees, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.5.x published-profile evaluation through repository testing automation, and layer-parallel block-construction evolution
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.5.x published-profile evaluation, local testing sweep automation, upstream embedding-readback API adoption, and LAB-owned replay-journaled clustering-only recovery
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned replay-journaled split-stage recovery, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics and rooted TNN-recall diagnostics, rooted CLI search over stored trees, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.5.x published-profile evaluation through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, and layer-parallel block-construction evolution
 
 ## USER-REQUEST
 
@@ -156,6 +156,10 @@
 - **UR-146 [INFERRED]:** The existing local profile-evaluation workflow should evolve rather than be replaced, so the repository can compare the current `0.5.x` experiments against prior evaluation baselines without changing the external indexing contract.
 - **UR-147 [KNOWN]:** Provide or update a repository-local runnable `test.ps1` script so a Windows local/testing workflow can execute the approved profile-evaluation sweep across the target `0.5.x` profiles and emit per-profile artifacts plus comparable summary output.
 - **UR-148 [INFERRED]:** This profile-sweep automation is a local/testing operator aid only; it must remain outside the production runtime contract and must not change MCP search or retrieval behavior for already-indexed content.
+- **UR-149 [KNOWN]:** Update LexonArchiveBuilder to use the new LexonGraph API for reading back stored embeddings instead of decoding stored embedding payloads inside LexonArchiveBuilder.
+- **UR-150 [INFERRED]:** Repository-owned tools that read stored embeddings for quality assessment, rooted search, or diagnostics should rely on the same upstream decode or reconstruction semantics as LexonGraph itself so new embedding encodings do not require duplicated repository-local decoder updates.
+- **UR-151 [INFERRED]:** This embedding-readback change should preserve existing CLI and MCP-visible behavior while moving embedding-format awareness behind the upstream LexonGraph API boundary.
+- **UR-152 [KNOWN]:** LexonArchiveBuilder should stop treating unsupported stored embedding encodings as a repository-local format table problem when LexonGraph already knows how to reconstruct those embeddings through its shared API.
 
 ## Change Manifest
 
@@ -233,6 +237,8 @@
 | CM-INDEXER-070 | Revise | Refresh the adopted upstream dependency state and repository-owned narrative so the current named experiment target is upstream `0.4.0` while preserving `0.1.0` as the repository default and retaining `0.3.0` only as historical context | UR-144 |
 | CM-INDEXER-071 | Revise | Refresh the adopted upstream dependency state and repository-owned narrative so the current named experiment target expands to the upstream `0.5.x` profile series while preserving `0.1.0` as the repository default and retaining `0.4.x` only as prior comparison context | UR-145, UR-146 |
 | CM-INDEXER-072 | Add | Require repository-local runnable sweep automation, currently `test.ps1`, for local/testing evaluation of the active published-profile experiment set without changing production or MCP-facing contracts | UR-147, UR-148 |
+| CM-INDEXER-073 | Revise | Move stored-embedding readback for repository-owned quality, search, and diagnostic consumers behind the new upstream LexonGraph embedding reconstruction API instead of repository-local decoding logic | UR-149, UR-150, UR-152 |
+| CM-INDEXER-074 | Add | Preserve existing CLI and MCP-visible contracts while making upstream LexonGraph the authority for supported stored embedding encodings and reconstruction semantics | UR-150, UR-151, UR-152 |
 
 ## Before / After
 
@@ -595,6 +601,16 @@
 
 - **Before [KNOWN]:** The requirements did not define an approved repository-local operator automation surface for rerunning published-profile sweeps as the active experiment target changed.
 - **After [KNOWN]:** The requirements now call for a runnable repository-local `test.ps1` sweep that exercises the approved local/testing evaluation flow across the active experiment set, emits per-profile artifacts plus comparable summary output, and leaves production plus MCP-facing contracts unchanged.
+
+### BA-INDEXER-073
+
+- **Before [KNOWN]:** LexonArchiveBuilder requirements allowed repository-owned consumers such as rooted quality or diagnostics to decode stored embedding payloads through repository-local format handling, which drifted behind new upstream encodings.
+- **After [KNOWN]:** The requirements now move stored-embedding readback behind the upstream LexonGraph embedding reconstruction API so repository-owned consumers reuse upstream-supported encoding semantics instead of maintaining their own decoder table.
+
+### BA-INDEXER-074
+
+- **Before [KNOWN]:** Repository-owned support for new stored embedding encodings depended on duplicating LexonGraph format knowledge inside LexonArchiveBuilder.
+- **After [KNOWN]:** The requirements now treat LexonGraph as the authority for stored embedding reconstruction while preserving the existing CLI and MCP-visible surfaces that consume those decoded embeddings.
 
 ## Requirements
 
@@ -1198,6 +1214,13 @@ TNN-recall diagnostics for the reachable tree.
 - **TNN-recall extensibility [KNOWN]:** The assessment must support rooted
   TNN-recall diagnostics over the embedding corpus reachable from the supplied
   root without redefining the repository's search-serving surfaces.
+- **Embedding-readback boundary [KNOWN]:** When the assessment needs numerical
+  embedding values from stored branch blocks, especially for evolving branch
+  encodings such as EBCP, it SHALL obtain those values through the upstream
+  LexonGraph embedding readback or reconstruction API rather than through a
+  repository-local branch-decoder table keyed on embedding-encoding strings.
+  Plain leaf payload decoding for the currently supported stable encodings
+  remains unchanged in this increment.
 - **Environment parity [INFERRED]:** The same assessment contract must remain
   usable against local/testing and preserved production-shaped block stores
   through the shared `BlockStore` boundary.
@@ -1289,6 +1312,10 @@ through `lexongraph-search` to return the top `k` matching leaf nodes.
 - **Search boundary [KNOWN]:** The tool SHALL use the `lexongraph-search` API for
   the actual rooted search rather than introducing a repository-local search
   algorithm.
+- **Embedding-readback boundary [KNOWN]:** Any repository-owned stored-embedding
+  readback needed by this rooted-tree operator surface SHALL reuse the upstream
+  LexonGraph embedding readback or reconstruction API rather than maintaining a
+  separate repository-local decoder.
 - **Embedding boundary [KNOWN]:** The tool SHALL accept a caller-supplied
   embedding endpoint for query embedding generation rather than requiring Rust
   code changes for each endpoint choice.
@@ -1347,7 +1374,11 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - **Content-type implication [KNOWN]:** The published-profile clustering contract
   must remain generic across current mailbox and document flows so future
   content types do not require a parallel clustering-control family.
-- **Traceability:** UR-3, UR-6, UR-7, UR-13, UR-19, UR-22, UR-42, UR-118, UR-119, UR-121, UR-123, UR-125
+- **Embedding-readback implication [KNOWN]:** Stored embedding reconstruction
+  semantics and supported on-disk encodings must remain upstream-owned through
+  LexonGraph APIs rather than being redefined independently by repository-owned
+  quality, search, or diagnostic tools.
+- **Traceability:** UR-3, UR-6, UR-7, UR-13, UR-19, UR-22, UR-42, UR-118, UR-119, UR-121, UR-123, UR-125, UR-149, UR-150, UR-151, UR-152
 
 ## Out of Scope
 
@@ -1370,6 +1401,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - Allowing user-query diagnostic recall to contribute to automated or aggregate rooted-quality metrics
 - Requiring the rooted CLI search tool to replace or redefine the existing MCP search surface in this increment
 - Defining a repository-local search algorithm or a second repository-local search corpus model instead of using `lexongraph-search` over the approved rooted-tree boundary
+- Defining or maintaining a repository-local branch-embedding decoding matrix for evolving branch encodings when the upstream LexonGraph embedding readback API already owns the supported branch reconstruction semantics
 
 ## Invariant Impact Assessment
 
@@ -1390,6 +1422,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Latest upstream telemetry remains subordinate to the existing runtime progress surface | Preserved with clarified scope | Requirements now constrain richer live telemetry and heartbeat events to the same repository-owned log stream rather than a new telemetry interface |
 | Operator-visible progress counts remain understandable across upstream telemetry changes | Preserved with clarified scope | Requirements now distinguish invocation-total delegated-item counts from stage-local or layer-local telemetry counts so upstream count-shape changes do not create misleading logs |
 | Post-index quality assessment remains subordinate to existing storage and serving boundaries | Preserved with clarified scope | The new assessment is constrained to a CLI-only operator tool that reads through the shared `BlockStore` boundary and does not alter MCP-facing behavior |
+| Stored embedding format awareness remains upstream-owned | Preserved with revised ownership | Requirements now place supported stored-embedding encodings and reconstruction semantics behind the upstream LexonGraph readback API instead of a repository-local decoder table |
 | Aggregate recall evaluation remains rooted-corpus-based and reproducible | Preserved with clarified scope | TNN-Recall is constrained to uniform seeded sampling over the rooted reachable embedding set for aggregate metrics, while user-query recall remains diagnostic-only |
 | Operator CLI search remains additive to MCP search-serving behavior | Preserved with clarified scope | The new rooted CLI search tool is additive, uses the approved rooted-tree boundary plus `lexongraph-search`, and does not replace the MCP surface |
 | Clients are not forced to parse raw mailbox blobs for ordinary retrieval | Preserved | Indexed chunks must reference normalized email artifacts so retrieval can stay at chunk level or expand to full normalized email through repository-owned artifacts |
@@ -1496,10 +1529,14 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   - user clarification in this session selecting: "Replace the external control surface with profile-based v0.1.0 (Recommended)"
   - user request in this session: "LexonGraph has switched to exposing a versioned indexing profile. Currently we hard-code to v0.1.0 (I think). Make this an option we can test different profiles. Can we also pin to main of LexonGraph for now with an explicit note that this is so we can quickly test new profiles?"
   - user request in this session: "LexonGraph now has a 0.5.x series of profiles to test. Update to allow us to test this and create/update a test.ps1 I can run them"
+  - user request in this session: "update lab to use the new api for reading back embeddings rather then decoding them in lab"
   - `test.ps1:1-90`
   - `crates/lexonarchivebuilder-indexer/src/config.rs:45-60`
   - `crates/lexonarchivebuilder-indexer/src/main.rs:287-320`
   - `Cargo.toml:29-37`
+  - `crates/lexonarchivebuilder-indexer/src/quality.rs:1105-1179`
+  - `crates/lexonarchivebuilder-indexer/src/runtime.rs:720-741`
+  - `crates/lexonarchivebuilder-indexer/src/tree_tools.rs:81-114`
   - `docs/specs/lexonarchivebuilder-indexer/design.md:228-315`
   - `docs/specs/lexonarchivebuilder-indexer/validation.md:72-187`
   - `crates/lexonarchivebuilder-indexer/src/runtime.rs:14-340`
