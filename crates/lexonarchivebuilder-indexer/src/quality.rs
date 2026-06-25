@@ -1361,7 +1361,7 @@ fn decode_branch_embeddings(
             block_id: block_id.to_string(),
             message: error.to_string(),
         })?;
-    let mut decoded = Vec::new();
+    let mut decoded = Vec::with_capacity(branch.entries.len());
     for entry in &branch.entries {
         let values = reconstruct_logical_branch_embedding_f32(
             &entry.embedding,
