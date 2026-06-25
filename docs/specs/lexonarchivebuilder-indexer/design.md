@@ -616,11 +616,13 @@ through TNN-recall. That evidence is mode-tagged so corpus-based quality
 evaluation remains distinguishable from optional user-query diagnostics in both
 the human-readable summary and the JSON report.
 
-When this flow needs numerical embedding values from stored rooted blocks, it
-does not decode those payloads through a repository-local embedding-encoding
-table. Instead, it treats LexonGraph as the authority for supported stored
-encodings and reconstructs the logical floating-point vectors through the
-upstream embedding readback API.
+When this flow needs numerical embedding values from stored rooted branch
+blocks, it does not decode those payloads through a repository-local
+branch-encoding table. Instead, it treats LexonGraph as the authority for
+supported branch encodings and reconstructs the logical floating-point vectors
+through the upstream embedding readback API. Plain leaf payload decoding for
+the currently supported stable encodings remains on the existing local path in
+this increment.
 
 One required repository-owned heuristic in this increment compares a child's
 centroid-distance spread against its parent's corresponding spread. The design

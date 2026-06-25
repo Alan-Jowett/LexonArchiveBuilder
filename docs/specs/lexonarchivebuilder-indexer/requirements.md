@@ -1215,9 +1215,12 @@ TNN-recall diagnostics for the reachable tree.
   TNN-recall diagnostics over the embedding corpus reachable from the supplied
   root without redefining the repository's search-serving surfaces.
 - **Embedding-readback boundary [KNOWN]:** When the assessment needs numerical
-  embedding values from stored blocks, it SHALL obtain those values through the
-  upstream LexonGraph embedding readback or reconstruction API rather than
-  through a repository-local decoder keyed on embedding-encoding strings.
+  embedding values from stored branch blocks, especially for evolving branch
+  encodings such as EBCP, it SHALL obtain those values through the upstream
+  LexonGraph embedding readback or reconstruction API rather than through a
+  repository-local branch-decoder table keyed on embedding-encoding strings.
+  Plain leaf payload decoding for the currently supported stable encodings
+  remains unchanged in this increment.
 - **Environment parity [INFERRED]:** The same assessment contract must remain
   usable against local/testing and preserved production-shaped block stores
   through the shared `BlockStore` boundary.
@@ -1398,7 +1401,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - Allowing user-query diagnostic recall to contribute to automated or aggregate rooted-quality metrics
 - Requiring the rooted CLI search tool to replace or redefine the existing MCP search surface in this increment
 - Defining a repository-local search algorithm or a second repository-local search corpus model instead of using `lexongraph-search` over the approved rooted-tree boundary
-- Defining or maintaining a repository-local stored-embedding decoding matrix when the upstream LexonGraph embedding readback API already owns the supported encoding and reconstruction semantics
+- Defining or maintaining a repository-local branch-embedding decoding matrix for evolving branch encodings when the upstream LexonGraph embedding readback API already owns the supported branch reconstruction semantics
 
 ## Invariant Impact Assessment
 

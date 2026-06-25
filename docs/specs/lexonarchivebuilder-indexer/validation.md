@@ -285,9 +285,11 @@ the rooted analysis result without requiring an operator-visible quantile-bin
 configuration surface in this increment. When rooted TNN-recall is enabled, the
 same surface keeps corpus-based evaluation controls, including sample size,
 seed, and traversal width, distinct from optional diagnostic-query recall
-inputs. Any stored embeddings consumed by this flow are reconstructed through
-the upstream LexonGraph embedding readback API rather than through a
-repository-local decoder table.
+inputs. Any stored branch embeddings consumed by this flow are reconstructed
+through the upstream LexonGraph embedding readback API rather than through a
+repository-local branch-decoder table, while plain leaf payload decoding for
+the currently supported stable encodings remains on the existing local path in
+this increment.
 
 **Traces to:** RQ-INDEXER-008D, RQ-INDEXER-008D1, RQ-INDEXER-008D2, RQ-INDEXER-008D3, DSG-LFI-002D, DSG-LFI-002D1, DSG-LFI-002D2, DSG-LFI-002F, DSG-LFI-005B, DSG-LFI-007D
 
