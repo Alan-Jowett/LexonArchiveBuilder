@@ -133,14 +133,21 @@ LexonArchiveBuilder selects delegated dependency integrations as an environment 
 | Profile | Storage / block access | Query-time embeddings when required by delegated search |
 |---|---|---|
 | local/testing | local filesystem-backed access | local embedding service using the same Docker-containerized embedding engine profile as the indexer |
-| production | Azure Blob Storage-backed access | Azure OpenAI |
+| production-oriented | overlay block store: memory cache + local filesystem cache + Azure Blob SAS-backed access | Azure OpenAI |
 
 This selection is configuration-driven and preserves one delegated search flow
 independent of environment.
 
+The non-local MCP storage target is intentionally fixed to this overlay shape
+rather than to a plain Azure-only mode or a caller-assembled arbitrary storage
+stack. That keeps `search_chunks` and the named retrieval tools on one shared
+storage-targeting contract even when a given retrieval operation is currently
+specified to return an explicit unsupported or unavailable outcome.
+
 For the first MVP, only the local/testing profile must be executable end to
-end. The production profile remains a preserved adapter and configuration
-boundary rather than an executable runtime path in this increment.
+end. The production-oriented overlay profile remains a preserved adapter and
+configuration boundary rather than an executable runtime path in this
+increment.
 
 **Traces to:** RQ-MCP-006, RQ-MCP-007, RQ-MCP-007A, RQ-MCP-012
 
@@ -172,6 +179,11 @@ host operating system.
 The MVP realizes this parity boundary by keeping the MCP contract and adapter
 selection model environment-neutral even though only the local/testing profile
 is required to execute in the first increment.
+
+Within that parity boundary, all MCP tools share the same two-mode storage
+contract: direct local filesystem access or the fixed non-local overlay of
+memory cache plus local filesystem cache plus Azure Blob SAS-backed storage. No
+tool defines a plain Azure-only targeting exception.
 
 **Traces to:** RQ-MCP-007, RQ-MCP-009, RQ-MCP-012
 
@@ -217,6 +229,8 @@ LexonArchiveBuilder-owned verification artifacts validate:
 - correct selection and use of environment-specific dependency integrations
 - executable local/testing conformance against filesystem-backed block access
   and the indexer-aligned Docker-containerized embedding profile
+- correct preservation of the shared two-mode local-versus-overlay block-store
+  targeting contract across `search_chunks` and the named retrieval tools
 - explicit unsupported or unavailable named-retrieval outcomes when no
   delegated name-based retrieval contract exists for the requested item class
 - preservation of one stable MCP contract across environments

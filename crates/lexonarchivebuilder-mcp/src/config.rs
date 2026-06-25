@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use lexonarchivebuilder_indexer::config::{EmbeddingSpecConfig, EnvironmentConfig};
+use lexonarchivebuilder_indexer::config::{
+    ConfigError as IndexerConfigError, EmbeddingSpecConfig, EnvironmentConfig,
+};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -31,6 +33,8 @@ pub enum ConfigError {
     InvalidTopK,
     #[error("traversal_width must be at least 1")]
     InvalidTraversalWidth,
+    #[error(transparent)]
+    IndexerConfig(#[from] IndexerConfigError),
 }
 
 impl McpConfig {
@@ -41,6 +45,7 @@ impl McpConfig {
         if self.traversal_width == 0 {
             return Err(ConfigError::InvalidTraversalWidth);
         }
+        self.environment.validate()?;
         Ok(())
     }
 
@@ -81,6 +86,7 @@ mod tests {
 
     use super::*;
     use lexonarchivebuilder_indexer::config::LocalEmbeddingConfig;
+    use lexonarchivebuilder_indexer::config::ProductionEmbeddingConfig;
 
     #[test]
     fn relative_summary_paths_are_resolved_against_config_directory() {
@@ -118,5 +124,38 @@ mod tests {
                 .join("output")
                 .join("summary.json")
         );
+    }
+
+    #[test]
+    fn production_config_requires_overlay_block_store_fields() {
+        let config = McpConfig {
+            environment: EnvironmentConfig::Production {
+                block_store: lexonarchivebuilder_indexer::config::ProductionBlockStoreConfig {
+                    container_sas_url:
+                        "https://example.blob.core.windows.net/archive-sync?sig=test".into(),
+                    prefix: None,
+                    filesystem_cache_root: None,
+                    memory_cache_max_resident_blocks: None,
+                },
+                embedding: ProductionEmbeddingConfig {
+                    endpoint: "https://example.openai.azure.com".into(),
+                    deployment: "embeddings".into(),
+                    api_version: "2024-02-01".into(),
+                    api_key_env: None,
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 384,
+                encoding: "f32le".into(),
+            },
+            index: IndexConfig::RootId {
+                root_id: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".into(),
+            },
+            top_k: default_top_k(),
+            traversal_width: default_traversal_width(),
+        };
+
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("filesystem_cache_root"));
     }
 }

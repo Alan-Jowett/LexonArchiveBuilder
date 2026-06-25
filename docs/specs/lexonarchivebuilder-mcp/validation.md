@@ -102,9 +102,24 @@ Inspect the preserved production environment profile boundary.
 **Pass condition:** production-specific storage and embedding identifiers remain
 behind the same adapter-selection boundary as the executable local/testing
 profile, and no local-only assumptions leak into the MCP contract or delegated
-search orchestration boundary.
+search orchestration boundary. The preserved non-local storage family must
+describe the approved overlay target of memory cache plus local filesystem
+cache plus Azure Blob SAS-backed access rather than a plain Azure-only mode.
 
 **Traces to:** RQ-MCP-006, RQ-MCP-007, DSG-LFM-005, DSG-LFM-006, DSG-LFM-007
+
+### VAL-LFM-007A
+
+Inspect the MCP tool surface against the approved non-local storage-targeting
+contract.
+
+**Pass condition:** `search_chunks` and the named retrieval tools share one
+storage-targeting contract with exactly two modes: direct local filesystem
+access or the fixed overlay of memory cache plus local filesystem cache plus
+Azure Blob SAS-backed access. No MCP tool introduces a plain Azure-only
+block-store targeting mode outside that approved overlay shape.
+
+**Traces to:** RQ-MCP-006, RQ-MCP-007, DSG-LFM-006, DSG-LFM-007, DSG-LFM-011
 
 ### VAL-LFM-008
 

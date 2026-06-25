@@ -121,6 +121,10 @@ pub struct ProductionBlockStoreConfig {
     pub container_sas_url: String,
     #[serde(default)]
     pub prefix: Option<String>,
+    #[serde(default)]
+    pub filesystem_cache_root: Option<PathBuf>,
+    #[serde(default)]
+    pub memory_cache_max_resident_blocks: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -173,6 +177,16 @@ pub enum ConfigError {
     MissingProductionContainerSasUrl,
     #[error("production block_store.prefix is not supported by the Azure Blob block store")]
     UnsupportedProductionBlockStorePrefix,
+    #[error(
+        "production block_store.filesystem_cache_root is required for the production overlay block store"
+    )]
+    MissingProductionFilesystemCacheRoot,
+    #[error(
+        "production block_store.memory_cache_max_resident_blocks is required for the production overlay block store"
+    )]
+    MissingProductionMemoryCacheMaxResidentBlocks,
+    #[error("production block_store.memory_cache_max_resident_blocks must be at least 1")]
+    InvalidProductionMemoryCacheMaxResidentBlocks,
 }
 
 impl BatchRequest {
@@ -183,9 +197,7 @@ impl BatchRequest {
         if matches!(self.max_concurrency, Some(0)) {
             return Err(ConfigError::InvalidMaxConcurrency);
         }
-        if let EnvironmentConfig::Production { block_store, .. } = &self.environment {
-            block_store.validate()?;
-        }
+        self.environment.validate_for_stage(self.stage)?;
         Ok(())
     }
 
@@ -206,6 +218,24 @@ impl BatchRequest {
 }
 
 impl EnvironmentConfig {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        self.validate_for_stage(ExecutionStage::FullPipeline)
+    }
+
+    pub fn validate_for_stage(&self, stage: ExecutionStage) -> Result<(), ConfigError> {
+        match self {
+            Self::Local { .. } => {
+                if stage.includes_ingestion() {
+                    self.local_embedding()?;
+                }
+            }
+            Self::Production { block_store, .. } => {
+                block_store.validate()?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn resolve_block_store_root(&self, request_dir: &Path) -> Option<PathBuf> {
         match self {
             Self::Local {
@@ -240,6 +270,18 @@ impl ProductionBlockStoreConfig {
             .is_some_and(|prefix| !prefix.trim().is_empty())
         {
             return Err(ConfigError::UnsupportedProductionBlockStorePrefix);
+        }
+        if self.filesystem_cache_root.is_none() {
+            return Err(ConfigError::MissingProductionFilesystemCacheRoot);
+        }
+        match self.memory_cache_max_resident_blocks {
+            Some(0) => {
+                return Err(ConfigError::InvalidProductionMemoryCacheMaxResidentBlocks);
+            }
+            Some(_) => {}
+            None => {
+                return Err(ConfigError::MissingProductionMemoryCacheMaxResidentBlocks);
+            }
         }
         Ok(())
     }
@@ -608,6 +650,8 @@ mod tests {
                 block_store: ProductionBlockStoreConfig {
                     container_sas_url: String::new(),
                     prefix: None,
+                    filesystem_cache_root: None,
+                    memory_cache_max_resident_blocks: None,
                 },
                 embedding: ProductionEmbeddingConfig {
                     endpoint: "https://example.openai.azure.com".into(),
@@ -644,6 +688,8 @@ mod tests {
                     container_sas_url:
                         "https://example.blob.core.windows.net/archive-sync?sig=test".into(),
                     prefix: Some("archive-sync".into()),
+                    filesystem_cache_root: None,
+                    memory_cache_max_resident_blocks: None,
                 },
                 embedding: ProductionEmbeddingConfig {
                     endpoint: "https://example.openai.azure.com".into(),
@@ -673,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn production_request_deserializes_container_sas_url() {
+    fn production_request_requires_filesystem_cache_root_for_overlay_block_store() {
         let request: BatchRequest = serde_json::from_value(json!({
             "environment": {
                 "kind": "production",
@@ -697,16 +743,88 @@ mod tests {
         }))
         .unwrap();
 
+        assert!(matches!(
+            request.validate(),
+            Err(ConfigError::MissingProductionFilesystemCacheRoot)
+        ));
+    }
+
+    #[test]
+    fn production_request_accepts_overlay_cache_layers() {
+        let request: BatchRequest = serde_json::from_value(json!({
+            "environment": {
+                "kind": "production",
+                "block_store": {
+                    "container_sas_url": "https://example.blob.core.windows.net/archive-sync?sig=test",
+                    "filesystem_cache_root": "cache",
+                    "memory_cache_max_resident_blocks": 64
+                },
+                "embedding": {
+                    "endpoint": "https://example.openai.azure.com",
+                    "deployment": "embeddings"
+                }
+            },
+            "embedding_spec": {
+                "dims": 384,
+                "encoding": "f32le"
+            },
+            "profile_version": "0.5.0",
+            "items": [{
+                "kind": "document",
+                "path": "docs/sample.txt"
+            }]
+        }))
+        .unwrap();
+
+        assert!(request.validate().is_ok());
         match request.environment {
             EnvironmentConfig::Production { block_store, .. } => {
                 assert_eq!(
-                    block_store.container_sas_url,
-                    "https://example.blob.core.windows.net/archive-sync?sig=test"
+                    block_store.filesystem_cache_root,
+                    Some(PathBuf::from("cache"))
                 );
-                assert_eq!(block_store.prefix, None);
+                assert_eq!(block_store.memory_cache_max_resident_blocks, Some(64));
             }
             EnvironmentConfig::Local { .. } => panic!("expected production environment"),
         }
+    }
+
+    #[test]
+    fn production_request_rejects_partial_overlay_cache_config() {
+        let request = BatchRequest {
+            environment: EnvironmentConfig::Production {
+                block_store: ProductionBlockStoreConfig {
+                    container_sas_url:
+                        "https://example.blob.core.windows.net/archive-sync?sig=test".into(),
+                    prefix: None,
+                    filesystem_cache_root: Some("cache".into()),
+                    memory_cache_max_resident_blocks: None,
+                },
+                embedding: ProductionEmbeddingConfig {
+                    endpoint: "https://example.openai.azure.com".into(),
+                    deployment: "embeddings".into(),
+                    api_version: default_azure_api_version(),
+                    api_key_env: None,
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 384,
+                encoding: "f32le".into(),
+            },
+            block_size_target: default_block_size_target(),
+            stage: ExecutionStage::FullPipeline,
+            profile_version: default_profile_version(),
+            max_concurrency: None,
+            items: vec![BatchItemConfig::Document {
+                path: PathBuf::from("docs").join("sample.txt"),
+                metadata: BTreeMap::new(),
+            }],
+        };
+
+        assert!(matches!(
+            request.validate(),
+            Err(ConfigError::MissingProductionMemoryCacheMaxResidentBlocks)
+        ));
     }
 
     #[test]

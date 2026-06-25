@@ -160,6 +160,10 @@
 - **UR-150 [INFERRED]:** Repository-owned tools that read stored embeddings for quality assessment, rooted search, or diagnostics should rely on the same upstream decode or reconstruction semantics as LexonGraph itself so new embedding encodings do not require duplicated repository-local decoder updates.
 - **UR-151 [INFERRED]:** This embedding-readback change should preserve existing CLI and MCP-visible behavior while moving embedding-format awareness behind the upstream LexonGraph API boundary.
 - **UR-152 [KNOWN]:** LexonArchiveBuilder should stop treating unsupported stored embedding encodings as a repository-local format table problem when LexonGraph already knows how to reconstruct those embeddings through its shared API.
+- **UR-153 [KNOWN]:** All indexer tools that read from or write to the configured block store must allow operators to target either a local filesystem block store or an overlay block store composed of an in-memory cache, a local filesystem cache, and an Azure Blob backing store addressed by SAS URL.
+- **UR-154 [KNOWN]:** For this increment, a plain Azure Blob block-store target without the required memory-plus-filesystem overlay is not an approved indexer tool-targeting mode.
+- **UR-155 [INFERRED]:** The same block-store targeting contract should apply consistently across batch indexing, standalone clustering discovery, rooted quality assessment, rooted CLI search, and any other indexer-owned operator tool that traverses the shared `BlockStore` boundary.
+- **UR-156 [INFERRED]:** The new overlay-capable targeting contract must remain content-type-neutral and preserve the existing shared `BlockStore` abstraction family for indexed blocks, normalized email artifacts, and mailbox provenance artifacts.
 
 ## Change Manifest
 
@@ -239,6 +243,7 @@
 | CM-INDEXER-072 | Add | Require repository-local runnable sweep automation, currently `test.ps1`, for local/testing evaluation of the active published-profile experiment set without changing production or MCP-facing contracts | UR-147, UR-148 |
 | CM-INDEXER-073 | Revise | Move stored-embedding readback for repository-owned quality, search, and diagnostic consumers behind the new upstream LexonGraph embedding reconstruction API instead of repository-local decoding logic | UR-149, UR-150, UR-152 |
 | CM-INDEXER-074 | Add | Preserve existing CLI and MCP-visible contracts while making upstream LexonGraph the authority for supported stored embedding encodings and reconstruction semantics | UR-150, UR-151, UR-152 |
+| CM-INDEXER-075 | Revise | Replace the current local-versus-plain-Azure tool-targeting split with a repository-wide two-mode contract: direct local filesystem or a fixed overlay of memory cache plus local filesystem cache plus Azure Blob SAS-backed storage | UR-153, UR-154, UR-155, UR-156 |
 
 ## Before / After
 
@@ -611,6 +616,11 @@
 
 - **Before [KNOWN]:** Repository-owned support for new stored embedding encodings depended on duplicating LexonGraph format knowledge inside LexonArchiveBuilder.
 - **After [KNOWN]:** The requirements now treat LexonGraph as the authority for stored embedding reconstruction while preserving the existing CLI and MCP-visible surfaces that consume those decoded embeddings.
+
+### BA-INDEXER-075
+
+- **Before [KNOWN]:** The requirements allowed indexer-owned tools to vary between a local filesystem block store and a plain Azure Blob production target, but they did not require a uniform overlay-capable targeting contract across every tool surface that uses the shared `BlockStore` boundary.
+- **After [KNOWN]:** The requirements now constrain all indexer-owned block-store-consuming tools to a consistent two-mode target model: direct local filesystem access or a fixed overlay block store composed of memory cache, local filesystem cache, and Azure Blob SAS-backed storage.
 
 ## Requirements
 
@@ -1006,15 +1016,19 @@ LexonArchiveBuilder SHALL provide a concrete implementation of `lexongraph_block
 
 - **Architectural target storage profiles [KNOWN]:**
   - local filesystem for local/testing operation
-  - Azure Blob Storage for production operation
-- **MVP realization [KNOWN]:** The first in-repo implementation must execute end-to-end against the local filesystem profile. Azure Blob Storage remains a required future profile boundary, but not a required executable realization for the first MVP.
+  - overlay block store for production-oriented operation, composed of memory cache + local filesystem cache + Azure Blob Storage backing addressed by SAS URL
+- **Approved tool-targeting modes [KNOWN]:** Every indexer-owned tool that reads from or writes to the shared `BlockStore` boundary SHALL support exactly these two target modes: direct local filesystem or the approved overlay block store.
+- **Disallowed mode [KNOWN]:** A plain Azure Blob block-store target without the required overlay layers is not an approved operator-facing mode in this increment.
+- **Current increment [KNOWN]:** The existing local/testing realization remains required, and this increment additionally requires the overlay target mode to be usable on the same repository-owned tool surfaces rather than being introduced tool-by-tool.
 - **Local filesystem interoperability [KNOWN]:** The local/testing filesystem-backed realization SHALL use the LexonGraph-owned filesystem block-store contract, including its on-disk naming and layout scheme, so LexonGraph filesystem tooling such as `lexongraph-block-inspect` can operate on LexonArchiveBuilder-produced local stores.
 - **Local implementation target [KNOWN]:** The local/testing filesystem-backed realization SHALL use the upstream `lexongraph-block-store-fs` crate rather than a repository-local filesystem naming scheme.
 - **Migration boundary [KNOWN]:** This local filesystem interoperability correction may require a fresh or rebuilt local store; continued read compatibility with blocks written by the superseded custom local layout is not required in this increment.
+- **Overlay shape [KNOWN]:** The non-local target mode SHALL be a fixed ordered overlay containing an in-memory cache layer, a local filesystem cache layer, and an Azure Blob backing layer addressed through a SAS URL rather than a caller-selectable arbitrary stack of storage backends.
 - **Artifact reuse [KNOWN]:** The same environment-selected `BlockStore` abstraction family SHALL also be used for normalized email artifacts and mailbox provenance artifacts, provided indexing contracts and retrieval references remain explicit.
+- **Tool-surface consistency [INFERRED]:** Batch indexing, standalone clustering discovery, rooted quality assessment, rooted CLI search, and future indexer-owned operator tools SHALL share the same block-store target-selection contract instead of inventing per-tool storage mode variants.
 - **Assessment-tool implication [INFERRED]:** Post-index rooted block-tree quality assessment SHALL also read blocks through the same environment-selected `BlockStore` boundary rather than bypassing it with a repository-specific storage reader.
 - **Mailbox retention [KNOWN]:** Mailbox provenance artifacts SHALL be retained so the original source material remains available for re-normalization, re-chunking, and re-ingestion flows.
-- **Traceability:** UR-3, UR-6, UR-9, UR-12, UR-13, UR-18, UR-22, UR-25, UR-26, UR-27, UR-28, UR-80, UR-86
+- **Traceability:** UR-3, UR-6, UR-9, UR-12, UR-13, UR-18, UR-22, UR-25, UR-26, UR-27, UR-28, UR-80, UR-86, UR-153, UR-154, UR-155, UR-156
 
 #### RQ-INDEXER-006 - Embedding provider integration
 
@@ -1034,9 +1048,9 @@ LexonArchiveBuilder SHALL obtain embeddings through a provider that satisfies `l
 LexonArchiveBuilder SHALL select storage and embedding integrations according to environment without changing the delegated indexing contract or the batch input contract.
 
 - **Local/testing [KNOWN]:** local filesystem + local embedding service
-- **Production [KNOWN]:** Azure Blob Storage + Azure OpenAI
-- **MVP realization [KNOWN]:** Only the local/testing profile is required to be executable in the first MVP. The production profile must remain representable through the same adapter boundary and configuration model without requiring Azure-specific execution support in this increment.
-- **Traceability:** UR-6, UR-7, UR-12, UR-13
+- **Production-oriented [KNOWN]:** overlay block store (memory cache + local filesystem cache + Azure Blob SAS-backed storage) + Azure OpenAI
+- **Constraint [KNOWN]:** Environment-specific adapter selection for every indexer-owned tool must expose the same two storage-targeting modes rather than allowing some tools to target local filesystem while others target a plain Azure Blob backend directly.
+- **Traceability:** UR-6, UR-7, UR-12, UR-13, UR-153, UR-154, UR-155, UR-156
 
 #### RQ-INDEXER-008 - Idempotent reruns
 
@@ -1408,7 +1422,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Invariant | Impact | Assessment |
 |---|---|---|
 | Indexing remains separate from search serving | Preserved | Requirements explicitly constrain scope to indexing-time orchestration and integrations |
-| Environment-specific storage and embedding behavior stays behind stable interfaces | Preserved | Stage selection, block-store iteration, and clustering-status reporting are constrained to the same request and adapter boundaries across local/testing and the preserved production profile |
+| Environment-specific storage and embedding behavior stays behind stable interfaces | Preserved with revised storage contract | Stage selection, block-store iteration, clustering-status reporting, and operator-tool traversal now share the same two-mode local-versus-overlay block-store contract instead of splitting between local filesystem and plain Azure Blob targeting |
 | Architecture remains extensible to future content types | Preserved | Collection-oriented input still covers both mailbox and document collections, and stage selection is defined in generic pipeline terms rather than mailbox-specific behavior |
 | Idempotence and recoverability stay aligned with underlying immutable block semantics | Preserved with clarified scope | Requirements extend hash-addressed identity expectations to normalized email artifacts and require clustering-only reruns over the same clustering-eligible block-store snapshot to remain semantically stable under unchanged upstream semantics |
 | Local development remains self-contained and batch-oriented | Preserved | Docker Compose is constrained to compose local dependencies around the batch container rather than changing the runtime model |
