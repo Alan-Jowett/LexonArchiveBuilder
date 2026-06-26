@@ -930,7 +930,9 @@ LexonArchiveBuilder provides concrete `lexongraph_block_store::BlockStore`
 implementations or adapters selected by environment.
 
 - local/testing selects a filesystem-backed block store
-- production selects an Azure Blob-backed block store
+- production-oriented operation selects a fixed overlay block store composed of
+  an in-memory cache layer, a local filesystem cache layer, and an Azure Blob
+  backing layer addressed by SAS URL
 
 The same environment-selected `BlockStore` abstraction family is reused for:
 
@@ -942,9 +944,16 @@ The rest of the LexonArchiveBuilder indexing flow consumes only the backend-neut
 `BlockStore` contract and does not depend on filesystem paths or Azure-specific
 blob layout details.
 
-For the first MVP, only the local/testing block-store realization must be
-executable. The production storage profile remains a preserved adapter seam and
-configuration target rather than an implemented runtime path in this increment.
+The non-local target is intentionally fixed to this overlay shape rather than a
+caller-assembled arbitrary stack of storage adapters. This keeps tool-targeting
+semantics stable across batch indexing, standalone clustering, rooted quality
+assessment, rooted CLI search, and future indexer-owned operator tools that
+traverse the shared `BlockStore` boundary.
+
+For the approved increment, the local/testing block-store realization remains
+required and executable, and the production-oriented overlay target remains part
+of the same preserved adapter seam and configuration family rather than a
+tool-specific exception path.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-007, RQ-INDEXER-010
 
@@ -989,7 +998,7 @@ used by rooted TNN-recall, so repository-owned aggregation stays rooted-
 snapshot-local rather than mixing data from unrelated stored trees.
 
 This design keeps assessment logic backend-neutral across local filesystem and
-the preserved production storage profile. It also prevents the repository from
+the approved non-local overlay storage profile. It also prevents the repository from
 introducing a second storage-reader stack with different reachability or
 decoding semantics than the indexing path already uses.
 
@@ -1007,7 +1016,7 @@ reachable rooted tree is the authority for which stored leaf nodes may appear in
 search results for one invocation.
 
 This preserves backend-neutral search orchestration across local filesystem and
-the preserved production storage profile while keeping traversal semantics
+the approved non-local overlay storage profile while keeping traversal semantics
 aligned with the same stored tree boundary used by rooted quality assessment.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-008E, RQ-INDEXER-010
@@ -1059,15 +1068,17 @@ environment profile:
 | Profile | Block storage | Embedding target |
 |---|---|---|
 | local/testing | local filesystem | local STAPI-compatible service |
-| production | Azure Blob Storage | Azure OpenAI |
+| production-oriented | overlay block store: memory cache + local filesystem cache + Azure Blob SAS-backed storage | Azure OpenAI |
 
 This selection is configuration-driven and preserves one stable delegated
 indexing flow independent of environment across indexed blocks, normalized email
 artifacts, and mailbox provenance artifacts.
 
 For the approved MVP slice, the local/testing profile is the only profile that
-must execute end to end. The production profile remains represented at this
-design layer so future adapters can plug into the same orchestration contract.
+must execute end to end. The production-oriented overlay profile remains
+represented at this design layer so the same orchestration contract can govern
+both direct-local and overlay-backed tool targeting without introducing a plain
+Azure-only operator mode.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-007
 
@@ -1234,6 +1245,11 @@ the first increment. Standalone clustering continues to rely on the same
 configured `BlockStore` abstraction and the same upstream block-iteration
 contract across environments rather than introducing a local-only discovery
 mechanism.
+
+Within that parity boundary, every indexer-owned tool shares the same two-mode
+storage-targeting contract: direct local filesystem or the fixed non-local
+overlay of memory cache plus local filesystem cache plus Azure Blob SAS-backed
+storage. No indexer-owned tool defines a plain Azure-only targeting exception.
 
 **Traces to:** RQ-INDEXER-007, RQ-INDEXER-010, RQ-INDEXER-003D,
 RQ-INDEXER-003E, RQ-INDEXER-003G

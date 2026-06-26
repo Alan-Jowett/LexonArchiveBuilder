@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use lexonarchivebuilder_indexer::BatchSummary;
 use lexonarchivebuilder_indexer::INGESTION_ONLY_ROOT_ID_PLACEHOLDER;
 use lexonarchivebuilder_indexer::block_store::ConfiguredBlockStore;
-use lexonarchivebuilder_indexer::config::ConfigError as IndexerConfigError;
 use lexonarchivebuilder_indexer::embedding::ConfiguredEmbeddingProvider;
 use lexonarchivebuilder_indexer::tree_tools::{
     metadata_values_to_text_map, parse_block_hash, search_with_partial_retry,
@@ -103,8 +102,6 @@ pub enum RuntimeError {
     },
     #[error(transparent)]
     Config(#[from] ConfigError),
-    #[error(transparent)]
-    IndexerConfig(#[from] IndexerConfigError),
     #[error("top_k must be at least 1")]
     InvalidTopK,
     #[error("traversal_width must be at least 1")]
@@ -156,7 +153,6 @@ impl McpRuntime {
 
     pub fn new(request_dir: PathBuf, config: McpConfig) -> Result<Self, RuntimeError> {
         config.validate()?;
-        config.environment.local_embedding()?;
         Ok(Self {
             request_dir,
             config,
@@ -577,7 +573,9 @@ mod tests {
 
         assert!(matches!(
             error,
-            RuntimeError::IndexerConfig(IndexerConfigError::MissingLocalEmbeddingBaseUrl)
+            RuntimeError::Config(crate::config::ConfigError::IndexerConfig(
+                lexonarchivebuilder_indexer::config::ConfigError::MissingLocalEmbeddingBaseUrl
+            ))
         ));
     }
 

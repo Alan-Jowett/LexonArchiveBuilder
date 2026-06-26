@@ -38,7 +38,7 @@
       "value": "ghcr.io/substratusai/stapi:v2.2.2-3"
     },
     "indexerRequestJson": {
-      "value": "{\n  \"environment\": {\n    \"kind\": \"production\",\n    \"block_store\": {\n      \"account_url\": \"https://labmvpstorage001.blob.core.windows.net\",\n      \"container\": \"blocks\"\n    },\n    \"embedding\": {\n      \"endpoint\": \"http://<embedder-vm-private-ip>:8080\",\n      \"deployment\": \"all-MiniLM-L6-v2\"\n    }\n  },\n  \"embedding_spec\": {\n    \"dims\": 384,\n    \"encoding\": \"f32le\"\n  },\n  \"stage\": \"clustering-and-block-assembly\",\n  \"items\": []\n}"
+      "value": "{\n  \"environment\": {\n    \"kind\": \"production\",\n    \"block_store\": {\n      \"container_sas_url\": \"https://labmvpstorage001.blob.core.windows.net/blocks?<sas-token>\",\n      \"filesystem_cache_root\": \"cache/block-store\",\n      \"memory_cache_max_resident_blocks\": 4096\n    },\n    \"embedding\": {\n      \"endpoint\": \"http://<embedder-vm-private-ip>:8080\",\n      \"deployment\": \"all-MiniLM-L6-v2\"\n    }\n  },\n  \"embedding_spec\": {\n    \"dims\": 384,\n    \"encoding\": \"f32le\"\n  },\n  \"stage\": \"clustering-and-block-assembly\",\n  \"items\": []\n}"
     }
   }
 }

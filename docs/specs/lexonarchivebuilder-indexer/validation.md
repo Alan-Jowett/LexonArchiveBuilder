@@ -386,7 +386,9 @@ also applies to normalized email artifacts and mailbox provenance artifacts that
 share the same `BlockStore` abstraction family, and to the rooted block-tree
 quality tool when it reads stored trees through that same boundary.
 The same neutrality also applies to rooted CLI search over a caller-supplied
-tree when it reads through the same `BlockStore` boundary.
+tree when it reads through the same `BlockStore` boundary. The non-local
+boundary is the fixed overlay target of memory cache plus local filesystem
+cache plus Azure Blob SAS-backed storage rather than a plain Azure-only mode.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-007, DSG-LFI-005,
 DSG-LFI-006, DSG-LFI-007, DSG-LFI-008
@@ -433,6 +435,21 @@ Validation may treat the local store as fresh for this increment rather than
 requiring reads from the superseded custom filesystem layout.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-010B, DSG-LFI-005, DSG-LFI-005A
+
+### VAL-LFI-005A1
+
+Inspect the non-local tool-targeting profile for representative indexer-owned
+tool surfaces that traverse the shared `BlockStore` boundary.
+
+**Pass condition:** the non-local profile is specified as one fixed overlay
+composed of an in-memory cache, a local filesystem cache, and an Azure Blob
+backing store addressed by SAS URL; batch indexing, standalone clustering,
+rooted quality assessment, and rooted CLI search all reuse that same targeting
+contract; and no operator-facing tool introduces a plain Azure-only block-store
+mode outside the approved overlay shape.
+
+**Traces to:** RQ-INDEXER-005, RQ-INDEXER-007, DSG-LFI-005, DSG-LFI-005B,
+DSG-LFI-005C, DSG-LFI-007, DSG-LFI-008
 
 ### VAL-LFI-005B
 
@@ -515,10 +532,12 @@ DSG-LFI-005C, DSG-LFI-006A, DSG-LFI-007E
 
 Inspect the preserved production environment profile boundary.
 
-**Pass condition:** production-specific storage and embedding identifiers remain
+**Pass condition:** production-oriented storage and embedding identifiers remain
 behind the same `BlockStore` and `EmbeddingProvider` selection boundary as the
 local/testing profile, and no local-only assumptions leak into the core batch
-contract or content-model abstractions.
+contract or content-model abstractions. The preserved non-local storage
+identifier family must describe the approved overlay target rather than a plain
+Azure-only target.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-007, DSG-LFI-005,
 DSG-LFI-006, DSG-LFI-007

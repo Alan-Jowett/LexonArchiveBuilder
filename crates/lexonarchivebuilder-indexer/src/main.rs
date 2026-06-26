@@ -107,9 +107,13 @@ struct BlockStoreArgs {
     block_store_root: Option<PathBuf>,
     #[arg(long, required_if_eq("block_store_profile", "production"))]
     block_store_container_sas_url: Option<String>,
+    #[arg(long, required_if_eq("block_store_profile", "production"))]
+    block_store_filesystem_cache_root: Option<PathBuf>,
+    #[arg(long, required_if_eq("block_store_profile", "production"))]
+    block_store_memory_cache_max_resident_blocks: Option<usize>,
     #[arg(
         long,
-        help = "Reserved for non-Azure block store backends. Production Azure Blob configuration rejects non-empty prefixes."
+        help = "Reserved for non-Azure block store backends. The production overlay uses Azure Blob backing storage and rejects non-empty prefixes."
     )]
     block_store_prefix: Option<String>,
 }
@@ -130,6 +134,9 @@ impl BlockStoreArgs {
                         .block_store_container_sas_url
                         .clone()
                         .expect("production container_sas_url is required by clap"),
+                    filesystem_cache_root: self.block_store_filesystem_cache_root.clone(),
+                    memory_cache_max_resident_blocks: self
+                        .block_store_memory_cache_max_resident_blocks,
                     prefix: self.block_store_prefix.clone(),
                 },
                 embedding: ProductionEmbeddingConfig {
@@ -367,7 +374,26 @@ mod tests {
     }
 
     #[test]
-    fn quality_command_parses_production_container_sas_url() {
+    fn quality_command_rejects_production_profile_without_overlay_args() {
+        let error = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "quality",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--block-store-profile",
+            "production",
+            "--block-store-container-sas-url",
+            "https://example.blob.core.windows.net/archive-sync?sig=test",
+        ])
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("--block-store-filesystem-cache-root"));
+        assert!(error.contains("--block-store-memory-cache-max-resident-blocks"));
+    }
+
+    #[test]
+    fn quality_command_parses_production_overlay_args() {
         let cli = Cli::try_parse_from([
             "lexonarchivebuilder-indexer",
             "quality",
@@ -377,6 +403,10 @@ mod tests {
             "production",
             "--block-store-container-sas-url",
             "https://example.blob.core.windows.net/archive-sync?sig=test",
+            "--block-store-filesystem-cache-root",
+            "cache",
+            "--block-store-memory-cache-max-resident-blocks",
+            "64",
         ])
         .unwrap();
 
@@ -390,6 +420,14 @@ mod tests {
                     block_store.block_store_container_sas_url,
                     Some("https://example.blob.core.windows.net/archive-sync?sig=test".into())
                 );
+                assert_eq!(
+                    block_store.block_store_filesystem_cache_root,
+                    Some(PathBuf::from("cache"))
+                );
+                assert_eq!(
+                    block_store.block_store_memory_cache_max_resident_blocks,
+                    Some(64)
+                );
                 let environment = block_store.to_environment_config();
                 match environment {
                     EnvironmentConfig::Production { block_store, .. } => {
@@ -397,6 +435,11 @@ mod tests {
                             block_store.container_sas_url,
                             "https://example.blob.core.windows.net/archive-sync?sig=test"
                         );
+                        assert_eq!(
+                            block_store.filesystem_cache_root,
+                            Some(PathBuf::from("cache"))
+                        );
+                        assert_eq!(block_store.memory_cache_max_resident_blocks, Some(64));
                         assert_eq!(block_store.prefix, None);
                     }
                     EnvironmentConfig::Local { .. } => panic!("expected production environment"),

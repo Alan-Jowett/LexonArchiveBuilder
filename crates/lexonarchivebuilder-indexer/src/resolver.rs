@@ -343,7 +343,7 @@ mod tests {
         }
 
         fn conforming_resolver(&self) -> Self::Resolver {
-            ResolverMode::Working(self.resolver.clone())
+            ResolverMode::Working(Box::new(self.resolver.clone()))
         }
 
         fn failing_resolver(&self) -> Self::Resolver {
@@ -357,7 +357,7 @@ mod tests {
 
     #[derive(Clone)]
     enum ResolverMode {
-        Working(LocalFilesystemContentResolver),
+        Working(Box<LocalFilesystemContentResolver>),
         Failing,
         Unusable,
     }
