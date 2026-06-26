@@ -271,7 +271,11 @@ impl ProductionBlockStoreConfig {
         {
             return Err(ConfigError::UnsupportedProductionBlockStorePrefix);
         }
-        if self.filesystem_cache_root.is_none() {
+        if self
+            .filesystem_cache_root
+            .as_ref()
+            .is_none_or(|path| path.as_os_str().is_empty())
+        {
             return Err(ConfigError::MissingProductionFilesystemCacheRoot);
         }
         match self.memory_cache_max_resident_blocks {
@@ -787,6 +791,39 @@ mod tests {
             }
             EnvironmentConfig::Local { .. } => panic!("expected production environment"),
         }
+    }
+
+    #[test]
+    fn production_request_rejects_empty_filesystem_cache_root() {
+        let request: BatchRequest = serde_json::from_value(json!({
+            "environment": {
+                "kind": "production",
+                "block_store": {
+                    "container_sas_url": "https://example.blob.core.windows.net/archive-sync?sig=test",
+                    "filesystem_cache_root": "",
+                    "memory_cache_max_resident_blocks": 64
+                },
+                "embedding": {
+                    "endpoint": "https://example.openai.azure.com",
+                    "deployment": "embeddings"
+                }
+            },
+            "embedding_spec": {
+                "dims": 384,
+                "encoding": "f32le"
+            },
+            "profile_version": "0.5.0",
+            "items": [{
+                "kind": "document",
+                "path": "docs/sample.txt"
+            }]
+        }))
+        .unwrap();
+
+        assert!(matches!(
+            request.validate(),
+            Err(ConfigError::MissingProductionFilesystemCacheRoot)
+        ));
     }
 
     #[test]
