@@ -14,7 +14,7 @@ param containerName string
 param sasExpiry string
 
 @description('Service SAS permissions for the experiment container.')
-param sasPermissions string = 'racwdl'
+param sasPermissions string = 'racwl'
 
 var blobHostName = '${storageAccountName}.blob.${environment().suffixes.storage}'
 var containerSasToken = storage.listServiceSas(storage.apiVersion, {

@@ -140,6 +140,7 @@ jobs:
           PY
           )"
           manifest_hash="$(printf '%s' "$manifest_json_minified" | sha256sum | cut -c1-10)"
+          repo_hash="$(printf '%s' "$GITHUB_REPOSITORY" | sha256sum | cut -c1-6)"
           container_name="$(python - "$manifest_path" <<'PY'
           import json
           import sys
@@ -150,7 +151,7 @@ jobs:
           )"
 
           resource_group="lexon-exp-${manifest_hash}"
-          storage_account_name="lexexp${manifest_hash}sa"
+          storage_account_name="lex${repo_hash}${manifest_hash}sa"
           vnet_name="lexon-exp-${manifest_hash}-vnet"
           vm_name="lexon-exp-index-${manifest_hash}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           run_name="index-${manifest_hash}-${profile_version//./-}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -222,7 +223,7 @@ jobs:
                   "sasExpiry": {"value": sas_expiry},
                   "vmName": {"value": vm_name},
                   "sshPublicKey": {"value": ssh_public_key},
-                  "enablePublicIp": {"value": True},
+                  "enablePublicIp": {"value": enable_ssh_access.lower() == "true"},
                   "enableSshAccess": {"value": enable_ssh_access.lower() == "true"},
                   "sshSourcePrefixes": {"value": json.loads(ssh_prefixes_json)},
                   "workloadEnvironmentFile": {"value": workload_env_file},
@@ -275,12 +276,22 @@ jobs:
               --output json
           )"
 
+          container_sas_url="$(python - "$outputs_json" <<'PY'
+          import json
+          import sys
+
+          print(json.loads(sys.argv[1])["containerSasUrl"]["value"])
+          PY
+          )"
+          printf '::add-mask::%s\n' "$container_sas_url"
+          printf 'CONTAINER_SAS_URL=%s\n' "$container_sas_url" >>"$GITHUB_ENV"
+
           python - "$outputs_json" >>"$GITHUB_OUTPUT" <<'PY'
           import json
           import sys
 
           outputs = json.loads(sys.argv[1])
-          for key in ("containerSasUrl", "storageAccountName", "containerName", "vmName", "vmPublicIpAddress"):
+          for key in ("storageAccountName", "containerName", "vmName", "vmPublicIpAddress"):
               value = outputs[key]["value"]
               print(f"{key}={value}")
           PY
@@ -292,7 +303,7 @@ jobs:
           set -euo pipefail
           mkdir -p indexing-experiment-artifact
 
-          status_url="$(python - '${{ steps.deploy.outputs.containerSasUrl }}' '${{ steps.prepare.outputs.artifact_prefix }}/status.json' <<'PY'
+          status_url="$(python - "$CONTAINER_SAS_URL" '${{ steps.prepare.outputs.artifact_prefix }}/status.json' <<'PY'
           import sys
           from urllib.parse import urlsplit, urlunsplit
           parts = urlsplit(sys.argv[1])
@@ -313,7 +324,7 @@ jobs:
             exit 1
           fi
 
-          quality_url="$(python - '${{ steps.deploy.outputs.containerSasUrl }}' '${{ steps.prepare.outputs.artifact_prefix }}/quality.json' <<'PY'
+          quality_url="$(python - "$CONTAINER_SAS_URL" '${{ steps.prepare.outputs.artifact_prefix }}/quality.json' <<'PY'
           import sys
           from urllib.parse import urlsplit, urlunsplit
           parts = urlsplit(sys.argv[1])
@@ -321,7 +332,7 @@ jobs:
           print(urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment)))
           PY
           )"
-          summary_url="$(python - '${{ steps.deploy.outputs.containerSasUrl }}' '${{ steps.prepare.outputs.artifact_prefix }}/summary.json' <<'PY'
+          summary_url="$(python - "$CONTAINER_SAS_URL" '${{ steps.prepare.outputs.artifact_prefix }}/summary.json' <<'PY'
           import sys
           from urllib.parse import urlsplit, urlunsplit
           parts = urlsplit(sys.argv[1])
@@ -329,7 +340,7 @@ jobs:
           print(urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment)))
           PY
           )"
-          result_url="$(python - '${{ steps.deploy.outputs.containerSasUrl }}' '${{ steps.prepare.outputs.artifact_prefix }}/result.json' <<'PY'
+          result_url="$(python - "$CONTAINER_SAS_URL" '${{ steps.prepare.outputs.artifact_prefix }}/result.json' <<'PY'
           import sys
           from urllib.parse import urlsplit, urlunsplit
           parts = urlsplit(sys.argv[1])

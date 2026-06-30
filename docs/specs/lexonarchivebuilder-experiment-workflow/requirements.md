@@ -337,7 +337,7 @@ The hosted workflow family SHALL remain an operator-automation and experiment-or
   - `docs/specs/lexonarchivebuilder-indexer/requirements.md:141-144,186-188,230-232,552-568,703-779,1445`
   - user request in this session: "build a full github workflow to allow running experiments similar in nature to what test.ps1 currently does"
   - user revision in this session: "two workflows: 1) run just the embedding step over a set of working groups and store it in a azure blob store along with the replay journal 2) run the indexing experiment over a set of embeddings"
-  - user clarification in this session: "Make the embeddings derive from a checked in file. Checked in file will then contain: 1) the list of work groups. 2) container name to store them in. It should also be iincrementally updateable so if the content of the working groups changes, only new embeddings are added."
+  - user clarification in this session: "Make the embeddings derive from a checked in file. Checked in file will then contain: 1) the list of work groups. 2) container name to store them in. It should also be incrementally updateable so if the content of the working groups changes, only new embeddings are added."
 - **Excluded from this requirements artifact [KNOWN]:**
   - workflow YAML structure and job graph details
   - Bicep module changes

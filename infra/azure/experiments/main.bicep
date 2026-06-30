@@ -19,7 +19,7 @@ param containerName string
 param sasExpiry string
 
 @description('Service SAS permissions for the experiment container.')
-param sasPermissions string = 'racwdl'
+param sasPermissions string = 'racwl'
 
 @description('Name of the runner VM.')
 param vmName string
@@ -34,7 +34,7 @@ param adminUsername string = 'azureuser'
 param sshPublicKey string
 
 @description('Whether to assign a public IP address to the runner VM.')
-param enablePublicIp bool = true
+param enablePublicIp bool = false
 
 @description('Whether to allow inbound SSH on the runner VM subnet.')
 param enableSshAccess bool = false
