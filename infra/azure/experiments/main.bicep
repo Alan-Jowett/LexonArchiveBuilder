@@ -68,8 +68,6 @@ module storage 'storage.bicep' = {
     tags: tags
     storageAccountName: storageAccountName
     containerName: containerName
-    sasExpiry: sasExpiry
-    sasPermissions: sasPermissions
   }
 }
 

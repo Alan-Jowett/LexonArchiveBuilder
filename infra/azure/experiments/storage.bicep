@@ -10,22 +10,6 @@ param storageAccountName string
 @description('Name of the blob container.')
 param containerName string
 
-@description('SAS expiry timestamp in UTC.')
-param sasExpiry string
-
-@description('Service SAS permissions for the experiment container.')
-param sasPermissions string = 'racwl'
-
-var blobHostName = '${storageAccountName}.blob.${environment().suffixes.storage}'
-var containerSasToken = storage.listServiceSas(storage.apiVersion, {
-  canonicalizedResource: '/blob/${storageAccountName}/${containerName}'
-  signedResource: 'c'
-  signedProtocol: 'https'
-  signedPermission: sasPermissions
-  signedExpiry: sasExpiry
-  keyToSign: 'key1'
-}).serviceSasToken
-
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageAccountName
   location: location

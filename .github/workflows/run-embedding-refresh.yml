@@ -99,7 +99,7 @@ jobs:
             exit 1
           fi
 
-          manifest_json_minified="$(python - "$manifest_path" <<'PY'
+          manifest_json_minified="$(python3 - "$manifest_path" <<'PY'
           import json
           import re
           import sys
@@ -130,7 +130,7 @@ jobs:
           )"
           manifest_hash="$(printf '%s' "$manifest_json_minified" | sha256sum | cut -c1-10)"
           repo_hash="$(printf '%s' "$GITHUB_REPOSITORY" | sha256sum | cut -c1-6)"
-          container_name="$(python - "$manifest_path" <<'PY'
+          container_name="$(python3 - "$manifest_path" <<'PY'
           import json
           import sys
 
@@ -158,7 +158,7 @@ jobs:
               printf 'ssh_public_key is required when ssh_source_prefixes enables SSH access\n' >&2
               exit 1
             fi
-            ssh_prefixes_json="$(python - "$ssh_prefixes_input" <<'PY'
+            ssh_prefixes_json="$(python3 - "$ssh_prefixes_input" <<'PY'
             import json
             import sys
 
@@ -189,7 +189,7 @@ jobs:
               "BLOCK_STORE_TARGET='${block_store_target}'"
           )"
 
-          python - "$container_name" "$storage_account_name" "$resource_group" "$vnet_name" "$vm_name" "$sas_expiry" "$ssh_public_key" "$enable_ssh_access" "$ssh_prefixes_json" "$workload_env_file" "$workload_script_path" > deployment.parameters.json <<'PY'
+          python3 - "$container_name" "$storage_account_name" "$resource_group" "$vnet_name" "$vm_name" "$sas_expiry" "$ssh_public_key" "$enable_ssh_access" "$ssh_prefixes_json" "$workload_env_file" "$workload_script_path" > deployment.parameters.json <<'PY'
           import json
           import os
           import pathlib
@@ -265,7 +265,7 @@ jobs:
               --output json
           )"
 
-          python - "$outputs_json" >>"$GITHUB_OUTPUT" <<'PY'
+          python3 - "$outputs_json" >>"$GITHUB_OUTPUT" <<'PY'
           import json
           import sys
 
@@ -310,7 +310,7 @@ jobs:
           set -euo pipefail
           mkdir -p embedding-refresh-artifact
 
-          status_url="$(python - "$CONTAINER_SAS_URL" '${{ steps.prepare.outputs.artifact_prefix }}/status.json' <<'PY'
+          status_url="$(python3 - "$CONTAINER_SAS_URL" '${{ steps.prepare.outputs.artifact_prefix }}/status.json' <<'PY'
           import sys
           from urllib.parse import urlsplit, urlunsplit
 
@@ -333,7 +333,7 @@ jobs:
             exit 1
           fi
 
-          summary_url="$(python - "$CONTAINER_SAS_URL" '${{ steps.prepare.outputs.artifact_prefix }}/summary.json' <<'PY'
+          summary_url="$(python3 - "$CONTAINER_SAS_URL" '${{ steps.prepare.outputs.artifact_prefix }}/summary.json' <<'PY'
           import sys
           from urllib.parse import urlsplit, urlunsplit
           parts = urlsplit(sys.argv[1])
@@ -341,7 +341,7 @@ jobs:
           print(urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment)))
           PY
           )"
-          manifest_url="$(python - "$CONTAINER_SAS_URL" '${{ steps.prepare.outputs.artifact_prefix }}/manifest.json' <<'PY'
+          manifest_url="$(python3 - "$CONTAINER_SAS_URL" '${{ steps.prepare.outputs.artifact_prefix }}/manifest.json' <<'PY'
           import sys
           from urllib.parse import urlsplit, urlunsplit
           parts = urlsplit(sys.argv[1])
@@ -353,7 +353,7 @@ jobs:
           curl --fail --silent --show-error --location "$summary_url" --output embedding-refresh-artifact/summary.json || true
           curl --fail --silent --show-error --location "$manifest_url" --output embedding-refresh-artifact/manifest.json || true
 
-          success_flag="$(python - embedding-refresh-artifact/status.json <<'PY'
+          success_flag="$(python3 - embedding-refresh-artifact/status.json <<'PY'
           import json
           import sys
           with open(sys.argv[1], 'r', encoding='utf-8') as handle:
