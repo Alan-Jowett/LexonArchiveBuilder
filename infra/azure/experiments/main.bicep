@@ -48,8 +48,10 @@ param workloadEnvironmentFile string
 @description('Workload script content executed by the runner VM.')
 param workloadScript string
 
+var deploymentSuffix = uniqueString(vmName)
+
 module network 'network.bicep' = {
-  name: 'lab-experiment-network'
+  name: 'lab-experiment-network-${deploymentSuffix}'
   params: {
     location: location
     tags: tags
@@ -60,7 +62,7 @@ module network 'network.bicep' = {
 }
 
 module storage 'storage.bicep' = {
-  name: 'lab-experiment-storage'
+  name: 'lab-experiment-storage-${deploymentSuffix}'
   params: {
     location: location
     tags: tags
@@ -71,13 +73,26 @@ module storage 'storage.bicep' = {
   }
 }
 
-var resolvedWorkloadEnvironmentFile = 'CONTAINER_SAS_URL=''${storage.outputs.containerSasUrl}''
+resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
+  name: storage.outputs.storageAccountName
+}
+
+var containerSasToken = storageAccount.listServiceSas('2023-05-01', {
+  canonicalizedResource: '/blob/${storage.outputs.storageAccountName}/${storage.outputs.containerName}'
+  signedResource: 'c'
+  signedProtocol: 'https'
+  signedPermission: sasPermissions
+  signedExpiry: sasExpiry
+  keyToSign: 'key1'
+}).serviceSasToken
+var containerSasUrl = '${storage.outputs.blobEndpoint}${storage.outputs.containerName}?${containerSasToken}'
+var resolvedWorkloadEnvironmentFile = 'CONTAINER_SAS_URL=''${containerSasUrl}''
 STORAGE_ACCOUNT_NAME=''${storage.outputs.storageAccountName}''
 CONTAINER_NAME=''${storage.outputs.containerName}''
 ${workloadEnvironmentFile}'
 
 module runner 'vm-runner.bicep' = {
-  name: 'lab-experiment-runner'
+  name: 'lab-experiment-runner-${deploymentSuffix}'
   params: {
     location: location
     tags: tags
@@ -97,6 +112,5 @@ module runner 'vm-runner.bicep' = {
 output storageAccountName string = storage.outputs.storageAccountName
 output containerName string = storage.outputs.containerName
 output blobEndpoint string = storage.outputs.blobEndpoint
-output containerSasUrl string = storage.outputs.containerSasUrl
 output vmName string = vmName
 output vmPublicIpAddress string = runner.outputs.publicIpAddress

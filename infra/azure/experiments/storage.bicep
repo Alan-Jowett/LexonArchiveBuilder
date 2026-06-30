@@ -61,5 +61,3 @@ resource container 'Microsoft.Storage/storageAccounts/blobServices/containers@20
 output storageAccountName string = storage.name
 output containerName string = container.name
 output blobEndpoint string = storage.properties.primaryEndpoints.blob
-output containerSasToken string = containerSasToken
-output containerSasUrl string = '${storage.properties.primaryEndpoints.blob}${containerName}?${containerSasToken}'

@@ -7,6 +7,27 @@ source /opt/lexonarchivebuilder/runner/workload.env
 WORK_ROOT="/opt/lexonarchivebuilder/work/${RUN_NAME}"
 mkdir -p "$WORK_ROOT"
 
+wait_for_tcp_port() {
+  local host="$1"
+  local port="$2"
+  local timeout_secs="$3"
+  local start_ts
+  start_ts="$(date +%s)"
+
+  while true; do
+    if bash -c "</dev/tcp/${host}/${port}" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    if (( "$(date +%s)" - start_ts >= timeout_secs )); then
+      printf 'error: timed out waiting for %s:%s to accept TCP connections\n' "$host" "$port" >&2
+      return 1
+    fi
+
+    sleep 1
+  done
+}
+
 cleanup() {
   docker rm -f lexonarchivebuilder-experiment-stapi >/dev/null 2>&1 || true
 }
@@ -21,6 +42,7 @@ docker run -d \
   --name lexonarchivebuilder-experiment-stapi \
   -p 8080:8080 \
   "$STAPI_IMAGE" >/dev/null
+wait_for_tcp_port 127.0.0.1 8080 "${STAPI_WAIT_TIMEOUT_SECS:-60}"
 
 docker run --rm \
   --entrypoint bash \
