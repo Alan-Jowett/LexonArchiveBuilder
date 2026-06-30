@@ -159,12 +159,25 @@ jobs:
               exit 1
             fi
             ssh_prefixes_json="$(python3 - "$ssh_prefixes_input" <<'PY'
+            import ipaddress
             import json
             import sys
 
             raw = sys.argv[1]
             items = [entry.strip() for entry in raw.split(',') if entry.strip()]
-            print(json.dumps(items))
+            if not items:
+                raise SystemExit('ssh_source_prefixes must contain at least one CIDR when SSH access is enabled')
+
+            validated = []
+            for entry in items:
+                if '/' not in entry:
+                    raise SystemExit(f'ssh_source_prefixes entry "{entry}" must use CIDR notation')
+                try:
+                    validated.append(str(ipaddress.ip_network(entry, strict=False)))
+                except ValueError as exc:
+                    raise SystemExit(f'ssh_source_prefixes entry "{entry}" is not a valid CIDR: {exc}')
+
+            print(json.dumps(validated))
           PY
             )"
           elif [[ -z "$ssh_public_key" ]]; then

@@ -194,16 +194,16 @@ lexonarchivebuilder-indexer quality \
   --block-store-root "$BLOCK_STORE_DIR" \
   --json-out "$QUALITY_PATH"
 
-python3 - "$RESULT_PATH" "$PROFILE_VERSION" "$ROOT_ID" "$QUALITY_PATH" "$SUMMARY_PATH" <<'PY'
+python3 - "$RESULT_PATH" "$PROFILE_VERSION" "$ROOT_ID" "$ARTIFACT_PREFIX" <<'PY'
 import json
 import sys
 
-result_path, profile_version, root_id, quality_path, summary_path = sys.argv[1:6]
+result_path, profile_version, root_id, artifact_prefix = sys.argv[1:5]
 payload = {
     "profile_version": profile_version,
     "root_id": root_id,
-    "quality_report": quality_path,
-    "summary_report": summary_path,
+    "quality_report": f"{artifact_prefix}/quality.json",
+    "summary_report": f"{artifact_prefix}/summary.json",
 }
 with open(result_path, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, indent=2, sort_keys=True)
