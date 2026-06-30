@@ -303,7 +303,7 @@ jobs:
           PY
           )"
 
-          for _ in $(seq 1 240); do
+          for _ in $(seq 1 220); do
             if curl --fail --silent --show-error --location "$status_url" --output embedding-refresh-artifact/status.json; then
               break
             fi
