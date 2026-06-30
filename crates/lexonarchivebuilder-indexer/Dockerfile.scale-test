@@ -6,9 +6,13 @@ RUN cargo build --release -p lexonarchivebuilder-indexer
 
 FROM debian:bookworm-slim AS runtime
 
+ARG AZCOPY_VERSION=10.32.4
+ARG AZCOPY_SHA256=8f859a0dbbc117660c249fb3569694fc8a0f33b68701f5b2b92ccc001ee50784
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends bash ca-certificates coreutils curl findutils python3 rsync tar gzip \
-    && curl -fsSL https://aka.ms/downloadazcopy-v10-linux -o /tmp/azcopy.tgz \
+    && curl -fsSL "https://github.com/Azure/azure-storage-azcopy/releases/download/v${AZCOPY_VERSION}/azcopy_linux_amd64_${AZCOPY_VERSION}.tar.gz" -o /tmp/azcopy.tgz \
+    && echo "${AZCOPY_SHA256}  /tmp/azcopy.tgz" | sha256sum -c - \
     && tar -xzf /tmp/azcopy.tgz -C /tmp \
     && mv /tmp/azcopy_linux_amd64_*/azcopy /usr/local/bin/azcopy \
     && chmod +x /usr/local/bin/azcopy \

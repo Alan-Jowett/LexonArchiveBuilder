@@ -98,13 +98,26 @@ jobs:
 
           manifest_json_minified="$(python - "$manifest_path" <<'PY'
           import json
+          import re
           import sys
 
           with open(sys.argv[1], 'r', encoding='utf-8') as handle:
               data = json.load(handle)
 
-          if not isinstance(data.get('container_name'), str) or not data['container_name'].strip():
+          container_name = data.get('container_name')
+          if not isinstance(container_name, str) or not container_name.strip():
               raise SystemExit('manifest must contain non-empty string field "container_name"')
+          container_name = container_name.strip()
+          if (
+              len(container_name) < 3
+              or len(container_name) > 63
+              or not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?', container_name)
+          ):
+              raise SystemExit(
+                  'manifest field "container_name" must be a valid Azure Blob container name '
+                  '(3-63 lowercase alphanumeric characters or hyphens, starting and ending with an alphanumeric character)'
+              )
+          data['container_name'] = container_name
 
           if not isinstance(data.get('sources'), list) or not data['sources']:
               raise SystemExit('manifest must contain non-empty array field "sources"')
@@ -116,6 +129,7 @@ jobs:
           container_name="$(python - "$manifest_path" <<'PY'
           import json
           import sys
+
           with open(sys.argv[1], 'r', encoding='utf-8') as handle:
               print(json.load(handle)['container_name'].strip())
           PY

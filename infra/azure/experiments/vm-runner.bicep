@@ -38,6 +38,8 @@ param workloadScript string
 
 var nicName = '${vmName}-nic'
 var publicIpName = '${vmName}-pip'
+var workloadEnvironmentFileBase64 = base64(workloadEnvironmentFile)
+var workloadScriptBase64 = base64(workloadScript)
 var cloudInit = '''
 #cloud-config
 package_update: true
@@ -49,12 +51,8 @@ runcmd:
     systemctl enable docker
     systemctl start docker
     mkdir -p /opt/lexonarchivebuilder/runner
-    cat > /opt/lexonarchivebuilder/runner/workload.env <<'EOF'
-    ${workloadEnvironmentFile}
-    EOF
-    cat > /opt/lexonarchivebuilder/runner/workload.sh <<'EOF'
-    ${workloadScript}
-    EOF
+    printf '%s' '${workloadEnvironmentFileBase64}' | base64 -d > /opt/lexonarchivebuilder/runner/workload.env
+    printf '%s' '${workloadScriptBase64}' | base64 -d > /opt/lexonarchivebuilder/runner/workload.sh
     chmod 0600 /opt/lexonarchivebuilder/runner/workload.env
     chmod 0755 /opt/lexonarchivebuilder/runner/workload.sh
     cat > /usr/local/bin/lexonarchivebuilder-runner-wrapper.sh <<'EOF'
