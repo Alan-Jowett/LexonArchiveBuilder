@@ -83,7 +83,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-require_commands azcopy date lexonarchivebuilder-indexer python3
+require_commands azcopy date find lexonarchivebuilder-indexer python3
 ensure_supported_block_store_target "$BLOCK_STORE_TARGET"
 
 if [[ -z "$MANIFEST_PATH" || -z "$CONTAINER_SAS_URL" || -z "$PROFILE_VERSION" ]]; then
@@ -93,6 +93,7 @@ fi
 
 MANIFEST_PATH="$(resolve_input_path "$MANIFEST_PATH")"
 load_manifest "$MANIFEST_PATH"
+validate_profile_version "$PROFILE_VERSION"
 
 if [[ -z "$RUN_NAME" ]]; then
   RUN_NAME="$(date -u '+%Y%m%dT%H%M%SZ')"
@@ -131,7 +132,7 @@ cleanup() {
     "$SUCCESS" \
     "$MANIFEST_PATH" \
     "$ARTIFACT_PREFIX" \
-    "{\"profile_version\": \"${PROFILE_VERSION}\", \"dataset_block_store_prefix\": \"${DATASET_BLOCK_STORE_PREFIX}\", \"dataset_replay_journal_prefix\": \"${DATASET_REPLAY_JOURNAL_PREFIX}\", \"container_name\": \"${MANIFEST_CONTAINER_NAME}\"}"
+    "{\"profile_version\": \"$(json_escape "$PROFILE_VERSION")\", \"dataset_block_store_prefix\": \"$(json_escape "$DATASET_BLOCK_STORE_PREFIX")\", \"dataset_replay_journal_prefix\": \"$(json_escape "$DATASET_REPLAY_JOURNAL_PREFIX")\", \"container_name\": \"$(json_escape "$MANIFEST_CONTAINER_NAME")\"}"
 
   if [[ -f "$REQUEST_PATH" ]]; then
     upload_file_to_blob "$REQUEST_PATH" "$CONTAINER_SAS_URL" "${ARTIFACT_PREFIX}/request.json"

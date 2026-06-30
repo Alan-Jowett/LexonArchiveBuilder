@@ -16,7 +16,8 @@ name: Run embedding refresh
         type: string
       ssh_public_key:
         description: SSH public key for break-glass VM access
-        required: true
+        required: false
+        default: ''
         type: string
       ssh_source_prefixes:
         description: Optional comma-separated CIDRs allowed to SSH to the VM
@@ -73,18 +74,25 @@ jobs:
       - name: Prepare run metadata and deployment parameters
         id: prepare
         shell: bash
+        env:
+          MANIFEST_PATH_INPUT: ${{ inputs.manifest_path }}
+          RUNNER_IMAGE_TAG_INPUT: ${{ inputs.runner_image_tag }}
+          SSH_PUBLIC_KEY_INPUT: ${{ inputs.ssh_public_key }}
+          SSH_SOURCE_PREFIXES_INPUT: ${{ inputs.ssh_source_prefixes }}
+          BLOCK_STORE_TARGET_INPUT: ${{ inputs.block_store_target }}
         run: |
           set -euo pipefail
 
-          manifest_path='${{ inputs.manifest_path }}'
+          manifest_path="$MANIFEST_PATH_INPUT"
           if [[ ! -f "$manifest_path" ]]; then
             printf 'Manifest not found: %s\n' "$manifest_path" >&2
             exit 1
           fi
 
-          ssh_prefixes_input='${{ inputs.ssh_source_prefixes }}'
-          block_store_target='${{ inputs.block_store_target }}'
-          runner_image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/lexonarchivebuilder-scale-test:${{ inputs.runner_image_tag }}"
+          ssh_prefixes_input="$SSH_SOURCE_PREFIXES_INPUT"
+          block_store_target="$BLOCK_STORE_TARGET_INPUT"
+          runner_image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/lexonarchivebuilder-scale-test:${RUNNER_IMAGE_TAG_INPUT}"
+          ssh_public_key="$SSH_PUBLIC_KEY_INPUT"
 
           if [[ "$block_store_target" == 'overlay' ]]; then
             printf 'TODO(overlay-block-store): overlay block-store workflow execution depends on the separate overlay implementation PR and is not wired in this change set yet\n' >&2
@@ -145,6 +153,10 @@ jobs:
           ssh_prefixes_json='[]'
           if [[ -n "$ssh_prefixes_input" ]]; then
             enable_ssh_access=true
+            if [[ -z "$ssh_public_key" ]]; then
+              printf 'ssh_public_key is required when ssh_source_prefixes enables SSH access\n' >&2
+              exit 1
+            fi
             ssh_prefixes_json="$(python - "$ssh_prefixes_input" <<'PY'
             import json
             import sys
@@ -154,9 +166,15 @@ jobs:
             print(json.dumps(items))
           PY
             )"
+          elif [[ -z "$ssh_public_key" ]]; then
+            ssh_key_path="${RUNNER_TEMP}/lexonarchivebuilder-embedding-refresh-ssh-key"
+            rm -f "$ssh_key_path" "$ssh_key_path.pub"
+            ssh-keygen -q -t rsa -b 4096 -N '' -f "$ssh_key_path" >/dev/null
+            ssh_public_key="$(<"${ssh_key_path}.pub")"
+            rm -f "$ssh_key_path" "$ssh_key_path.pub"
           fi
 
-          sas_expiry="$(date -u -d '+30 days' '+%Y-%m-%dT%H:%M:%SZ')"
+          sas_expiry="$(date -u -d '+1 day' '+%Y-%m-%dT%H:%M:%SZ')"
 
           workload_env_file="$(
             printf "%s\n" \
@@ -170,7 +188,7 @@ jobs:
               "BLOCK_STORE_TARGET='${block_store_target}'"
           )"
 
-          python - "$container_name" "$storage_account_name" "$resource_group" "$vnet_name" "$vm_name" "$sas_expiry" "${{ inputs.ssh_public_key }}" "$enable_ssh_access" "$ssh_prefixes_json" "$workload_env_file" "$workload_script_path" > deployment.parameters.json <<'PY'
+          python - "$container_name" "$storage_account_name" "$resource_group" "$vnet_name" "$vm_name" "$sas_expiry" "$ssh_public_key" "$enable_ssh_access" "$ssh_prefixes_json" "$workload_env_file" "$workload_script_path" > deployment.parameters.json <<'PY'
           import json
           import os
           import pathlib

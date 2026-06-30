@@ -136,7 +136,7 @@ cleanup() {
     "$SUCCESS" \
     "$MANIFEST_PATH" \
     "$ARTIFACT_PREFIX" \
-    "{\"dataset_block_store_prefix\": \"${DATASET_BLOCK_STORE_PREFIX}\", \"dataset_replay_journal_prefix\": \"${DATASET_REPLAY_JOURNAL_PREFIX}\", \"container_name\": \"${MANIFEST_CONTAINER_NAME}\"}"
+    "{\"dataset_block_store_prefix\": \"$(json_escape "$DATASET_BLOCK_STORE_PREFIX")\", \"dataset_replay_journal_prefix\": \"$(json_escape "$DATASET_REPLAY_JOURNAL_PREFIX")\", \"container_name\": \"$(json_escape "$MANIFEST_CONTAINER_NAME")\"}"
 
   if [[ -f "$SUMMARY_PATH" ]]; then
     upload_file_to_blob "$SUMMARY_PATH" "$CONTAINER_SAS_URL" "$summary_blob"

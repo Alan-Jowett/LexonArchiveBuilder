@@ -48,6 +48,14 @@ validate_run_name() {
   fi
 }
 
+validate_profile_version() {
+  local candidate="$1"
+  if [[ ! "$candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    printf 'error: profile version must use MAJOR.MINOR.PATCH format\n' >&2
+    exit 1
+  fi
+}
+
 resolve_input_path() {
   local candidate="$1"
   if [[ "$candidate" = /* ]]; then

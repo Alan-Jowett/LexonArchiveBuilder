@@ -295,8 +295,7 @@ foreach ($role in @('Contributor', 'User Access Administrator')) {
 }
 
 @(
-  @{ name = 'github-main'; subject = "repo:${repo}:ref:refs/heads/main" },
-  @{ name = 'github-hosted-experiment-workflows'; subject = "repo:${repo}:ref:refs/heads/alanjo/hosted-experiment-workflows" }
+  @{ name = 'github-main'; subject = "repo:${repo}:ref:refs/heads/main" }
 ) | ForEach-Object {
   $body = @{
     name = $_.name
@@ -324,10 +323,12 @@ This identity needs:
    creates a VM-scoped role assignment so the one-shot runner can deallocate
    itself after completion.
 
-The federated credentials above allow GitHub OIDC access from:
+The federated credential above allows GitHub OIDC access from:
 
 1. `repo:Alan-Jowett/LexonArchiveBuilder:ref:refs/heads/main`
-2. `repo:Alan-Jowett/LexonArchiveBuilder:ref:refs/heads/alanjo/hosted-experiment-workflows`
+
+Add additional branch-specific subjects only when you need to run the hosted
+workflows from non-`main` refs.
 
 The hosted workflows always attempt to deallocate the experiment VM when the run
 concludes, but they intentionally leave the Azure resource group in place for
