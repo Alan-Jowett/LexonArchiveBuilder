@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LexonArchiveBuilder contributors
 
+from typing import Optional
 import shlex
 import sys
 
@@ -17,11 +18,16 @@ def write_assignments(container_sas_url: str, storage_account_name: str, contain
 
 
 def main(
-    container_sas_url: str | None = None,
-    storage_account_name: str | None = None,
-    container_name: str | None = None,
+    container_sas_url: Optional[str] = None,
+    storage_account_name: Optional[str] = None,
+    container_name: Optional[str] = None,
 ) -> int:
     if container_sas_url is None or storage_account_name is None or container_name is None:
+        if len(sys.argv) != 4:
+            raise SystemExit(
+                "usage: render-workload-storage-env.py <container-sas-url> "
+                "<storage-account-name> <container-name>"
+            )
         container_sas_url, storage_account_name, container_name = sys.argv[1:4]
     write_assignments(container_sas_url, storage_account_name, container_name)
     return 0

@@ -8,6 +8,22 @@ from pathlib import Path
 import sys
 
 
+def parse_json_object(value: str, parser: argparse.ArgumentParser) -> object:
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError as exc:
+        parser.error(f"--ssh-source-prefixes-json must be valid JSON: {exc.msg}")
+
+
+def read_text_file(path: str, parser: argparse.ArgumentParser) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        parser.error(f"--workload-script-path not found: {path}")
+    except OSError as exc:
+        parser.error(f"--workload-script-path could not be read: {path}: {exc}")
+
+
 def parse_bool(value: str) -> bool:
     if value == "true":
         return True
@@ -35,6 +51,8 @@ def main() -> int:
     parser.add_argument("--github-run-id", required=True)
     parser.add_argument("--github-run-attempt", required=True)
     args = parser.parse_args()
+    ssh_source_prefixes = parse_json_object(args.ssh_source_prefixes_json, parser)
+    workload_script = read_text_file(args.workload_script_path, parser)
 
     params = {
         "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
@@ -49,9 +67,9 @@ def main() -> int:
             "sshPublicKey": {"value": args.ssh_public_key},
             "enablePublicIp": {"value": args.enable_public_ip},
             "enableSshAccess": {"value": args.enable_ssh_access},
-            "sshSourcePrefixes": {"value": json.loads(args.ssh_source_prefixes_json)},
+            "sshSourcePrefixes": {"value": ssh_source_prefixes},
             "workloadEnvironmentFile": {"value": args.workload_environment_file},
-            "workloadScript": {"value": Path(args.workload_script_path).read_text(encoding="utf-8")},
+            "workloadScript": {"value": workload_script},
             "tags": {
                 "value": {
                     "lexon-workflow": args.workflow_name,
