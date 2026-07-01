@@ -75,13 +75,6 @@ module storage 'storage.bicep' = {
     sasPermissions: sasPermissions
   }
 }
-var resolvedWorkloadEnvironmentFile = join([
-  concat('CONTAINER_SAS_URL=', '''', storage.outputs.containerSasUrl, '''')
-  concat('STORAGE_ACCOUNT_NAME=', '''', storageAccountName, '''')
-  concat('CONTAINER_NAME=', '''', containerName, '''')
-  workloadEnvironmentFile
-], '\n')
-
 module runner 'vm-runner.bicep' = {
   name: 'lab-experiment-runner-${deploymentSuffix}'
   params: {
@@ -95,7 +88,10 @@ module runner 'vm-runner.bicep' = {
     enablePublicIp: enablePublicIp
     azureSubscriptionId: subscription().subscriptionId
     azureResourceGroupName: resourceGroup().name
-    workloadEnvironmentFile: resolvedWorkloadEnvironmentFile
+    containerSasUrl: storage.outputs.containerSasUrl
+    storageAccountName: storageAccountName
+    containerName: containerName
+    workloadEnvironmentFile: workloadEnvironmentFile
     workloadScript: workloadScript
   }
 }

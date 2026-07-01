@@ -42,6 +42,11 @@
 - **UR-EXP-29 [KNOWN]:** The embedding-refresh workflow should publish enough diagnostics to explain failures that occur before the inner embedding script uploads its normal `status.json`.
 - **UR-EXP-30 [KNOWN]:** Early bootstrap failures should still produce machine-readable failure status and durable logs that the GitHub workflow can retrieve.
 - **UR-EXP-31 [KNOWN]:** Operators should have an explicit debug mode that can keep failed VMs available temporarily for inspection instead of always deallocating immediately.
+- **UR-EXP-32 [KNOWN]:** The repository should stop discovering preventable hosted-workflow regressions only through expensive live Azure debugging.
+- **UR-EXP-33 [KNOWN]:** The hosted experiment workflow family should have repository-owned validation for scripts, steps, and process seams that it composes.
+- **UR-EXP-34 [KNOWN]:** Preventable hosted-workflow defects such as bad script formatting, env-file formatting, quoting, or separators should be catchable locally.
+- **UR-EXP-35 [KNOWN]:** The validation surface should exercise generated workflow-owned artifacts and handoff seams rather than relying only on static source inspection.
+- **UR-EXP-36 [KNOWN]:** Live Azure workflow runs should remain integration confirmation, but should not be the primary place repository-owned formatting and wiring defects are first discovered.
 
 ## Change Manifest
 
@@ -61,6 +66,7 @@
 | CM-EXP-012 | Revise | Extend the hosted artifact contract so embedding-refresh bootstrap failures still publish durable status and diagnostic artifacts | UR-EXP-29, UR-EXP-30 |
 | CM-EXP-013 | Add | Require workflow-visible bootstrap failure classification and retrieval of early-failure diagnostic artifacts | UR-EXP-29, UR-EXP-30 |
 | CM-EXP-014 | Revise | Allow an explicit debug-retention mode that can preserve failed VMs temporarily without changing the default deallocation contract | UR-EXP-31 |
+| CM-EXP-015 | Add | Define a repository-owned preflight validation layer for locally preventable hosted-workflow regressions before live Azure confirmation | UR-EXP-32, UR-EXP-33, UR-EXP-34, UR-EXP-35, UR-EXP-36 |
 
 ## Before / After
 
@@ -113,6 +119,11 @@
 
 - **Before [KNOWN]:** The cleanup contract requires deallocation on failure but does not define an approved way to preserve a failed VM briefly for deliberate operator debugging.
 - **After [KNOWN]:** The workflow boundary keeps deallocation as the default while allowing an explicit debug-retention mode for failure investigation.
+
+### BA-EXP-011
+
+- **Before [KNOWN]:** The repository has no approved hosted-workflow preflight validation layer for preventable composition defects such as malformed env files, bad quoting, broken separators, or broken bootstrap/workload handoff seams, so these failures are discovered mainly through live Azure runs.
+- **After [KNOWN]:** The specification requires a repository-owned preflight validation layer that exercises rendered workflow-owned artifacts and catches the covered regression class through local or normal-CI execution before live Azure confirmation is required.
 
 ## Requirements
 
@@ -335,6 +346,56 @@ The hosted workflow family SHALL support an explicit operator-selected debug-ret
 - **Constraint [KNOWN]:** The retained VM path must not imply automatic resource-group deletion.
 - **Traceability:** UR-EXP-15, UR-EXP-16, UR-EXP-31
 
+#### RQ-EXP-018B - Hosted-workflow preflight validation boundary
+
+The hosted workflow family SHALL define a repository-owned preflight validation
+layer for workflow-owned regressions that are preventable without a live Azure
+run.
+
+- **Boundary [KNOWN]:** This layer complements but does not replace the existing live Azure confirmation path.
+- **Rationale [KNOWN]:** Preventable repository-owned workflow defects should not require expensive cloud debugging to detect first.
+- **Traceability:** UR-EXP-32, UR-EXP-33, UR-EXP-36
+
+#### RQ-EXP-018C - Preventable regression coverage
+
+The hosted-workflow preflight validation layer SHALL cover the repository-owned
+regression class that includes malformed generated env-file content, incorrect
+quoting or separators in sourced assignments, broken bootstrap-to-workload
+handoff wiring, and malformed repository-owned status or artifact handoff
+inputs.
+
+- **Boundary [KNOWN]:** This requirement covers workflow-owned composition defects rather than all possible cloud-runtime failures.
+- **Traceability:** UR-EXP-33, UR-EXP-34, UR-EXP-35
+
+#### RQ-EXP-018D - Local or normal-CI execution path
+
+The hosted-workflow preflight validation layer SHALL execute through
+repository-local or normal-CI paths that do not require Azure deployment for
+the covered regression class.
+
+- **Allowed realizations [INFERRED]:** Deterministic rendering, fixture-driven shell validation, smoke-style checks, or equivalent repository-owned execution paths.
+- **Boundary [KNOWN]:** This requirement does not require a full local emulation of Azure infrastructure.
+- **Traceability:** UR-EXP-33, UR-EXP-34, UR-EXP-36
+
+#### RQ-EXP-018E - Rendered-artifact validation
+
+The hosted-workflow preflight validation layer SHALL validate generated
+workflow-owned artifacts and handoff seams rather than relying solely on static
+inspection of checked-in source files.
+
+- **Required minimum [KNOWN]:** Validation must exercise rendered env-file content, rendered bootstrap/workload handoff content, and repository-owned invocation inputs for the covered regression class.
+- **Traceability:** UR-EXP-34, UR-EXP-35
+
+#### RQ-EXP-018F - Layered validation role
+
+The hosted workflow family SHALL treat repository-owned preflight validation as
+the first-line detection layer for locally preventable workflow regressions, and
+live Azure runs as the integration-confirmation layer for the remaining cloud
+and runtime behavior.
+
+- **Required property [KNOWN]:** Live Azure runs remain necessary for end-to-end confirmation, but they are no longer the intended first discovery mechanism for covered repository-owned defects.
+- **Traceability:** UR-EXP-32, UR-EXP-35, UR-EXP-36
+
 #### RQ-EXP-019 - Resource-group preservation
 
 The hosted workflow family SHALL NOT delete the experiment resource group automatically as part of normal or failure-path cleanup.
@@ -403,6 +464,8 @@ The hosted workflow family SHALL remain an operator-automation and experiment-or
   - user clarification in this session: "Make the embeddings derive from a checked in file. Checked in file will then contain: 1) the list of work groups. 2) container name to store them in. It should also be incrementally updateable so if the content of the working groups changes, only new embeddings are added."
   - user request in this session: "enable overlay and make it the default"
   - user clarification in this session: "Keep both targets and default to `overlay`"
+  - user request in this session: "/evolve we are waisting a lot of time and resource trying to debug this live. Why don't we have validation for the scripts / steps / proceses in the expermintal workflows? Isn't there some way we could test this?"
+  - user clarification in this session: "avoid repeated regressions in preventable stuff like bad script / env file / etc formatting and catch that locally"
 - **Excluded from this requirements artifact [KNOWN]:**
   - workflow YAML structure and job graph details
   - Bicep module changes

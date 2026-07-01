@@ -50,6 +50,7 @@ CDN retrieval behavior.
 - checked-in manifest assets that define reusable embedding datasets
 - published lab images consumed by the hosted workflows
 - Azure operator guidance for post-run inspection and manual cleanup
+- repository-owned CI and local smoke-validation surfaces that can exercise hosted workflow seams without Azure deployment
 
 ### Unaffected artifacts
 
@@ -426,6 +427,83 @@ are insufficient.
 
 **Traces to:** RQ-EXP-018A, RQ-EXP-019
 
+### DSG-EXP-013 `Preflight validation boundary`
+
+The hosted experiment-workflow boundary adds a repository-owned preflight
+validation layer for workflow-owned regressions that are preventable without a
+live Azure run.
+
+This layer is intentionally subordinate to, not a replacement for, the live
+Azure integration layer. Its purpose is to catch repository-owned defects in
+rendered workflow/bootstrap/workload seams before deployment, VM startup, and
+Blob-backed execution consume most of the debugging cost.
+
+**Traces to:** RQ-EXP-018B, RQ-EXP-018F
+
+### DSG-EXP-013A `Rendered-artifact validation strategy`
+
+The design targets the workflow family's generated handoff artifacts rather than
+only the checked-in source text.
+
+The preflight strategy therefore validates repository-owned artifacts such as:
+
+1. rendered workload environment-file content
+2. rendered bootstrap/workload script handoff content
+3. workflow-side status and artifact path inputs
+4. repository-owned step and process invocation seams
+
+This design choice is required because the covered regressions are not limited
+to source-file syntax errors; they include defects introduced by composition of
+workflow values, bootstrap inputs, and shell-owned handoff files.
+
+**Traces to:** RQ-EXP-018C, RQ-EXP-018E
+
+### DSG-EXP-013B `Repository-local execution path`
+
+The preflight layer executes through repository-owned local or normal-CI paths
+that do not require Azure deployment for the covered regression class.
+
+Allowed realization shapes include deterministic rendering, fixture-driven
+shell execution, smoke tests, and other repository-local checks that exercise
+the hosted workflow family's owned seams deeply enough to detect malformed
+generated artifacts.
+
+This keeps the validation contract aligned with the repository's existing
+pattern of smoke-style shell validation while avoiding any requirement to
+emulate the full Azure runtime locally.
+
+**Traces to:** RQ-EXP-018D, RQ-EXP-018E
+
+### DSG-EXP-013C `Preventable-failure regression scope`
+
+The preflight layer explicitly covers the class of repository-owned failures
+that can stop the hosted workflows before Azure integration behavior becomes the
+dominant risk.
+
+The minimum covered class includes:
+
+1. malformed env-file concatenation or missing separators
+2. incorrect shell quoting for sourced assignments
+3. broken bootstrap-to-workload invocation wiring
+4. malformed repository-owned status or artifact handoff inputs
+
+This scope is intentionally narrower than all cloud failures and broader than
+static linting alone.
+
+**Traces to:** RQ-EXP-018C
+
+### DSG-EXP-013D `Layered confidence model`
+
+Hosted workflow confidence is established in two layers:
+
+1. preflight validation for repository-owned, locally preventable workflow regressions
+2. live Azure confirmation for full integration behavior involving cloud identity, deployed infrastructure, external images, and runtime services
+
+The design explicitly rejects using live Azure runs as the primary discovery
+mechanism for the first layer of defects.
+
+**Traces to:** RQ-EXP-018B, RQ-EXP-018D, RQ-EXP-018F
+
 ## Traceability
 
 | Design ID | Satisfies |
@@ -449,3 +527,8 @@ are insufficient.
 | DSG-EXP-012 | RQ-EXP-017, RQ-EXP-018, RQ-EXP-019 |
 | DSG-EXP-012A | RQ-EXP-015A, RQ-EXP-016A, RQ-EXP-018 |
 | DSG-EXP-012B | RQ-EXP-018A, RQ-EXP-019 |
+| DSG-EXP-013 | RQ-EXP-018B, RQ-EXP-018F |
+| DSG-EXP-013A | RQ-EXP-018C, RQ-EXP-018E |
+| DSG-EXP-013B | RQ-EXP-018D, RQ-EXP-018E |
+| DSG-EXP-013C | RQ-EXP-018C |
+| DSG-EXP-013D | RQ-EXP-018B, RQ-EXP-018D, RQ-EXP-018F |
