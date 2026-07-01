@@ -390,14 +390,18 @@ jobs:
           curl --fail --silent --show-error --location "$bootstrap_cloud_init_url" --output embedding-refresh-artifact/bootstrap-cloud-init-output.log || true
           curl --fail --silent --show-error --location "$bootstrap_stapi_url" --output embedding-refresh-artifact/bootstrap-stapi.log || true
 
-          readarray -t status_fields < <(python3 - embedding-refresh-artifact/status.json "$phase" <<'PY'
-          import json
-          import sys
-          with open(sys.argv[1], 'r', encoding='utf-8') as handle:
-              payload = json.load(handle)
-          print('true' if payload.get('success') else 'false')
-          print(payload.get('phase') or sys.argv[2])
-          PY
+          readarray -t status_fields < <(
+            python3 -c "$(
+              printf '%s\n' \
+                'import json' \
+                'import sys' \
+                'with open(sys.argv[1], "r", encoding="utf-8") as handle:' \
+                '    payload = json.load(handle)' \
+                'print("true" if payload.get("success") else "false")' \
+                'print(payload.get("phase") or sys.argv[2])'
+            )" \
+            embedding-refresh-artifact/status.json \
+            "$phase"
           )
           success_flag="${status_fields[0]}"
           phase="${status_fields[1]}"
