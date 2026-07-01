@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 LexonArchiveBuilder contributors
+
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};

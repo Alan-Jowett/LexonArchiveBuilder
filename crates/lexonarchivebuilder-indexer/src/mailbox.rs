@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 LexonArchiveBuilder contributors
+
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fs;

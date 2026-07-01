@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonArchiveBuilder contributors
 name: CI
 
 on:
@@ -8,12 +10,22 @@ on:
     branches:
       - main
     paths:
+      - .dockerignore
+      - .gitattributes
+      - .github/skills/**
+      - .github/workflows/**
+      - .gitignore
       - Cargo.toml
       - Cargo.lock
       - crates/**
       - docs/**
+      - docker-compose.yml
+      - examples/**
+      - hooks/**
+      - infra/**
       - README.md
-      - .github/workflows/ci.yml
+      - scripts/**
+      - test.ps1
 
 permissions:
   contents: read
@@ -23,6 +35,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  spdx:
+    name: SPDX header check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check SPDX headers
+        run: bash hooks/check-spdx-headers --all
+
   fmt:
     name: Rust format
     runs-on: ubuntu-latest

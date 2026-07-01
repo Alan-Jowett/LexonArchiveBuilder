@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 LexonArchiveBuilder contributors
+
 use std::collections::HashMap;
 use std::fs;
 use std::future::Future;
