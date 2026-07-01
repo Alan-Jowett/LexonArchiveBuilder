@@ -87,12 +87,12 @@ var containerSasToken = storageAccount.listServiceSas('2023-05-01', {
   keyToSign: 'key1'
 }).serviceSasToken
 var containerSasUrl = 'https://${storageAccountName}.blob.${environment().suffixes.storage}/${containerName}?${containerSasToken}'
-var resolvedWorkloadEnvironmentFile = '''
-CONTAINER_SAS_URL='${containerSasUrl}'
-STORAGE_ACCOUNT_NAME='${storageAccountName}'
-CONTAINER_NAME='${containerName}'
-${workloadEnvironmentFile}
-'''
+var resolvedWorkloadEnvironmentFile = join([
+  format('CONTAINER_SAS_URL={0}', containerSasUrl)
+  format('STORAGE_ACCOUNT_NAME={0}', storageAccountName)
+  format('CONTAINER_NAME={0}', containerName)
+  workloadEnvironmentFile
+], '\n')
 
 module runner 'vm-runner.bicep' = {
   name: 'lab-experiment-runner-${deploymentSuffix}'
