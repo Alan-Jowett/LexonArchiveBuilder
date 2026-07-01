@@ -67,6 +67,7 @@ runcmd:
     systemctl start docker
     mkdir -p /opt/lexonarchivebuilder/runner
     printf '%s' '__WORKLOAD_ENVIRONMENT_FILE_BASE64__' | base64 -d > /opt/lexonarchivebuilder/runner/workload.env
+    printf '\n' >> /opt/lexonarchivebuilder/runner/workload.env
     python3 - '__CONTAINER_SAS_URL_BASE64__' '__STORAGE_ACCOUNT_NAME_BASE64__' '__CONTAINER_NAME_BASE64__' >> /opt/lexonarchivebuilder/runner/workload.env <<'PY'
     import base64
     import shlex
