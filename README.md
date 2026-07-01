@@ -232,6 +232,112 @@ fixtures, run:
 scripts/lexonarchivebuilder-scale-test-compose-smoke.sh
 ```
 
+### Hosted experiment workflows
+
+The repository also includes two hosted GitHub Actions workflows for Azure-backed
+experiment automation:
+
+1. **Run embedding refresh** refreshes a reusable embedding dataset and replay
+   journal for a checked-in manifest.
+2. **Run indexing experiment** reuses that persisted dataset, runs one
+   published-profile experiment, and uploads the rooted quality report as a
+   workflow artifact.
+
+Both workflows are dispatched manually from GitHub and default to the published
+`main` tag of `ghcr.io/<owner>/lexonarchivebuilder-scale-test`, with an input to
+override the tag for a specific published image.
+
+The checked-in manifest format is currently JSON with:
+
+```json
+{
+  "container_name": "ietf-mailing-lists-sample",
+  "sources": [
+    "rsync.ietf.org::mailman-archive/ipsec/"
+  ]
+}
+```
+
+See `examples/local/scale-test/manifests/ietf-mailing-lists.sample.json` for a
+repository sample.
+
+Before running the hosted workflows, configure these repository variables for
+GitHub Actions OIDC Azure login:
+
+- `AZURE_LOCATION`
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+
+To create the required Azure Entra identity for these workflows, use:
+
+```powershell
+$repo = 'Alan-Jowett/LexonArchiveBuilder'
+$appName = 'lexonarchivebuilder-experiments-gha'
+$subscriptionId = (az account show --query id -o tsv).Trim()
+$tenantId = (az account show --query tenantId -o tsv).Trim()
+$scope = "/subscriptions/$subscriptionId"
+
+$app = az ad app create `
+  --display-name $appName `
+  --sign-in-audience AzureADMyOrg `
+  --query '{appId:appId,id:id}' `
+  -o json | ConvertFrom-Json
+
+az ad sp create --id $app.appId | Out-Null
+
+foreach ($role in @('Contributor', 'User Access Administrator')) {
+  az role assignment create `
+    --assignee $app.appId `
+    --role $role `
+    --scope $scope `
+    --output none
+}
+
+@(
+  @{ name = 'github-main'; subject = "repo:${repo}:ref:refs/heads/main" }
+) | ForEach-Object {
+  $body = @{
+    name = $_.name
+    issuer = 'https://token.actions.githubusercontent.com'
+    subject = $_.subject
+    audiences = @('api://AzureADTokenExchange')
+  } | ConvertTo-Json -Depth 5
+
+  $tmp = New-TemporaryFile
+  Set-Content -Path $tmp -Value $body -NoNewline
+  az ad app federated-credential create --id $app.id --parameters @$tmp | Out-Null
+  Remove-Item $tmp -Force
+}
+
+Write-Host "AZURE_CLIENT_ID=$($app.appId)"
+Write-Host "AZURE_TENANT_ID=$tenantId"
+Write-Host "AZURE_SUBSCRIPTION_ID=$subscriptionId"
+```
+
+This identity needs:
+
+1. **Contributor** on the subscription because the workflows create resource
+   groups and deploy the experiment infrastructure.
+2. **User Access Administrator** on the subscription because the Bicep package
+   creates a VM-scoped role assignment so the one-shot runner can deallocate
+   itself after completion.
+
+The federated credential above allows GitHub OIDC access from:
+
+1. `repo:Alan-Jowett/LexonArchiveBuilder:ref:refs/heads/main`
+
+Add additional branch-specific subjects only when you need to run the hosted
+workflows from non-`main` refs.
+
+The hosted workflows always attempt to deallocate the experiment VM when the run
+concludes, but they intentionally leave the Azure resource group in place for
+manual inspection and cleanup.
+
+> **TODO(overlay-block-store):** the hosted workflow inputs already reserve a
+> `block_store_target` seam for a future overlay block store. Until that
+> separate implementation lands, only the filesystem-backed path is executable.
+
 ## MCP MVP
 
 The first `lexonarchivebuilder-mcp` MVP is now implemented as a Rust stdio MCP server

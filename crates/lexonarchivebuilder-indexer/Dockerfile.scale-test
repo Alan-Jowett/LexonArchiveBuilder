@@ -6,15 +6,24 @@ RUN cargo build --release -p lexonarchivebuilder-indexer
 
 FROM debian:bookworm-slim AS runtime
 
+ARG AZCOPY_VERSION=10.32.4
+ARG AZCOPY_SHA256=8f859a0dbbc117660c249fb3569694fc8a0f33b68701f5b2b92ccc001ee50784
+
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash ca-certificates coreutils findutils rsync \
+    && apt-get install -y --no-install-recommends bash ca-certificates coreutils curl findutils python3 rsync tar gzip \
+    && curl -fsSL "https://github.com/Azure/azure-storage-azcopy/releases/download/v${AZCOPY_VERSION}/azcopy_linux_amd64_${AZCOPY_VERSION}.tar.gz" -o /tmp/azcopy.tgz \
+    && echo "${AZCOPY_SHA256}  /tmp/azcopy.tgz" | sha256sum -c - \
+    && tar -xzf /tmp/azcopy.tgz -C /tmp \
+    && mv /tmp/azcopy_linux_amd64_*/azcopy /usr/local/bin/azcopy \
+    && chmod +x /usr/local/bin/azcopy \
+    && rm -rf /tmp/azcopy.tgz /tmp/azcopy_linux_amd64_* \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
 COPY --from=builder /workspace/target/release/lexonarchivebuilder-indexer /usr/local/bin/lexonarchivebuilder-indexer
 COPY examples/local /workspace/examples/local
-COPY scripts/lexonarchivebuilder-scale-test.sh /workspace/scripts/lexonarchivebuilder-scale-test.sh
+COPY scripts /workspace/scripts
 ENV SCALE_TEST_INDEXER_MODE=direct
-RUN chmod +x /workspace/scripts/lexonarchivebuilder-scale-test.sh
+RUN chmod +x /workspace/scripts/*.sh
 
 ENTRYPOINT ["bash", "/workspace/scripts/lexonarchivebuilder-scale-test.sh"]

@@ -11,7 +11,7 @@ name: Publish Docker images
       - Cargo.lock
       - crates/**
       - examples/local/**
-      - scripts/lexonarchivebuilder-scale-test.sh
+      - scripts/**
       - .github/workflows/publish-images.yml
   workflow_dispatch:
 
