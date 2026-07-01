@@ -8,6 +8,10 @@ source /opt/lexonarchivebuilder/runner/workload.env
 
 WORK_ROOT="/opt/lexonarchivebuilder/work/${RUN_NAME}"
 mkdir -p "$WORK_ROOT"
+BOOTSTRAP_LOG_PATH="${WORK_ROOT}/bootstrap-wrapper.log"
+BOOTSTRAP_STATUS_PATH="${WORK_ROOT}/bootstrap-status.json"
+BOOTSTRAP_CLOUD_INIT_LOG_PATH="${WORK_ROOT}/bootstrap-cloud-init-output.log"
+BOOTSTRAP_STAPI_LOG_PATH="${WORK_ROOT}/bootstrap-stapi.log"
 
 wait_for_tcp_port() {
   local host="$1"
@@ -30,10 +34,96 @@ wait_for_tcp_port() {
   done
 }
 
+blob_url_for() {
+  local blob_path="$1"
+  local base_url query
+  base_url="${CONTAINER_SAS_URL%%\?*}"
+  query="${CONTAINER_SAS_URL#*\?}"
+  printf '%s/%s?%s' "${base_url%/}" "${blob_path#/}" "$query"
+}
+
+upload_blob_file() {
+  local source_file="$1"
+  local blob_path="$2"
+  local blob_url
+  blob_url="$(blob_url_for "$blob_path")"
+  curl --fail --silent --show-error \
+    -X PUT \
+    -H 'x-ms-blob-type: BlockBlob' \
+    -H 'x-ms-version: 2023-11-03' \
+    --upload-file "$source_file" \
+    "$blob_url"
+}
+
+workload_status_exists() {
+  local status_url
+  status_url="$(blob_url_for "${ARTIFACT_PREFIX}/status.json")"
+  curl --fail --silent --show-error --location "$status_url" --output /dev/null
+}
+
+write_bootstrap_status() {
+  local exit_code="$1"
+  python3 - "$BOOTSTRAP_STATUS_PATH" "$RUN_NAME" "$ARTIFACT_PREFIX" "$exit_code" <<'PY'
+import json
+import sys
+
+status_path, run_name, artifact_prefix, exit_code = sys.argv[1:5]
+payload = {
+    "workflow": "embedding-refresh",
+    "run_name": run_name,
+    "success": False,
+    "phase": "bootstrap",
+    "artifact_prefix": artifact_prefix,
+    "exit_code": int(exit_code),
+}
+
+with open(status_path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+PY
+}
+
+publish_bootstrap_failure_artifacts() {
+  local exit_code="$1"
+
+  if workload_status_exists >/dev/null 2>&1; then
+    return 0
+  fi
+
+  write_bootstrap_status "$exit_code"
+
+  if [[ -f /var/log/cloud-init-output.log ]]; then
+    cp /var/log/cloud-init-output.log "$BOOTSTRAP_CLOUD_INIT_LOG_PATH"
+  fi
+
+  if docker ps -a --format '{{.Names}}' | grep -Fx 'lexonarchivebuilder-experiment-stapi' >/dev/null 2>&1; then
+    docker logs lexonarchivebuilder-experiment-stapi >"$BOOTSTRAP_STAPI_LOG_PATH" 2>&1 || printf 'warning: failed to capture stapi container logs\n' >&2
+  fi
+
+  upload_blob_file "$BOOTSTRAP_STATUS_PATH" "${ARTIFACT_PREFIX}/bootstrap-status.json" || printf 'warning: failed to upload bootstrap-status.json\n' >&2
+  upload_blob_file "$BOOTSTRAP_LOG_PATH" "${ARTIFACT_PREFIX}/bootstrap-wrapper.log" || printf 'warning: failed to upload bootstrap-wrapper.log\n' >&2
+  if [[ -f "$BOOTSTRAP_CLOUD_INIT_LOG_PATH" ]]; then
+    upload_blob_file "$BOOTSTRAP_CLOUD_INIT_LOG_PATH" "${ARTIFACT_PREFIX}/bootstrap-cloud-init-output.log" || printf 'warning: failed to upload bootstrap-cloud-init-output.log\n' >&2
+  fi
+  if [[ -f "$BOOTSTRAP_STAPI_LOG_PATH" ]]; then
+    upload_blob_file "$BOOTSTRAP_STAPI_LOG_PATH" "${ARTIFACT_PREFIX}/bootstrap-stapi.log" || printf 'warning: failed to upload bootstrap-stapi.log\n' >&2
+  fi
+  if [[ -f "${WORK_ROOT}/manifest.json" ]]; then
+    upload_blob_file "${WORK_ROOT}/manifest.json" "${ARTIFACT_PREFIX}/manifest.json" || printf 'warning: failed to upload manifest.json\n' >&2
+  fi
+}
+
 cleanup() {
+  local exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
+    publish_bootstrap_failure_artifacts "$exit_code"
+  fi
   docker rm -f lexonarchivebuilder-experiment-stapi >/dev/null 2>&1 || true
+  exit $exit_code
 }
 trap cleanup EXIT
+
+exec > >(tee -a "$BOOTSTRAP_LOG_PATH") 2>&1
 
 printf '%s' "$MANIFEST_JSON_B64" | base64 -d > "${WORK_ROOT}/manifest.json"
 

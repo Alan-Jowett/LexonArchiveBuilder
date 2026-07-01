@@ -39,6 +39,9 @@
 - **UR-EXP-26 [KNOWN]:** The indexing workflow should remain comparable to `test.ps1`, including the post-index quality/report step rather than only the clustering-and-block-assembly step.
 - **UR-EXP-27 [KNOWN]:** Enable the hosted workflow family to execute the overlay block-store path now that the overlay implementation is available.
 - **UR-EXP-28 [KNOWN]:** Keep both hosted block-store targets selectable, but make `overlay` the default target for hosted workflow runs.
+- **UR-EXP-29 [KNOWN]:** The embedding-refresh workflow should publish enough diagnostics to explain failures that occur before the inner embedding script uploads its normal `status.json`.
+- **UR-EXP-30 [KNOWN]:** Early bootstrap failures should still produce machine-readable failure status and durable logs that the GitHub workflow can retrieve.
+- **UR-EXP-31 [KNOWN]:** Operators should have an explicit debug mode that can keep failed VMs available temporarily for inspection instead of always deallocating immediately.
 
 ## Change Manifest
 
@@ -55,6 +58,9 @@
 | CM-EXP-009 | Add | Preserve repository semantic boundaries by keeping hosted experiment automation separate from scale-test, indexer, MCP, and production-serving contracts | UR-EXP-19, UR-EXP-20, UR-EXP-21 |
 | CM-EXP-010 | Revise | Replace the deferred overlay TODO seam with an executable hosted block-store target contract that keeps filesystem available while making overlay the default | UR-EXP-22, UR-EXP-23, UR-EXP-27, UR-EXP-28 |
 | CM-EXP-011 | Revise | Require the indexing-experiment workflow to include the rooted quality/report step needed to stay comparable to `test.ps1` | UR-EXP-14, UR-EXP-26 |
+| CM-EXP-012 | Revise | Extend the hosted artifact contract so embedding-refresh bootstrap failures still publish durable status and diagnostic artifacts | UR-EXP-29, UR-EXP-30 |
+| CM-EXP-013 | Add | Require workflow-visible bootstrap failure classification and retrieval of early-failure diagnostic artifacts | UR-EXP-29, UR-EXP-30 |
+| CM-EXP-014 | Revise | Allow an explicit debug-retention mode that can preserve failed VMs temporarily without changing the default deallocation contract | UR-EXP-31 |
 
 ## Before / After
 
@@ -97,6 +103,16 @@
 
 - **Before [KNOWN]:** The hosted indexing-experiment requirements named an experiment report output but did not explicitly require the post-index quality/report step that makes the workflow comparable to `test.ps1`.
 - **After [KNOWN]:** The hosted indexing-experiment requirements explicitly include rooted quality/report generation as part of the experiment workflow.
+
+### BA-EXP-009
+
+- **Before [KNOWN]:** The hosted artifact contract assumes the inner workload script reaches its own cleanup/upload path, so early bootstrap failures can leave no durable `status.json` or diagnostic bundle behind.
+- **After [KNOWN]:** The embedding-refresh boundary requires a bootstrap-owned status and diagnostic publication path that survives failures before the inner workload script starts successfully.
+
+### BA-EXP-010
+
+- **Before [KNOWN]:** The cleanup contract requires deallocation on failure but does not define an approved way to preserve a failed VM briefly for deliberate operator debugging.
+- **After [KNOWN]:** The workflow boundary keeps deallocation as the default while allowing an explicit debug-retention mode for failure investigation.
 
 ## Requirements
 
@@ -191,7 +207,7 @@ target, the workflow family SHALL default that selection to `overlay`.
 
 - **Rationale [KNOWN]:** The hosted Azure-backed execution path should prefer the production-oriented overlay realization while preserving filesystem as an explicit fallback and comparison mode.
 - **Constraint [KNOWN]:** Defaulting to `overlay` must not remove the caller's ability to choose filesystem explicitly.
-- **Traceability:** UR-EXP-27, UR-EXP-28
+- **Traceability:** UR-EXP-29, UR-EXP-30
 
 #### RQ-EXP-009 - Indexing-experiment profile input
 
@@ -265,6 +281,14 @@ Each hosted workflow SHALL write its operator-relevant output artifacts to Azure
 - **Boundary [UNKNOWN]:** The exact manifest, report, and supplemental log bundle naming conventions are not yet specified in this phase.
 - **Traceability:** UR-EXP-4, UR-EXP-14, UR-EXP-18, UR-EXP-26
 
+#### RQ-EXP-015A - Bootstrap failure artifact handoff
+
+The embedding-refresh workflow SHALL publish a bootstrap-owned status artifact and diagnostic artifact set to Azure Blob Storage when failure occurs before the inner embedding script reaches its normal cleanup/upload path.
+
+- **Required minimum [KNOWN]:** The bootstrap diagnostic set must include enough evidence to distinguish cloud-init/bootstrap failure from a later workload failure.
+- **Boundary [UNKNOWN]:** The exact diagnostic file names and blob-path layout are not yet specified in this phase.
+- **Traceability:** UR-EXP-29, UR-EXP-30
+
 #### RQ-EXP-016 - Workflow artifact publication
 
 After each workflow concludes, the hosted workflow SHALL upload the retrieved operator-relevant output artifact set as GitHub Actions workflow artifacts.
@@ -272,6 +296,13 @@ After each workflow concludes, the hosted workflow SHALL upload the retrieved op
 - **Required property [KNOWN]:** Workflow consumers should be able to obtain the relevant run outputs directly from the workflow run without separately browsing Azure storage.
 - **Boundary [INFERRED]:** The embedding-refresh workflow may publish a smaller artifact family than the indexing workflow so long as the durable reusable dataset remains in Blob Storage.
 - **Traceability:** UR-EXP-14
+
+#### RQ-EXP-016A - Bootstrap diagnostics publication
+
+When the embedding-refresh workflow fails before normal workload artifacts are available, the hosted workflow SHALL retrieve and publish the bootstrap status and diagnostic artifacts as GitHub workflow artifacts.
+
+- **Required property [KNOWN]:** Operators must be able to inspect early-failure diagnostics from the workflow run itself without first opening Azure guest state.
+- **Traceability:** UR-EXP-29, UR-EXP-30
 
 #### RQ-EXP-017 - Workflow outcome surface
 
@@ -281,6 +312,13 @@ Each hosted workflow SHALL surface whether the run passed or failed and SHALL al
 - **Boundary [UNKNOWN]:** Whether these values are emitted as job outputs, workflow summary entries, or both is not yet specified in this phase.
 - **Traceability:** UR-EXP-14, UR-EXP-17
 
+#### RQ-EXP-017A - Early failure classification
+
+The embedding-refresh workflow SHALL surface whether a failed run stopped during bootstrap-before-workload execution or during the later workload-owned execution path.
+
+- **Required property [KNOWN]:** The surfaced classification must be derivable from a machine-readable status artifact rather than only from free-form logs.
+- **Traceability:** UR-EXP-29, UR-EXP-30
+
 #### RQ-EXP-018 - Always-on VM deallocation
 
 Each hosted workflow SHALL always attempt to deallocate the experiment VM after VM-side execution concludes, regardless of whether the run succeeded or failed.
@@ -288,6 +326,14 @@ Each hosted workflow SHALL always attempt to deallocate the experiment VM after 
 - **Required property [KNOWN]:** Workflow-level cleanup must provide a fallback even when VM-side self-deallocation does not occur.
 - **Constraint [KNOWN]:** This cleanup requirement applies to failure paths as well as success paths.
 - **Traceability:** UR-EXP-15
+
+#### RQ-EXP-018A - Debug-retention override
+
+The hosted workflow family SHALL support an explicit operator-selected debug-retention mode that preserves or delays deallocation for failed runs long enough for manual investigation.
+
+- **Required property [KNOWN]:** Default behavior remains automatic deallocation; retention is an opt-in debugging mode rather than the normal failure-path contract.
+- **Constraint [KNOWN]:** The retained VM path must not imply automatic resource-group deletion.
+- **Traceability:** UR-EXP-15, UR-EXP-16, UR-EXP-31
 
 #### RQ-EXP-019 - Resource-group preservation
 

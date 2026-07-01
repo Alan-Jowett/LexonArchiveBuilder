@@ -61,11 +61,16 @@ runcmd:
     cat > /usr/local/bin/lexonarchivebuilder-runner-wrapper.sh <<'EOF'
     #!/usr/bin/env bash
     set -euo pipefail
+    source /opt/lexonarchivebuilder/runner/workload.env
     set +e
     /opt/lexonarchivebuilder/runner/workload.sh
     WORKLOAD_EXIT_CODE=$?
     set -e
     echo "${WORKLOAD_EXIT_CODE}" > /opt/lexonarchivebuilder/runner/last-exit-code
+    if [ "${WORKLOAD_EXIT_CODE}" -ne 0 ] && [ "${DEBUG_RETAIN_ON_FAILURE:-false}" = "true" ]; then
+      echo "debug-retained" > /opt/lexonarchivebuilder/runner/last-deallocate-exit-code
+      exit "${WORKLOAD_EXIT_CODE}"
+    fi
     ARM_TOKEN=''
     TOKEN_EXIT_CODE=0
     set +e
