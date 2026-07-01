@@ -7,6 +7,7 @@ set -euo pipefail
 source /opt/lexonarchivebuilder/runner/workload.env
 
 WORK_ROOT="/opt/lexonarchivebuilder/work/${RUN_NAME}"
+HOSTED_SCRIPTS_DIR="${WORK_ROOT}/hosted-scripts"
 mkdir -p "$WORK_ROOT"
 BOOTSTRAP_LOG_PATH="${WORK_ROOT}/bootstrap-wrapper.log"
 BOOTSTRAP_STATUS_PATH="${WORK_ROOT}/bootstrap-status.json"
@@ -126,6 +127,10 @@ trap cleanup EXIT
 exec > >(tee -a "$BOOTSTRAP_LOG_PATH") 2>&1
 
 printf '%s' "$MANIFEST_JSON_B64" | base64 -d > "${WORK_ROOT}/manifest.json"
+mkdir -p "$HOSTED_SCRIPTS_DIR"
+printf '%s' "$HOSTED_EXPERIMENT_COMMON_SCRIPT_B64" | base64 -d > "${HOSTED_SCRIPTS_DIR}/lexonarchivebuilder-hosted-experiment-common.sh"
+printf '%s' "$HOSTED_EXPERIMENT_WORKLOAD_SCRIPT_B64" | base64 -d > "${HOSTED_SCRIPTS_DIR}/lexonarchivebuilder-embedding-refresh.sh"
+chmod 0755 "${HOSTED_SCRIPTS_DIR}/lexonarchivebuilder-embedding-refresh.sh"
 
 docker pull "$RUNNER_IMAGE" >/dev/null
 docker pull "$STAPI_IMAGE" >/dev/null
@@ -139,6 +144,7 @@ wait_for_tcp_port 127.0.0.1 8080 "${STAPI_WAIT_TIMEOUT_SECS:-60}"
 docker run --rm \
   --entrypoint bash \
   --add-host host.docker.internal:host-gateway \
+  -v "${HOSTED_SCRIPTS_DIR}:/workspace/scripts:ro" \
   -v "${WORK_ROOT}:/workspace/hosted-run" \
   "$RUNNER_IMAGE" \
   /workspace/scripts/lexonarchivebuilder-embedding-refresh.sh \

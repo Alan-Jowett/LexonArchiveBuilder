@@ -148,6 +148,8 @@ jobs:
           )"
           manifest_hash="$(printf '%s' "$manifest_json_minified" | sha256sum | cut -c1-10)"
           repo_hash="$(printf '%s' "$GITHUB_REPOSITORY" | sha256sum | cut -c1-6)"
+          hosted_experiment_common_script_b64="$(base64 -w0 scripts/lexonarchivebuilder-hosted-experiment-common.sh)"
+          hosted_experiment_workload_script_b64="$(base64 -w0 scripts/lexonarchivebuilder-embedding-refresh.sh)"
           container_name="$(python3 - "$manifest_path" <<'PY'
           import json
           import sys
@@ -217,6 +219,8 @@ jobs:
               "RUNNER_IMAGE='${runner_image}'" \
               "STAPI_IMAGE='${STAPI_IMAGE}'" \
               "MANIFEST_JSON_B64='${manifest_json_b64}'" \
+              "HOSTED_EXPERIMENT_COMMON_SCRIPT_B64='${hosted_experiment_common_script_b64}'" \
+              "HOSTED_EXPERIMENT_WORKLOAD_SCRIPT_B64='${hosted_experiment_workload_script_b64}'" \
               "DATASET_BLOCK_STORE_PREFIX='${dataset_block_store_prefix}'" \
               "DATASET_REPLAY_JOURNAL_PREFIX='${dataset_replay_journal_prefix}'" \
               "ARTIFACT_PREFIX='${artifact_prefix}'" \
