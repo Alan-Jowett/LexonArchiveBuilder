@@ -876,6 +876,10 @@ through a repository-owned mutable reference mechanism.
   same class of repository-owned discovery surface used for current-root
   publication rather than a request-local file or a local-only segment
   directory.
+- **Artifact shape [KNOWN]:** The caller SHALL provide a ref name, and the
+  runtime SHALL publish one human-readable JSON ref artifact at
+  `refs/{ref_name}` for that name rather than coalescing multiple logical refs
+  into one shared mutable file or blob.
 - **Ownership boundary [INFERRED]:** The mutable reference points to immutable
   audit blocks by hash; it does not make the journal blocks themselves mutable.
 - **Traceability:** UR-162, UR-165
@@ -912,6 +916,10 @@ repository-owned mutable reference mechanism.
   store contents or depending on request-local output capture alone.
 - **Stage boundary [KNOWN]:** Stages that do not materialize a new final root
   SHALL NOT rewrite the current-root reference.
+- **Ref payload boundary [KNOWN]:** The `refs/{ref_name}` JSON payload SHALL
+  carry the latest replay-journal head block id, the latest root block id when
+  a root-materializing stage completed successfully, and publication metadata
+  such as the effective profile version.
 - **Ownership boundary [INFERRED]:** The mutable reference points to an
   immutable root block identity by hash; it does not make the root block
   mutable.

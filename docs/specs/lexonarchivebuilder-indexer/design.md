@@ -305,6 +305,11 @@ This keeps replay discovery aligned with the repository's mutable
 reference pattern for current-root publication instead of relying on request-
 local state or block-store scanning heuristics.
 
+The caller supplies the ref name, and the runtime maps that name to one
+human-readable JSON ref artifact at `refs/{ref_name}`. That artifact is the
+unit of mutable publication; different ref names produce different ref files or
+blob paths rather than sharing one repository-global mutable JSON document.
+
 **Traces to:** RQ-INDEXER-003E3, RQ-INDEXER-010
 
 ### DSG-LFI-001F3 `Replay-audit entry coverage`
@@ -334,6 +339,10 @@ The mutable current-root reference is updated only after the new immutable root
 is already valid and durable under the selected `BlockStore` boundary. Stages
 that do not materialize a new final root leave the existing current-root
 reference unchanged.
+
+The `refs/{ref_name}` JSON payload carries the latest replay-journal head block
+id, the latest successfully materialized root block id when present, and
+publication metadata such as the effective profile version and stage label.
 
 This preserves the existing `BatchSummary` final-root contract while adding a
 durable repository-owned discovery surface for later invocations and operator

@@ -867,6 +867,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: lexongraph_streaming_indexer::PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            ref_name: "test-branch".into(),
             items: vec![
                 BatchItemConfig::Mailbox {
                     path: mailbox_path.strip_prefix(dir.path()).unwrap().to_path_buf(),

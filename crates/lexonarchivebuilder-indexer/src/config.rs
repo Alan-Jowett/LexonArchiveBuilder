@@ -21,7 +21,7 @@ const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_MAX_RETRIES: u32 = 5;
 const DEFAULT_RETRY_DELAY_MS: u64 = 1_000;
 const MIN_MAX_CONCURRENCY: usize = 1;
-pub const MUTABLE_REF_STORE_FILE_NAME: &str = "indexer-state.refs.json";
+pub const MUTABLE_REF_ROOT_DIR: &str = "refs";
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, ValueEnum, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -88,6 +88,8 @@ pub struct BatchRequest {
     pub profile_version: PublishedProfileVersion,
     #[serde(default)]
     pub max_concurrency: Option<usize>,
+    #[serde(default)]
+    pub ref_name: String,
     #[serde(default)]
     pub items: Vec<BatchItemConfig>,
 }
@@ -185,6 +187,12 @@ pub enum ConfigError {
     EmptyItems,
     #[error("max_concurrency must be at least 1 when specified")]
     InvalidMaxConcurrency,
+    #[error("batch request ref_name must not be empty")]
+    MissingRefName,
+    #[error(
+        "batch request ref_name must be a relative slash-separated ref name without empty, '.' or '..' segments"
+    )]
+    InvalidRefName,
     #[error("local embedding base_url must not be empty")]
     MissingLocalEmbeddingBaseUrl,
     #[error("production block_store.container_sas_url must not be empty")]
@@ -211,6 +219,7 @@ impl BatchRequest {
         if matches!(self.max_concurrency, Some(0)) {
             return Err(ConfigError::InvalidMaxConcurrency);
         }
+        normalized_ref_name_segments(&self.ref_name)?;
         self.environment.validate_for_stage(self.stage)?;
         Ok(())
     }
@@ -256,7 +265,15 @@ impl EnvironmentConfig {
         Ok(())
     }
 
-    pub fn resolve_mutable_ref_store(&self, request_dir: &Path) -> Option<MutableRefStoreLocation> {
+    pub fn resolve_mutable_ref_store(
+        &self,
+        request_dir: &Path,
+        ref_name: &str,
+    ) -> Option<MutableRefStoreLocation> {
+        let relative_path = mutable_ref_relative_path(ref_name)
+            .expect("ref_name must be validated before resolving mutable ref storage");
+        let relative_path_buf = mutable_ref_relative_path_buf(ref_name)
+            .expect("ref_name must be validated before resolving mutable ref storage");
         match self {
             Self::Local {
                 block_store_root, ..
@@ -266,18 +283,15 @@ impl EnvironmentConfig {
                     .parent()
                     .unwrap_or(block_store_root.as_path());
                 Some(MutableRefStoreLocation::LocalFile {
-                    path: parent.join(MUTABLE_REF_STORE_FILE_NAME),
+                    path: parent.join(relative_path_buf),
                 })
             }
             Self::LocalOverlay { block_store, .. } | Self::Production { block_store, .. } => {
                 Some(MutableRefStoreLocation::AzureBlob {
-                    url: mutable_ref_store_blob_url(
-                        &block_store.container_sas_url,
-                        MUTABLE_REF_STORE_FILE_NAME,
-                    ),
+                    url: mutable_ref_store_blob_url(&block_store.container_sas_url, &relative_path),
                     display_path: mutable_ref_store_blob_display_path(
                         &block_store.container_sas_url,
-                        MUTABLE_REF_STORE_FILE_NAME,
+                        &relative_path,
                     ),
                 })
             }
@@ -347,6 +361,42 @@ fn mutable_ref_store_blob_display_path(container_sas_url: &str, file_name: &str)
         .map_or(container_sas_url, |(base, _)| base)
         .trim_end_matches('/');
     format!("{base}/{file_name}")
+}
+
+fn normalized_ref_name_segments(ref_name: &str) -> Result<Vec<String>, ConfigError> {
+    let trimmed = ref_name.trim();
+    if trimmed.is_empty() {
+        return Err(ConfigError::MissingRefName);
+    }
+    let normalized = trimmed.replace('\\', "/");
+    if normalized.starts_with('/') || normalized.ends_with('/') {
+        return Err(ConfigError::InvalidRefName);
+    }
+    let segments = normalized
+        .split('/')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if segments
+        .iter()
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return Err(ConfigError::InvalidRefName);
+    }
+    Ok(segments)
+}
+
+fn mutable_ref_relative_path(ref_name: &str) -> Result<String, ConfigError> {
+    let segments = normalized_ref_name_segments(ref_name)?;
+    Ok(format!("{MUTABLE_REF_ROOT_DIR}/{}", segments.join("/")))
+}
+
+fn mutable_ref_relative_path_buf(ref_name: &str) -> Result<PathBuf, ConfigError> {
+    let segments = normalized_ref_name_segments(ref_name)?;
+    let mut path = PathBuf::from(MUTABLE_REF_ROOT_DIR);
+    for segment in segments {
+        path.push(segment);
+    }
+    Ok(path)
 }
 
 impl BatchItemConfig {
@@ -529,6 +579,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: default_profile_version(),
             max_concurrency: None,
+            ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Document {
                 path: relative_document_path.clone(),
                 metadata: BTreeMap::new(),
@@ -568,6 +619,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: default_profile_version(),
             max_concurrency: Some(0),
+            ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
                 metadata: BTreeMap::new(),
@@ -602,6 +654,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: default_profile_version(),
             max_concurrency: Some(7),
+            ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
                 metadata: BTreeMap::new(),
@@ -635,6 +688,7 @@ mod tests {
                 "dims": 384,
                 "encoding": "f32le"
             },
+            "ref_name": "test-branch",
             "items": [{
                 "kind": "document",
                 "path": "docs/sample.txt"
@@ -668,6 +722,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: default_profile_version(),
             max_concurrency: None,
+            ref_name: "test-branch".into(),
             items: vec![],
         };
 
@@ -696,6 +751,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: default_profile_version(),
             max_concurrency: None,
+            ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
                 metadata: BTreeMap::new(),
@@ -730,6 +786,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: default_profile_version(),
             max_concurrency: None,
+            ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
                 metadata: BTreeMap::new(),
@@ -768,6 +825,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: default_profile_version(),
             max_concurrency: None,
+            ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
                 metadata: BTreeMap::new(),
@@ -798,6 +856,7 @@ mod tests {
                 "encoding": "f32le"
             },
             "profile_version": "0.5.0",
+            "ref_name": "test-branch",
             "items": [{
                 "kind": "document",
                 "path": "docs/sample.txt"
@@ -831,6 +890,7 @@ mod tests {
                 "encoding": "f32le"
             },
             "profile_version": "0.5.0",
+            "ref_name": "test-branch",
             "items": [{
                 "kind": "document",
                 "path": "docs/sample.txt"
@@ -872,6 +932,7 @@ mod tests {
                 "encoding": "f32le"
             },
             "stage": "ingestion-and-embedding",
+            "ref_name": "test-branch",
             "items": [{
                 "kind": "document",
                 "path": "docs/sample.txt"
@@ -899,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    fn production_resolve_mutable_ref_store_uses_branch_named_blob() {
+    fn production_resolve_mutable_ref_store_uses_ref_named_blob() {
         let environment = EnvironmentConfig::Production {
             block_store: ProductionBlockStoreConfig {
                 container_sas_url: "https://example.blob.core.windows.net/archive-sync?sig=test"
@@ -917,10 +978,13 @@ mod tests {
         };
 
         assert_eq!(
-            environment.resolve_mutable_ref_store(Path::new("request-root")),
+            environment.resolve_mutable_ref_store(Path::new("request-root"), "feature/test"),
             Some(MutableRefStoreLocation::AzureBlob {
-                url: "https://example.blob.core.windows.net/archive-sync/indexer-state.refs.json?sig=test".into(),
-                display_path: "https://example.blob.core.windows.net/archive-sync/indexer-state.refs.json".into(),
+                url:
+                    "https://example.blob.core.windows.net/archive-sync/refs/feature/test?sig=test"
+                        .into(),
+                display_path:
+                    "https://example.blob.core.windows.net/archive-sync/refs/feature/test".into(),
             })
         );
     }
@@ -945,6 +1009,7 @@ mod tests {
                 "encoding": "f32le"
             },
             "profile_version": "0.5.0",
+            "ref_name": "test-branch",
             "items": [{
                 "kind": "document",
                 "path": "docs/sample.txt"
@@ -984,6 +1049,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: default_profile_version(),
             max_concurrency: None,
+            ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
                 metadata: BTreeMap::new(),
@@ -1046,6 +1112,7 @@ mod tests {
                 "encoding": "f32le"
             },
             "profile_version": "0.5.0",
+            "ref_name": "test-branch",
             "items": [{
                 "kind": "document",
                 "path": "docs/sample.txt"

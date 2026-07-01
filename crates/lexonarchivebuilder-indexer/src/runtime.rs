@@ -31,7 +31,7 @@ use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 
 use crate::block_store::ConfiguredBlockStore;
 #[cfg(test)]
-use crate::config::MUTABLE_REF_STORE_FILE_NAME;
+use crate::config::MUTABLE_REF_ROOT_DIR;
 use crate::config::{
     BatchItemConfig, BatchRequest, BatchSummary, ClusteringConfigOverrides, ConfigError,
     ConfiguredClustering, ExecutionStage, MutableRefStoreLocation, metadata_to_text_map,
@@ -57,10 +57,13 @@ const AZURE_BLOB_API_VERSION: &str = "2023-11-03";
 const MUTABLE_REF_STORE_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MUTABLE_REF_STORE_HTTP_RETRY_ATTEMPTS: usize = 3;
 const MUTABLE_REF_STORE_HTTP_RETRY_DELAY: Duration = Duration::from_millis(500);
+#[cfg(test)]
+const TEST_REF_NAME: &str = "test-branch";
 
 #[derive(Clone, Copy)]
 struct RuntimeIo<'a> {
     mutable_ref_store: Option<&'a MutableRefStoreLocation>,
+    mutable_ref_metadata: Option<&'a BTreeMap<String, String>>,
     progress: &'a ProgressReporter,
 }
 
@@ -109,6 +112,13 @@ enum ReplayJournalStepKind {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct MutableRefStoreState {
+    current_root_block_id: Option<String>,
+    replay_journal_head_block_id: Option<String>,
+    metadata: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct MutableRefStoreUpdate {
     current_root_block_id: Option<String>,
     replay_journal_head_block_id: Option<String>,
     metadata: Option<BTreeMap<String, String>>,
@@ -1366,12 +1376,16 @@ where
     let clustering = clustering_overrides.to_configured_clustering(request.profile_version)?;
     let stage = request.stage;
     let block_store = ConfiguredBlockStore::from_environment(request_dir, &request.environment)?;
-    let mutable_ref_store = request.environment.resolve_mutable_ref_store(request_dir);
+    let mutable_ref_store = request
+        .environment
+        .resolve_mutable_ref_store(request_dir, &request.ref_name);
+    let mutable_ref_metadata = mutable_ref_store_metadata(stage, &clustering);
     let embedding_spec = request.to_embedding_spec();
     let resolver = LocalFilesystemContentResolver::new(block_store.clone());
     let max_concurrency = request.effective_max_concurrency();
     let io = RuntimeIo {
         mutable_ref_store: mutable_ref_store.as_ref(),
+        mutable_ref_metadata: mutable_ref_store.as_ref().map(|_| &mutable_ref_metadata),
         progress: &progress,
     };
 
@@ -1434,7 +1448,7 @@ where
     } else {
         let Some(mutable_ref_store) = mutable_ref_store.clone() else {
             return Err(RuntimeError::MissingReplayJournalHead {
-                path: "<unresolved block store root>".into(),
+                path: "<unresolved mutable ref>".into(),
             });
         };
         let (replay_batches, embedding_provider) = load_replay_batches_from_store_async(
@@ -1517,10 +1531,19 @@ async fn run_ingestion_only_stage(
                 .zip(constructed.block_ids.iter().copied())
                 .map(|(item, block_id)| replay_journal_record_from_item(block_id, item))
                 .collect::<Vec<_>>();
-            append_replay_journal_records_async(
+            let replay_journal_head_block_id = append_replay_journal_records_async(
                 block_store.clone(),
                 mutable_ref_store.clone(),
                 records,
+            )
+            .await?;
+            update_mutable_ref_store_async(
+                mutable_ref_store.clone(),
+                MutableRefStoreUpdate {
+                    replay_journal_head_block_id,
+                    metadata: io.mutable_ref_metadata.cloned(),
+                    ..MutableRefStoreUpdate::default()
+                },
             )
             .await?;
         }
@@ -1694,18 +1717,46 @@ fn replay_sort_key(item: &IndexItem<ContentRef>) -> (String, Vec<(String, String
 }
 
 #[cfg(test)]
-fn mutable_ref_store_path(block_store_root: &Path) -> PathBuf {
+fn mutable_ref_store_path(block_store_root: &Path, ref_name: &str) -> PathBuf {
+    let mut relative = PathBuf::from(MUTABLE_REF_ROOT_DIR);
+    for segment in ref_name.split('/') {
+        relative.push(segment);
+    }
     match block_store_root.parent() {
-        Some(parent) => parent.join(MUTABLE_REF_STORE_FILE_NAME),
-        None => block_store_root.join(MUTABLE_REF_STORE_FILE_NAME),
+        Some(parent) => parent.join(relative),
+        None => block_store_root.join(relative),
     }
 }
 
 #[cfg(test)]
-fn local_mutable_ref_store_location(block_store_root: &Path) -> MutableRefStoreLocation {
+fn local_mutable_ref_store_location(
+    block_store_root: &Path,
+    ref_name: &str,
+) -> MutableRefStoreLocation {
     MutableRefStoreLocation::LocalFile {
-        path: mutable_ref_store_path(block_store_root),
+        path: mutable_ref_store_path(block_store_root, ref_name),
     }
+}
+
+fn execution_stage_label(stage: ExecutionStage) -> &'static str {
+    match stage {
+        ExecutionStage::FullPipeline => "full-pipeline",
+        ExecutionStage::IngestionAndEmbedding => "ingestion-and-embedding",
+        ExecutionStage::ClusteringAndBlockAssembly => "clustering-and-block-assembly",
+    }
+}
+
+fn mutable_ref_store_metadata(
+    stage: ExecutionStage,
+    clustering: &ConfiguredClustering,
+) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (
+            "profile_version".into(),
+            clustering.profile_version.to_string(),
+        ),
+        ("stage".into(), execution_stage_label(stage).into()),
+    ])
 }
 
 fn mutable_ref_store_label(location: &MutableRefStoreLocation) -> String {
@@ -1943,20 +1994,32 @@ fn write_mutable_ref_store(
     write_mutable_ref_store_bytes(location, &encoded)
 }
 
-fn publish_current_root(
+fn apply_mutable_ref_store_update(refs: &mut MutableRefStoreState, update: MutableRefStoreUpdate) {
+    if let Some(current_root_block_id) = update.current_root_block_id {
+        refs.current_root_block_id = Some(current_root_block_id);
+    }
+    if let Some(replay_journal_head_block_id) = update.replay_journal_head_block_id {
+        refs.replay_journal_head_block_id = Some(replay_journal_head_block_id);
+    }
+    if let Some(metadata) = update.metadata {
+        refs.metadata = Some(metadata);
+    }
+}
+
+fn update_mutable_ref_store(
     mutable_ref_store: &MutableRefStoreLocation,
-    root_id: &BlockHash,
+    update: MutableRefStoreUpdate,
 ) -> Result<(), RuntimeError> {
     let mut refs = load_mutable_ref_store(mutable_ref_store)?;
-    refs.current_root_block_id = Some(root_id.to_string());
+    apply_mutable_ref_store_update(&mut refs, update);
     write_mutable_ref_store(mutable_ref_store, &refs)
 }
 
-async fn publish_current_root_async(
+async fn update_mutable_ref_store_async(
     mutable_ref_store: MutableRefStoreLocation,
-    root_id: BlockHash,
+    update: MutableRefStoreUpdate,
 ) -> Result<(), RuntimeError> {
-    tokio::task::spawn_blocking(move || publish_current_root(&mutable_ref_store, &root_id))
+    tokio::task::spawn_blocking(move || update_mutable_ref_store(&mutable_ref_store, update))
         .await
         .map_err(RuntimeError::BlockingMutableRefTaskJoin)?
 }
@@ -1965,22 +2028,34 @@ fn append_replay_journal_records(
     store: &dyn BlockStore,
     mutable_ref_store: &MutableRefStoreLocation,
     records: &[ReplayJournalRecord],
-) -> Result<(), RuntimeError> {
+) -> Result<Option<String>, RuntimeError> {
     if records.is_empty() {
-        return Ok(());
+        return Ok(load_mutable_ref_store(mutable_ref_store)?.replay_journal_head_block_id);
     }
 
-    let mut refs = load_mutable_ref_store(mutable_ref_store)?;
-    let mut current_head = refs.replay_journal_head_block_id.clone();
+    let mut current_head = load_mutable_ref_store(mutable_ref_store)?.replay_journal_head_block_id;
     let mut pending_entries = Vec::new();
+    let mut pending_entry_sizes = Vec::new();
+    let mut pending_entry_size_sum = 0usize;
 
     for record in records {
+        let encoded_record = encode_replay_journal_record(record)?;
+        let encoded_record_size = encoded_record.len();
         pending_entries.push(record.clone());
-        let block_size = replay_journal_block_body_size(&pending_entries, current_head.as_deref())?;
+        pending_entry_sizes.push(encoded_record_size);
+        pending_entry_size_sum += encoded_record_size;
+        let block_size = replay_journal_block_body_size(
+            pending_entry_sizes.as_slice(),
+            pending_entry_size_sum,
+            current_head.as_deref(),
+        )?;
         if block_size > REPLAY_JOURNAL_BLOCK_MAX_BYTES {
             let overflow = pending_entries
                 .pop()
                 .expect("pending_entries was just pushed");
+            let overflow_size = pending_entry_sizes
+                .pop()
+                .expect("pending_entry_sizes was just pushed");
             if pending_entries.is_empty() {
                 return Err(RuntimeError::WriteReplayJournal {
                     block_id: replay_journal_record_label(&overflow).to_string(),
@@ -1999,7 +2074,11 @@ fn append_replay_journal_records(
                 std::mem::take(&mut pending_entries),
             )?;
             current_head = Some(published.to_string());
+            pending_entry_sizes.clear();
+            pending_entry_size_sum = 0;
             pending_entries.push(overflow);
+            pending_entry_sizes.push(overflow_size);
+            pending_entry_size_sum += overflow_size;
         }
     }
 
@@ -2012,15 +2091,14 @@ fn append_replay_journal_records(
         current_head = Some(published.to_string());
     }
 
-    refs.replay_journal_head_block_id = current_head;
-    write_mutable_ref_store(mutable_ref_store, &refs)
+    Ok(current_head)
 }
 
 async fn append_replay_journal_records_async(
     store: ConfiguredBlockStore,
     mutable_ref_store: MutableRefStoreLocation,
     records: Vec<ReplayJournalRecord>,
-) -> Result<(), RuntimeError> {
+) -> Result<Option<String>, RuntimeError> {
     tokio::task::spawn_blocking(move || {
         append_replay_journal_records(&store, &mutable_ref_store, &records)
     })
@@ -2029,10 +2107,35 @@ async fn append_replay_journal_records_async(
 }
 
 fn replay_journal_block_body_size(
-    entries: &[ReplayJournalRecord],
+    encoded_entry_sizes: &[usize],
+    encoded_entry_size_sum: usize,
     previous_block_id: Option<&str>,
 ) -> Result<usize, RuntimeError> {
-    Ok(encode_replay_journal_block_body(entries, previous_block_id)?.len())
+    let base_len = encode_replay_journal_block_body(&[], previous_block_id)?.len();
+    Ok(base_len - cbor_array_header_size(0)
+        + cbor_array_header_size(encoded_entry_sizes.len())
+        + encoded_entry_size_sum)
+}
+
+fn cbor_array_header_size(len: usize) -> usize {
+    match len {
+        0..=23 => 1,
+        24..=0xff => 2,
+        0x100..=0xffff => 3,
+        0x1_0000..=0xffff_ffff => 5,
+        _ => 9,
+    }
+}
+
+fn encode_replay_journal_record(record: &ReplayJournalRecord) -> Result<Vec<u8>, RuntimeError> {
+    let mut encoded = Vec::new();
+    ciborium::ser::into_writer(record, &mut encoded).map_err(|source| {
+        RuntimeError::WriteReplayJournal {
+            block_id: replay_journal_record_label(record).to_string(),
+            source: io::Error::new(ErrorKind::InvalidData, source.to_string()),
+        }
+    })?;
+    Ok(encoded)
 }
 
 fn encode_replay_journal_block_body(
@@ -2693,15 +2796,21 @@ where
             &result.block_ids,
             &result.root_id,
         ));
-        append_replay_journal_records_async(
+        let replay_journal_head_block_id = append_replay_journal_records_async(
             block_store.clone(),
             mutable_ref_store.clone(),
             records,
         )
         .await?;
-    }
-    if let Some(mutable_ref_store) = io.mutable_ref_store {
-        publish_current_root_async(mutable_ref_store.clone(), result.root_id).await?;
+        update_mutable_ref_store_async(
+            mutable_ref_store.clone(),
+            MutableRefStoreUpdate {
+                current_root_block_id: Some(result.root_id.to_string()),
+                replay_journal_head_block_id,
+                metadata: io.mutable_ref_metadata.cloned(),
+            },
+        )
+        .await?;
     }
 
     let mut block_ids = result
@@ -2751,7 +2860,7 @@ fn load_replay_batches_from_store(
 ) -> Result<(Vec<ReplayBatch>, StoredLeafEmbeddingProvider), RuntimeError> {
     let Some(mutable_ref_store) = io.mutable_ref_store else {
         return Err(RuntimeError::MissingReplayJournalHead {
-            path: "<unresolved block store root>".into(),
+            path: "<unresolved mutable ref>".into(),
         });
     };
     load_replay_batches_from_journal(
@@ -2773,6 +2882,7 @@ async fn load_replay_batches_from_store_async(
     tokio::task::spawn_blocking(move || {
         let io = RuntimeIo {
             mutable_ref_store: Some(&mutable_ref_store),
+            mutable_ref_metadata: None,
             progress: &progress,
         };
         load_replay_batches_from_store(&store, &embedding_spec, max_concurrency, io)
@@ -3411,6 +3521,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Mailbox {
                     path: mailbox_path
@@ -3465,6 +3576,7 @@ mod tests {
                 stage: ExecutionStage::ClusteringAndBlockAssembly,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: None,
+                ref_name: TEST_REF_NAME.into(),
                 items: vec![],
             },
         )
@@ -3503,6 +3615,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
             items: vec![BatchItemConfig::Document {
                 path: Path::new("doc.txt").to_path_buf(),
                 metadata: BTreeMap::new(),
@@ -3552,6 +3665,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Mailbox {
                     path: mailbox_path
@@ -3672,6 +3786,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            ref_name: TEST_REF_NAME.into(),
             items,
         };
         run_request(temp.path(), seed_request).await.unwrap();
@@ -3696,6 +3811,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            ref_name: TEST_REF_NAME.into(),
             items: vec![],
         };
 
@@ -3753,6 +3869,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
             items: vec![],
         }
     }
@@ -3776,6 +3893,7 @@ mod tests {
                 "encoding": request.embedding_spec.encoding
             },
             "block_size_target": request.block_size_target,
+            "ref_name": request.ref_name,
             "stage": "clustering-and-block-assembly",
             "items": []
         })
@@ -3842,10 +3960,16 @@ mod tests {
                 .unwrap();
             records.push(replay_journal_record_from_item(block_id, &item));
         }
-        append_replay_journal_records(
-            &store,
-            &local_mutable_ref_store_location(&root.join("blocks")),
-            &records,
+        let mutable_ref_store =
+            local_mutable_ref_store_location(&root.join("blocks"), TEST_REF_NAME);
+        let replay_journal_head_block_id =
+            append_replay_journal_records(&store, &mutable_ref_store, &records).unwrap();
+        update_mutable_ref_store(
+            &mutable_ref_store,
+            MutableRefStoreUpdate {
+                replay_journal_head_block_id,
+                ..MutableRefStoreUpdate::default()
+            },
         )
         .unwrap();
     }
@@ -4089,6 +4213,7 @@ mod tests {
             stage: ExecutionStage::IngestionAndEmbedding,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
                     path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
@@ -4137,6 +4262,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
                     path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
@@ -4170,6 +4296,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
             items: vec![],
         };
 
@@ -4217,6 +4344,7 @@ mod tests {
                 stage: ExecutionStage::FullPipeline,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: None,
+                ref_name: TEST_REF_NAME.into(),
                 items: vec![
                     BatchItemConfig::Document {
                         path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
@@ -4251,6 +4379,7 @@ mod tests {
                     "dims": 2,
                     "encoding": "f32le"
                 },
+                "ref_name": "test-branch",
                 "items": [
                     {
                         "kind": "document",
@@ -4304,6 +4433,7 @@ mod tests {
                     "dims": 2,
                     "encoding": "f32le"
                 },
+                "ref_name": "test-branch",
                 "items": [
                     { "kind": "document", "path": "alpha.txt" },
                     { "kind": "document", "path": "beta.txt" },
@@ -4355,6 +4485,7 @@ mod tests {
                     "dims": 2,
                     "encoding": "f32le"
                 },
+                "ref_name": "test-branch",
                 "items": [
                     { "kind": "document", "path": "alpha.txt" },
                     { "kind": "document", "path": "beta.txt" },
@@ -4405,6 +4536,7 @@ mod tests {
                     "encoding": "f32le"
                 },
                 "profile_version": "0.5.0",
+                "ref_name": "test-branch",
                 "items": [
                     { "kind": "document", "path": "alpha.txt" },
                     { "kind": "document", "path": "beta.txt" },
@@ -5025,6 +5157,7 @@ mod tests {
                     "dims": 2,
                     "encoding": "f32le"
                 },
+                "ref_name": "test-branch",
                 "items": [
                     { "kind": "document", "path": "alpha.txt" }
                 ]
@@ -5075,6 +5208,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(1),
+            ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
                     path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
@@ -5153,6 +5287,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(1),
+            ref_name: TEST_REF_NAME.into(),
             items: vec![BatchItemConfig::Mailbox {
                 path: mailbox_path
                     .strip_prefix(temp.path())
@@ -5211,6 +5346,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(3),
+            ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
                     path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
@@ -5270,6 +5406,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(3),
+            ref_name: TEST_REF_NAME.into(),
             items,
         };
 
@@ -5316,6 +5453,7 @@ mod tests {
             stage: ExecutionStage::IngestionAndEmbedding,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(3),
+            ref_name: TEST_REF_NAME.into(),
             items,
         };
 
@@ -5355,6 +5493,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
                     path: document_b.strip_prefix(temp.path()).unwrap().to_path_buf(),
@@ -5388,6 +5527,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
             items: vec![],
         };
 
@@ -5437,6 +5577,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            ref_name: TEST_REF_NAME.into(),
             items,
         };
         run_request(temp.path(), request).await.unwrap();
@@ -5462,9 +5603,10 @@ mod tests {
         };
         let progress: ProgressReporter = Arc::new(|_| {});
         let block_store_root = temp.path().join("blocks");
-        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root);
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
         let io = RuntimeIo {
             mutable_ref_store: Some(&mutable_ref_store),
+            mutable_ref_metadata: None,
             progress: &progress,
         };
         let (replay_batches, _) =
@@ -5514,12 +5656,13 @@ mod tests {
             stage: ExecutionStage::IngestionAndEmbedding,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            ref_name: TEST_REF_NAME.into(),
             items,
         };
         run_request(temp.path(), request).await.unwrap();
 
         let block_store_root = temp.path().join("blocks");
-        assert!(mutable_ref_store_path(&block_store_root).exists());
+        assert!(mutable_ref_store_path(&block_store_root, TEST_REF_NAME).exists());
 
         let block_store = ConfiguredBlockStore::from_environment(
             temp.path(),
@@ -5556,10 +5699,11 @@ mod tests {
         .unwrap();
         block_store.put(&Block::Leaf(invalid_leaf)).unwrap();
 
-        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root);
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
         let progress: ProgressReporter = Arc::new(|_| {});
         let io = RuntimeIo {
             mutable_ref_store: Some(&mutable_ref_store),
+            mutable_ref_metadata: None,
             progress: &progress,
         };
         let (replay_batches, _) =
@@ -5567,7 +5711,7 @@ mod tests {
         let replay_item_count: usize = replay_batches.iter().map(|batch| batch.items.len()).sum();
         assert_eq!(replay_item_count, document_names.len());
 
-        fs::remove_file(mutable_ref_store_path(&block_store_root)).unwrap();
+        fs::remove_file(mutable_ref_store_path(&block_store_root, TEST_REF_NAME)).unwrap();
         let error =
             load_replay_batches_from_store(&block_store, &embedding_spec, 8, io).unwrap_err();
         assert!(matches!(
@@ -5616,7 +5760,7 @@ mod tests {
         )
         .unwrap();
         let block_store_root = temp.path().join("blocks");
-        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root);
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
         prepare_mutable_ref_store(&mutable_ref_store).unwrap();
 
         let record = ReplayJournalRecord::ReplayInput {
@@ -5661,6 +5805,7 @@ mod tests {
             stage: ExecutionStage::IngestionAndEmbedding,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(1),
+            ref_name: TEST_REF_NAME.into(),
             items: vec![BatchItemConfig::Document {
                 path: document_path
                     .strip_prefix(temp.path())
@@ -5687,7 +5832,7 @@ mod tests {
         )
         .unwrap();
         let block_store_root = temp.path().join("blocks");
-        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root);
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
         let mut record = load_replay_journal_records(&block_store, &mutable_ref_store)
             .unwrap()
             .into_iter()
@@ -5709,6 +5854,7 @@ mod tests {
         let progress: ProgressReporter = Arc::new(|_| {});
         let io = RuntimeIo {
             mutable_ref_store: Some(&mutable_ref_store),
+            mutable_ref_metadata: None,
             progress: &progress,
         };
         let error =
@@ -5739,7 +5885,7 @@ mod tests {
         )
         .unwrap();
         let block_store_root = temp.path().join("blocks");
-        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root);
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
         prepare_mutable_ref_store(&mutable_ref_store).unwrap();
 
         let embedding_spec = EmbeddingSpec {
@@ -5802,14 +5948,33 @@ mod tests {
             replay_journal_record_from_item(block_one_id, &item_one),
             replay_journal_record_from_item(block_two_id, &item_two),
         ];
-        append_replay_journal_records(&block_store, &mutable_ref_store, &[records[0].clone()])
-            .unwrap();
-        append_replay_journal_records(&block_store, &mutable_ref_store, &[records[1].clone()])
-            .unwrap();
+        let replay_journal_head_block_id =
+            append_replay_journal_records(&block_store, &mutable_ref_store, &[records[0].clone()])
+                .unwrap();
+        update_mutable_ref_store(
+            &mutable_ref_store,
+            MutableRefStoreUpdate {
+                replay_journal_head_block_id,
+                ..MutableRefStoreUpdate::default()
+            },
+        )
+        .unwrap();
+        let replay_journal_head_block_id =
+            append_replay_journal_records(&block_store, &mutable_ref_store, &[records[1].clone()])
+                .unwrap();
+        update_mutable_ref_store(
+            &mutable_ref_store,
+            MutableRefStoreUpdate {
+                replay_journal_head_block_id,
+                ..MutableRefStoreUpdate::default()
+            },
+        )
+        .unwrap();
 
         let progress: ProgressReporter = Arc::new(|_| {});
         let io = RuntimeIo {
             mutable_ref_store: Some(&mutable_ref_store),
+            mutable_ref_metadata: None,
             progress: &progress,
         };
         let (replay_batches, _) =
@@ -5826,15 +5991,10 @@ mod tests {
     #[test]
     fn azure_mutable_ref_store_round_trips_json_state() {
         let server = spawn_ref_blob_server(3);
+        let ref_path = format!("{MUTABLE_REF_ROOT_DIR}/{TEST_REF_NAME}");
         let mutable_ref_store = MutableRefStoreLocation::AzureBlob {
-            url: format!(
-                "{}/archive-sync/{}?sig=test",
-                server.base_url, MUTABLE_REF_STORE_FILE_NAME
-            ),
-            display_path: format!(
-                "{}/archive-sync/{}",
-                server.base_url, MUTABLE_REF_STORE_FILE_NAME
-            ),
+            url: format!("{}/archive-sync/{}?sig=test", server.base_url, ref_path),
+            display_path: format!("{}/archive-sync/{}", server.base_url, ref_path),
         };
 
         assert_eq!(
@@ -5882,6 +6042,7 @@ mod tests {
                 stage: ExecutionStage::FullPipeline,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: Some(2),
+                ref_name: TEST_REF_NAME.into(),
                 items: vec![
                     BatchItemConfig::Document {
                         path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
@@ -5898,7 +6059,7 @@ mod tests {
         .unwrap();
 
         let block_store_root = temp.path().join("blocks");
-        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root);
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
         let refs_after_full = load_mutable_ref_store(&mutable_ref_store).unwrap();
 
         let clustering_summary = run_request(
@@ -5923,6 +6084,7 @@ mod tests {
                 stage: ExecutionStage::ClusteringAndBlockAssembly,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: Some(2),
+                ref_name: TEST_REF_NAME.into(),
                 items: vec![],
             },
         )
@@ -6003,6 +6165,7 @@ mod tests {
                 stage: ExecutionStage::FullPipeline,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: Some(2),
+                ref_name: TEST_REF_NAME.into(),
                 items: vec![
                     BatchItemConfig::Document {
                         path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
@@ -6019,7 +6182,7 @@ mod tests {
         .unwrap();
 
         let block_store_root = temp.path().join("blocks");
-        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root);
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
         let refs_after_full = load_mutable_ref_store(&mutable_ref_store).unwrap();
         assert_eq!(
             refs_after_full.current_root_block_id.as_deref(),
@@ -6049,6 +6212,7 @@ mod tests {
                 stage: ExecutionStage::IngestionAndEmbedding,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: Some(1),
+                ref_name: TEST_REF_NAME.into(),
                 items: vec![BatchItemConfig::Document {
                     path: document_c.strip_prefix(temp.path()).unwrap().to_path_buf(),
                     metadata: BTreeMap::new(),
@@ -6159,7 +6323,7 @@ mod tests {
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut request_line = String::new();
                 reader.read_line(&mut request_line).unwrap();
-                assert!(request_line.contains(MUTABLE_REF_STORE_FILE_NAME));
+                assert!(request_line.contains(&format!("{MUTABLE_REF_ROOT_DIR}/{TEST_REF_NAME}")));
                 let method = request_line
                     .split_whitespace()
                     .next()

@@ -161,9 +161,10 @@ publishes more than one journal block.
 
 **Pass condition:** each published journal block identifies its predecessor by
 hash when a predecessor exists, the latest journal head is discoverable through
-the repository-owned mutable reference mechanism, and representative audit
-entries record enough input identity, action-kind, and generated-output detail
-to reconstruct what completed work occurred.
+the repository-owned mutable reference mechanism at the selected
+`refs/{ref_name}` artifact, that artifact remains human-readable JSON, and
+representative audit entries record enough input identity, action-kind, and
+generated-output detail to reconstruct what completed work occurred.
 
 **Traces to:** RQ-INDEXER-003E2, RQ-INDEXER-003E3, RQ-INDEXER-003E4,
 DSG-LFI-001F1, DSG-LFI-001F2, DSG-LFI-001F3
@@ -176,7 +177,9 @@ stage that does not materialize a new final root.
 **Pass condition:** the root-materializing stage leaves the existing
 `BatchSummary` final-root output intact and publishes the same immutable root
 identity through the repository-owned mutable current-root reference; the later
-non-root-materializing stage does not rewrite that current-root reference.
+non-root-materializing stage does not rewrite that current-root reference, and
+the same `refs/{ref_name}` JSON artifact continues to carry the journal head,
+published root when present, and publication metadata.
 
 **Traces to:** RQ-INDEXER-003D, RQ-INDEXER-003E5, DSG-LFI-001D,
 DSG-LFI-001F4
