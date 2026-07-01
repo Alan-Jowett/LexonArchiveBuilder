@@ -54,6 +54,9 @@ const REPLAY_JOURNAL_MEDIA_TYPE: &str = "application/vnd.lexonarchivebuilder.rep
 const REPLAY_JOURNAL_SCHEMA_VERSION: u64 = 1;
 const REPLAY_JOURNAL_BLOCK_MAX_BYTES: usize = 64 * 1024 * 1024;
 const AZURE_BLOB_API_VERSION: &str = "2023-11-03";
+const MUTABLE_REF_STORE_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+const MUTABLE_REF_STORE_HTTP_RETRY_ATTEMPTS: usize = 3;
+const MUTABLE_REF_STORE_HTTP_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Copy)]
 struct RuntimeIo<'a> {
@@ -81,10 +84,27 @@ struct ReplayBatch {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct ReplayJournalRecord {
-    block_id: String,
-    metadata: Vec<(String, String)>,
-    content_ref: ReplayJournalContentRef,
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum ReplayJournalRecord {
+    ReplayInput {
+        step_kind: ReplayJournalStepKind,
+        block_id: String,
+        metadata: Vec<(String, String)>,
+        content_ref: ReplayJournalContentRef,
+    },
+    IndexingOutcome {
+        step_kind: ReplayJournalStepKind,
+        input_block_ids: Vec<String>,
+        generated_block_ids: Vec<String>,
+        root_block_id: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum ReplayJournalStepKind {
+    Embedding,
+    Indexing,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1595,7 +1615,10 @@ fn chunk_replay_journal_records(
         let audit_records = iter.by_ref().take(chunk_size).collect::<Vec<_>>();
         let items = audit_records
             .iter()
-            .map(replay_journal_record_to_item)
+            .map(|record| {
+                replay_journal_record_to_item(record)
+                    .expect("replay journal record batching only applies to replay inputs")
+            })
             .collect::<Vec<_>>();
         batches.push(ReplayBatch {
             items,
@@ -1629,7 +1652,12 @@ fn sort_replay_items(items: &mut [IndexItem<ContentRef>]) {
 }
 
 fn sort_replay_journal_records(records: &mut [ReplayJournalRecord]) {
-    records.sort_by_key(|record| replay_sort_key(&replay_journal_record_to_item(record)));
+    records.sort_by_key(|record| {
+        replay_sort_key(
+            &replay_journal_record_to_item(record)
+                .expect("replay journal record sorting only applies to replay inputs"),
+        )
+    });
 }
 
 fn replay_sort_key(item: &IndexItem<ContentRef>) -> (String, Vec<(String, String)>) {
@@ -1673,6 +1701,43 @@ fn mutable_ref_store_io_error(message: String) -> io::Error {
     io::Error::other(message)
 }
 
+fn mutable_ref_store_http_client() -> Result<Client, io::Error> {
+    Client::builder()
+        .timeout(MUTABLE_REF_STORE_HTTP_TIMEOUT)
+        .build()
+        .map_err(|error| mutable_ref_store_io_error(error.to_string()))
+}
+
+fn mutable_ref_store_request_with_retry<F>(
+    mut send: F,
+) -> Result<reqwest::blocking::Response, io::Error>
+where
+    F: FnMut(&Client) -> Result<reqwest::blocking::Response, reqwest::Error>,
+{
+    let client = mutable_ref_store_http_client()?;
+    let mut last_error = None;
+    for attempt in 0..MUTABLE_REF_STORE_HTTP_RETRY_ATTEMPTS {
+        match send(&client) {
+            Ok(response)
+                if attempt + 1 < MUTABLE_REF_STORE_HTTP_RETRY_ATTEMPTS
+                    && (response.status().is_server_error()
+                        || response.status() == StatusCode::REQUEST_TIMEOUT
+                        || response.status() == StatusCode::TOO_MANY_REQUESTS) =>
+            {
+                std::thread::sleep(MUTABLE_REF_STORE_HTTP_RETRY_DELAY);
+            }
+            Ok(response) => return Ok(response),
+            Err(error) if attempt + 1 < MUTABLE_REF_STORE_HTTP_RETRY_ATTEMPTS => {
+                last_error = Some(mutable_ref_store_io_error(error.to_string()));
+                std::thread::sleep(MUTABLE_REF_STORE_HTTP_RETRY_DELAY);
+            }
+            Err(error) => return Err(mutable_ref_store_io_error(error.to_string())),
+        }
+    }
+    Err(last_error
+        .unwrap_or_else(|| mutable_ref_store_io_error("mutable ref request failed".into())))
+}
+
 fn read_mutable_ref_store_bytes(
     location: &MutableRefStoreLocation,
 ) -> Result<Option<Vec<u8>>, RuntimeError> {
@@ -1689,14 +1754,16 @@ fn read_mutable_ref_store_bytes(
                 })
         }
         MutableRefStoreLocation::AzureBlob { url, display_path } => {
-            let response = Client::new()
-                .get(url)
-                .header("x-ms-version", AZURE_BLOB_API_VERSION)
-                .send()
-                .map_err(|error| RuntimeError::ReadMutableRefStore {
-                    path: display_path.clone(),
-                    source: mutable_ref_store_io_error(error.to_string()),
-                })?;
+            let response = mutable_ref_store_request_with_retry(|client| {
+                client
+                    .get(url)
+                    .header("x-ms-version", AZURE_BLOB_API_VERSION)
+                    .send()
+            })
+            .map_err(|source| RuntimeError::ReadMutableRefStore {
+                path: display_path.clone(),
+                source,
+            })?;
             match response.status() {
                 StatusCode::NOT_FOUND => Ok(None),
                 status if status.is_success() => response
@@ -1752,17 +1819,19 @@ fn write_mutable_ref_store_bytes(
             Ok(())
         }
         MutableRefStoreLocation::AzureBlob { url, display_path } => {
-            let response = Client::new()
-                .put(url)
-                .header("content-type", "application/json")
-                .header("x-ms-blob-type", "BlockBlob")
-                .header("x-ms-version", AZURE_BLOB_API_VERSION)
-                .body(encoded.to_vec())
-                .send()
-                .map_err(|error| RuntimeError::WriteMutableRefStore {
-                    path: display_path.clone(),
-                    source: mutable_ref_store_io_error(error.to_string()),
-                })?;
+            let response = mutable_ref_store_request_with_retry(|client| {
+                client
+                    .put(url)
+                    .header("content-type", "application/json")
+                    .header("x-ms-blob-type", "BlockBlob")
+                    .header("x-ms-version", AZURE_BLOB_API_VERSION)
+                    .body(encoded.to_vec())
+                    .send()
+            })
+            .map_err(|source| RuntimeError::WriteMutableRefStore {
+                path: display_path.clone(),
+                source,
+            })?;
             if response.status().is_success() {
                 Ok(())
             } else {
@@ -1850,7 +1919,7 @@ fn append_replay_journal_records(
                 .expect("pending_entries was just pushed");
             if pending_entries.is_empty() {
                 return Err(RuntimeError::WriteReplayJournal {
-                    block_id: overflow.block_id,
+                    block_id: replay_journal_record_label(&overflow).to_string(),
                     source: io::Error::new(
                         ErrorKind::InvalidData,
                         format!(
@@ -1936,7 +2005,7 @@ fn store_replay_journal_block(
     if body.len() > REPLAY_JOURNAL_BLOCK_MAX_BYTES {
         let block_id = entries
             .first()
-            .map(|entry| entry.block_id.clone())
+            .map(|entry| replay_journal_record_label(entry).to_string())
             .unwrap_or_else(|| "<empty>".into());
         return Err(RuntimeError::WriteReplayJournal {
             block_id,
@@ -2109,6 +2178,13 @@ fn typed_block_name(block: &v2::TypedBlock) -> &str {
     }
 }
 
+fn replay_journal_record_label(record: &ReplayJournalRecord) -> &str {
+    match record {
+        ReplayJournalRecord::ReplayInput { block_id, .. } => block_id,
+        ReplayJournalRecord::IndexingOutcome { root_block_id, .. } => root_block_id,
+    }
+}
+
 fn replay_journal_record_from_item(
     block_id: BlockHash,
     item: &IndexItem<ContentRef>,
@@ -2130,7 +2206,8 @@ fn replay_journal_record_from_item(
             chunk_index: *chunk_index,
         },
     };
-    ReplayJournalRecord {
+    ReplayJournalRecord::ReplayInput {
+        step_kind: ReplayJournalStepKind::Embedding,
         block_id: block_id.to_string(),
         metadata,
         content_ref,
@@ -2141,9 +2218,17 @@ fn normalize_replay_journal_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-fn replay_journal_record_to_item(record: &ReplayJournalRecord) -> IndexItem<ContentRef> {
-    let metadata = text_pairs_to_metadata(&record.metadata);
-    let content_ref = match &record.content_ref {
+fn replay_journal_record_to_item(record: &ReplayJournalRecord) -> Option<IndexItem<ContentRef>> {
+    let ReplayJournalRecord::ReplayInput {
+        metadata,
+        content_ref,
+        ..
+    } = record
+    else {
+        return None;
+    };
+    let metadata = text_pairs_to_metadata(metadata);
+    let content_ref = match content_ref {
         ReplayJournalContentRef::Document { path } => ContentRef::Document { path: path.into() },
         ReplayJournalContentRef::Inline { media_type, body } => ContentRef::Inline {
             media_type: media_type.clone(),
@@ -2157,10 +2242,10 @@ fn replay_journal_record_to_item(record: &ReplayJournalRecord) -> IndexItem<Cont
             chunk_index: *chunk_index,
         },
     };
-    IndexItem {
+    Some(IndexItem {
         metadata,
         content_ref,
-    }
+    })
 }
 
 fn text_pairs_to_metadata(pairs: &[(String, String)]) -> Vec<(ciborium::Value, ciborium::Value)> {
@@ -2195,11 +2280,39 @@ fn replay_journal_records_from_block_ids(
     Ok(records)
 }
 
-fn replay_journal_records_from_batches(batches: &[ReplayBatch]) -> Vec<ReplayJournalRecord> {
+fn replay_input_block_ids_from_batches(batches: &[ReplayBatch]) -> Vec<String> {
     batches
         .iter()
-        .flat_map(|batch| batch.audit_records.iter().cloned())
+        .flat_map(|batch| batch.audit_records.iter())
+        .filter_map(|record| match record {
+            ReplayJournalRecord::ReplayInput { block_id, .. } => Some(block_id.clone()),
+            ReplayJournalRecord::IndexingOutcome { .. } => None,
+        })
         .collect()
+}
+
+fn replay_journal_indexing_outcome_record(
+    input_block_ids: Vec<String>,
+    generated_block_ids: &[BlockHash],
+    root_id: &BlockHash,
+) -> ReplayJournalRecord {
+    let mut input_block_ids = input_block_ids;
+    input_block_ids.sort();
+    input_block_ids.dedup();
+
+    let mut generated_block_ids = generated_block_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    generated_block_ids.sort();
+    generated_block_ids.dedup();
+
+    ReplayJournalRecord::IndexingOutcome {
+        step_kind: ReplayJournalStepKind::Indexing,
+        input_block_ids,
+        generated_block_ids,
+        root_block_id: root_id.to_string(),
+    }
 }
 
 async fn build_leaf_blocks_concurrently(
@@ -2483,11 +2596,27 @@ where
     }
 
     if let Some(mutable_ref_store) = io.mutable_ref_store {
-        let records = if config.stage.includes_ingestion() {
+        let mut records = if config.stage.includes_ingestion() {
             replay_journal_records_from_block_ids(&result.block_ids, block_store, embedding_spec)?
         } else {
-            replay_journal_records_from_batches(&replay_batches)
+            Vec::new()
         };
+        let input_block_ids = if config.stage.includes_ingestion() {
+            records
+                .iter()
+                .filter_map(|record| match record {
+                    ReplayJournalRecord::ReplayInput { block_id, .. } => Some(block_id.clone()),
+                    ReplayJournalRecord::IndexingOutcome { .. } => None,
+                })
+                .collect::<Vec<_>>()
+        } else {
+            replay_input_block_ids_from_batches(&replay_batches)
+        };
+        records.push(replay_journal_indexing_outcome_record(
+            input_block_ids,
+            &result.block_ids,
+            &result.root_id,
+        ));
         append_replay_journal_records(block_store, mutable_ref_store, &records)?;
     }
     if let Some(mutable_ref_store) = io.mutable_ref_store {
@@ -2565,15 +2694,32 @@ fn load_replay_batches_from_journal(
         return Err(RuntimeError::NoClusterableBlocks);
     }
 
+    let mut latest_records_by_input = HashMap::new();
+    for record in records {
+        let Some(item) = replay_journal_record_to_item(&record) else {
+            continue;
+        };
+        latest_records_by_input.insert(replay_sort_key(&item), record);
+    }
+    let mut sorted_records = latest_records_by_input.into_values().collect::<Vec<_>>();
+    if sorted_records.is_empty() {
+        return Err(RuntimeError::NoClusterableBlocks);
+    }
+    sort_replay_journal_records(&mut sorted_records);
+
     let mut items = Vec::new();
     let mut embeddings_by_input_hash = HashMap::new();
-    for record in &records {
-        let journal_item = replay_journal_record_to_item(record);
-        let block_id = match parse_block_hash(&record.block_id) {
+    for record in &sorted_records {
+        let journal_item = replay_journal_record_to_item(record)
+            .expect("sorted replay journal records are replay inputs");
+        let ReplayJournalRecord::ReplayInput { block_id, .. } = record else {
+            unreachable!("non-replay inputs are filtered before clustering replay")
+        };
+        let block_id = match parse_block_hash(block_id) {
             Ok(block_id) => block_id,
             Err(error) => {
                 return Err(RuntimeError::InvalidReplayJournalHead {
-                    block_id: record.block_id.clone(),
+                    block_id: block_id.clone(),
                     message: error.to_string(),
                 });
             }
@@ -2621,8 +2767,6 @@ fn load_replay_batches_from_journal(
             items.len()
         ),
     );
-    let mut sorted_records = records;
-    sort_replay_journal_records(&mut sorted_records);
     let mut replay_batches = chunk_replay_journal_records(sorted_records, max_concurrency);
     annotate_submission_progress_batches(&mut replay_batches, SubmissionProgressKind::Replay);
     Ok((
@@ -3200,7 +3344,36 @@ mod tests {
         let stored_block_count_after_second = count_files_recursively(&temp.path().join("blocks"));
         second_server.join();
 
+        let clustering = run_request(
+            temp.path(),
+            BatchRequest {
+                environment: EnvironmentConfig::Local {
+                    block_store_root: Path::new("blocks").to_path_buf(),
+                    embedding: LocalEmbeddingConfig {
+                        base_url: String::new(),
+                        model: "all-MiniLM-L6-v2".into(),
+                        api_key_env: None,
+                        request_timeout_secs: 5,
+                        max_retries: 0,
+                        retry_delay_ms: 1,
+                    },
+                },
+                embedding_spec: EmbeddingSpecConfig {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                block_size_target: 65_536,
+                stage: ExecutionStage::ClusteringAndBlockAssembly,
+                profile_version: PUBLISHED_PROFILE_V0_1_0,
+                max_concurrency: None,
+                items: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
         assert_eq!(first.root_id, second.root_id);
+        assert_eq!(second.root_id, clustering.root_id);
         assert_eq!(first.block_ids, second.block_ids);
         assert_eq!(
             stored_block_count_after_second,
@@ -5315,12 +5488,14 @@ mod tests {
         };
 
         let record = replay_journal_record_from_item(BlockHash::from_bytes([7u8; 32]), &item);
-        assert_eq!(
-            record.content_ref,
-            ReplayJournalContentRef::Document {
-                path: "C:/temp/alpha.txt".into(),
-            }
-        );
+        assert!(matches!(
+            record,
+            ReplayJournalRecord::ReplayInput {
+                step_kind: ReplayJournalStepKind::Embedding,
+                content_ref: ReplayJournalContentRef::Document { path },
+                ..
+            } if path == "C:/temp/alpha.txt"
+        ));
     }
 
     #[test]
@@ -5345,7 +5520,8 @@ mod tests {
         let mutable_ref_store = local_mutable_ref_store_location(&block_store_root);
         prepare_mutable_ref_store(&mutable_ref_store).unwrap();
 
-        let record = ReplayJournalRecord {
+        let record = ReplayJournalRecord::ReplayInput {
+            step_kind: ReplayJournalStepKind::Embedding,
             block_id: BlockHash::from_bytes([9u8; 32]).to_string(),
             metadata: vec![],
             content_ref: ReplayJournalContentRef::Inline {
@@ -5418,9 +5594,11 @@ mod tests {
             .into_iter()
             .next()
             .unwrap();
-        record.content_ref = ReplayJournalContentRef::Document {
-            path: "bogus.txt".into(),
-        };
+        if let ReplayJournalRecord::ReplayInput { content_ref, .. } = &mut record {
+            *content_ref = ReplayJournalContentRef::Document {
+                path: "bogus.txt".into(),
+            };
+        }
         let forged_head = store_replay_journal_block(&block_store, None, vec![record]).unwrap();
         let mut refs = load_mutable_ref_store(&mutable_ref_store).unwrap();
         refs.replay_journal_head_block_id = Some(forged_head.to_string());
@@ -5444,7 +5622,7 @@ mod tests {
     }
 
     #[test]
-    fn journal_replay_preserves_duplicate_items_with_distinct_blocks() {
+    fn journal_replay_uses_latest_effective_item_for_duplicate_input_identity() {
         let temp = tempdir().unwrap();
         let block_store = ConfiguredBlockStore::from_environment(
             temp.path(),
@@ -5539,7 +5717,11 @@ mod tests {
             load_replay_batches_from_store(&block_store, &embedding_spec, 8, io).unwrap();
 
         let replay_item_count: usize = replay_batches.iter().map(|batch| batch.items.len()).sum();
-        assert_eq!(replay_item_count, 2);
+        assert_eq!(replay_item_count, 1);
+        assert!(matches!(
+            &replay_batches[0].audit_records[0],
+            ReplayJournalRecord::ReplayInput { block_id, .. } if block_id == &block_two_id.to_string()
+        ));
     }
 
     #[test]
@@ -5672,6 +5854,20 @@ mod tests {
         .unwrap();
         let records = load_replay_journal_records(&block_store, &mutable_ref_store).unwrap();
         assert_eq!(records.len(), 4);
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| matches!(
+                    record,
+                    ReplayJournalRecord::IndexingOutcome {
+                        step_kind: ReplayJournalStepKind::Indexing,
+                        root_block_id,
+                        ..
+                    } if root_block_id == &full_summary.root_id
+                ))
+                .count(),
+            2
+        );
         server.join();
     }
 
