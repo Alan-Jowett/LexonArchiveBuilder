@@ -19,6 +19,7 @@ on:
       - Cargo.lock
       - crates/**
       - docs/**
+      - docker-compose.yml
       - examples/**
       - hooks/**
       - infra/**

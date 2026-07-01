@@ -15,8 +15,8 @@ cd "$repo_root"
 
 md_line1='<!-- SPDX-License-Identifier: MIT'
 md_line2='  Copyright (c) 2026 LexonArchiveBuilder contributors -->'
-md_front_matter_line2='<!-- SPDX-License-Identifier: MIT'
-md_front_matter_line3='  Copyright (c) 2026 LexonArchiveBuilder contributors -->'
+md_front_matter_line2='# SPDX-License-Identifier: MIT'
+md_front_matter_line3='# Copyright (c) 2026 LexonArchiveBuilder contributors'
 slash_line1='// SPDX-License-Identifier: MIT'
 slash_line2='// Copyright (c) 2026 LexonArchiveBuilder contributors'
 hash_line1='# SPDX-License-Identifier: MIT'
