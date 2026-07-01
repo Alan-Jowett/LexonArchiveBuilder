@@ -134,9 +134,23 @@ from urllib.parse import urlsplit, urlunsplit
 
 container_sas_url = sys.argv[1]
 blob_path = sys.argv[2].strip('/')
+segments = []
+if blob_path:
+    for segment in blob_path.split('/'):
+        if not segment:
+            raise SystemExit('error: blob path must not contain empty path segments')
+        if segment in {'.', '..'}:
+            raise SystemExit('error: blob path must not contain "." or ".." path segments')
+        if any(ch.isspace() for ch in segment):
+            raise SystemExit('error: blob path must not contain whitespace')
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in segment):
+            raise SystemExit('error: blob path must not contain control characters')
+        if '\\' in segment:
+            raise SystemExit('error: blob path must not contain backslashes')
+        segments.append(segment)
 parts = urlsplit(container_sas_url)
 base_path = parts.path.rstrip('/')
-full_path = f"{base_path}/{blob_path}" if blob_path else base_path
+full_path = f"{base_path}/{'/'.join(segments)}" if segments else base_path
 print(urlunsplit((parts.scheme, parts.netloc, full_path, parts.query, parts.fragment)))
 PY
 }
