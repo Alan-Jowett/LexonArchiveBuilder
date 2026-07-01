@@ -8,7 +8,7 @@
 Validation patch for the approved email-artifact, chunk-level
 indexing, local filesystem block-store interoperability, replay-based
 streaming delegated indexing, stage-selectable execution, standalone
-clustering input discovery, published-profile API adoption,
+clustering input discovery, mutable current-root publication, published-profile API adoption,
 published-profile version selection, latest published-profile and telemetry
 compatibility, upstream regression assessment, replay-submission and
 streaming-status observability, clustering-failure diagnostics, rooted
@@ -145,44 +145,71 @@ Interrupt a representative ingestion-plus-embedding run after at least one
 replayable leaf output has been durably persisted but before the invocation has
 completed.
 
-**Pass condition:** previously committed replay-journal records remain readable,
-an incomplete trailing write does not invalidate earlier committed records, and
-subsequent resume logic can distinguish completed replayable work from
-uncommitted trailing progress.
+**Pass condition:** previously committed immutable replay-audit journal blocks
+remain readable from the last published journal head, incomplete unpublished
+progress does not invalidate earlier committed journal blocks, and subsequent
+resume logic can distinguish completed replayable work from unpublished
+trailing progress.
 
 **Traces to:** RQ-INDEXER-003E1, RQ-INDEXER-003E2, RQ-INDEXER-008,
 DSG-LFI-001F1
 
+### VAL-LFI-002H2
+
+Inspect a representative immutable replay-audit chain after an ingestion run
+publishes more than one journal block.
+
+**Pass condition:** each published journal block identifies its predecessor by
+hash when a predecessor exists, the latest journal head is discoverable through
+the repository-owned mutable reference mechanism, and representative audit
+entries record enough input identity, action-kind, and generated-output detail
+to reconstruct what completed work occurred.
+
+**Traces to:** RQ-INDEXER-003E2, RQ-INDEXER-003E3, RQ-INDEXER-003E4,
+DSG-LFI-001F1, DSG-LFI-001F2, DSG-LFI-001F3
+
+### VAL-LFI-002H3
+
+Run one successful root-materializing execution stage and one later execution
+stage that does not materialize a new final root.
+
+**Pass condition:** the root-materializing stage leaves the existing
+`BatchSummary` final-root output intact and publishes the same immutable root
+identity through the repository-owned mutable current-root reference; the later
+non-root-materializing stage does not rewrite that current-root reference.
+
+**Traces to:** RQ-INDEXER-003D, RQ-INDEXER-003E5, DSG-LFI-001D,
+DSG-LFI-001F4
+
 ### VAL-LFI-002I
 
-Run the clustering-plus-block-assembly stage against a configured local
-filesystem-backed block store that already contains representative delegated
-blocks, replay metadata, a valid replay journal, and an empty request item
-collection.
+Run the clustering-plus-block-assembly stage against a configured block store
+that already contains representative delegated blocks, replay metadata, a valid
+immutable replay-audit journal head, and an empty request item collection.
 
-**Pass condition:** LexonArchiveBuilder prefers the replay journal as the
-clustering-only replay-input source, reconstructs the deterministic replay input
-needed by the streaming indexer without rescanning the whole store in the common
-case, excludes artifacts outside the approved replay-input surface, and performs
-clustering or block assembly without requiring a prior LexonArchiveBuilder
-summary manifest.
+**Pass condition:** LexonArchiveBuilder reconstructs the deterministic replay
+input needed by the streaming indexer from the authoritative immutable replay-
+audit journal without rescanning the whole store, excludes artifacts outside
+the approved replay-input surface, and performs clustering or block assembly
+without requiring a prior LexonArchiveBuilder summary manifest.
 
 **Traces to:** RQ-INDEXER-002, RQ-INDEXER-003E, RQ-INDEXER-003E1,
-RQ-INDEXER-004F, RQ-INDEXER-010A, DSG-LFI-001E, DSG-LFI-001F,
-DSG-LFI-001F1
+RQ-INDEXER-003E3, RQ-INDEXER-004F, RQ-INDEXER-010A, DSG-LFI-001E,
+DSG-LFI-001F, DSG-LFI-001F1, DSG-LFI-001F2
 
 ### VAL-LFI-002I1
 
 Run the clustering-plus-block-assembly stage against a configured block store
-that contains representative delegated blocks but lacks a valid replay journal
-for the selected store snapshot.
+that contains representative delegated blocks but lacks a valid replay-audit
+journal head for the selected store snapshot.
 
-**Pass condition:** LexonArchiveBuilder falls back to the upstream block-iteration
-contract, reconstructs the deterministic replay input needed by the streaming
-indexer from the compatibility path, and preserves the same clustering-only
-result contract rather than failing solely because the journal is absent.
+**Pass condition:** LexonArchiveBuilder returns an explicit unsuccessful
+outcome that identifies the missing or invalid replay-audit journal discovery
+state rather than silently rescanning the whole store or producing a
+success-shaped clustering result.
 
-**Traces to:** RQ-INDEXER-003E, RQ-INDEXER-008, DSG-LFI-001E, DSG-LFI-001F
+**Traces to:** RQ-INDEXER-003E, RQ-INDEXER-003E1, RQ-INDEXER-003E3,
+DSG-LFI-001E, DSG-LFI-001F2
 
 ### VAL-LFI-002J
 
@@ -593,11 +620,10 @@ Run the clustering-only stage twice against an unchanged clustering-eligible
 block-store snapshot.
 
 **Pass condition:** the same clustering-eligible block set surfaced by the
-approved replay-input source produces the same logical clustering result on
-repeated standalone clustering runs, whether discovery uses the replay journal
-or the compatibility fallback path, without requiring repository-local
-duplicate-suppression logic, as long as the selected published profile version
-is unchanged.
+approved immutable replay-audit journal produces the same logical clustering
+result on repeated standalone clustering runs, without requiring repository-
+local duplicate-suppression logic, as long as the selected published profile
+version and journal head are unchanged.
 
 **Traces to:** RQ-INDEXER-003E, RQ-INDEXER-003F, RQ-INDEXER-003G,
 RQ-INDEXER-008, DSG-LFI-001E, DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-010

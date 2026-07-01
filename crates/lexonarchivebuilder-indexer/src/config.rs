@@ -254,14 +254,14 @@ impl EnvironmentConfig {
             Self::Local {
                 block_store_root, ..
             } => Some(resolve_path(request_dir, block_store_root)),
-            Self::LocalOverlay { block_store, .. } => Some(resolve_path(
-                request_dir,
-                block_store
-                    .filesystem_cache_root
-                    .as_ref()
-                    .expect("validated local-overlay requests include a filesystem cache root"),
-            )),
-            Self::Production { .. } => None,
+            Self::LocalOverlay { block_store, .. } | Self::Production { block_store, .. } => {
+                Some(resolve_path(
+                    request_dir,
+                    block_store.filesystem_cache_root.as_ref().expect(
+                        "validated overlay-backed requests include a filesystem cache root",
+                    ),
+                ))
+            }
         }
     }
 
@@ -858,6 +858,31 @@ mod tests {
                 panic!("expected local-overlay environment")
             }
         }
+    }
+
+    #[test]
+    fn production_resolve_block_store_root_uses_filesystem_cache_root() {
+        let request_dir = Path::new("request-root");
+        let environment = EnvironmentConfig::Production {
+            block_store: ProductionBlockStoreConfig {
+                container_sas_url: "https://example.blob.core.windows.net/archive-sync?sig=test"
+                    .into(),
+                prefix: None,
+                filesystem_cache_root: Some(PathBuf::from("cache")),
+                memory_cache_max_resident_blocks: Some(64),
+            },
+            embedding: ProductionEmbeddingConfig {
+                endpoint: "https://example.openai.azure.com".into(),
+                deployment: "embeddings".into(),
+                api_version: default_azure_api_version(),
+                api_key_env: None,
+            },
+        };
+
+        assert_eq!(
+            environment.resolve_block_store_root(request_dir),
+            Some(request_dir.join("cache"))
+        );
     }
 
     #[test]
