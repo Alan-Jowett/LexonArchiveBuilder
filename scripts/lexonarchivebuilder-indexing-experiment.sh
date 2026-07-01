@@ -171,7 +171,7 @@ fi
 download_blob_tree_if_present "$CONTAINER_SAS_URL" "$DATASET_REPLAY_JOURNAL_PREFIX" "$REPLAY_JOURNAL_DIR"
 
 if [[ "$BLOCK_STORE_TARGET" == "filesystem" ]] && [[ -z "$(find "$BLOCK_STORE_DIR" -type f -print -quit)" ]]; then
-  printf 'error: no reusable block-store data was found under blob prefix %s; run the embedding refresh workflow first\n' "$DATASET_BLOCK_STORE_PREFIX" >&2
+  printf 'error: no reusable filesystem block-store data was found under blob prefix %s; run embedding refresh with --block-store-target filesystem or rerun this command with --block-store-target overlay\n' "$DATASET_BLOCK_STORE_PREFIX" >&2
   exit 1
 fi
 
