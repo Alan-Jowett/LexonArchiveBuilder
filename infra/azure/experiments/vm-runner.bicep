@@ -48,7 +48,7 @@ var cloudInit = '''
 package_update: true
 runcmd:
   - |
-    set -euo pipefail
+    set -eu
     apt-get update
     apt-get install -y --no-install-recommends ca-certificates curl docker.io docker-compose-plugin python3
     systemctl enable docker
