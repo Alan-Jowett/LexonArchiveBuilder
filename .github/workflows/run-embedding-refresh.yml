@@ -346,13 +346,14 @@ jobs:
           mkdir -p embedding-refresh-artifact
 
           blob_url_for() {
-            python3 - "$CONTAINER_SAS_URL" "$1" <<'PY'
-            import sys
-            from urllib.parse import urlsplit, urlunsplit
-            parts = urlsplit(sys.argv[1])
-            path = f"{parts.path.rstrip('/')}/{sys.argv[2].lstrip('/')}"
-            print(urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment)))
-            PY
+            python3 -c "$(
+              printf '%s\n' \
+                'import sys' \
+                'from urllib.parse import urlsplit, urlunsplit' \
+                'parts = urlsplit(sys.argv[1])' \
+                'path = parts.path.rstrip("/") + "/" + sys.argv[2].lstrip("/")' \
+                'print(urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment)))'
+            )" "$CONTAINER_SAS_URL" "$1"
           }
 
           status_url="$(blob_url_for '${{ steps.prepare.outputs.artifact_prefix }}/status.json')"
