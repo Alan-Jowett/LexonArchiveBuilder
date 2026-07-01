@@ -125,20 +125,20 @@ var cloudInit = replace(
     replace(
       replace(
         replace(
-          cloudInitTemplate
-          '__WORKLOAD_ENVIRONMENT_FILE_BASE64__'
+          cloudInitTemplate,
+          '__WORKLOAD_ENVIRONMENT_FILE_BASE64__',
           workloadEnvironmentFileBase64
-        )
-        '__WORKLOAD_SCRIPT_BASE64__'
+        ),
+        '__WORKLOAD_SCRIPT_BASE64__',
         workloadScriptBase64
-      )
-      '__AZURE_SUBSCRIPTION_ID__'
+      ),
+      '__AZURE_SUBSCRIPTION_ID__',
       azureSubscriptionId
-    )
-    '__AZURE_RESOURCE_GROUP_NAME__'
+    ),
+    '__AZURE_RESOURCE_GROUP_NAME__',
     azureResourceGroupName
-  )
-  '__VM_NAME__'
+  ),
+  '__VM_NAME__',
   vmName
 )
 
