@@ -177,7 +177,6 @@ write_mailbox_request \
   "$REQUEST_PATH" \
   "block-store" \
   "$CONTAINER_SAS_URL" \
-  "$DATASET_BLOCK_STORE_PREFIX" \
   "$BLOCK_STORE_TARGET" \
   "$EMBEDDING_BASE_URL" \
   "ingestion-and-embedding" \

@@ -264,12 +264,11 @@ write_mailbox_request() {
   local request_path="$1"
   local block_store_root="$2"
   local container_sas_url="$3"
-  local block_store_blob_path="$4"
-  local block_store_target="$5"
-  local embedding_base_url="$6"
-  local stage="$7"
-  local profile_version="${8:-}"
-  local include_items="$9"
+  local block_store_target="$4"
+  local embedding_base_url="$5"
+  local stage="$6"
+  local profile_version="${7:-}"
+  local include_items="$8"
   local index mailbox_path month overlay_memory_cache_blocks
 
   if [[ "$block_store_target" == "overlay" ]]; then
