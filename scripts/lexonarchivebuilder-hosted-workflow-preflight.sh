@@ -24,6 +24,39 @@ require_commands() {
   done
 }
 
+base64_encode_file() {
+  local source_file="$1"
+  python3 - "$source_file" <<'PY'
+import base64
+import pathlib
+import sys
+
+print(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode('ascii'), end='')
+PY
+}
+
+base64_encode_text() {
+  local source_text="$1"
+  python3 - "$source_text" <<'PY'
+import base64
+import sys
+
+print(base64.b64encode(sys.argv[1].encode('utf-8')).decode('ascii'), end='')
+PY
+}
+
+base64_decode_to_file() {
+  local encoded_text="$1"
+  local destination_path="$2"
+  python3 - "$encoded_text" "$destination_path" <<'PY'
+import base64
+import pathlib
+import sys
+
+pathlib.Path(sys.argv[2]).write_bytes(base64.b64decode(sys.argv[1].encode('ascii')))
+PY
+}
+
 assert_file_equals() {
   local expected="$1"
   local actual="$2"
@@ -60,8 +93,8 @@ assert_env_roundtrip() {
       [[ "$PROFILE_VERSION" == "$expected_profile_version" ]] || { printf 'error: PROFILE_VERSION roundtrip failed\n' >&2; exit 1; }
     fi
 
-    printf '%s' "$HOSTED_EXPERIMENT_COMMON_SCRIPT_B64" | base64 -d > "$decoded_common_script"
-    printf '%s' "$HOSTED_EXPERIMENT_WORKLOAD_SCRIPT_B64" | base64 -d > "$decoded_workload_script"
+    base64_decode_to_file "$HOSTED_EXPERIMENT_COMMON_SCRIPT_B64" "$decoded_common_script"
+    base64_decode_to_file "$HOSTED_EXPERIMENT_WORKLOAD_SCRIPT_B64" "$decoded_workload_script"
   )
 
   assert_file_equals "$expected_common_script" "$decoded_common_script"
@@ -130,10 +163,10 @@ storage_account_name="lexonpreflightsa"
 ssh_public_key="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCtest-preflight"
 ssh_source_prefixes_json='["203.0.113.10/32"]'
 
-hosted_experiment_common_script_b64="$(base64 -w0 "$HOSTED_EXPERIMENT_COMMON_SCRIPT")"
-embedding_workload_script_b64="$(base64 -w0 "$EMBEDDING_WORKLOAD_SCRIPT")"
-indexing_workload_script_b64="$(base64 -w0 "$INDEXING_WORKLOAD_SCRIPT")"
-manifest_json_b64="$(printf '%s' "$manifest_json_minified" | base64 -w0)"
+hosted_experiment_common_script_b64="$(base64_encode_file "$HOSTED_EXPERIMENT_COMMON_SCRIPT")"
+embedding_workload_script_b64="$(base64_encode_file "$EMBEDDING_WORKLOAD_SCRIPT")"
+indexing_workload_script_b64="$(base64_encode_file "$INDEXING_WORKLOAD_SCRIPT")"
+manifest_json_b64="$(base64_encode_text "$manifest_json_minified")"
 
 embedding_env_file="$(
   hosted_workflow_render_embedding_workload_env_file \
