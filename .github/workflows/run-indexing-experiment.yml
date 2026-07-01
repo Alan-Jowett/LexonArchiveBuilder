@@ -32,7 +32,7 @@ name: Run indexing experiment
       block_store_target:
         description: Block-store target selection
         required: true
-        default: filesystem
+        default: overlay
         type: choice
         options:
           - filesystem
@@ -109,11 +109,6 @@ jobs:
 
           if [[ ! "$profile_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             printf 'profile_version must use MAJOR.MINOR.PATCH format\n' >&2
-            exit 1
-          fi
-
-          if [[ "$block_store_target" == 'overlay' ]]; then
-            printf 'TODO(overlay-block-store): overlay block-store workflow execution depends on the separate overlay implementation PR and is not wired in this change set yet\n' >&2
             exit 1
           fi
 

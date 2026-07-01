@@ -334,9 +334,9 @@ The hosted workflows always attempt to deallocate the experiment VM when the run
 concludes, but they intentionally leave the Azure resource group in place for
 manual inspection and cleanup.
 
-> **TODO(overlay-block-store):** the hosted workflow inputs already reserve a
-> `block_store_target` seam for a future overlay block store. Until that
-> separate implementation lands, only the filesystem-backed path is executable.
+The hosted experiment workflows now support both `filesystem` and `overlay`
+block-store targets, and default to `overlay` while preserving explicit
+filesystem selection for comparison or fallback runs.
 
 ## MCP MVP
 

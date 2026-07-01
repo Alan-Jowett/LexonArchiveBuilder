@@ -95,6 +95,10 @@ pub enum EnvironmentConfig {
         block_store_root: PathBuf,
         embedding: LocalEmbeddingConfig,
     },
+    LocalOverlay {
+        block_store: ProductionBlockStoreConfig,
+        embedding: LocalEmbeddingConfig,
+    },
     Production {
         block_store: ProductionBlockStoreConfig,
         embedding: ProductionEmbeddingConfig,
@@ -229,6 +233,12 @@ impl EnvironmentConfig {
                     self.local_embedding()?;
                 }
             }
+            Self::LocalOverlay { block_store, .. } => {
+                block_store.validate()?;
+                if stage.includes_ingestion() {
+                    self.local_embedding()?;
+                }
+            }
             Self::Production { block_store, .. } => {
                 block_store.validate()?;
             }
@@ -241,13 +251,20 @@ impl EnvironmentConfig {
             Self::Local {
                 block_store_root, ..
             } => Some(resolve_path(request_dir, block_store_root)),
+            Self::LocalOverlay { block_store, .. } => Some(resolve_path(
+                request_dir,
+                block_store
+                    .filesystem_cache_root
+                    .as_ref()
+                    .expect("validated local-overlay requests include a filesystem cache root"),
+            )),
             Self::Production { .. } => None,
         }
     }
 
     pub fn local_embedding(&self) -> Result<Option<LocalEmbeddingConfig>, ConfigError> {
         match self {
-            Self::Local { embedding, .. } => {
+            Self::Local { embedding, .. } | Self::LocalOverlay { embedding, .. } => {
                 if embedding.base_url.trim().is_empty() {
                     Err(ConfigError::MissingLocalEmbeddingBaseUrl)
                 } else {
@@ -789,7 +806,54 @@ mod tests {
                 );
                 assert_eq!(block_store.memory_cache_max_resident_blocks, Some(64));
             }
-            EnvironmentConfig::Local { .. } => panic!("expected production environment"),
+            EnvironmentConfig::Local { .. } | EnvironmentConfig::LocalOverlay { .. } => {
+                panic!("expected production environment")
+            }
+        }
+    }
+
+    #[test]
+    fn local_overlay_request_accepts_overlay_cache_layers_with_local_embedding() {
+        let request: BatchRequest = serde_json::from_value(json!({
+            "environment": {
+                "kind": "local-overlay",
+                "block_store": {
+                    "container_sas_url": "https://example.blob.core.windows.net/archive-sync/datasets/block-store?sig=test",
+                    "filesystem_cache_root": "cache",
+                    "memory_cache_max_resident_blocks": 64
+                },
+                "embedding": {
+                    "base_url": "http://localhost:8080"
+                }
+            },
+            "embedding_spec": {
+                "dims": 384,
+                "encoding": "f32le"
+            },
+            "stage": "ingestion-and-embedding",
+            "items": [{
+                "kind": "document",
+                "path": "docs/sample.txt"
+            }]
+        }))
+        .unwrap();
+
+        assert!(request.validate().is_ok());
+        match request.environment {
+            EnvironmentConfig::LocalOverlay {
+                block_store,
+                embedding,
+            } => {
+                assert_eq!(
+                    block_store.filesystem_cache_root,
+                    Some(PathBuf::from("cache"))
+                );
+                assert_eq!(block_store.memory_cache_max_resident_blocks, Some(64));
+                assert_eq!(embedding.base_url, "http://localhost:8080");
+            }
+            EnvironmentConfig::Local { .. } | EnvironmentConfig::Production { .. } => {
+                panic!("expected local-overlay environment")
+            }
         }
     }
 

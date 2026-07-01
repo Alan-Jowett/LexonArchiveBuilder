@@ -27,7 +27,7 @@ name: Run embedding refresh
       block_store_target:
         description: Block-store target selection
         required: true
-        default: filesystem
+        default: overlay
         type: choice
         options:
           - filesystem
@@ -100,11 +100,6 @@ jobs:
           fi
 
           runner_image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/lexonarchivebuilder-scale-test:${runner_image_tag}"
-
-          if [[ "$block_store_target" == 'overlay' ]]; then
-            printf 'TODO(overlay-block-store): overlay block-store workflow execution depends on the separate overlay implementation PR and is not wired in this change set yet\n' >&2
-            exit 1
-          fi
 
           manifest_json_minified="$(python3 - "$manifest_path" <<'PY'
           import json
