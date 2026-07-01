@@ -365,12 +365,12 @@ jobs:
           phase='unknown'
 
           for _ in $(seq 1 220); do
-            if curl --fail --silent --show-error --location "$bootstrap_status_url" --output embedding-refresh-artifact/bootstrap-status.json; then
+            if curl --fail --silent --location "$bootstrap_status_url" --output embedding-refresh-artifact/bootstrap-status.json 2>/dev/null; then
               cp embedding-refresh-artifact/bootstrap-status.json embedding-refresh-artifact/status.json
               phase='bootstrap'
               break
             fi
-            if curl --fail --silent --show-error --location "$status_url" --output embedding-refresh-artifact/status.json; then
+            if curl --fail --silent --location "$status_url" --output embedding-refresh-artifact/status.json 2>/dev/null; then
               phase='workload'
               break
             fi
