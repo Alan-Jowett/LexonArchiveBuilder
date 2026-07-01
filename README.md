@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT
+  Copyright (c) 2026 LexonArchiveBuilder contributors -->
+
 # LexonArchiveBuilder
 
 > LexonArchiveBuilder weaves mail archives, RFCs, and metadata into a unified, queryable knowledge layer atop LexonGraph, structuring threads, messages, and chunks into a coherent semantic fabric accessible through an MCP server.
@@ -68,6 +71,14 @@ Local and testing workflows are designed to be fully local:
 - the MCP server should remain usable from Linux or Windows environments
 
 This keeps local development fast, reproducible, and independent of cloud services.
+
+## Repository policy
+
+Tracked source, script, workflow, infrastructure, and Markdown files are expected to carry the repository SPDX/license header. To check staged changes locally, install the Git hook with:
+
+```bash
+git config core.hooksPath hooks
+```
 
 ## Production direction
 

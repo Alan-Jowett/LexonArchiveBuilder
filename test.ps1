@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonArchiveBuilder contributors
+
 param(
     [string[]]$Profiles = @(0..9 | ForEach-Object { '0.6.{0}' -f $_ }),
     [string]$RequestPath = 'C:\data3\request.json',

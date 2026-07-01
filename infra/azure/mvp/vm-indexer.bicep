@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 LexonArchiveBuilder contributors
+
 @description('Location for the indexing VM.')
 param location string
 
