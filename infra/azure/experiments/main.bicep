@@ -71,26 +71,16 @@ module storage 'storage.bicep' = {
     tags: tags
     storageAccountName: storageAccountName
     containerName: containerName
+    sasExpiry: sasExpiry
+    sasPermissions: sasPermissions
   }
 }
-
-resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
-  name: storage.outputs.storageAccountName
-}
-
-var containerSasToken = storageAccount.listServiceSas('2023-05-01', {
-  canonicalizedResource: '/blob/${storage.outputs.storageAccountName}/${storage.outputs.containerName}'
-  signedResource: 'c'
-  signedProtocol: 'https'
-  signedPermission: sasPermissions
-  signedExpiry: sasExpiry
-  keyToSign: 'key1'
-}).serviceSasToken
-var containerSasUrl = '${storage.outputs.blobEndpoint}${storage.outputs.containerName}?${containerSasToken}'
-var resolvedWorkloadEnvironmentFile = 'CONTAINER_SAS_URL=''${containerSasUrl}''
-STORAGE_ACCOUNT_NAME=''${storage.outputs.storageAccountName}''
-CONTAINER_NAME=''${storage.outputs.containerName}''
-${workloadEnvironmentFile}'
+var resolvedWorkloadEnvironmentFile = join([
+  concat('CONTAINER_SAS_URL=', '''', storage.outputs.containerSasUrl, '''')
+  concat('STORAGE_ACCOUNT_NAME=', '''', storageAccountName, '''')
+  concat('CONTAINER_NAME=', '''', containerName, '''')
+  workloadEnvironmentFile
+], '\n')
 
 module runner 'vm-runner.bicep' = {
   name: 'lab-experiment-runner-${deploymentSuffix}'

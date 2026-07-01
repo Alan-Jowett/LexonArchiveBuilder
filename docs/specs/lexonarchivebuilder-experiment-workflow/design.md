@@ -333,6 +333,50 @@ consumers.
 
 **Traces to:** RQ-EXP-015, RQ-EXP-016, RQ-EXP-014A
 
+### DSG-EXP-011A `Bootstrap-owned failure diagnostics`
+
+The embedding-refresh workflow adds a bootstrap-owned diagnostic publication
+path that exists before control reaches the inner
+`lexonarchivebuilder-embedding-refresh.sh` cleanup trap.
+
+That design separates two failure phases:
+
+1. **bootstrap failure** before the inner workload-owned status/upload path is
+   active
+2. **workload failure** after the inner workload-owned status/upload path is
+   active
+
+For the bootstrap-failure phase, the VM bootstrap/wrapper layer owns:
+
+1. writing a machine-readable bootstrap status artifact
+2. collecting best-effort early diagnostics from cloud-init, wrapper execution,
+   and available service/container failure evidence
+3. uploading those artifacts to the same Blob-backed run prefix used by the
+   workflow retrieval path
+
+This preserves the existing inner-script artifact contract while closing the
+observability gap that appears when failure occurs before that contract is live.
+
+**Traces to:** RQ-EXP-015A, RQ-EXP-017A
+
+### DSG-EXP-011B `Failure-phase-aware workflow retrieval`
+
+The GitHub-side embedding-refresh workflow treats bootstrap diagnostics as a
+first-class retrieval surface rather than assuming `status.json` only exists in
+the workload-owned shape.
+
+The design therefore requires the workflow wait/retrieval path to:
+
+1. recognize the bootstrap-owned machine-readable status artifact
+2. classify failure as bootstrap-phase or workload-phase
+3. retrieve the corresponding diagnostic files from Blob Storage
+4. republish that diagnostic bundle as workflow artifacts
+
+This keeps the operator-facing workflow surface usable without requiring
+immediate break-glass Azure inspection for early failures.
+
+**Traces to:** RQ-EXP-016A, RQ-EXP-017A
+
 ### DSG-EXP-012 `Outcome and cleanup contract`
 
 Each hosted workflow concludes by surfacing:
@@ -350,6 +394,37 @@ This design combines guest-side success-path shutdown with workflow-side cleanup
 fallback instead of trusting only one cleanup mechanism.
 
 **Traces to:** RQ-EXP-017, RQ-EXP-018, RQ-EXP-019
+
+### DSG-EXP-012A `Failure-path diagnostics before cleanup`
+
+Failure-path cleanup remains subordinate to diagnostic publication.
+
+The design requires the embedding-refresh bootstrap/wrapper path to attempt
+diagnostic capture and Blob publication before the workflow's default
+deallocation behavior removes the easiest source of failure evidence.
+
+This is a best-effort ordering guarantee, not a promise that every possible
+guest failure can always produce every diagnostic file.
+
+**Traces to:** RQ-EXP-015A, RQ-EXP-016A, RQ-EXP-018
+
+### DSG-EXP-012B `Opt-in debug retention`
+
+The hosted workflow family preserves automatic VM deallocation as the normal
+success and failure contract, but exposes an explicit debug-retention mode for
+manual investigation of failed runs.
+
+Within that mode:
+
+1. retention is caller-selected rather than automatic
+2. retention affects VM deallocation timing only for failures
+3. resource-group preservation remains unchanged
+
+This keeps cost and cleanup expectations stable for normal runs while giving
+operators an approved path for deeper investigation when automated diagnostics
+are insufficient.
+
+**Traces to:** RQ-EXP-018A, RQ-EXP-019
 
 ## Traceability
 
@@ -369,4 +444,8 @@ fallback instead of trusting only one cleanup mechanism.
 | DSG-EXP-010 | RQ-EXP-012, RQ-EXP-017, RQ-EXP-021 |
 | DSG-EXP-010A | RQ-EXP-008A, RQ-EXP-008B, RQ-EXP-012, RQ-EXP-020 |
 | DSG-EXP-011 | RQ-EXP-015, RQ-EXP-016, RQ-EXP-014A |
+| DSG-EXP-011A | RQ-EXP-015A, RQ-EXP-017A |
+| DSG-EXP-011B | RQ-EXP-016A, RQ-EXP-017A |
 | DSG-EXP-012 | RQ-EXP-017, RQ-EXP-018, RQ-EXP-019 |
+| DSG-EXP-012A | RQ-EXP-015A, RQ-EXP-016A, RQ-EXP-018 |
+| DSG-EXP-012B | RQ-EXP-018A, RQ-EXP-019 |

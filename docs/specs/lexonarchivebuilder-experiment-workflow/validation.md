@@ -156,6 +156,28 @@ state.
 
 **Traces to:** RQ-EXP-015, RQ-EXP-016, DSG-EXP-011
 
+### VAL-EXP-010A
+
+Inspect the embedding-refresh failure path before the inner workload-owned
+status/upload contract becomes active.
+
+**Pass condition:** when bootstrap fails before the inner embedding script can
+publish its normal `status.json`, the VM/bootstrap layer still publishes a
+machine-readable status artifact plus a Blob-backed diagnostic bundle that
+distinguishes bootstrap failure from later workload failure.
+
+**Traces to:** RQ-EXP-015A, RQ-EXP-017A, DSG-EXP-011A
+
+### VAL-EXP-010B
+
+Inspect the GitHub-side embedding-refresh retrieval path for early failures.
+
+**Pass condition:** the workflow can retrieve bootstrap-owned failure artifacts
+from Blob Storage and republish them as GitHub workflow artifacts without
+requiring manual Azure guest inspection as the primary diagnostic path.
+
+**Traces to:** RQ-EXP-016A, RQ-EXP-017A, DSG-EXP-011B
+
 ### VAL-EXP-011
 
 Inspect workflow cleanup behavior on both success and failure paths.
@@ -164,6 +186,18 @@ Inspect workflow cleanup behavior on both success and failure paths.
 neither workflow deletes the Azure resource group automatically.
 
 **Traces to:** RQ-EXP-018, RQ-EXP-019, DSG-EXP-012
+
+### VAL-EXP-011A
+
+Inspect embedding-refresh failure cleanup behavior with and without the
+debug-retention mode enabled.
+
+**Pass condition:** the default failure path attempts diagnostic publication
+before deallocation and still deallocates automatically, while the explicit
+debug-retention mode preserves or delays VM deallocation for failed runs without
+introducing automatic resource-group deletion.
+
+**Traces to:** RQ-EXP-015A, RQ-EXP-016A, RQ-EXP-018A, RQ-EXP-019, DSG-EXP-012A, DSG-EXP-012B
 
 ### VAL-EXP-012
 

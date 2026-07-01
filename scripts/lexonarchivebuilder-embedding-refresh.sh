@@ -128,6 +128,7 @@ cleanup() {
   local manifest_blob="${ARTIFACT_PREFIX}/manifest.json"
   local status_block_store_prefix="$DATASET_BLOCK_STORE_PREFIX"
   local block_store_location="$DATASET_BLOCK_STORE_PREFIX"
+  local status_extra_json
 
   if [[ "$BLOCK_STORE_TARGET" == "overlay" ]]; then
     status_block_store_prefix=""
@@ -138,6 +139,23 @@ cleanup() {
     SUCCESS=true
   fi
 
+  status_extra_json="$(
+    python3 - "$BLOCK_STORE_TARGET" "$block_store_location" "$status_block_store_prefix" "$DATASET_REPLAY_JOURNAL_PREFIX" "$MANIFEST_CONTAINER_NAME" <<'PY'
+import json
+import sys
+
+block_store_target, block_store_location, dataset_block_store_prefix, dataset_replay_journal_prefix, container_name = sys.argv[1:6]
+print(json.dumps({
+    "phase": "workload",
+    "block_store_target": block_store_target,
+    "block_store_location": block_store_location,
+    "dataset_block_store_prefix": dataset_block_store_prefix,
+    "dataset_replay_journal_prefix": dataset_replay_journal_prefix,
+    "container_name": container_name,
+}, sort_keys=True))
+PY
+  )"
+
   write_status_json \
     "$STATUS_PATH" \
     "embedding-refresh" \
@@ -145,7 +163,7 @@ cleanup() {
     "$SUCCESS" \
     "$MANIFEST_PATH" \
     "$ARTIFACT_PREFIX" \
-    "{\"block_store_target\": \"$(json_escape "$BLOCK_STORE_TARGET")\", \"block_store_location\": \"$(json_escape "$block_store_location")\", \"dataset_block_store_prefix\": \"$(json_escape "$status_block_store_prefix")\", \"dataset_replay_journal_prefix\": \"$(json_escape "$DATASET_REPLAY_JOURNAL_PREFIX")\", \"container_name\": \"$(json_escape "$MANIFEST_CONTAINER_NAME")\"}"
+    "$status_extra_json"
 
   if [[ -f "$SUMMARY_PATH" ]]; then
     upload_file_to_blob "$SUMMARY_PATH" "$CONTAINER_SAS_URL" "$summary_blob"

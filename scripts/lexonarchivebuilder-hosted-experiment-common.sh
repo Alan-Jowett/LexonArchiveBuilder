@@ -341,7 +341,10 @@ write_status_json() {
   local success_flag="$4"
   local manifest_path="$5"
   local artifact_prefix="$6"
-  local extra_json="${7:-{}}"
+  local extra_json="${7:-}"
+  if [[ -z "$extra_json" ]]; then
+    extra_json='{}'
+  fi
 
   python3 - "$status_path" "$workflow_name" "$run_name" "$success_flag" "$manifest_path" "$artifact_prefix" "$extra_json" <<'PY'
 import json

@@ -35,6 +35,11 @@ name: Run embedding refresh
         options:
           - filesystem
           - overlay
+      debug_retain_failed_vm:
+        description: Keep failed VM allocated for break-glass investigation
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -83,6 +88,7 @@ jobs:
           SSH_PUBLIC_KEY_INPUT: ${{ inputs.ssh_public_key }}
           SSH_SOURCE_PREFIXES_INPUT: ${{ inputs.ssh_source_prefixes }}
           BLOCK_STORE_TARGET_INPUT: ${{ inputs.block_store_target }}
+          DEBUG_RETAIN_FAILED_VM_INPUT: ${{ inputs.debug_retain_failed_vm }}
         run: |
           set -euo pipefail
 
@@ -96,6 +102,7 @@ jobs:
           block_store_target="$BLOCK_STORE_TARGET_INPUT"
           runner_image_tag="$RUNNER_IMAGE_TAG_INPUT"
           ssh_public_key="$SSH_PUBLIC_KEY_INPUT"
+          debug_retain_failed_vm="$DEBUG_RETAIN_FAILED_VM_INPUT"
 
           if [[ ! "$runner_image_tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
             printf 'runner_image_tag must be a valid Docker tag (1-128 chars: letters, digits, underscores, periods, or hyphens)\n' >&2
@@ -141,6 +148,8 @@ jobs:
           )"
           manifest_hash="$(printf '%s' "$manifest_json_minified" | sha256sum | cut -c1-10)"
           repo_hash="$(printf '%s' "$GITHUB_REPOSITORY" | sha256sum | cut -c1-6)"
+          hosted_experiment_common_script_b64="$(base64 -w0 scripts/lexonarchivebuilder-hosted-experiment-common.sh)"
+          hosted_experiment_workload_script_b64="$(base64 -w0 scripts/lexonarchivebuilder-embedding-refresh.sh)"
           container_name="$(python3 - "$manifest_path" <<'PY'
           import json
           import sys
@@ -169,27 +178,30 @@ jobs:
               printf 'ssh_public_key is required when ssh_source_prefixes enables SSH access\n' >&2
               exit 1
             fi
-            ssh_prefixes_json="$(python3 - "$ssh_prefixes_input" <<'PY'
-            import ipaddress
-            import json
-            import sys
-
-            raw = sys.argv[1]
-            items = [entry.strip() for entry in raw.split(',') if entry.strip()]
-            if not items:
-                raise SystemExit('ssh_source_prefixes must contain at least one CIDR when SSH access is enabled')
-
-            validated = []
-            for entry in items:
-                if '/' not in entry:
-                    raise SystemExit(f'ssh_source_prefixes entry "{entry}" must use CIDR notation')
-                try:
-                    validated.append(str(ipaddress.ip_network(entry, strict=False)))
-                except ValueError as exc:
-                    raise SystemExit(f'ssh_source_prefixes entry "{entry}" is not a valid CIDR: {exc}')
-
-            print(json.dumps(validated))
-          PY
+            ssh_prefixes_json="$(
+              python3 -c "$(
+                printf '%s\n' \
+                  'import ipaddress' \
+                  'import json' \
+                  'import sys' \
+                  '' \
+                  'raw = sys.argv[1]' \
+                  'items = [entry.strip() for entry in raw.split(",") if entry.strip()]' \
+                  'if not items:' \
+                  '    raise SystemExit("ssh_source_prefixes must contain at least one CIDR when SSH access is enabled")' \
+                  '' \
+                  'validated = []' \
+                  'for entry in items:' \
+                  '    if "/" not in entry:' \
+                  "        raise SystemExit(f'ssh_source_prefixes entry \\\"{entry}\\\" must use CIDR notation')" \
+                  '    try:' \
+                  '        validated.append(str(ipaddress.ip_network(entry, strict=False)))' \
+                  '    except ValueError as exc:' \
+                  "        raise SystemExit(f'ssh_source_prefixes entry \\\"{entry}\\\" is not a valid CIDR: {exc}')" \
+                  '' \
+                  'print(json.dumps(validated))'
+              )" \
+              "$ssh_prefixes_input"
             )"
           elif [[ -z "$ssh_public_key" ]]; then
             ssh_key_path="${RUNNER_TEMP}/lexonarchivebuilder-embedding-refresh-ssh-key"
@@ -207,10 +219,13 @@ jobs:
               "RUNNER_IMAGE='${runner_image}'" \
               "STAPI_IMAGE='${STAPI_IMAGE}'" \
               "MANIFEST_JSON_B64='${manifest_json_b64}'" \
+              "HOSTED_EXPERIMENT_COMMON_SCRIPT_B64='${hosted_experiment_common_script_b64}'" \
+              "HOSTED_EXPERIMENT_WORKLOAD_SCRIPT_B64='${hosted_experiment_workload_script_b64}'" \
               "DATASET_BLOCK_STORE_PREFIX='${dataset_block_store_prefix}'" \
               "DATASET_REPLAY_JOURNAL_PREFIX='${dataset_replay_journal_prefix}'" \
               "ARTIFACT_PREFIX='${artifact_prefix}'" \
-              "BLOCK_STORE_TARGET='${block_store_target}'"
+              "BLOCK_STORE_TARGET='${block_store_target}'" \
+              "DEBUG_RETAIN_ON_FAILURE='${debug_retain_failed_vm}'"
           )"
 
           python3 - "$container_name" "$storage_account_name" "$resource_group" "$vnet_name" "$vm_name" "$sas_expiry" "$ssh_public_key" "$enable_ssh_access" "$ssh_prefixes_json" "$workload_env_file" "$workload_script_path" > deployment.parameters.json <<'PY'
@@ -334,19 +349,29 @@ jobs:
           set -euo pipefail
           mkdir -p embedding-refresh-artifact
 
-          status_url="$(python3 - "$CONTAINER_SAS_URL" '${{ steps.prepare.outputs.artifact_prefix }}/status.json' <<'PY'
-          import sys
-          from urllib.parse import urlsplit, urlunsplit
+          blob_url_for() {
+            python3 -c "$(
+              printf '%s\n' \
+                'import sys' \
+                'from urllib.parse import urlsplit, urlunsplit' \
+                'parts = urlsplit(sys.argv[1])' \
+                'path = parts.path.rstrip("/") + "/" + sys.argv[2].lstrip("/")' \
+                'print(urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment)))'
+            )" "$CONTAINER_SAS_URL" "$1"
+          }
 
-          container_sas_url, blob_path = sys.argv[1:3]
-          parts = urlsplit(container_sas_url)
-          path = f"{parts.path.rstrip('/')}/{blob_path.lstrip('/')}"
-          print(urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment)))
-          PY
-          )"
+          status_url="$(blob_url_for '${{ steps.prepare.outputs.artifact_prefix }}/status.json')"
+          bootstrap_status_url="$(blob_url_for '${{ steps.prepare.outputs.artifact_prefix }}/bootstrap-status.json')"
+          phase='unknown'
 
           for _ in $(seq 1 220); do
-            if curl --fail --silent --show-error --location "$status_url" --output embedding-refresh-artifact/status.json; then
+            if curl --fail --silent --location "$bootstrap_status_url" --output embedding-refresh-artifact/bootstrap-status.json 2>/dev/null; then
+              cp embedding-refresh-artifact/bootstrap-status.json embedding-refresh-artifact/status.json
+              phase='bootstrap'
+              break
+            fi
+            if curl --fail --silent --location "$status_url" --output embedding-refresh-artifact/status.json 2>/dev/null; then
+              phase='workload'
               break
             fi
             sleep 60
@@ -357,42 +382,44 @@ jobs:
             exit 1
           fi
 
-          summary_url="$(python3 - "$CONTAINER_SAS_URL" '${{ steps.prepare.outputs.artifact_prefix }}/summary.json' <<'PY'
-          import sys
-          from urllib.parse import urlsplit, urlunsplit
-          parts = urlsplit(sys.argv[1])
-          path = f"{parts.path.rstrip('/')}/{sys.argv[2].lstrip('/')}"
-          print(urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment)))
-          PY
-          )"
-          manifest_url="$(python3 - "$CONTAINER_SAS_URL" '${{ steps.prepare.outputs.artifact_prefix }}/manifest.json' <<'PY'
-          import sys
-          from urllib.parse import urlsplit, urlunsplit
-          parts = urlsplit(sys.argv[1])
-          path = f"{parts.path.rstrip('/')}/{sys.argv[2].lstrip('/')}"
-          print(urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment)))
-          PY
-          )"
+          summary_url="$(blob_url_for '${{ steps.prepare.outputs.artifact_prefix }}/summary.json')"
+          manifest_url="$(blob_url_for '${{ steps.prepare.outputs.artifact_prefix }}/manifest.json')"
+          bootstrap_log_url="$(blob_url_for '${{ steps.prepare.outputs.artifact_prefix }}/bootstrap-wrapper.log')"
+          bootstrap_cloud_init_url="$(blob_url_for '${{ steps.prepare.outputs.artifact_prefix }}/bootstrap-cloud-init-output.log')"
+          bootstrap_stapi_url="$(blob_url_for '${{ steps.prepare.outputs.artifact_prefix }}/bootstrap-stapi.log')"
 
           curl --fail --silent --show-error --location "$summary_url" --output embedding-refresh-artifact/summary.json || true
           curl --fail --silent --show-error --location "$manifest_url" --output embedding-refresh-artifact/manifest.json || true
+          curl --fail --silent --show-error --location "$bootstrap_status_url" --output embedding-refresh-artifact/bootstrap-status.json || true
+          curl --fail --silent --show-error --location "$bootstrap_log_url" --output embedding-refresh-artifact/bootstrap-wrapper.log || true
+          curl --fail --silent --show-error --location "$bootstrap_cloud_init_url" --output embedding-refresh-artifact/bootstrap-cloud-init-output.log || true
+          curl --fail --silent --show-error --location "$bootstrap_stapi_url" --output embedding-refresh-artifact/bootstrap-stapi.log || true
 
-          success_flag="$(python3 - embedding-refresh-artifact/status.json <<'PY'
-          import json
-          import sys
-          with open(sys.argv[1], 'r', encoding='utf-8') as handle:
-              print('true' if json.load(handle).get('success') else 'false')
-          PY
-          )"
+          readarray -t status_fields < <(
+            python3 -c "$(
+              printf '%s\n' \
+                'import json' \
+                'import sys' \
+                'with open(sys.argv[1], "r", encoding="utf-8") as handle:' \
+                '    payload = json.load(handle)' \
+                'print("true" if payload.get("success") else "false")' \
+                'print(payload.get("phase") or sys.argv[2])'
+            )" \
+            embedding-refresh-artifact/status.json \
+            "$phase"
+          )
+          success_flag="${status_fields[0]}"
+          phase="${status_fields[1]}"
 
           echo "success=$success_flag" >>"$GITHUB_OUTPUT"
+          echo "phase=$phase" >>"$GITHUB_OUTPUT"
           if [[ "$success_flag" != 'true' ]]; then
-            printf 'Embedding refresh reported failure\n' >&2
+            printf 'Embedding refresh reported %s failure\n' "$phase" >&2
             exit 1
           fi
 
       - name: Always deallocate VM
-        if: always()
+        if: ${{ always() && !(failure() && inputs.debug_retain_failed_vm) }}
         shell: bash
         run: |
           set -euo pipefail
@@ -426,4 +453,6 @@ jobs:
             echo "| Public IP | \`${{ steps.deploy.outputs.vmPublicIpAddress }}\` |"
             echo "| Run name | \`${{ steps.prepare.outputs.run_name }}\` |"
             echo "| Artifact prefix | \`${{ steps.prepare.outputs.artifact_prefix }}\` |"
+            echo "| Failure phase | \`${{ steps.wait.outputs.phase }}\` |"
+            echo "| Debug retain failed VM | \`${{ inputs.debug_retain_failed_vm }}\` |"
           } >>"$GITHUB_STEP_SUMMARY"
