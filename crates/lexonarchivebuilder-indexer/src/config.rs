@@ -818,7 +818,7 @@ mod tests {
             "environment": {
                 "kind": "local-overlay",
                 "block_store": {
-                    "container_sas_url": "https://example.blob.core.windows.net/archive-sync/datasets/block-store?sig=test",
+                    "container_sas_url": "https://example.blob.core.windows.net/archive-sync?sig=test",
                     "filesystem_cache_root": "cache",
                     "memory_cache_max_resident_blocks": 64
                 },

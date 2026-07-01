@@ -29,10 +29,10 @@
 - **UR-EXP-19 [KNOWN]:** Do not solve the separate LAB block-storage-abstraction effort here.
 - **UR-EXP-20 [INFERRED]:** The hosted workflows should authenticate to Azure through repository-owned GitHub Actions federation rather than a developer-local Azure session.
 - **UR-EXP-21 [INFERRED]:** The new hosted automation boundary should orchestrate existing repository experiment/runtime surfaces without redefining indexer semantics, scale-test semantics, MCP semantics, or production-serving semantics.
-- **UR-EXP-22 [ASSUMPTION]:** A new block-store type is being introduced in another pull request as an overlay of memory, local filesystem, and Azure Blob Storage where writes always persist to Azure and reads are served from the first layer that has the data.
-- **UR-EXP-23 [KNOWN]:** All relevant repository components for this experiment path should be able to target either the existing regular filesystem block store or the future overlay block store.
-- **UR-EXP-24 [KNOWN]:** The overlay block-store implementation itself is out of scope for this increment because it is being built in another pull request.
-- **UR-EXP-25 [KNOWN]:** Any overlay block-store integration points introduced by this increment should remain clearly marked TODOs until the separate pull request lands.
+- **UR-EXP-22 [KNOWN]:** The approved overlay block-store shape is memory cache plus local filesystem cache plus Azure Blob Storage backing, with writes persisting to Azure and reads served from the first layer that has the data.
+- **UR-EXP-23 [KNOWN]:** All relevant repository components for this experiment path should be able to target either the existing regular filesystem block store or the approved overlay block store.
+- **UR-EXP-24 [KNOWN]:** This increment should consume the landed overlay block-store implementation rather than redesigning or replacing it.
+- **UR-EXP-25 [KNOWN]:** Hosted workflow changes should remove stale TODO-only overlay seams and instead use the approved executable overlay contract where that contract is now available.
 - **UR-EXP-26 [KNOWN]:** The indexing workflow should remain comparable to `test.ps1`, including the post-index quality/report step rather than only the clustering-and-block-assembly step.
 - **UR-EXP-27 [KNOWN]:** Enable the hosted workflow family to execute the overlay block-store path now that the overlay implementation is available.
 - **UR-EXP-28 [KNOWN]:** Keep both hosted block-store targets selectable, but make `overlay` the default target for hosted workflow runs.
