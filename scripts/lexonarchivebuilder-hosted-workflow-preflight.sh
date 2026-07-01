@@ -137,7 +137,7 @@ render_final_workload_env() {
   printf '%s' "${base_env_path}.final"
 }
 
-require_commands python3 base64 cmp
+require_commands python3 cmp
 
 MANIFEST_PATH="${REPO_ROOT}/examples/local/scale-test/manifests/ietf-mailing-lists.sample.json"
 EMBEDDING_BOOTSTRAP_SCRIPT="${REPO_ROOT}/infra/azure/experiments/embedding-refresh-bootstrap.sh"

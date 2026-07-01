@@ -70,6 +70,7 @@ runcmd:
     cat > /opt/lexonarchivebuilder/runner/render_workload_storage_env.py <<'PY'
     __RENDER_WORKLOAD_STORAGE_ENV_PY__
     PY
+    install -m 0600 /dev/null /opt/lexonarchivebuilder/runner/workload.env
     printf '%s' '__WORKLOAD_ENVIRONMENT_FILE_BASE64__' | base64 -d > /opt/lexonarchivebuilder/runner/workload.env
     printf '\n' >> /opt/lexonarchivebuilder/runner/workload.env
     python3 - '__CONTAINER_SAS_URL_BASE64__' '__STORAGE_ACCOUNT_NAME_BASE64__' '__CONTAINER_NAME_BASE64__' >> /opt/lexonarchivebuilder/runner/workload.env <<'PY'
@@ -89,7 +90,6 @@ runcmd:
     )
     PY
     printf '%s' '__WORKLOAD_SCRIPT_BASE64__' | base64 -d > /opt/lexonarchivebuilder/runner/workload.sh
-    chmod 0600 /opt/lexonarchivebuilder/runner/workload.env
     chmod 0644 /opt/lexonarchivebuilder/runner/render_workload_storage_env.py
     chmod 0755 /opt/lexonarchivebuilder/runner/workload.sh
     cat > /usr/local/bin/lexonarchivebuilder-runner-wrapper.sh <<'EOF'
