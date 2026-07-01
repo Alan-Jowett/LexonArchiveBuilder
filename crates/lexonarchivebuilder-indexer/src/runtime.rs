@@ -1,19 +1,20 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonArchiveBuilder contributors
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::future::Future;
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, Cursor, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
+use ciborium::Value;
 use lexongraph_block::{
-    Block, BlockError, BlockHash, EmbeddingSpec, LeafEntry, SerializedBlock, VERSION_1,
-    build_leaf_block, deserialize_block,
+    Block, BlockError, BlockHash, DecodedBlock, EmbeddingSpec, LeafEntry, SerializedBlock,
+    VERSION_1, VersionedBlock, build_leaf_block, deserialize_block, v2,
 };
-use lexongraph_block_store::{BlockStore, BlockStoreError};
+use lexongraph_block_store::{BlockStore, BlockStoreError, BlockStoreExt};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_streaming_indexer::{
     BuiltInPlanningDirection, ContentResolver, IndexItem, PlanningStage, PublishedIndexingProfile,
@@ -21,15 +22,19 @@ use lexongraph_streaming_indexer::{
     StreamingIndexingStatus, StreamingIndexingStatusObserver, StreamingIndexingStatusState,
     published_indexing_profile,
 };
+use reqwest::StatusCode;
+use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 
 use crate::block_store::ConfiguredBlockStore;
+#[cfg(test)]
+use crate::config::MUTABLE_REF_ROOT_DIR;
 use crate::config::{
     BatchItemConfig, BatchRequest, BatchSummary, ClusteringConfigOverrides, ConfigError,
-    ConfiguredClustering, ExecutionStage, metadata_to_text_map,
+    ConfiguredClustering, ExecutionStage, MutableRefStoreLocation, metadata_to_text_map,
 };
 use crate::embedding::{ConfiguredEmbeddingProvider, ConfiguredEmbeddingProviderError};
 use crate::mailbox::{MailboxExpansionError, expand_mailbox_item_with_stats};
@@ -44,16 +49,21 @@ type ProgressReporter = Arc<dyn Fn(String) + Send + Sync + 'static>;
 pub const INGESTION_ONLY_ROOT_ID_PLACEHOLDER: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
 const PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
-const REPLAY_JOURNAL_FILE_MAGIC: &[u8] = b"LABRJ1\0";
-const REPLAY_JOURNAL_SEGMENT_PREFIX: &str = "segment-";
-const REPLAY_JOURNAL_SEGMENT_EXTENSION: &str = "cbor";
-const REPLAY_JOURNAL_SEGMENT_MAX_BYTES: u64 = 64 * 1024 * 1024;
-const REPLAY_JOURNAL_RECORD_MAX_BYTES: usize =
-    (REPLAY_JOURNAL_SEGMENT_MAX_BYTES as usize) - REPLAY_JOURNAL_FILE_MAGIC.len() - 4;
+const REPLAY_JOURNAL_BLOCK_TYPE: &str = "lexonarchivebuilder.replay-journal";
+const REPLAY_JOURNAL_MEDIA_TYPE: &str = "application/vnd.lexonarchivebuilder.replay-journal+cbor";
+const REPLAY_JOURNAL_SCHEMA_VERSION: u64 = 1;
+const REPLAY_JOURNAL_BLOCK_MAX_BYTES: usize = 64 * 1024 * 1024;
+const AZURE_BLOB_API_VERSION: &str = "2023-11-03";
+const MUTABLE_REF_STORE_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+const MUTABLE_REF_STORE_HTTP_RETRY_ATTEMPTS: usize = 3;
+const MUTABLE_REF_STORE_HTTP_RETRY_DELAY: Duration = Duration::from_millis(500);
+#[cfg(test)]
+const TEST_REF_NAME: &str = "test-branch";
 
 #[derive(Clone, Copy)]
 struct RuntimeIo<'a> {
-    local_block_store_root: Option<&'a Path>,
+    mutable_ref_store: Option<&'a MutableRefStoreLocation>,
+    mutable_ref_metadata: Option<&'a BTreeMap<String, String>>,
     progress: &'a ProgressReporter,
 }
 
@@ -72,14 +82,53 @@ struct ConstructedBlocks {
 #[derive(Clone, Debug)]
 struct ReplayBatch {
     items: Vec<IndexItem<ContentRef>>,
+    audit_records: Vec<ReplayJournalRecord>,
     completion_message: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct ReplayJournalRecord {
-    block_id: String,
-    metadata: Vec<(String, String)>,
-    content_ref: ReplayJournalContentRef,
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum ReplayJournalRecord {
+    ReplayInput {
+        step_kind: ReplayJournalStepKind,
+        block_id: String,
+        metadata: Vec<(String, String)>,
+        content_ref: ReplayJournalContentRef,
+    },
+    IndexingOutcome {
+        step_kind: ReplayJournalStepKind,
+        input_block_ids: Vec<String>,
+        generated_block_ids: Vec<String>,
+        root_block_id: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum ReplayJournalStepKind {
+    Embedding,
+    Indexing,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct MutableRefStoreState {
+    current_root_block_id: Option<String>,
+    replay_journal_head_block_id: Option<String>,
+    metadata: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct MutableRefStoreUpdate {
+    current_root_block_id: Option<String>,
+    replay_journal_head_block_id: Option<String>,
+    metadata: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct ReplayJournalBlockBody {
+    schema_version: u64,
+    previous_block_id: Option<String>,
+    entries: Vec<ReplayJournalRecord>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -422,6 +471,8 @@ pub enum RuntimeError {
     MissingReplayMetadata { block_id: String },
     #[error("leaf-indexing worker task failed: {0}")]
     LeafTaskJoin(#[from] JoinError),
+    #[error("blocking mutable-ref task failed: {0}")]
+    BlockingMutableRefTaskJoin(JoinError),
     #[error("failed to write batch summary {path}: {source}")]
     WriteSummary {
         path: String,
@@ -441,21 +492,41 @@ pub enum RuntimeError {
         #[source]
         source: serde_json::Error,
     },
-    #[error("failed to prepare replay journal {path}: {source}")]
-    PrepareReplayJournal {
+    #[error("failed to prepare mutable ref store {path}: {source}")]
+    PrepareMutableRefStore {
         path: String,
         #[source]
         source: io::Error,
     },
-    #[error("failed to append replay journal {path}: {source}")]
+    #[error("failed to write mutable ref store {path}: {source}")]
+    WriteMutableRefStore {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to read mutable ref store {path}: {source}")]
+    ReadMutableRefStore {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to encode mutable ref store {path}: {message}")]
+    EncodeMutableRefStore { path: String, message: String },
+    #[error("failed to decode mutable ref store {path}: {message}")]
+    DecodeMutableRefStore { path: String, message: String },
+    #[error("replay journal head reference is missing from mutable ref store {path}")]
+    MissingReplayJournalHead { path: String },
+    #[error("replay journal head {block_id} is invalid: {message}")]
+    InvalidReplayJournalHead { block_id: String, message: String },
+    #[error("failed to append replay journal block {block_id}: {source}")]
     WriteReplayJournal {
-        path: String,
+        block_id: String,
         #[source]
         source: io::Error,
     },
-    #[error("failed to read replay journal {path}: {source}")]
+    #[error("failed to read replay journal block {block_id}: {source}")]
     ReadReplayJournal {
-        path: String,
+        block_id: String,
         #[source]
         source: io::Error,
     },
@@ -1305,19 +1376,23 @@ where
     let clustering = clustering_overrides.to_configured_clustering(request.profile_version)?;
     let stage = request.stage;
     let block_store = ConfiguredBlockStore::from_environment(request_dir, &request.environment)?;
-    let local_block_store_root = request.environment.resolve_block_store_root(request_dir);
+    let mutable_ref_store = request
+        .environment
+        .resolve_mutable_ref_store(request_dir, &request.ref_name);
+    let mutable_ref_metadata = mutable_ref_store_metadata(stage, &clustering);
     let embedding_spec = request.to_embedding_spec();
     let resolver = LocalFilesystemContentResolver::new(block_store.clone());
     let max_concurrency = request.effective_max_concurrency();
     let io = RuntimeIo {
-        local_block_store_root: local_block_store_root.as_deref(),
+        mutable_ref_store: mutable_ref_store.as_ref(),
+        mutable_ref_metadata: mutable_ref_store.as_ref().map(|_| &mutable_ref_metadata),
         progress: &progress,
     };
 
     if stage.includes_ingestion()
-        && let Some(block_store_root) = io.local_block_store_root
+        && let Some(mutable_ref_store) = io.mutable_ref_store
     {
-        prepare_replay_journal(block_store_root)?;
+        prepare_mutable_ref_store_async(mutable_ref_store.clone()).await?;
     }
 
     if stage == ExecutionStage::IngestionAndEmbedding {
@@ -1371,8 +1446,19 @@ where
         )
         .await
     } else {
-        let (replay_batches, embedding_provider) =
-            load_replay_batches_from_store(&block_store, &embedding_spec, max_concurrency, io)?;
+        let Some(mutable_ref_store) = mutable_ref_store.clone() else {
+            return Err(RuntimeError::MissingReplayJournalHead {
+                path: "<unresolved mutable ref>".into(),
+            });
+        };
+        let (replay_batches, embedding_provider) = load_replay_batches_from_store_async(
+            block_store.clone(),
+            embedding_spec.clone(),
+            max_concurrency,
+            mutable_ref_store,
+            Arc::clone(&progress),
+        )
+        .await?;
         run_streaming_stage(
             resolver,
             embedding_provider,
@@ -1438,14 +1524,28 @@ async fn run_ingestion_only_stage(
         )
         .await?;
         persist_staged_blocks(&constructed.blocks, block_store)?;
-        if let Some(block_store_root) = io.local_block_store_root {
+        if let Some(mutable_ref_store) = io.mutable_ref_store {
             let records = batch
                 .items
                 .iter()
                 .zip(constructed.block_ids.iter().copied())
                 .map(|(item, block_id)| replay_journal_record_from_item(block_id, item))
                 .collect::<Vec<_>>();
-            append_replay_journal_records(block_store_root, &records)?;
+            let replay_journal_head_block_id = append_replay_journal_records_async(
+                block_store.clone(),
+                mutable_ref_store.clone(),
+                records,
+            )
+            .await?;
+            update_mutable_ref_store_async(
+                mutable_ref_store.clone(),
+                MutableRefStoreUpdate {
+                    replay_journal_head_block_id,
+                    metadata: io.mutable_ref_metadata.cloned(),
+                    ..MutableRefStoreUpdate::default()
+                },
+            )
+            .await?;
         }
         completed_items += batch_item_count;
         if let Some(message) = batch.completion_message {
@@ -1538,6 +1638,32 @@ fn chunk_replay_items(
         let chunk = iter.by_ref().take(chunk_size).collect();
         batches.push(ReplayBatch {
             items: chunk,
+            audit_records: Vec::new(),
+            completion_message: None,
+        });
+    }
+    batches
+}
+
+fn chunk_replay_journal_records(
+    records: Vec<ReplayJournalRecord>,
+    max_concurrency: usize,
+) -> Vec<ReplayBatch> {
+    let mut batches = Vec::new();
+    let chunk_size = max_concurrency.max(1);
+    let mut iter = records.into_iter().peekable();
+    while iter.peek().is_some() {
+        let audit_records = iter.by_ref().take(chunk_size).collect::<Vec<_>>();
+        let items = audit_records
+            .iter()
+            .map(|record| {
+                replay_journal_record_to_item(record)
+                    .expect("replay journal record batching only applies to replay inputs")
+            })
+            .collect::<Vec<_>>();
+        batches.push(ReplayBatch {
+            items,
+            audit_records,
             completion_message: None,
         });
     }
@@ -1566,6 +1692,15 @@ fn sort_replay_items(items: &mut [IndexItem<ContentRef>]) {
     items.sort_by_key(replay_sort_key);
 }
 
+fn sort_replay_journal_records(records: &mut [ReplayJournalRecord]) {
+    records.sort_by_key(|record| {
+        replay_sort_key(
+            &replay_journal_record_to_item(record)
+                .expect("replay journal record sorting only applies to replay inputs"),
+        )
+    });
+}
+
 fn replay_sort_key(item: &IndexItem<ContentRef>) -> (String, Vec<(String, String)>) {
     let content_key = match &item.content_ref {
         ContentRef::Document { path } => format!("document:{}", path.to_string_lossy()),
@@ -1581,276 +1716,652 @@ fn replay_sort_key(item: &IndexItem<ContentRef>) -> (String, Vec<(String, String
     (content_key, metadata_key)
 }
 
-fn replay_journal_root(block_store_root: &Path) -> PathBuf {
-    match block_store_root.file_name().and_then(|name| name.to_str()) {
-        Some(name) if !name.is_empty() => {
-            block_store_root.with_file_name(format!("{name}.replay-journal"))
-        }
-        _ => block_store_root.join("replay-journal"),
+#[cfg(test)]
+fn mutable_ref_store_path(block_store_root: &Path, ref_name: &str) -> PathBuf {
+    let mut relative = PathBuf::from(MUTABLE_REF_ROOT_DIR);
+    for segment in ref_name.split('/') {
+        relative.push(segment);
+    }
+    match block_store_root.parent() {
+        Some(parent) => parent.join(relative),
+        None => block_store_root.join(relative),
     }
 }
 
-fn prepare_replay_journal(block_store_root: &Path) -> Result<(), RuntimeError> {
-    let journal_root = replay_journal_root(block_store_root);
-    fs::create_dir_all(&journal_root).map_err(|source| RuntimeError::PrepareReplayJournal {
-        path: journal_root.display().to_string(),
-        source,
+#[cfg(test)]
+fn local_mutable_ref_store_location(
+    block_store_root: &Path,
+    ref_name: &str,
+) -> MutableRefStoreLocation {
+    MutableRefStoreLocation::LocalFile {
+        path: mutable_ref_store_path(block_store_root, ref_name),
+    }
+}
+
+fn execution_stage_label(stage: ExecutionStage) -> &'static str {
+    match stage {
+        ExecutionStage::FullPipeline => "full-pipeline",
+        ExecutionStage::IngestionAndEmbedding => "ingestion-and-embedding",
+        ExecutionStage::ClusteringAndBlockAssembly => "clustering-and-block-assembly",
+    }
+}
+
+fn mutable_ref_store_metadata(
+    stage: ExecutionStage,
+    clustering: &ConfiguredClustering,
+) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (
+            "profile_version".into(),
+            clustering.profile_version.to_string(),
+        ),
+        ("stage".into(), execution_stage_label(stage).into()),
+    ])
+}
+
+fn mutable_ref_store_label(location: &MutableRefStoreLocation) -> String {
+    match location {
+        MutableRefStoreLocation::LocalFile { path } => path.display().to_string(),
+        MutableRefStoreLocation::AzureBlob { display_path, .. } => display_path.clone(),
+    }
+}
+
+fn mutable_ref_store_io_error(message: String) -> io::Error {
+    io::Error::other(message)
+}
+
+fn mutable_ref_store_http_client() -> Result<Client, io::Error> {
+    Client::builder()
+        .timeout(MUTABLE_REF_STORE_HTTP_TIMEOUT)
+        .build()
+        .map_err(|error| mutable_ref_store_io_error(error.to_string()))
+}
+
+fn mutable_ref_store_request_with_retry<F>(
+    mut send: F,
+) -> Result<reqwest::blocking::Response, io::Error>
+where
+    F: FnMut(&Client) -> Result<reqwest::blocking::Response, reqwest::Error>,
+{
+    let client = mutable_ref_store_http_client()?;
+    let mut last_error = None;
+    for attempt in 0..MUTABLE_REF_STORE_HTTP_RETRY_ATTEMPTS {
+        match send(&client) {
+            Ok(response)
+                if attempt + 1 < MUTABLE_REF_STORE_HTTP_RETRY_ATTEMPTS
+                    && (response.status().is_server_error()
+                        || response.status() == StatusCode::REQUEST_TIMEOUT
+                        || response.status() == StatusCode::TOO_MANY_REQUESTS) =>
+            {
+                last_error = Some(mutable_ref_store_io_error(format!(
+                    "retryable HTTP status {} while accessing mutable ref store",
+                    response.status()
+                )));
+                std::thread::sleep(MUTABLE_REF_STORE_HTTP_RETRY_DELAY);
+            }
+            Ok(response) => return Ok(response),
+            Err(error) if attempt + 1 < MUTABLE_REF_STORE_HTTP_RETRY_ATTEMPTS => {
+                last_error = Some(mutable_ref_store_io_error(error.to_string()));
+                std::thread::sleep(MUTABLE_REF_STORE_HTTP_RETRY_DELAY);
+            }
+            Err(error) => return Err(mutable_ref_store_io_error(error.to_string())),
+        }
+    }
+    Err(last_error
+        .unwrap_or_else(|| mutable_ref_store_io_error("mutable ref request failed".into())))
+}
+
+fn read_mutable_ref_store_bytes(
+    location: &MutableRefStoreLocation,
+) -> Result<Option<Vec<u8>>, RuntimeError> {
+    match location {
+        MutableRefStoreLocation::LocalFile { path } => {
+            if !path.exists() {
+                return Ok(None);
+            }
+            fs::read(path)
+                .map(Some)
+                .map_err(|source| RuntimeError::ReadMutableRefStore {
+                    path: path.display().to_string(),
+                    source,
+                })
+        }
+        MutableRefStoreLocation::AzureBlob { url, display_path } => {
+            let response = mutable_ref_store_request_with_retry(|client| {
+                client
+                    .get(url)
+                    .header("x-ms-version", AZURE_BLOB_API_VERSION)
+                    .send()
+            })
+            .map_err(|source| RuntimeError::ReadMutableRefStore {
+                path: display_path.clone(),
+                source,
+            })?;
+            match response.status() {
+                StatusCode::NOT_FOUND => Ok(None),
+                status if status.is_success() => response
+                    .bytes()
+                    .map(|bytes| Some(bytes.to_vec()))
+                    .map_err(|error| RuntimeError::ReadMutableRefStore {
+                        path: display_path.clone(),
+                        source: mutable_ref_store_io_error(error.to_string()),
+                    }),
+                status => Err(RuntimeError::ReadMutableRefStore {
+                    path: display_path.clone(),
+                    source: mutable_ref_store_io_error(format!(
+                        "unexpected HTTP status {} while reading mutable ref store",
+                        status
+                    )),
+                }),
+            }
+        }
+    }
+}
+
+fn write_mutable_ref_store_bytes(
+    location: &MutableRefStoreLocation,
+    encoded: &[u8],
+) -> Result<(), RuntimeError> {
+    match location {
+        MutableRefStoreLocation::LocalFile { path } => {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|source| {
+                    RuntimeError::PrepareMutableRefStore {
+                        path: parent.display().to_string(),
+                        source,
+                    }
+                })?;
+            }
+            let temp_path = path.with_extension("tmp");
+            let backup_path = path.with_extension("bak");
+            fs::write(&temp_path, encoded).map_err(|source| {
+                RuntimeError::WriteMutableRefStore {
+                    path: temp_path.display().to_string(),
+                    source,
+                }
+            })?;
+            let had_existing_file = path.exists();
+            if had_existing_file {
+                if backup_path.exists() {
+                    fs::remove_file(&backup_path).map_err(|source| {
+                        RuntimeError::WriteMutableRefStore {
+                            path: backup_path.display().to_string(),
+                            source,
+                        }
+                    })?;
+                }
+                fs::rename(path, &backup_path).map_err(|source| {
+                    RuntimeError::WriteMutableRefStore {
+                        path: path.display().to_string(),
+                        source,
+                    }
+                })?;
+            }
+            if let Err(source) = fs::rename(&temp_path, path) {
+                if had_existing_file {
+                    let _ = fs::rename(&backup_path, path);
+                }
+                return Err(RuntimeError::WriteMutableRefStore {
+                    path: path.display().to_string(),
+                    source,
+                });
+            }
+            if had_existing_file && backup_path.exists() {
+                fs::remove_file(&backup_path).map_err(|source| {
+                    RuntimeError::WriteMutableRefStore {
+                        path: backup_path.display().to_string(),
+                        source,
+                    }
+                })?;
+            }
+            Ok(())
+        }
+        MutableRefStoreLocation::AzureBlob { url, display_path } => {
+            let response = mutable_ref_store_request_with_retry(|client| {
+                client
+                    .put(url)
+                    .header("content-type", "application/json")
+                    .header("x-ms-blob-type", "BlockBlob")
+                    .header("x-ms-version", AZURE_BLOB_API_VERSION)
+                    .body(encoded.to_vec())
+                    .send()
+            })
+            .map_err(|source| RuntimeError::WriteMutableRefStore {
+                path: display_path.clone(),
+                source,
+            })?;
+            if response.status().is_success() {
+                Ok(())
+            } else {
+                Err(RuntimeError::WriteMutableRefStore {
+                    path: display_path.clone(),
+                    source: mutable_ref_store_io_error(format!(
+                        "unexpected HTTP status {} while writing mutable ref store",
+                        response.status()
+                    )),
+                })
+            }
+        }
+    }
+}
+
+fn prepare_mutable_ref_store(location: &MutableRefStoreLocation) -> Result<(), RuntimeError> {
+    match location {
+        MutableRefStoreLocation::LocalFile { path } => {
+            let Some(parent) = path.parent() else {
+                return Ok(());
+            };
+            fs::create_dir_all(parent).map_err(|source| RuntimeError::PrepareMutableRefStore {
+                path: parent.display().to_string(),
+                source,
+            })
+        }
+        MutableRefStoreLocation::AzureBlob { .. } => Ok(()),
+    }
+}
+
+async fn prepare_mutable_ref_store_async(
+    location: MutableRefStoreLocation,
+) -> Result<(), RuntimeError> {
+    tokio::task::spawn_blocking(move || prepare_mutable_ref_store(&location))
+        .await
+        .map_err(RuntimeError::BlockingMutableRefTaskJoin)?
+}
+
+fn load_mutable_ref_store(
+    location: &MutableRefStoreLocation,
+) -> Result<MutableRefStoreState, RuntimeError> {
+    let label = mutable_ref_store_label(location);
+    let Some(bytes) = read_mutable_ref_store_bytes(location)? else {
+        return Ok(MutableRefStoreState::default());
+    };
+    serde_json::from_slice(bytes.as_slice()).map_err(|error| RuntimeError::DecodeMutableRefStore {
+        path: label,
+        message: error.to_string(),
     })
+}
+
+fn write_mutable_ref_store(
+    location: &MutableRefStoreLocation,
+    state: &MutableRefStoreState,
+) -> Result<(), RuntimeError> {
+    let label = mutable_ref_store_label(location);
+    let encoded =
+        serde_json::to_vec_pretty(state).map_err(|error| RuntimeError::EncodeMutableRefStore {
+            path: label,
+            message: error.to_string(),
+        })?;
+    write_mutable_ref_store_bytes(location, &encoded)
+}
+
+fn apply_mutable_ref_store_update(refs: &mut MutableRefStoreState, update: MutableRefStoreUpdate) {
+    if let Some(current_root_block_id) = update.current_root_block_id {
+        refs.current_root_block_id = Some(current_root_block_id);
+    }
+    if let Some(replay_journal_head_block_id) = update.replay_journal_head_block_id {
+        refs.replay_journal_head_block_id = Some(replay_journal_head_block_id);
+    }
+    if let Some(metadata) = update.metadata {
+        refs.metadata = Some(metadata);
+    }
+}
+
+fn update_mutable_ref_store(
+    mutable_ref_store: &MutableRefStoreLocation,
+    update: MutableRefStoreUpdate,
+) -> Result<(), RuntimeError> {
+    let mut refs = load_mutable_ref_store(mutable_ref_store)?;
+    apply_mutable_ref_store_update(&mut refs, update);
+    write_mutable_ref_store(mutable_ref_store, &refs)
+}
+
+async fn update_mutable_ref_store_async(
+    mutable_ref_store: MutableRefStoreLocation,
+    update: MutableRefStoreUpdate,
+) -> Result<(), RuntimeError> {
+    tokio::task::spawn_blocking(move || update_mutable_ref_store(&mutable_ref_store, update))
+        .await
+        .map_err(RuntimeError::BlockingMutableRefTaskJoin)?
 }
 
 fn append_replay_journal_records(
-    block_store_root: &Path,
+    store: &dyn BlockStore,
+    mutable_ref_store: &MutableRefStoreLocation,
     records: &[ReplayJournalRecord],
-) -> Result<(), RuntimeError> {
+) -> Result<Option<String>, RuntimeError> {
     if records.is_empty() {
-        return Ok(());
+        return Ok(load_mutable_ref_store(mutable_ref_store)?.replay_journal_head_block_id);
     }
 
-    let journal_root = replay_journal_root(block_store_root);
-    fs::create_dir_all(&journal_root).map_err(|source| RuntimeError::PrepareReplayJournal {
-        path: journal_root.display().to_string(),
-        source,
-    })?;
-
-    let mut segment_paths = replay_journal_segment_paths(&journal_root)?;
-    let mut current_segment_index = segment_paths
-        .last()
-        .and_then(|path| replay_journal_segment_index(path))
-        .unwrap_or(1);
-    let mut current_segment_path = if let Some(path) = segment_paths.pop() {
-        path
-    } else {
-        replay_journal_segment_path(&journal_root, current_segment_index)
-    };
-    let mut current_size = initialize_replay_journal_segment(&current_segment_path)?;
-    let mut file = open_replay_journal_segment_for_append(&current_segment_path)?;
+    let mut current_head = load_mutable_ref_store(mutable_ref_store)?.replay_journal_head_block_id;
+    let mut pending_entries = Vec::new();
+    let mut pending_entry_sizes = Vec::new();
+    let mut pending_entry_size_sum = 0usize;
 
     for record in records {
-        let mut encoded = Vec::new();
-        ciborium::ser::into_writer(record, &mut encoded).map_err(|source| {
-            RuntimeError::WriteReplayJournal {
-                path: current_segment_path.display().to_string(),
-                source: io::Error::new(ErrorKind::InvalidData, source.to_string()),
-            }
-        })?;
-        if encoded.len() > REPLAY_JOURNAL_RECORD_MAX_BYTES {
-            return Err(RuntimeError::WriteReplayJournal {
-                path: current_segment_path.display().to_string(),
-                source: io::Error::new(
-                    ErrorKind::InvalidData,
-                    format!(
-                        "replay journal record exceeded {}-byte maximum payload",
-                        REPLAY_JOURNAL_RECORD_MAX_BYTES
+        let encoded_record = encode_replay_journal_record(record)?;
+        let encoded_record_size = encoded_record.len();
+        pending_entries.push(record.clone());
+        pending_entry_sizes.push(encoded_record_size);
+        pending_entry_size_sum += encoded_record_size;
+        let block_size = replay_journal_block_body_size(
+            pending_entry_sizes.as_slice(),
+            pending_entry_size_sum,
+            current_head.as_deref(),
+        )?;
+        if block_size > REPLAY_JOURNAL_BLOCK_MAX_BYTES {
+            let overflow = pending_entries
+                .pop()
+                .expect("pending_entries was just pushed");
+            let overflow_size = pending_entry_sizes
+                .pop()
+                .expect("pending_entry_sizes was just pushed");
+            if pending_entries.is_empty() {
+                return Err(RuntimeError::WriteReplayJournal {
+                    block_id: replay_journal_record_label(&overflow).to_string(),
+                    source: io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!(
+                            "replay journal block exceeded {}-byte maximum payload",
+                            REPLAY_JOURNAL_BLOCK_MAX_BYTES
+                        ),
                     ),
-                ),
-            });
+                });
+            }
+            let published = store_replay_journal_block(
+                store,
+                current_head.as_deref(),
+                std::mem::take(&mut pending_entries),
+            )?;
+            current_head = Some(published.to_string());
+            pending_entry_sizes.clear();
+            pending_entry_size_sum = 0;
+            pending_entries.push(overflow);
+            pending_entry_sizes.push(overflow_size);
+            pending_entry_size_sum += overflow_size;
         }
-        let frame_size = encoded.len() as u64 + 4;
-        if current_size > REPLAY_JOURNAL_FILE_MAGIC.len() as u64
-            && current_size + frame_size > REPLAY_JOURNAL_SEGMENT_MAX_BYTES
-        {
-            file.sync_data()
-                .map_err(|source| RuntimeError::WriteReplayJournal {
-                    path: current_segment_path.display().to_string(),
-                    source,
-                })?;
-            current_segment_index += 1;
-            current_segment_path =
-                replay_journal_segment_path(&journal_root, current_segment_index);
-            current_size = initialize_replay_journal_segment(&current_segment_path)?;
-            file = open_replay_journal_segment_for_append(&current_segment_path)?;
-        }
-
-        let record_len =
-            u32::try_from(encoded.len()).map_err(|_| RuntimeError::WriteReplayJournal {
-                path: current_segment_path.display().to_string(),
-                source: io::Error::new(
-                    ErrorKind::InvalidData,
-                    "replay journal record exceeded 4 GiB length prefix",
-                ),
-            })?;
-        file.write_all(&record_len.to_le_bytes())
-            .and_then(|_| file.write_all(&encoded))
-            .map_err(|source| RuntimeError::WriteReplayJournal {
-                path: current_segment_path.display().to_string(),
-                source,
-            })?;
-        current_size += frame_size;
     }
 
-    file.sync_data()
-        .map_err(|source| RuntimeError::WriteReplayJournal {
-            path: current_segment_path.display().to_string(),
-            source,
-        })?;
+    if !pending_entries.is_empty() {
+        let published = store_replay_journal_block(
+            store,
+            current_head.as_deref(),
+            std::mem::take(&mut pending_entries),
+        )?;
+        current_head = Some(published.to_string());
+    }
 
-    Ok(())
+    Ok(current_head)
 }
 
-fn replay_journal_segment_paths(journal_root: &Path) -> Result<Vec<PathBuf>, RuntimeError> {
-    collect_replay_journal_segment_paths(journal_root).map_err(|source| {
-        RuntimeError::PrepareReplayJournal {
-            path: journal_root.display().to_string(),
-            source,
-        }
+async fn append_replay_journal_records_async(
+    store: ConfiguredBlockStore,
+    mutable_ref_store: MutableRefStoreLocation,
+    records: Vec<ReplayJournalRecord>,
+) -> Result<Option<String>, RuntimeError> {
+    tokio::task::spawn_blocking(move || {
+        append_replay_journal_records(&store, &mutable_ref_store, &records)
     })
+    .await
+    .map_err(RuntimeError::BlockingMutableRefTaskJoin)?
 }
 
-fn load_replay_journal_segment_paths(journal_root: &Path) -> Result<Vec<PathBuf>, RuntimeError> {
-    collect_replay_journal_segment_paths(journal_root).map_err(|source| {
-        RuntimeError::ReadReplayJournal {
-            path: journal_root.display().to_string(),
-            source,
+fn replay_journal_block_body_size(
+    encoded_entry_sizes: &[usize],
+    encoded_entry_size_sum: usize,
+    previous_block_id: Option<&str>,
+) -> Result<usize, RuntimeError> {
+    let base_len = encode_replay_journal_block_body(&[], previous_block_id)?.len();
+    Ok(base_len - cbor_array_header_size(0)
+        + cbor_array_header_size(encoded_entry_sizes.len())
+        + encoded_entry_size_sum)
+}
+
+fn cbor_array_header_size(len: usize) -> usize {
+    match len {
+        0..=23 => 1,
+        24..=0xff => 2,
+        0x100..=0xffff => 3,
+        0x1_0000..=0xffff_ffff => 5,
+        _ => 9,
+    }
+}
+
+fn encode_replay_journal_record(record: &ReplayJournalRecord) -> Result<Vec<u8>, RuntimeError> {
+    let mut encoded = Vec::new();
+    ciborium::ser::into_writer(record, &mut encoded).map_err(|source| {
+        RuntimeError::WriteReplayJournal {
+            block_id: replay_journal_record_label(record).to_string(),
+            source: io::Error::new(ErrorKind::InvalidData, source.to_string()),
         }
-    })
-}
-
-fn collect_replay_journal_segment_paths(journal_root: &Path) -> io::Result<Vec<PathBuf>> {
-    if !journal_root.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut segments = Vec::new();
-    let entries = fs::read_dir(journal_root)?;
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        if replay_journal_segment_index(&path).is_some() {
-            segments.push(path);
-        }
-    }
-    segments.sort();
-    Ok(segments)
-}
-
-fn replay_journal_segment_path(journal_root: &Path, segment_index: u64) -> PathBuf {
-    journal_root.join(format!(
-        "{REPLAY_JOURNAL_SEGMENT_PREFIX}{segment_index:08}.{REPLAY_JOURNAL_SEGMENT_EXTENSION}"
-    ))
-}
-
-fn replay_journal_segment_index(path: &Path) -> Option<u64> {
-    let extension = path.extension()?.to_str()?;
-    if extension != REPLAY_JOURNAL_SEGMENT_EXTENSION {
-        return None;
-    }
-    let stem = path.file_stem()?.to_str()?;
-    let suffix = stem.strip_prefix(REPLAY_JOURNAL_SEGMENT_PREFIX)?;
-    suffix.parse().ok()
-}
-
-fn initialize_replay_journal_segment(path: &Path) -> Result<u64, RuntimeError> {
-    if path.exists() {
-        let metadata = fs::metadata(path).map_err(|source| RuntimeError::WriteReplayJournal {
-            path: path.display().to_string(),
-            source,
-        })?;
-        if metadata.len() >= REPLAY_JOURNAL_FILE_MAGIC.len() as u64
-            && replay_journal_segment_has_magic(path)?
-        {
-            return Ok(metadata.len());
-        }
-    }
-
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(path)
-        .map_err(|source| RuntimeError::WriteReplayJournal {
-            path: path.display().to_string(),
-            source,
-        })?;
-    file.write_all(REPLAY_JOURNAL_FILE_MAGIC)
-        .and_then(|_| file.sync_data())
-        .map_err(|source| RuntimeError::WriteReplayJournal {
-            path: path.display().to_string(),
-            source,
-        })?;
-    Ok(REPLAY_JOURNAL_FILE_MAGIC.len() as u64)
-}
-
-fn replay_journal_segment_has_magic(path: &Path) -> Result<bool, RuntimeError> {
-    let mut file = fs::File::open(path).map_err(|source| RuntimeError::WriteReplayJournal {
-        path: path.display().to_string(),
-        source,
     })?;
-    let mut magic = vec![0u8; REPLAY_JOURNAL_FILE_MAGIC.len()];
-    file.read_exact(&mut magic)
-        .map_err(|source| RuntimeError::WriteReplayJournal {
-            path: path.display().to_string(),
-            source,
-        })?;
-    Ok(magic == REPLAY_JOURNAL_FILE_MAGIC)
+    Ok(encoded)
 }
 
-fn open_replay_journal_segment_for_append(path: &Path) -> Result<fs::File, RuntimeError> {
-    fs::OpenOptions::new()
-        .append(true)
-        .open(path)
-        .map_err(|source| RuntimeError::WriteReplayJournal {
-            path: path.display().to_string(),
-            source,
-        })
+fn encode_replay_journal_block_body(
+    entries: &[ReplayJournalRecord],
+    previous_block_id: Option<&str>,
+) -> Result<Vec<u8>, RuntimeError> {
+    let body = ReplayJournalBlockBody {
+        schema_version: REPLAY_JOURNAL_SCHEMA_VERSION,
+        previous_block_id: previous_block_id.map(str::to_string),
+        entries: entries.to_vec(),
+    };
+    let mut encoded = Vec::new();
+    ciborium::ser::into_writer(&body, &mut encoded).map_err(|source| {
+        RuntimeError::WriteReplayJournal {
+            block_id: previous_block_id.unwrap_or("<new>").to_string(),
+            source: io::Error::new(ErrorKind::InvalidData, source.to_string()),
+        }
+    })?;
+    Ok(encoded)
+}
+
+fn replay_journal_custom_block(body: Vec<u8>) -> Result<VersionedBlock, RuntimeError> {
+    let block = v2::build_custom_block(
+        REPLAY_JOURNAL_BLOCK_TYPE,
+        Value::Map(vec![
+            (
+                Value::Text("media_type".into()),
+                Value::Text(REPLAY_JOURNAL_MEDIA_TYPE.to_string()),
+            ),
+            (Value::Text("body".into()), Value::Bytes(body)),
+        ]),
+    )
+    .map_err(|source| RuntimeError::WriteReplayJournal {
+        block_id: "<new>".into(),
+        source: io::Error::new(ErrorKind::InvalidData, source.to_string()),
+    })?;
+    Ok(VersionedBlock::V2(block))
+}
+
+fn store_replay_journal_block(
+    store: &dyn BlockStore,
+    previous_block_id: Option<&str>,
+    entries: Vec<ReplayJournalRecord>,
+) -> Result<BlockHash, RuntimeError> {
+    let body = encode_replay_journal_block_body(&entries, previous_block_id)?;
+    if body.len() > REPLAY_JOURNAL_BLOCK_MAX_BYTES {
+        let block_id = entries
+            .first()
+            .map(|entry| replay_journal_record_label(entry).to_string())
+            .unwrap_or_else(|| "<empty>".into());
+        return Err(RuntimeError::WriteReplayJournal {
+            block_id,
+            source: io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "replay journal block exceeded {}-byte maximum payload",
+                    REPLAY_JOURNAL_BLOCK_MAX_BYTES
+                ),
+            ),
+        });
+    }
+    let versioned = replay_journal_custom_block(body)?;
+    store
+        .put_versioned(&versioned)
+        .map_err(RuntimeError::BlockStore)
 }
 
 fn load_replay_journal_records(
-    block_store_root: &Path,
-) -> Result<Option<Vec<ReplayJournalRecord>>, RuntimeError> {
-    let journal_root = replay_journal_root(block_store_root);
-    let segment_paths = load_replay_journal_segment_paths(&journal_root)?;
-    if segment_paths.is_empty() {
-        return Ok(None);
+    store: &ConfiguredBlockStore,
+    mutable_ref_store: &MutableRefStoreLocation,
+) -> Result<Vec<ReplayJournalRecord>, RuntimeError> {
+    let refs = load_mutable_ref_store(mutable_ref_store)?;
+    let Some(mut current_block_id) = refs.replay_journal_head_block_id else {
+        return Err(RuntimeError::MissingReplayJournalHead {
+            path: mutable_ref_store_label(mutable_ref_store),
+        });
+    };
+
+    let mut visited = HashSet::new();
+    let mut blocks = Vec::new();
+    loop {
+        if !visited.insert(current_block_id.clone()) {
+            return Err(RuntimeError::InvalidReplayJournalHead {
+                block_id: current_block_id,
+                message: "replay journal chain contains a cycle".into(),
+            });
+        }
+        let block_hash = parse_block_hash(&current_block_id).map_err(|error| {
+            RuntimeError::InvalidReplayJournalHead {
+                block_id: current_block_id.clone(),
+                message: error.to_string(),
+            }
+        })?;
+        let Some(decoded) = store.get_decoded(&block_hash)? else {
+            return Err(RuntimeError::ReadReplayJournal {
+                block_id: current_block_id,
+                source: io::Error::new(ErrorKind::NotFound, "referenced journal block is missing"),
+            });
+        };
+        let decoded = replay_journal_block_body_from_decoded(decoded, &block_hash.to_string())?;
+        current_block_id = match decoded.previous_block_id.clone() {
+            Some(previous) => {
+                blocks.push(decoded);
+                previous
+            }
+            None => {
+                blocks.push(decoded);
+                break;
+            }
+        };
     }
 
+    blocks.reverse();
     let mut records = Vec::new();
-    for segment_path in segment_paths {
-        let mut file =
-            fs::File::open(&segment_path).map_err(|source| RuntimeError::ReadReplayJournal {
-                path: segment_path.display().to_string(),
-                source,
-            })?;
-        let mut magic = vec![0u8; REPLAY_JOURNAL_FILE_MAGIC.len()];
-        if file.read_exact(&mut magic).is_err() || magic != REPLAY_JOURNAL_FILE_MAGIC {
-            return Ok(None);
-        }
-
-        loop {
-            let mut len_bytes = [0u8; 4];
-            match file.read_exact(&mut len_bytes) {
-                Ok(()) => {}
-                Err(error) if error.kind() == ErrorKind::UnexpectedEof => break,
-                Err(error) => {
-                    return Err(RuntimeError::ReadReplayJournal {
-                        path: segment_path.display().to_string(),
-                        source: error,
-                    });
-                }
-            }
-            let record_len = u32::from_le_bytes(len_bytes) as usize;
-            if record_len > REPLAY_JOURNAL_RECORD_MAX_BYTES {
-                return Ok(None);
-            }
-            let mut payload = vec![0u8; record_len];
-            match file.read_exact(&mut payload) {
-                Ok(()) => {}
-                Err(error) if error.kind() == ErrorKind::UnexpectedEof => break,
-                Err(error) => {
-                    return Err(RuntimeError::ReadReplayJournal {
-                        path: segment_path.display().to_string(),
-                        source: error,
-                    });
-                }
-            }
-            let record: ReplayJournalRecord = match ciborium::de::from_reader(payload.as_slice()) {
-                Ok(record) => record,
-                Err(_) => return Ok(None),
-            };
-            records.push(record);
-        }
+    for block in blocks {
+        records.extend(block.entries);
     }
+    Ok(records)
+}
 
-    Ok(Some(records))
+fn replay_journal_block_body_from_decoded(
+    decoded: DecodedBlock,
+    block_id: &str,
+) -> Result<ReplayJournalBlockBody, RuntimeError> {
+    let custom = match decoded {
+        DecodedBlock::V2(validated) => match v2::into_typed_block(validated).map_err(|error| {
+            RuntimeError::InvalidReplayJournalHead {
+                block_id: block_id.to_string(),
+                message: error.to_string(),
+            }
+        })? {
+            v2::TypedBlock::Custom(custom) => custom,
+            other => {
+                return Err(RuntimeError::InvalidReplayJournalHead {
+                    block_id: block_id.to_string(),
+                    message: format!("unexpected journal block type {}", typed_block_name(&other)),
+                });
+            }
+        },
+        other => {
+            return Err(RuntimeError::InvalidReplayJournalHead {
+                block_id: block_id.to_string(),
+                message: format!("unexpected journal block version {:?}", other),
+            });
+        }
+    };
+    if custom.type_name != REPLAY_JOURNAL_BLOCK_TYPE {
+        return Err(RuntimeError::InvalidReplayJournalHead {
+            block_id: block_id.to_string(),
+            message: format!("unexpected journal block type name {}", custom.type_name),
+        });
+    }
+    let (media_type, body) = custom_block_payload(&custom.content, block_id)?;
+    if media_type != REPLAY_JOURNAL_MEDIA_TYPE {
+        return Err(RuntimeError::InvalidReplayJournalHead {
+            block_id: block_id.to_string(),
+            message: format!("unexpected journal media type {media_type}"),
+        });
+    }
+    let decoded: ReplayJournalBlockBody =
+        ciborium::de::from_reader(Cursor::new(body)).map_err(|error| {
+            RuntimeError::InvalidReplayJournalHead {
+                block_id: block_id.to_string(),
+                message: error.to_string(),
+            }
+        })?;
+    if decoded.schema_version != REPLAY_JOURNAL_SCHEMA_VERSION {
+        return Err(RuntimeError::InvalidReplayJournalHead {
+            block_id: block_id.to_string(),
+            message: format!(
+                "journal block schema_version must be {}",
+                REPLAY_JOURNAL_SCHEMA_VERSION
+            ),
+        });
+    }
+    Ok(decoded)
+}
+
+fn custom_block_payload(
+    content: &Value,
+    block_id: &str,
+) -> Result<(String, Vec<u8>), RuntimeError> {
+    let Value::Map(fields) = content else {
+        return Err(RuntimeError::InvalidReplayJournalHead {
+            block_id: block_id.to_string(),
+            message: "custom block content must be a CBOR map".into(),
+        });
+    };
+    let media_type = fields
+        .iter()
+        .find_map(|(key, value)| match (key, value) {
+            (Value::Text(name), Value::Text(media_type)) if name == "media_type" => {
+                Some(media_type.clone())
+            }
+            _ => None,
+        })
+        .ok_or_else(|| RuntimeError::InvalidReplayJournalHead {
+            block_id: block_id.to_string(),
+            message: "custom block content is missing media_type".into(),
+        })?;
+    let body = fields
+        .iter()
+        .find_map(|(key, value)| match (key, value) {
+            (Value::Text(name), Value::Bytes(body)) if name == "body" => Some(body.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| RuntimeError::InvalidReplayJournalHead {
+            block_id: block_id.to_string(),
+            message: "custom block content is missing body".into(),
+        })?;
+    Ok((media_type, body))
+}
+
+fn typed_block_name(block: &v2::TypedBlock) -> &str {
+    match block {
+        v2::TypedBlock::Branch(branch) => &branch.type_name,
+        v2::TypedBlock::Leaf(leaf) => &leaf.type_name,
+        v2::TypedBlock::Custom(custom) => &custom.type_name,
+    }
+}
+
+fn replay_journal_record_label(record: &ReplayJournalRecord) -> &str {
+    match record {
+        ReplayJournalRecord::ReplayInput { block_id, .. } => block_id,
+        ReplayJournalRecord::IndexingOutcome { root_block_id, .. } => root_block_id,
+    }
 }
 
 fn replay_journal_record_from_item(
@@ -1874,7 +2385,8 @@ fn replay_journal_record_from_item(
             chunk_index: *chunk_index,
         },
     };
-    ReplayJournalRecord {
+    ReplayJournalRecord::ReplayInput {
+        step_kind: ReplayJournalStepKind::Embedding,
         block_id: block_id.to_string(),
         metadata,
         content_ref,
@@ -1885,9 +2397,17 @@ fn normalize_replay_journal_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-fn replay_journal_record_to_item(record: &ReplayJournalRecord) -> IndexItem<ContentRef> {
-    let metadata = text_pairs_to_metadata(&record.metadata);
-    let content_ref = match &record.content_ref {
+fn replay_journal_record_to_item(record: &ReplayJournalRecord) -> Option<IndexItem<ContentRef>> {
+    let ReplayJournalRecord::ReplayInput {
+        metadata,
+        content_ref,
+        ..
+    } = record
+    else {
+        return None;
+    };
+    let metadata = text_pairs_to_metadata(metadata);
+    let content_ref = match content_ref {
         ReplayJournalContentRef::Document { path } => ContentRef::Document { path: path.into() },
         ReplayJournalContentRef::Inline { media_type, body } => ContentRef::Inline {
             media_type: media_type.clone(),
@@ -1901,10 +2421,10 @@ fn replay_journal_record_to_item(record: &ReplayJournalRecord) -> IndexItem<Cont
             chunk_index: *chunk_index,
         },
     };
-    IndexItem {
+    Some(IndexItem {
         metadata,
         content_ref,
-    }
+    })
 }
 
 fn text_pairs_to_metadata(pairs: &[(String, String)]) -> Vec<(ciborium::Value, ciborium::Value)> {
@@ -1937,6 +2457,41 @@ fn replay_journal_records_from_block_ids(
         records.push(replay_journal_record_from_item(validated.hash, &item));
     }
     Ok(records)
+}
+
+fn replay_input_block_ids_from_batches(batches: &[ReplayBatch]) -> Vec<String> {
+    batches
+        .iter()
+        .flat_map(|batch| batch.audit_records.iter())
+        .filter_map(|record| match record {
+            ReplayJournalRecord::ReplayInput { block_id, .. } => Some(block_id.clone()),
+            ReplayJournalRecord::IndexingOutcome { .. } => None,
+        })
+        .collect()
+}
+
+fn replay_journal_indexing_outcome_record(
+    input_block_ids: Vec<String>,
+    generated_block_ids: &[BlockHash],
+    root_id: &BlockHash,
+) -> ReplayJournalRecord {
+    let mut input_block_ids = input_block_ids;
+    input_block_ids.sort();
+    input_block_ids.dedup();
+
+    let mut generated_block_ids = generated_block_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    generated_block_ids.sort();
+    generated_block_ids.dedup();
+
+    ReplayJournalRecord::IndexingOutcome {
+        step_kind: ReplayJournalStepKind::Indexing,
+        input_block_ids,
+        generated_block_ids,
+        root_block_id: root_id.to_string(),
+    }
 }
 
 async fn build_leaf_blocks_concurrently(
@@ -2219,12 +2774,43 @@ where
         return Err(RuntimeError::EmptyDelegatedOutput);
     }
 
-    if let Some(block_store_root) = io.local_block_store_root
-        && config.stage.includes_ingestion()
-    {
-        let records =
-            replay_journal_records_from_block_ids(&result.block_ids, block_store, embedding_spec)?;
-        append_replay_journal_records(block_store_root, &records)?;
+    if let Some(mutable_ref_store) = io.mutable_ref_store {
+        let mut records = if config.stage.includes_ingestion() {
+            replay_journal_records_from_block_ids(&result.block_ids, block_store, embedding_spec)?
+        } else {
+            Vec::new()
+        };
+        let input_block_ids = if config.stage.includes_ingestion() {
+            records
+                .iter()
+                .filter_map(|record| match record {
+                    ReplayJournalRecord::ReplayInput { block_id, .. } => Some(block_id.clone()),
+                    ReplayJournalRecord::IndexingOutcome { .. } => None,
+                })
+                .collect::<Vec<_>>()
+        } else {
+            replay_input_block_ids_from_batches(&replay_batches)
+        };
+        records.push(replay_journal_indexing_outcome_record(
+            input_block_ids,
+            &result.block_ids,
+            &result.root_id,
+        ));
+        let replay_journal_head_block_id = append_replay_journal_records_async(
+            block_store.clone(),
+            mutable_ref_store.clone(),
+            records,
+        )
+        .await?;
+        update_mutable_ref_store_async(
+            mutable_ref_store.clone(),
+            MutableRefStoreUpdate {
+                current_root_block_id: Some(result.root_id.to_string()),
+                replay_journal_head_block_id,
+                metadata: io.mutable_ref_metadata.cloned(),
+            },
+        )
+        .await?;
     }
 
     let mut block_ids = result
@@ -2272,108 +2858,114 @@ fn load_replay_batches_from_store(
     max_concurrency: usize,
     io: RuntimeIo<'_>,
 ) -> Result<(Vec<ReplayBatch>, StoredLeafEmbeddingProvider), RuntimeError> {
-    if let Some(block_store_root) = io.local_block_store_root
-        && let Some(loaded) = try_load_replay_batches_from_journal(
-            store,
-            embedding_spec,
-            max_concurrency,
-            block_store_root,
-            io.progress,
-        )?
-    {
-        return Ok(loaded);
-    }
-
-    report_progress(
+    let Some(mutable_ref_store) = io.mutable_ref_store else {
+        return Err(RuntimeError::MissingReplayJournalHead {
+            path: "<unresolved mutable ref>".into(),
+        });
+    };
+    load_replay_batches_from_journal(
+        store,
+        embedding_spec,
+        max_concurrency,
+        mutable_ref_store,
         io.progress,
-        "Scanning the configured block store for clustering-eligible leaf blocks".to_string(),
-    );
-
-    let mut items = Vec::new();
-    let mut embeddings_by_input_hash = HashMap::new();
-    for block_id in store.iter_block_ids()? {
-        let block_id = block_id?;
-        let Some(validated) = store.get(&block_id)? else {
-            return Err(RuntimeError::MissingIteratedBlock {
-                block_id: block_id.to_string(),
-            });
-        };
-        let Some((item, embedding)) = replay_item_from_validated_block(&validated, embedding_spec)?
-        else {
-            continue;
-        };
-        let key = replay_embedding_input_hash(&validated, embedding_spec)?
-            .expect("replay_item_from_validated_block already filtered this block")
-            .into_bytes();
-        embeddings_by_input_hash.insert(key, embedding);
-        items.push(item);
-    }
-
-    if items.is_empty() {
-        return Err(RuntimeError::NoClusterableBlocks);
-    }
-
-    sort_replay_items(&mut items);
-
-    report_progress(
-        io.progress,
-        format!(
-            "Loaded {} replay item(s) from clustering-eligible leaf blocks in the configured block store",
-            items.len()
-        ),
-    );
-    let mut replay_batches = chunk_replay_items(items, max_concurrency);
-    annotate_submission_progress_batches(&mut replay_batches, SubmissionProgressKind::Replay);
-    Ok((
-        replay_batches,
-        StoredLeafEmbeddingProvider {
-            embeddings_by_input_hash: Arc::new(embeddings_by_input_hash),
-        },
-    ))
+    )
 }
 
-fn try_load_replay_batches_from_journal(
+async fn load_replay_batches_from_store_async(
+    store: ConfiguredBlockStore,
+    embedding_spec: EmbeddingSpec,
+    max_concurrency: usize,
+    mutable_ref_store: MutableRefStoreLocation,
+    progress: ProgressReporter,
+) -> Result<(Vec<ReplayBatch>, StoredLeafEmbeddingProvider), RuntimeError> {
+    tokio::task::spawn_blocking(move || {
+        let io = RuntimeIo {
+            mutable_ref_store: Some(&mutable_ref_store),
+            mutable_ref_metadata: None,
+            progress: &progress,
+        };
+        load_replay_batches_from_store(&store, &embedding_spec, max_concurrency, io)
+    })
+    .await
+    .map_err(RuntimeError::BlockingMutableRefTaskJoin)?
+}
+
+fn load_replay_batches_from_journal(
     store: &ConfiguredBlockStore,
     embedding_spec: &EmbeddingSpec,
     max_concurrency: usize,
-    block_store_root: &Path,
+    mutable_ref_store: &MutableRefStoreLocation,
     progress: &ProgressReporter,
-) -> Result<Option<(Vec<ReplayBatch>, StoredLeafEmbeddingProvider)>, RuntimeError> {
-    let Some(records) = load_replay_journal_records(block_store_root)? else {
-        return Ok(None);
-    };
+) -> Result<(Vec<ReplayBatch>, StoredLeafEmbeddingProvider), RuntimeError> {
+    let records = load_replay_journal_records(store, mutable_ref_store)?;
     if records.is_empty() {
-        return Ok(None);
+        return Err(RuntimeError::NoClusterableBlocks);
     }
+
+    let mut latest_records_by_input = HashMap::new();
+    for record in records {
+        let Some(item) = replay_journal_record_to_item(&record) else {
+            continue;
+        };
+        latest_records_by_input.insert(replay_sort_key(&item), record);
+    }
+    let mut sorted_records = latest_records_by_input.into_values().collect::<Vec<_>>();
+    if sorted_records.is_empty() {
+        return Err(RuntimeError::NoClusterableBlocks);
+    }
+    sort_replay_journal_records(&mut sorted_records);
 
     let mut items = Vec::new();
     let mut embeddings_by_input_hash = HashMap::new();
-    for record in records {
-        let journal_item = replay_journal_record_to_item(&record);
-        let block_id = match parse_block_hash(&record.block_id) {
+    for record in &sorted_records {
+        let journal_item = replay_journal_record_to_item(record)
+            .expect("sorted replay journal records are replay inputs");
+        let ReplayJournalRecord::ReplayInput { block_id, .. } = record else {
+            unreachable!("non-replay inputs are filtered before clustering replay")
+        };
+        let block_id = match parse_block_hash(block_id) {
             Ok(block_id) => block_id,
-            Err(_) => return Ok(None),
+            Err(error) => {
+                return Err(RuntimeError::InvalidReplayJournalHead {
+                    block_id: block_id.clone(),
+                    message: error.to_string(),
+                });
+            }
         };
         let Some(validated) = store.get(&block_id)? else {
-            return Ok(None);
+            return Err(RuntimeError::ReadReplayJournal {
+                block_id: block_id.to_string(),
+                source: io::Error::new(
+                    ErrorKind::NotFound,
+                    "journal entry references missing block",
+                ),
+            });
         };
         let Some(key) = replay_embedding_input_hash(&validated, embedding_spec)? else {
-            return Ok(None);
+            return Err(RuntimeError::MissingReplayMetadata {
+                block_id: block_id.to_string(),
+            });
         };
         let Some((block_item, embedding)) =
             replay_item_from_validated_block(&validated, embedding_spec)?
         else {
-            return Ok(None);
+            return Err(RuntimeError::MissingReplayMetadata {
+                block_id: block_id.to_string(),
+            });
         };
         if replay_sort_key(&journal_item) != replay_sort_key(&block_item) {
-            return Ok(None);
+            return Err(RuntimeError::InvalidReplayJournalHead {
+                block_id: block_id.to_string(),
+                message: "journal entry does not match referenced block replay metadata".into(),
+            });
         }
         items.push(block_item);
         embeddings_by_input_hash.insert(key.into_bytes(), embedding);
     }
 
     if items.is_empty() {
-        return Ok(None);
+        return Err(RuntimeError::NoClusterableBlocks);
     }
 
     sort_replay_items(&mut items);
@@ -2384,14 +2976,14 @@ fn try_load_replay_batches_from_journal(
             items.len()
         ),
     );
-    let mut replay_batches = chunk_replay_items(items, max_concurrency);
+    let mut replay_batches = chunk_replay_journal_records(sorted_records, max_concurrency);
     annotate_submission_progress_batches(&mut replay_batches, SubmissionProgressKind::Replay);
-    Ok(Some((
+    Ok((
         replay_batches,
         StoredLeafEmbeddingProvider {
             embeddings_by_input_hash: Arc::new(embeddings_by_input_hash),
         },
-    )))
+    ))
 }
 
 fn replay_embedding_input_hash(
@@ -2837,7 +3429,7 @@ pub fn write_clustering_failure_diagnostics_file(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::io::{Read, Write};
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
     use std::sync::mpsc;
     use std::sync::{
@@ -2929,6 +3521,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Mailbox {
                     path: mailbox_path
@@ -2961,11 +3554,41 @@ mod tests {
         let stored_block_count_after_second = count_files_recursively(&temp.path().join("blocks"));
         second_server.join();
 
+        let clustering = run_request(
+            temp.path(),
+            BatchRequest {
+                environment: EnvironmentConfig::Local {
+                    block_store_root: Path::new("blocks").to_path_buf(),
+                    embedding: LocalEmbeddingConfig {
+                        base_url: String::new(),
+                        model: "all-MiniLM-L6-v2".into(),
+                        api_key_env: None,
+                        request_timeout_secs: 5,
+                        max_retries: 0,
+                        retry_delay_ms: 1,
+                    },
+                },
+                embedding_spec: EmbeddingSpecConfig {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                block_size_target: 65_536,
+                stage: ExecutionStage::ClusteringAndBlockAssembly,
+                profile_version: PUBLISHED_PROFILE_V0_1_0,
+                max_concurrency: None,
+                ref_name: TEST_REF_NAME.into(),
+                items: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
         assert_eq!(first.root_id, second.root_id);
+        assert_eq!(second.root_id, clustering.root_id);
         assert_eq!(first.block_ids, second.block_ids);
         assert_eq!(
-            stored_block_count_after_first,
-            stored_block_count_after_second
+            stored_block_count_after_second,
+            stored_block_count_after_first + 1
         );
         assert!(stored_block_count_after_second > first.block_count);
     }
@@ -2992,6 +3615,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
             items: vec![BatchItemConfig::Document {
                 path: Path::new("doc.txt").to_path_buf(),
                 metadata: BTreeMap::new(),
@@ -3041,6 +3665,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Mailbox {
                     path: mailbox_path
@@ -3161,6 +3786,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            ref_name: TEST_REF_NAME.into(),
             items,
         };
         run_request(temp.path(), seed_request).await.unwrap();
@@ -3185,6 +3811,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            ref_name: TEST_REF_NAME.into(),
             items: vec![],
         };
 
@@ -3242,6 +3869,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
             items: vec![],
         }
     }
@@ -3265,6 +3893,7 @@ mod tests {
                 "encoding": request.embedding_spec.encoding
             },
             "block_size_target": request.block_size_target,
+            "ref_name": request.ref_name,
             "stage": "clustering-and-block-assembly",
             "items": []
         })
@@ -3292,6 +3921,7 @@ mod tests {
             dims: 2,
             encoding: "f32le".into(),
         };
+        let mut records = Vec::new();
 
         for name in names {
             let path = root.join(format!("{name}.txt"));
@@ -3323,8 +3953,25 @@ mod tests {
                 None,
             )
             .unwrap();
-            store.put(&Block::Leaf(block)).unwrap();
+            let block_id = store.put(&Block::Leaf(block)).unwrap();
+            let validated = store.get(&block_id).unwrap().unwrap();
+            let (item, _) = replay_item_from_validated_block(&validated, &embedding_spec)
+                .unwrap()
+                .unwrap();
+            records.push(replay_journal_record_from_item(block_id, &item));
         }
+        let mutable_ref_store =
+            local_mutable_ref_store_location(&root.join("blocks"), TEST_REF_NAME);
+        let replay_journal_head_block_id =
+            append_replay_journal_records(&store, &mutable_ref_store, &records).unwrap();
+        update_mutable_ref_store(
+            &mutable_ref_store,
+            MutableRefStoreUpdate {
+                replay_journal_head_block_id,
+                ..MutableRefStoreUpdate::default()
+            },
+        )
+        .unwrap();
     }
 
     #[tokio::test]
@@ -3566,6 +4213,7 @@ mod tests {
             stage: ExecutionStage::IngestionAndEmbedding,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
                     path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
@@ -3614,6 +4262,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
                     path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
@@ -3647,6 +4296,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
             items: vec![],
         };
 
@@ -3694,6 +4344,7 @@ mod tests {
                 stage: ExecutionStage::FullPipeline,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: None,
+                ref_name: TEST_REF_NAME.into(),
                 items: vec![
                     BatchItemConfig::Document {
                         path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
@@ -3728,6 +4379,7 @@ mod tests {
                     "dims": 2,
                     "encoding": "f32le"
                 },
+                "ref_name": "test-branch",
                 "items": [
                     {
                         "kind": "document",
@@ -3781,6 +4433,7 @@ mod tests {
                     "dims": 2,
                     "encoding": "f32le"
                 },
+                "ref_name": "test-branch",
                 "items": [
                     { "kind": "document", "path": "alpha.txt" },
                     { "kind": "document", "path": "beta.txt" },
@@ -3832,6 +4485,7 @@ mod tests {
                     "dims": 2,
                     "encoding": "f32le"
                 },
+                "ref_name": "test-branch",
                 "items": [
                     { "kind": "document", "path": "alpha.txt" },
                     { "kind": "document", "path": "beta.txt" },
@@ -3882,6 +4536,7 @@ mod tests {
                     "encoding": "f32le"
                 },
                 "profile_version": "0.5.0",
+                "ref_name": "test-branch",
                 "items": [
                     { "kind": "document", "path": "alpha.txt" },
                     { "kind": "document", "path": "beta.txt" },
@@ -4014,6 +4669,7 @@ mod tests {
                     },
                 },
             ],
+            audit_records: Vec::new(),
             completion_message: None,
         }];
         let inputs = replay_batches[0]
@@ -4501,6 +5157,7 @@ mod tests {
                     "dims": 2,
                     "encoding": "f32le"
                 },
+                "ref_name": "test-branch",
                 "items": [
                     { "kind": "document", "path": "alpha.txt" }
                 ]
@@ -4551,6 +5208,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(1),
+            ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
                     path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
@@ -4629,6 +5287,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(1),
+            ref_name: TEST_REF_NAME.into(),
             items: vec![BatchItemConfig::Mailbox {
                 path: mailbox_path
                     .strip_prefix(temp.path())
@@ -4687,6 +5346,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(3),
+            ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
                     path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
@@ -4746,6 +5406,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(3),
+            ref_name: TEST_REF_NAME.into(),
             items,
         };
 
@@ -4792,6 +5453,7 @@ mod tests {
             stage: ExecutionStage::IngestionAndEmbedding,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(3),
+            ref_name: TEST_REF_NAME.into(),
             items,
         };
 
@@ -4831,6 +5493,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
                     path: document_b.strip_prefix(temp.path()).unwrap().to_path_buf(),
@@ -4864,6 +5527,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
             items: vec![],
         };
 
@@ -4913,6 +5577,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            ref_name: TEST_REF_NAME.into(),
             items,
         };
         run_request(temp.path(), request).await.unwrap();
@@ -4938,8 +5603,10 @@ mod tests {
         };
         let progress: ProgressReporter = Arc::new(|_| {});
         let block_store_root = temp.path().join("blocks");
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
         let io = RuntimeIo {
-            local_block_store_root: Some(block_store_root.as_path()),
+            mutable_ref_store: Some(&mutable_ref_store),
+            mutable_ref_metadata: None,
             progress: &progress,
         };
         let (replay_batches, _) =
@@ -4953,7 +5620,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clustering_only_prefers_replay_journal_over_full_store_scan() {
+    async fn clustering_only_requires_replay_journal_head() {
         let temp = tempdir().unwrap();
         let document_names = ["alpha", "beta"];
         let items = document_names
@@ -4989,13 +5656,13 @@ mod tests {
             stage: ExecutionStage::IngestionAndEmbedding,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            ref_name: TEST_REF_NAME.into(),
             items,
         };
         run_request(temp.path(), request).await.unwrap();
 
         let block_store_root = temp.path().join("blocks");
-        let journal_root = replay_journal_root(&block_store_root);
-        assert!(journal_root.exists());
+        assert!(mutable_ref_store_path(&block_store_root, TEST_REF_NAME).exists());
 
         let block_store = ConfiguredBlockStore::from_environment(
             temp.path(),
@@ -5032,9 +5699,11 @@ mod tests {
         .unwrap();
         block_store.put(&Block::Leaf(invalid_leaf)).unwrap();
 
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
         let progress: ProgressReporter = Arc::new(|_| {});
         let io = RuntimeIo {
-            local_block_store_root: Some(block_store_root.as_path()),
+            mutable_ref_store: Some(&mutable_ref_store),
+            mutable_ref_metadata: None,
             progress: &progress,
         };
         let (replay_batches, _) =
@@ -5042,127 +5711,13 @@ mod tests {
         let replay_item_count: usize = replay_batches.iter().map(|batch| batch.items.len()).sum();
         assert_eq!(replay_item_count, document_names.len());
 
-        fs::remove_dir_all(&journal_root).unwrap();
+        fs::remove_file(mutable_ref_store_path(&block_store_root, TEST_REF_NAME)).unwrap();
         let error =
             load_replay_batches_from_store(&block_store, &embedding_spec, 8, io).unwrap_err();
-        assert!(matches!(error, RuntimeError::MissingReplayMetadata { .. }));
-        server.join();
-    }
-
-    #[tokio::test]
-    async fn replay_journal_ignores_partial_trailing_record() {
-        let temp = tempdir().unwrap();
-        let document_path = temp.path().join("alpha.txt");
-        fs::write(&document_path, "alpha\n").unwrap();
-
-        let server = spawn_embedding_server(1);
-        let request = BatchRequest {
-            environment: EnvironmentConfig::Local {
-                block_store_root: Path::new("blocks").to_path_buf(),
-                embedding: LocalEmbeddingConfig {
-                    base_url: server.base_url.clone(),
-                    model: "all-MiniLM-L6-v2".into(),
-                    api_key_env: None,
-                    request_timeout_secs: 5,
-                    max_retries: 0,
-                    retry_delay_ms: 1,
-                },
-            },
-            embedding_spec: EmbeddingSpecConfig {
-                dims: 2,
-                encoding: "f32le".into(),
-            },
-            block_size_target: 65_536,
-            stage: ExecutionStage::IngestionAndEmbedding,
-            profile_version: PUBLISHED_PROFILE_V0_1_0,
-            max_concurrency: Some(1),
-            items: vec![BatchItemConfig::Document {
-                path: document_path
-                    .strip_prefix(temp.path())
-                    .unwrap()
-                    .to_path_buf(),
-                metadata: BTreeMap::new(),
-            }],
-        };
-        run_request(temp.path(), request).await.unwrap();
-
-        let block_store_root = temp.path().join("blocks");
-        let segment_path = replay_journal_segment_paths(&replay_journal_root(&block_store_root))
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
-        let mut file = fs::OpenOptions::new()
-            .append(true)
-            .open(&segment_path)
-            .unwrap();
-        file.write_all(&16u32.to_le_bytes()).unwrap();
-        file.write_all(b"short").unwrap();
-        file.sync_data().unwrap();
-
-        let records = load_replay_journal_records(&block_store_root)
-            .unwrap()
-            .unwrap();
-        assert_eq!(records.len(), 1);
-        server.join();
-    }
-
-    #[tokio::test]
-    async fn replay_journal_rejects_oversized_record_length() {
-        let temp = tempdir().unwrap();
-        let document_path = temp.path().join("alpha.txt");
-        fs::write(&document_path, "alpha\n").unwrap();
-
-        let server = spawn_embedding_server(1);
-        let request = BatchRequest {
-            environment: EnvironmentConfig::Local {
-                block_store_root: Path::new("blocks").to_path_buf(),
-                embedding: LocalEmbeddingConfig {
-                    base_url: server.base_url.clone(),
-                    model: "all-MiniLM-L6-v2".into(),
-                    api_key_env: None,
-                    request_timeout_secs: 5,
-                    max_retries: 0,
-                    retry_delay_ms: 1,
-                },
-            },
-            embedding_spec: EmbeddingSpecConfig {
-                dims: 2,
-                encoding: "f32le".into(),
-            },
-            block_size_target: 65_536,
-            stage: ExecutionStage::IngestionAndEmbedding,
-            profile_version: PUBLISHED_PROFILE_V0_1_0,
-            max_concurrency: Some(1),
-            items: vec![BatchItemConfig::Document {
-                path: document_path
-                    .strip_prefix(temp.path())
-                    .unwrap()
-                    .to_path_buf(),
-                metadata: BTreeMap::new(),
-            }],
-        };
-        run_request(temp.path(), request).await.unwrap();
-
-        let block_store_root = temp.path().join("blocks");
-        let segment_path = replay_journal_segment_paths(&replay_journal_root(&block_store_root))
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
-        let mut file = fs::OpenOptions::new()
-            .append(true)
-            .open(&segment_path)
-            .unwrap();
-        let oversized_len = (REPLAY_JOURNAL_RECORD_MAX_BYTES + 1) as u32;
-        file.write_all(&oversized_len.to_le_bytes()).unwrap();
-        file.sync_data().unwrap();
-
-        assert!(
-            load_replay_journal_records(&block_store_root)
-                .unwrap()
-                .is_none()
-        );
+        assert!(matches!(
+            error,
+            RuntimeError::MissingReplayJournalHead { .. }
+        ));
         server.join();
     }
 
@@ -5176,50 +5731,55 @@ mod tests {
         };
 
         let record = replay_journal_record_from_item(BlockHash::from_bytes([7u8; 32]), &item);
-        assert_eq!(
-            record.content_ref,
-            ReplayJournalContentRef::Document {
-                path: "C:/temp/alpha.txt".into(),
-            }
-        );
+        assert!(matches!(
+            record,
+            ReplayJournalRecord::ReplayInput {
+                step_kind: ReplayJournalStepKind::Embedding,
+                content_ref: ReplayJournalContentRef::Document { path },
+                ..
+            } if path == "C:/temp/alpha.txt"
+        ));
     }
 
     #[test]
     fn replay_journal_writer_rejects_oversized_payload() {
         let temp = tempdir().unwrap();
+        let block_store = ConfiguredBlockStore::from_environment(
+            temp.path(),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: String::new(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+        )
+        .unwrap();
         let block_store_root = temp.path().join("blocks");
-        prepare_replay_journal(&block_store_root).unwrap();
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
+        prepare_mutable_ref_store(&mutable_ref_store).unwrap();
 
-        let record = ReplayJournalRecord {
+        let record = ReplayJournalRecord::ReplayInput {
+            step_kind: ReplayJournalStepKind::Embedding,
             block_id: BlockHash::from_bytes([9u8; 32]).to_string(),
             metadata: vec![],
             content_ref: ReplayJournalContentRef::Inline {
                 media_type: "text/plain".into(),
-                body: vec![b'x'; REPLAY_JOURNAL_RECORD_MAX_BYTES + 1],
+                body: vec![b'x'; REPLAY_JOURNAL_BLOCK_MAX_BYTES + 1],
             },
         };
 
-        let error = append_replay_journal_records(&block_store_root, &[record]).unwrap_err();
+        let error =
+            append_replay_journal_records(&block_store, &mutable_ref_store, &[record]).unwrap_err();
         assert!(matches!(error, RuntimeError::WriteReplayJournal { .. }));
     }
 
-    #[test]
-    fn replay_journal_reinitializes_segment_with_corrupt_magic() {
-        let temp = tempdir().unwrap();
-        let block_store_root = temp.path().join("blocks");
-        prepare_replay_journal(&block_store_root).unwrap();
-
-        let journal_root = replay_journal_root(&block_store_root);
-        let segment_path = replay_journal_segment_path(&journal_root, 1);
-        fs::write(&segment_path, b"BADMAGIC-corrupt-segment").unwrap();
-
-        let size = initialize_replay_journal_segment(&segment_path).unwrap();
-        assert_eq!(size, REPLAY_JOURNAL_FILE_MAGIC.len() as u64);
-        assert!(replay_journal_segment_has_magic(&segment_path).unwrap());
-    }
-
     #[tokio::test]
-    async fn clustering_only_falls_back_when_journal_record_mismatches_block() {
+    async fn clustering_only_rejects_journal_record_mismatch() {
         let temp = tempdir().unwrap();
         let document_path = temp.path().join("alpha.txt");
         fs::write(&document_path, "alpha\n").unwrap();
@@ -5245,6 +5805,7 @@ mod tests {
             stage: ExecutionStage::IngestionAndEmbedding,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(1),
+            ref_name: TEST_REF_NAME.into(),
             items: vec![BatchItemConfig::Document {
                 path: document_path
                     .strip_prefix(temp.path())
@@ -5254,34 +5815,6 @@ mod tests {
             }],
         };
         run_request(temp.path(), request).await.unwrap();
-
-        let block_store_root = temp.path().join("blocks");
-        let segment_path = replay_journal_segment_paths(&replay_journal_root(&block_store_root))
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
-        let mut record = load_replay_journal_records(&block_store_root)
-            .unwrap()
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
-        record.content_ref = ReplayJournalContentRef::Document {
-            path: "bogus.txt".into(),
-        };
-        let mut encoded = Vec::new();
-        ciborium::ser::into_writer(&record, &mut encoded).unwrap();
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(&segment_path)
-            .unwrap();
-        file.write_all(REPLAY_JOURNAL_FILE_MAGIC).unwrap();
-        file.write_all(&(encoded.len() as u32).to_le_bytes())
-            .unwrap();
-        file.write_all(&encoded).unwrap();
-        file.sync_data().unwrap();
 
         let block_store = ConfiguredBlockStore::from_environment(
             temp.path(),
@@ -5298,28 +5831,43 @@ mod tests {
             },
         )
         .unwrap();
+        let block_store_root = temp.path().join("blocks");
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
+        let mut record = load_replay_journal_records(&block_store, &mutable_ref_store)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        if let ReplayJournalRecord::ReplayInput { content_ref, .. } = &mut record {
+            *content_ref = ReplayJournalContentRef::Document {
+                path: "bogus.txt".into(),
+            };
+        }
+        let forged_head = store_replay_journal_block(&block_store, None, vec![record]).unwrap();
+        let mut refs = load_mutable_ref_store(&mutable_ref_store).unwrap();
+        refs.replay_journal_head_block_id = Some(forged_head.to_string());
+        write_mutable_ref_store(&mutable_ref_store, &refs).unwrap();
         let embedding_spec = EmbeddingSpec {
             dims: 2,
             encoding: "f32le".into(),
         };
         let progress: ProgressReporter = Arc::new(|_| {});
         let io = RuntimeIo {
-            local_block_store_root: Some(block_store_root.as_path()),
+            mutable_ref_store: Some(&mutable_ref_store),
+            mutable_ref_metadata: None,
             progress: &progress,
         };
-        let (replay_batches, _) =
-            load_replay_batches_from_store(&block_store, &embedding_spec, 1, io).unwrap();
-        assert_eq!(replay_batches.len(), 1);
-        assert_eq!(replay_batches[0].items.len(), 1);
-        match &replay_batches[0].items[0].content_ref {
-            ContentRef::Document { path } => assert_eq!(path, &document_path),
-            other => panic!("expected document replay item, got {other:?}"),
-        }
+        let error =
+            load_replay_batches_from_store(&block_store, &embedding_spec, 1, io).unwrap_err();
+        assert!(matches!(
+            error,
+            RuntimeError::InvalidReplayJournalHead { .. }
+        ));
         server.join();
     }
 
     #[test]
-    fn journal_replay_preserves_duplicate_items_with_distinct_blocks() {
+    fn journal_replay_uses_latest_effective_item_for_duplicate_input_identity() {
         let temp = tempdir().unwrap();
         let block_store = ConfiguredBlockStore::from_environment(
             temp.path(),
@@ -5337,7 +5885,8 @@ mod tests {
         )
         .unwrap();
         let block_store_root = temp.path().join("blocks");
-        prepare_replay_journal(&block_store_root).unwrap();
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
+        prepare_mutable_ref_store(&mutable_ref_store).unwrap();
 
         let embedding_spec = EmbeddingSpec {
             dims: 2,
@@ -5395,28 +5944,303 @@ mod tests {
         let (item_two, _) = replay_item_from_validated_block(&validated_two, &embedding_spec)
             .unwrap()
             .unwrap();
-        let records = vec![
+        let records = [
             replay_journal_record_from_item(block_one_id, &item_one),
             replay_journal_record_from_item(block_two_id, &item_two),
         ];
-        append_replay_journal_records(&block_store_root, &records).unwrap();
+        let replay_journal_head_block_id =
+            append_replay_journal_records(&block_store, &mutable_ref_store, &[records[0].clone()])
+                .unwrap();
+        update_mutable_ref_store(
+            &mutable_ref_store,
+            MutableRefStoreUpdate {
+                replay_journal_head_block_id,
+                ..MutableRefStoreUpdate::default()
+            },
+        )
+        .unwrap();
+        let replay_journal_head_block_id =
+            append_replay_journal_records(&block_store, &mutable_ref_store, &[records[1].clone()])
+                .unwrap();
+        update_mutable_ref_store(
+            &mutable_ref_store,
+            MutableRefStoreUpdate {
+                replay_journal_head_block_id,
+                ..MutableRefStoreUpdate::default()
+            },
+        )
+        .unwrap();
 
         let progress: ProgressReporter = Arc::new(|_| {});
         let io = RuntimeIo {
-            local_block_store_root: Some(block_store_root.as_path()),
+            mutable_ref_store: Some(&mutable_ref_store),
+            mutable_ref_metadata: None,
             progress: &progress,
         };
         let (replay_batches, _) =
             load_replay_batches_from_store(&block_store, &embedding_spec, 8, io).unwrap();
 
         let replay_item_count: usize = replay_batches.iter().map(|batch| batch.items.len()).sum();
-        assert_eq!(replay_item_count, 2);
+        assert_eq!(replay_item_count, 1);
+        assert!(matches!(
+            &replay_batches[0].audit_records[0],
+            ReplayJournalRecord::ReplayInput { block_id, .. } if block_id == &block_two_id.to_string()
+        ));
+    }
+
+    #[test]
+    fn azure_mutable_ref_store_round_trips_json_state() {
+        let server = spawn_ref_blob_server(3);
+        let ref_path = format!("{MUTABLE_REF_ROOT_DIR}/{TEST_REF_NAME}");
+        let mutable_ref_store = MutableRefStoreLocation::AzureBlob {
+            url: format!("{}/archive-sync/{}?sig=test", server.base_url, ref_path),
+            display_path: format!("{}/archive-sync/{}", server.base_url, ref_path),
+        };
+
+        assert_eq!(
+            load_mutable_ref_store(&mutable_ref_store).unwrap(),
+            MutableRefStoreState::default()
+        );
+        let state = MutableRefStoreState {
+            current_root_block_id: Some(BlockHash::from_bytes([1u8; 32]).to_string()),
+            replay_journal_head_block_id: Some(BlockHash::from_bytes([2u8; 32]).to_string()),
+            metadata: Some(BTreeMap::from([("stage".into(), "full-pipeline".into())])),
+        };
+        write_mutable_ref_store(&mutable_ref_store, &state).unwrap();
+        assert_eq!(load_mutable_ref_store(&mutable_ref_store).unwrap(), state);
+        server.join();
+    }
+
+    #[tokio::test]
+    async fn clustering_only_run_advances_replay_journal_head() {
+        let temp = tempdir().unwrap();
+        let document_a = temp.path().join("alpha.txt");
+        let document_b = temp.path().join("beta.txt");
+        fs::write(&document_a, b"alpha\n").unwrap();
+        fs::write(&document_b, b"beta\n").unwrap();
+
+        let server = spawn_embedding_server(2);
+        let full_summary = run_request(
+            temp.path(),
+            BatchRequest {
+                environment: EnvironmentConfig::Local {
+                    block_store_root: Path::new("blocks").to_path_buf(),
+                    embedding: LocalEmbeddingConfig {
+                        base_url: server.base_url.clone(),
+                        model: "all-MiniLM-L6-v2".into(),
+                        api_key_env: None,
+                        request_timeout_secs: 5,
+                        max_retries: 0,
+                        retry_delay_ms: 1,
+                    },
+                },
+                embedding_spec: EmbeddingSpecConfig {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                block_size_target: 65_536,
+                stage: ExecutionStage::FullPipeline,
+                profile_version: PUBLISHED_PROFILE_V0_1_0,
+                max_concurrency: Some(2),
+                ref_name: TEST_REF_NAME.into(),
+                items: vec![
+                    BatchItemConfig::Document {
+                        path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
+                        metadata: BTreeMap::new(),
+                    },
+                    BatchItemConfig::Document {
+                        path: document_b.strip_prefix(temp.path()).unwrap().to_path_buf(),
+                        metadata: BTreeMap::new(),
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+        let block_store_root = temp.path().join("blocks");
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
+        let refs_after_full = load_mutable_ref_store(&mutable_ref_store).unwrap();
+
+        let clustering_summary = run_request(
+            temp.path(),
+            BatchRequest {
+                environment: EnvironmentConfig::Local {
+                    block_store_root: Path::new("blocks").to_path_buf(),
+                    embedding: LocalEmbeddingConfig {
+                        base_url: String::new(),
+                        model: "all-MiniLM-L6-v2".into(),
+                        api_key_env: None,
+                        request_timeout_secs: 5,
+                        max_retries: 0,
+                        retry_delay_ms: 1,
+                    },
+                },
+                embedding_spec: EmbeddingSpecConfig {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                block_size_target: 65_536,
+                stage: ExecutionStage::ClusteringAndBlockAssembly,
+                profile_version: PUBLISHED_PROFILE_V0_1_0,
+                max_concurrency: Some(2),
+                ref_name: TEST_REF_NAME.into(),
+                items: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+        let refs_after_clustering = load_mutable_ref_store(&mutable_ref_store).unwrap();
+        assert_eq!(clustering_summary.root_id, full_summary.root_id);
+        assert_ne!(
+            refs_after_clustering.replay_journal_head_block_id,
+            refs_after_full.replay_journal_head_block_id
+        );
+
+        let block_store = ConfiguredBlockStore::from_environment(
+            temp.path(),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: String::new(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+        )
+        .unwrap();
+        let records = load_replay_journal_records(&block_store, &mutable_ref_store).unwrap();
+        assert_eq!(records.len(), 4);
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| matches!(
+                    record,
+                    ReplayJournalRecord::IndexingOutcome {
+                        step_kind: ReplayJournalStepKind::Indexing,
+                        root_block_id,
+                        ..
+                    } if root_block_id == &full_summary.root_id
+                ))
+                .count(),
+            2
+        );
+        server.join();
+    }
+
+    #[tokio::test]
+    async fn current_root_ref_is_published_and_ingestion_only_does_not_rewrite_it() {
+        let temp = tempdir().unwrap();
+        let document_a = temp.path().join("alpha.txt");
+        let document_b = temp.path().join("beta.txt");
+        let document_c = temp.path().join("gamma.txt");
+        fs::write(&document_a, b"alpha\n").unwrap();
+        fs::write(&document_b, b"beta\n").unwrap();
+        fs::write(&document_c, b"gamma\n").unwrap();
+
+        let server = spawn_embedding_server(3);
+        let full_summary = run_request(
+            temp.path(),
+            BatchRequest {
+                environment: EnvironmentConfig::Local {
+                    block_store_root: Path::new("blocks").to_path_buf(),
+                    embedding: LocalEmbeddingConfig {
+                        base_url: server.base_url.clone(),
+                        model: "all-MiniLM-L6-v2".into(),
+                        api_key_env: None,
+                        request_timeout_secs: 5,
+                        max_retries: 0,
+                        retry_delay_ms: 1,
+                    },
+                },
+                embedding_spec: EmbeddingSpecConfig {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                block_size_target: 65_536,
+                stage: ExecutionStage::FullPipeline,
+                profile_version: PUBLISHED_PROFILE_V0_1_0,
+                max_concurrency: Some(2),
+                ref_name: TEST_REF_NAME.into(),
+                items: vec![
+                    BatchItemConfig::Document {
+                        path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
+                        metadata: BTreeMap::new(),
+                    },
+                    BatchItemConfig::Document {
+                        path: document_b.strip_prefix(temp.path()).unwrap().to_path_buf(),
+                        metadata: BTreeMap::new(),
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+        let block_store_root = temp.path().join("blocks");
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
+        let refs_after_full = load_mutable_ref_store(&mutable_ref_store).unwrap();
+        assert_eq!(
+            refs_after_full.current_root_block_id.as_deref(),
+            Some(full_summary.root_id.as_str())
+        );
+        assert!(refs_after_full.replay_journal_head_block_id.is_some());
+
+        let ingestion_only_summary = run_request(
+            temp.path(),
+            BatchRequest {
+                environment: EnvironmentConfig::Local {
+                    block_store_root: Path::new("blocks").to_path_buf(),
+                    embedding: LocalEmbeddingConfig {
+                        base_url: server.base_url.clone(),
+                        model: "all-MiniLM-L6-v2".into(),
+                        api_key_env: None,
+                        request_timeout_secs: 5,
+                        max_retries: 0,
+                        retry_delay_ms: 1,
+                    },
+                },
+                embedding_spec: EmbeddingSpecConfig {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                block_size_target: 65_536,
+                stage: ExecutionStage::IngestionAndEmbedding,
+                profile_version: PUBLISHED_PROFILE_V0_1_0,
+                max_concurrency: Some(1),
+                ref_name: TEST_REF_NAME.into(),
+                items: vec![BatchItemConfig::Document {
+                    path: document_c.strip_prefix(temp.path()).unwrap().to_path_buf(),
+                    metadata: BTreeMap::new(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(ingestion_only_summary.root_id, placeholder_root_id());
+
+        let refs_after_ingestion = load_mutable_ref_store(&mutable_ref_store).unwrap();
+        assert_eq!(
+            refs_after_ingestion.current_root_block_id.as_deref(),
+            Some(full_summary.root_id.as_str())
+        );
+        assert!(refs_after_ingestion.replay_journal_head_block_id.is_some());
+        server.join();
     }
 
     struct TestServer {
         base_url: String,
         handle: thread::JoinHandle<()>,
         max_in_flight: Arc<AtomicUsize>,
+    }
+
+    struct RefBlobServer {
+        base_url: String,
+        handle: thread::JoinHandle<()>,
     }
 
     impl TestServer {
@@ -5426,6 +6250,12 @@ mod tests {
 
         fn max_in_flight(&self) -> usize {
             self.max_in_flight.load(Ordering::SeqCst)
+        }
+    }
+
+    impl RefBlobServer {
+        fn join(self) {
+            self.handle.join().unwrap();
         }
     }
 
@@ -5478,6 +6308,69 @@ mod tests {
 
     fn spawn_embedding_server(expected_requests: usize) -> TestServer {
         spawn_embedding_server_with_delay(expected_requests, Duration::ZERO)
+    }
+
+    fn spawn_ref_blob_server(expected_requests: usize) -> RefBlobServer {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let state = Arc::new(std::sync::Mutex::new(None::<Vec<u8>>));
+        let state_for_thread = Arc::clone(&state);
+        let handle = thread::spawn(move || {
+            ready_tx.send(()).unwrap();
+            for _ in 0..expected_requests {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                reader.read_line(&mut request_line).unwrap();
+                assert!(request_line.contains(&format!("{MUTABLE_REF_ROOT_DIR}/{TEST_REF_NAME}")));
+                let method = request_line
+                    .split_whitespace()
+                    .next()
+                    .expect("request line includes method")
+                    .to_string();
+                let mut content_length = 0usize;
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).unwrap();
+                    if header == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = header.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        content_length = value.trim().parse().unwrap();
+                    }
+                }
+                let mut body = vec![0u8; content_length];
+                reader.read_exact(&mut body).unwrap();
+                let (status, response_body) = match method.as_str() {
+                    "GET" => match state_for_thread.lock().unwrap().clone() {
+                        Some(body) => ("200 OK", body),
+                        None => ("404 Not Found", Vec::new()),
+                    },
+                    "PUT" => {
+                        *state_for_thread.lock().unwrap() = Some(body);
+                        ("201 Created", Vec::new())
+                    }
+                    other => panic!("unexpected ref-blob method {other}"),
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    response_body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+                if !response_body.is_empty() {
+                    stream.write_all(&response_body).unwrap();
+                }
+                stream.flush().unwrap();
+            }
+        });
+        ready_rx.recv().unwrap();
+        RefBlobServer {
+            base_url: format!("http://{}", address),
+            handle,
+        }
     }
 
     fn spawn_distinct_embedding_server(expected_requests: usize) -> TestServer {

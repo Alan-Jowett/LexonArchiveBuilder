@@ -8,7 +8,7 @@
 Specification patch for the approved email-artifact, chunk-level
 indexing, local filesystem block-store interoperability, replay-based
 streaming delegated indexing, stage-selectable execution, standalone
-clustering input discovery, published-profile API adoption,
+clustering input discovery, mutable current-root publication, published-profile API adoption,
 published-profile version selection, latest published-profile and
 telemetry compatibility, upstream regression assessment,
 replay-submission and streaming-status observability,
@@ -233,25 +233,21 @@ ingestion phase in the same invocation, LexonArchiveBuilder derives its clusteri
 candidate set from a repository-owned replay-input source that is valid for the
 configured store snapshot.
 
-When the selected environment exposes a LAB-managed local filesystem block-store
-root, the preferred source is a LAB-owned replay journal emitted during
-successful leaf persistence. When that journal is absent, incompatible,
-incomplete, or intentionally unavailable because the store was rebuilt without
-journal continuity, the runtime falls back to iterating the configured
-`BlockStore` through the upstream LexonGraph block-iteration API.
+LexonArchiveBuilder treats the repository-owned immutable replay-audit journal as
+the authoritative replay-input source for standalone clustering.
 
-LexonArchiveBuilder treats the approved replay-journal contract plus the upstream
-iteration contract as the authorities for which stored inputs are
-clustering-eligible. Repository-owned artifacts that are not surfaced by the
-approved replay-input surface remain outside the standalone clustering input
-set.
+The runtime discovers the current journal head through the approved mutable
+reference mechanism, traverses the immutable journal chain from that head, and
+reconstructs clustering-eligible replay inputs only from entries surfaced by
+that chain. Repository-owned artifacts that are not surfaced by the approved
+replay-audit input surface remain outside the standalone clustering input set.
 
 Standalone clustering therefore operates over all clustering-eligible blocks
-visible in the configured store snapshot at invocation time rather than over a
-request-local summary artifact.
+visible through the selected journal head rather than over a request-local
+summary artifact or a whole-store block scan.
 
 **Traces to:** RQ-INDEXER-003E, RQ-INDEXER-003E1, RQ-INDEXER-003E2,
-RQ-INDEXER-010A
+RQ-INDEXER-003E3, RQ-INDEXER-010A
 
 ### DSG-LFI-001F `Replay staging for split-stage execution`
 
@@ -268,30 +264,91 @@ This design fixes the replay-safety contract but does not freeze a specific
 serialization schema for the staging artifact in the specification layer.
 
 **Traces to:** RQ-INDEXER-003A, RQ-INDEXER-003E, RQ-INDEXER-003E1,
-RQ-INDEXER-004F
+RQ-INDEXER-003E4, RQ-INDEXER-004F
 
-### DSG-LFI-001F1 `Replay-journal write and growth discipline`
+### DSG-LFI-001F1 `Immutable replay-audit publication discipline`
 
-For environments that expose a LAB-managed local filesystem block-store root,
 LexonArchiveBuilder realizes the repository-owned replay staging artifact as a
-durable replay journal whose committed records are append-only and emitted only
-after the corresponding replayable leaf output has been durably persisted
-through the approved storage boundary.
+shared-`BlockStore` immutable replay-audit journal in both local/testing and
+production-oriented environments.
 
-The journal is optimized for sequential append and sequential replay rather than
-random in-place mutation. Growth is controlled through bounded journal segments
-or equivalent rollover units so large corpora do not require one unbounded
-monolithic file.
+The runtime accumulates bounded completed-work audit entries until the active
+journal payload crosses the approved size-oriented threshold, then publishes one
+immutable journal block that:
 
-Crash recovery treats a partial trailing record as incomplete local progress and
-preserves all earlier committed records as valid replay state.
+1. contains the grouped audit entries for that completed work chunk
+2. identifies the predecessor journal block by hash when a predecessor exists
+3. becomes the new authoritative replay point only after the journal block
+   itself is durably persisted
 
-The specification intentionally leaves the first compact binary encoding choice
-open at the design layer boundary, provided the implementation preserves the
-append-only, low-overhead, and segmentable requirements approved upstream of
-this document.
+Crash recovery treats unpublished in-memory or otherwise incomplete local
+progress as non-authoritative and preserves the previously published journal
+head plus its immutable predecessor chain as valid replay state.
+
+The specification intentionally leaves the exact compact encoding and the exact
+size threshold open at the design layer boundary, provided the implementation
+preserves append-only immutable publication, low-overhead operation, and bounded
+redo cost.
 
 **Traces to:** RQ-INDEXER-003E1, RQ-INDEXER-003E2, RQ-INDEXER-008
+
+### DSG-LFI-001F2 `Mutable replay-journal head discovery`
+
+LexonArchiveBuilder publishes the latest immutable replay-audit journal head
+through a repository-owned mutable reference mechanism.
+
+That reference is the discovery point for later ingestion resume and
+clustering-only replay. Updating the head changes which immutable audit chain is
+authoritative, but it does not mutate any previously published journal block.
+
+This keeps replay discovery aligned with the repository's mutable
+reference pattern for current-root publication instead of relying on request-
+local state or block-store scanning heuristics.
+
+The caller supplies the ref name, and the runtime maps that name to one
+human-readable JSON ref artifact at `refs/{ref_name}`. That artifact is the
+unit of mutable publication; different ref names produce different ref files or
+blob paths rather than sharing one repository-global mutable JSON document.
+
+**Traces to:** RQ-INDEXER-003E3, RQ-INDEXER-010
+
+### DSG-LFI-001F3 `Replay-audit entry coverage`
+
+Each immutable replay-audit journal block stores repository-owned audit entries
+that are detailed enough to reconstruct what completed work occurred.
+
+For every recorded work entry, the design preserves at least:
+
+- the relevant input item, artifact, or predecessor block identities
+- the repository-owned action or step kind that completed
+- the generated block identities or equivalent durable output artifacts
+
+This keeps the journal useful both for deterministic replay reconstruction and
+for later audit or diagnosis without redefining LexonGraph-owned semantics for
+the delegated blocks themselves.
+
+**Traces to:** RQ-INDEXER-003E4, RQ-INDEXER-010A
+
+### DSG-LFI-001F4 `Mutable current-root publication`
+
+When a successful execution stage materializes a new final root, the runtime
+publishes that immutable root identity through the same repository-owned
+mutable reference mechanism class used for replay-journal head discovery.
+
+The mutable current-root reference is updated only after the new immutable root
+is already valid and durable under the selected `BlockStore` boundary. Stages
+that do not materialize a new final root leave the existing current-root
+reference unchanged.
+
+The `refs/{ref_name}` JSON payload carries the latest replay-journal head block
+id, the latest successfully materialized root block id when present, and
+publication metadata such as the effective profile version and stage label.
+
+This preserves the existing `BatchSummary` final-root contract while adding a
+durable repository-owned discovery surface for later invocations and operator
+workflows.
+
+**Traces to:** RQ-INDEXER-003D, RQ-INDEXER-003E5, RQ-INDEXER-010
 
 ### DSG-LFI-001G `Published-profile planning seam`
 
@@ -422,9 +479,8 @@ by mailbox through replay staging and streaming-pass preparation rather than
 waiting for all delegated work to accumulate behind one final terminal call. A
 clustering-only request may leave the collection empty and instead derive its
 input from the configured store snapshot through the separate standalone
-clustering-discovery seam plus replay-staging seam, which prefers the
-repository-owned replay journal and only falls back to whole-store discovery for
-compatibility cases.
+clustering-discovery seam plus replay-staging seam, which uses the repository-
+owned immutable replay-audit journal as the authoritative discovery surface.
 
 **Traces to:** RQ-INDEXER-001, RQ-INDEXER-002, RQ-INDEXER-003A,
 RQ-INDEXER-003D, RQ-INDEXER-003E
@@ -1317,11 +1373,10 @@ changing the concurrency budget may change throughput, but it does not change
 the logical block set or final root produced for unchanged input under the same
 delegated LexonGraph contract.
 
-For standalone clustering, the comparable invariant is store-snapshot stability:
-repeating the clustering-only stage against the same clustering-eligible block
-set is expected to produce the same logical clustering result under unchanged
-upstream semantics whether replay inputs come from a valid replay journal or
-from compatibility-mode whole-store iteration.
+For standalone clustering, the comparable invariant is journal-head stability:
+repeating the clustering-only stage against the same journal head and the same
+clustering-eligible block-store snapshot is expected to produce the same
+logical clustering result under unchanged upstream semantics.
 
 The same stability expectation applies to clustering configuration resolution:
 repeating a clustering-enabled run with the same selected published profile
@@ -1354,12 +1409,13 @@ LexonArchiveBuilder-owned verification artifacts validate:
   without exposing the raw upstream lifecycle
 - correct leaf-layer concurrency scheduling with cross-layer barriers
 - correct standalone clustering input discovery through the repository-owned
-  replay journal with upstream block-iteration fallback
+  immutable replay-audit journal without whole-store scan fallback
 - correct adoption of the upstream published-profile API with defaulted and
   explicit profile-version selection plus explicit rejection of retired
   low-level clustering controls
 - correct deterministic replay staging and replay-stable content fingerprinting
-- correct replay-journal append, rollover, and crash-tolerance behavior
+- correct replay-audit block publication, mutable head updates, grouped-entry
+  coverage, and crash-tolerance behavior
 - correct selection and use of content-resolution, block-store, and
   embedding-provider adapters
 - correct interoperability of the local filesystem-backed block-store profile
