@@ -442,7 +442,9 @@ mod tests {
                         assert_eq!(block_store.memory_cache_max_resident_blocks, Some(64));
                         assert_eq!(block_store.prefix, None);
                     }
-                    EnvironmentConfig::Local { .. } => panic!("expected production environment"),
+                    EnvironmentConfig::Local { .. } | EnvironmentConfig::LocalOverlay { .. } => {
+                        panic!("expected production environment")
+                    }
                 }
             }
             _ => panic!("expected quality command"),

@@ -34,7 +34,7 @@ RUN_NAME=""
 DATASET_BLOCK_STORE_PREFIX="datasets/block-store"
 DATASET_REPLAY_JOURNAL_PREFIX="datasets/block-store.replay-journal"
 ARTIFACT_PREFIX=""
-BLOCK_STORE_TARGET="filesystem"
+BLOCK_STORE_TARGET="overlay"
 EMBEDDING_BASE_URL="${SCALE_TEST_EMBEDDING_BASE_URL:-http://stapi:8080}"
 
 while [[ $# -gt 0 ]]; do
@@ -124,6 +124,13 @@ cleanup() {
   local status_blob="${ARTIFACT_PREFIX}/status.json"
   local sources_blob="${ARTIFACT_PREFIX}/sources.txt"
   local manifest_blob="${ARTIFACT_PREFIX}/manifest.json"
+  local status_block_store_prefix="$DATASET_BLOCK_STORE_PREFIX"
+  local block_store_location="$DATASET_BLOCK_STORE_PREFIX"
+
+  if [[ "$BLOCK_STORE_TARGET" == "overlay" ]]; then
+    status_block_store_prefix=""
+    block_store_location="container-root"
+  fi
 
   if [[ $exit_code -eq 0 ]]; then
     SUCCESS=true
@@ -136,7 +143,7 @@ cleanup() {
     "$SUCCESS" \
     "$MANIFEST_PATH" \
     "$ARTIFACT_PREFIX" \
-    "{\"dataset_block_store_prefix\": \"$(json_escape "$DATASET_BLOCK_STORE_PREFIX")\", \"dataset_replay_journal_prefix\": \"$(json_escape "$DATASET_REPLAY_JOURNAL_PREFIX")\", \"container_name\": \"$(json_escape "$MANIFEST_CONTAINER_NAME")\"}"
+    "{\"block_store_target\": \"$(json_escape "$BLOCK_STORE_TARGET")\", \"block_store_location\": \"$(json_escape "$block_store_location")\", \"dataset_block_store_prefix\": \"$(json_escape "$status_block_store_prefix")\", \"dataset_replay_journal_prefix\": \"$(json_escape "$DATASET_REPLAY_JOURNAL_PREFIX")\", \"container_name\": \"$(json_escape "$MANIFEST_CONTAINER_NAME")\"}"
 
   if [[ -f "$SUMMARY_PATH" ]]; then
     upload_file_to_blob "$SUMMARY_PATH" "$CONTAINER_SAS_URL" "$summary_blob"
@@ -160,11 +167,21 @@ trap cleanup EXIT
 
 printf '%s\n' "${MANIFEST_SOURCES[@]}" >"$SOURCES_LOG"
 
-download_blob_tree_if_present "$CONTAINER_SAS_URL" "$DATASET_BLOCK_STORE_PREFIX" "$BLOCK_STORE_DIR"
+if [[ "$BLOCK_STORE_TARGET" == "filesystem" ]]; then
+  download_blob_tree_if_present "$CONTAINER_SAS_URL" "$DATASET_BLOCK_STORE_PREFIX" "$BLOCK_STORE_DIR"
+fi
 download_blob_tree_if_present "$CONTAINER_SAS_URL" "$DATASET_REPLAY_JOURNAL_PREFIX" "$REPLAY_JOURNAL_DIR"
 
 mirror_manifest_sources "$RUN_ROOT"
-write_mailbox_request "$REQUEST_PATH" "block-store" "$EMBEDDING_BASE_URL" "ingestion-and-embedding" "" "yes"
+write_mailbox_request \
+  "$REQUEST_PATH" \
+  "block-store" \
+  "$CONTAINER_SAS_URL" \
+  "$BLOCK_STORE_TARGET" \
+  "$EMBEDDING_BASE_URL" \
+  "ingestion-and-embedding" \
+  "" \
+  "yes"
 
 printf 'Discovered %d mailbox files\n' "${#MAILBOX_PATHS[@]}"
 printf 'Refreshing reusable embeddings for container %s\n' "$MANIFEST_CONTAINER_NAME"
@@ -174,5 +191,7 @@ lexonarchivebuilder-indexer run \
   --stage ingestion-and-embedding \
   --summary-out "$SUMMARY_PATH"
 
-sync_local_tree_to_blob "$BLOCK_STORE_DIR" "$CONTAINER_SAS_URL" "$DATASET_BLOCK_STORE_PREFIX"
+if [[ "$BLOCK_STORE_TARGET" == "filesystem" ]]; then
+  sync_local_tree_to_blob "$BLOCK_STORE_DIR" "$CONTAINER_SAS_URL" "$DATASET_BLOCK_STORE_PREFIX"
+fi
 sync_local_tree_to_blob "$REPLAY_JOURNAL_DIR" "$CONTAINER_SAS_URL" "$DATASET_REPLAY_JOURNAL_PREFIX"

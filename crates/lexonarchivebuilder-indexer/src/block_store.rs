@@ -27,7 +27,8 @@ impl ConfiguredBlockStore {
                 block_store_root, ..
             } => FilesystemBlockStore::new(resolve_path(request_dir, block_store_root))
                 .map(Self::Local),
-            EnvironmentConfig::Production { block_store, .. } => {
+            EnvironmentConfig::LocalOverlay { block_store, .. }
+            | EnvironmentConfig::Production { block_store, .. } => {
                 Self::production_store(request_dir, block_store)
             }
         }
@@ -211,6 +212,33 @@ mod tests {
                     deployment: "unused".into(),
                     api_version: "2024-02-01".into(),
                     api_key_env: None,
+                },
+            },
+        )
+        .unwrap();
+
+        assert!(matches!(store, ConfiguredBlockStore::Overlay(_)));
+    }
+
+    #[test]
+    fn configured_local_overlay_store_accepts_overlay_cache_layers() {
+        let store = ConfiguredBlockStore::from_environment(
+            Path::new("."),
+            &EnvironmentConfig::LocalOverlay {
+                block_store: ProductionBlockStoreConfig {
+                    container_sas_url:
+                        "https://example.blob.core.windows.net/archive-sync?sig=test".into(),
+                    prefix: None,
+                    filesystem_cache_root: Some("cache".into()),
+                    memory_cache_max_resident_blocks: Some(64),
+                },
+                embedding: crate::config::LocalEmbeddingConfig {
+                    base_url: "http://localhost:8080".into(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 30,
+                    max_retries: 5,
+                    retry_delay_ms: 1_000,
                 },
             },
         )

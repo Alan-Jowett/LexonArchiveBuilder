@@ -68,18 +68,23 @@ resolve_input_path() {
 ensure_supported_block_store_target() {
   local target="$1"
   case "$target" in
-    filesystem)
+    filesystem|overlay)
       return 0
-      ;;
-    overlay)
-      printf 'error: TODO(overlay-block-store): overlay block-store support depends on the separate overlay implementation PR and is not executable in this change set yet\n' >&2
-      exit 2
       ;;
     *)
       printf 'error: unsupported block-store target: %s\n' "$target" >&2
       exit 1
       ;;
   esac
+}
+
+overlay_memory_cache_max_resident_blocks() {
+  local value="${OVERLAY_BLOCK_STORE_MEMORY_CACHE_MAX_RESIDENT_BLOCKS:-4096}"
+  if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'error: OVERLAY_BLOCK_STORE_MEMORY_CACHE_MAX_RESIDENT_BLOCKS must be a positive integer\n' >&2
+    exit 1
+  fi
+  printf '%s' "$value"
 }
 
 load_manifest() {
@@ -258,17 +263,32 @@ mirror_manifest_sources() {
 write_mailbox_request() {
   local request_path="$1"
   local block_store_root="$2"
-  local embedding_base_url="$3"
-  local stage="$4"
-  local profile_version="${5:-}"
-  local include_items="$6"
-  local index mailbox_path month
+  local container_sas_url="$3"
+  local block_store_target="$4"
+  local embedding_base_url="$5"
+  local stage="$6"
+  local profile_version="${7:-}"
+  local include_items="$8"
+  local index mailbox_path month overlay_memory_cache_blocks
+
+  if [[ "$block_store_target" == "overlay" ]]; then
+    overlay_memory_cache_blocks="$(overlay_memory_cache_max_resident_blocks)"
+  fi
 
   {
     printf '{\n'
     printf '  "environment": {\n'
-    printf '    "kind": "local",\n'
-    printf '    "block_store_root": "%s",\n' "$(json_escape "$block_store_root")"
+    if [[ "$block_store_target" == "overlay" ]]; then
+      printf '    "kind": "local-overlay",\n'
+      printf '    "block_store": {\n'
+      printf '      "container_sas_url": "%s",\n' "$(json_escape "$container_sas_url")"
+      printf '      "filesystem_cache_root": "%s",\n' "$(json_escape "$block_store_root")"
+      printf '      "memory_cache_max_resident_blocks": %s\n' "$overlay_memory_cache_blocks"
+      printf '    },\n'
+    else
+      printf '    "kind": "local",\n'
+      printf '    "block_store_root": "%s",\n' "$(json_escape "$block_store_root")"
+    fi
     printf '    "embedding": {\n'
     printf '      "base_url": "%s",\n' "$(json_escape "$embedding_base_url")"
     printf '      "model": "all-MiniLM-L6-v2",\n'

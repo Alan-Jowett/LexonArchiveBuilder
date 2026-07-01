@@ -117,25 +117,28 @@ the manifest so long as it remains a checked-in file with those required fields.
 
 **Traces to:** RQ-EXP-005, RQ-EXP-006
 
-### DSG-EXP-003A `Block-store selection seam with deferred overlay integration`
+### DSG-EXP-003A `Hosted block-store target contract`
 
-The hosted workflow family preserves a block-store target seam for the
-experiment path instead of hard-coding one storage realization forever.
+The hosted workflow family preserves a caller-visible block-store selection
+contract for the experiment path instead of hard-coding one storage realization
+forever.
 
 The design baseline distinguishes:
 
 1. the currently available regular filesystem block-store path
-2. the future overlay block-store path described by the separate pull request,
-   which is assumed to layer memory, local filesystem, and Azure Blob Storage so
+2. the approved overlay block-store path, which layers memory, local
+   filesystem, and Azure Blob Storage so
    writes persist to Azure while reads are satisfied by the first layer that has
    the requested data
 
-Because that overlay implementation is being built elsewhere, this increment
-does not claim executable overlay support. Instead, any new integration points
-needed to accommodate that future block-store target remain explicitly marked as
-TODOs in downstream implementation artifacts until the other pull request lands.
+Both hosted workflows use the same two-target contract, and the default
+selection is `overlay` whenever the caller does not explicitly choose a target.
 
-**Traces to:** RQ-EXP-008A, RQ-EXP-020
+The design therefore treats overlay as an executable hosted mode rather than a
+future-only seam while preserving explicit filesystem selection for comparison,
+fallback, and local-parity investigations.
+
+**Traces to:** RQ-EXP-008A, RQ-EXP-008B, RQ-EXP-020
 
 ### DSG-EXP-004 `Embedding-refresh as stage-selectable ingestion`
 
@@ -288,18 +291,24 @@ surface rather than a production-serving deployment expansion.
 
 **Traces to:** RQ-EXP-012, RQ-EXP-017, RQ-EXP-021
 
-### DSG-EXP-010A `Deferred overlay-block-store hosting seam`
+### DSG-EXP-010A `Hosted overlay-target execution wiring`
 
-When the separate overlay block-store pull request lands, the hosted workflow
-family should be able to target either the existing filesystem block-store path
-or that overlay path without changing the high-level two-workflow contract.
+The hosted workflow family wires the approved two-target block-store contract
+through workflow inputs, VM bootstrap inputs, and downstream container
+invocation without changing the high-level two-workflow contract.
 
-Until then, the design keeps the Azure-hosted execution shape compatible with
-filesystem-backed runs and reserves overlay-targeting integration points as
-explicit TODO-marked seams in the workflow, IaC, or bootstrap layers rather than
-pretending the overlay path is already implemented.
+Within that wiring:
 
-**Traces to:** RQ-EXP-008A, RQ-EXP-012, RQ-EXP-020
+1. both workflows accept explicit caller selection of `filesystem` or `overlay`
+2. both workflows default the omitted selection to `overlay`
+3. the workflow, IaC, and bootstrap layers pass the selected target through to
+   the existing runtime surfaces without inventing a third storage mode
+
+This preserves Azure-hosted execution parity across embedding refresh and
+indexing experiments while avoiding any redesign of the upstream overlay
+implementation itself.
+
+**Traces to:** RQ-EXP-008A, RQ-EXP-008B, RQ-EXP-012, RQ-EXP-020
 
 ### DSG-EXP-011 `Blob-backed artifact handoff`
 
@@ -346,7 +355,7 @@ fallback instead of trusting only one cleanup mechanism.
 | DSG-EXP-001 | RQ-EXP-001, RQ-EXP-020, RQ-EXP-021 |
 | DSG-EXP-002 | RQ-EXP-002, RQ-EXP-008 |
 | DSG-EXP-003 | RQ-EXP-005, RQ-EXP-006 |
-| DSG-EXP-003A | RQ-EXP-008A, RQ-EXP-020 |
+| DSG-EXP-003A | RQ-EXP-008A, RQ-EXP-008B, RQ-EXP-020 |
 | DSG-EXP-004 | RQ-EXP-007, RQ-EXP-012, RQ-EXP-013 |
 | DSG-EXP-005 | RQ-EXP-007, RQ-EXP-020 |
 | DSG-EXP-006 | RQ-EXP-008, RQ-EXP-009, RQ-EXP-014 |
@@ -355,6 +364,6 @@ fallback instead of trusting only one cleanup mechanism.
 | DSG-EXP-008 | RQ-EXP-003, RQ-EXP-011 |
 | DSG-EXP-009 | RQ-EXP-003, RQ-EXP-004, RQ-EXP-021 |
 | DSG-EXP-010 | RQ-EXP-012, RQ-EXP-017, RQ-EXP-021 |
-| DSG-EXP-010A | RQ-EXP-008A, RQ-EXP-012, RQ-EXP-020 |
+| DSG-EXP-010A | RQ-EXP-008A, RQ-EXP-008B, RQ-EXP-012, RQ-EXP-020 |
 | DSG-EXP-011 | RQ-EXP-015, RQ-EXP-016, RQ-EXP-014A |
 | DSG-EXP-012 | RQ-EXP-017, RQ-EXP-018, RQ-EXP-019 |

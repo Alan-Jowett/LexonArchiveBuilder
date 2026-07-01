@@ -35,7 +35,7 @@ RUN_NAME=""
 DATASET_BLOCK_STORE_PREFIX="datasets/block-store"
 DATASET_REPLAY_JOURNAL_PREFIX="datasets/block-store.replay-journal"
 ARTIFACT_PREFIX=""
-BLOCK_STORE_TARGET="filesystem"
+BLOCK_STORE_TARGET="overlay"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -121,6 +121,14 @@ cp "$MANIFEST_PATH" "$MANIFEST_COPY_PATH"
 SUCCESS=false
 cleanup() {
   local exit_code=$?
+  local status_block_store_prefix="$DATASET_BLOCK_STORE_PREFIX"
+  local block_store_location="$DATASET_BLOCK_STORE_PREFIX"
+
+  if [[ "$BLOCK_STORE_TARGET" == "overlay" ]]; then
+    status_block_store_prefix=""
+    block_store_location="container-root"
+  fi
+
   if [[ $exit_code -eq 0 ]]; then
     SUCCESS=true
   fi
@@ -132,7 +140,7 @@ cleanup() {
     "$SUCCESS" \
     "$MANIFEST_PATH" \
     "$ARTIFACT_PREFIX" \
-    "{\"profile_version\": \"$(json_escape "$PROFILE_VERSION")\", \"dataset_block_store_prefix\": \"$(json_escape "$DATASET_BLOCK_STORE_PREFIX")\", \"dataset_replay_journal_prefix\": \"$(json_escape "$DATASET_REPLAY_JOURNAL_PREFIX")\", \"container_name\": \"$(json_escape "$MANIFEST_CONTAINER_NAME")\"}"
+    "{\"profile_version\": \"$(json_escape "$PROFILE_VERSION")\", \"block_store_target\": \"$(json_escape "$BLOCK_STORE_TARGET")\", \"block_store_location\": \"$(json_escape "$block_store_location")\", \"dataset_block_store_prefix\": \"$(json_escape "$status_block_store_prefix")\", \"dataset_replay_journal_prefix\": \"$(json_escape "$DATASET_REPLAY_JOURNAL_PREFIX")\", \"container_name\": \"$(json_escape "$MANIFEST_CONTAINER_NAME")\"}"
 
   if [[ -f "$REQUEST_PATH" ]]; then
     upload_file_to_blob "$REQUEST_PATH" "$CONTAINER_SAS_URL" "${ARTIFACT_PREFIX}/request.json"
@@ -157,15 +165,25 @@ cleanup() {
 }
 trap cleanup EXIT
 
-download_blob_tree_if_present "$CONTAINER_SAS_URL" "$DATASET_BLOCK_STORE_PREFIX" "$BLOCK_STORE_DIR"
+if [[ "$BLOCK_STORE_TARGET" == "filesystem" ]]; then
+  download_blob_tree_if_present "$CONTAINER_SAS_URL" "$DATASET_BLOCK_STORE_PREFIX" "$BLOCK_STORE_DIR"
+fi
 download_blob_tree_if_present "$CONTAINER_SAS_URL" "$DATASET_REPLAY_JOURNAL_PREFIX" "$REPLAY_JOURNAL_DIR"
 
-if [[ -z "$(find "$BLOCK_STORE_DIR" -type f -print -quit)" ]]; then
-  printf 'error: no reusable block-store data was found under blob prefix %s; run the embedding refresh workflow first\n' "$DATASET_BLOCK_STORE_PREFIX" >&2
+if [[ "$BLOCK_STORE_TARGET" == "filesystem" ]] && [[ -z "$(find "$BLOCK_STORE_DIR" -type f -print -quit)" ]]; then
+  printf 'error: no reusable filesystem block-store data was found under blob prefix %s; run embedding refresh with --block-store-target filesystem or rerun this command with --block-store-target overlay\n' "$DATASET_BLOCK_STORE_PREFIX" >&2
   exit 1
 fi
 
-write_mailbox_request "$REQUEST_PATH" "block-store" "http://127.0.0.1:8080" "clustering-and-block-assembly" "$PROFILE_VERSION" "no"
+write_mailbox_request \
+  "$REQUEST_PATH" \
+  "block-store" \
+  "$CONTAINER_SAS_URL" \
+  "$BLOCK_STORE_TARGET" \
+  "http://127.0.0.1:8080" \
+  "clustering-and-block-assembly" \
+  "$PROFILE_VERSION" \
+  "no"
 
 lexonarchivebuilder-indexer run \
   --request "$REQUEST_PATH" \
@@ -189,10 +207,21 @@ print(root_id)
 PY
 )"
 
-lexonarchivebuilder-indexer quality \
-  --root-id "$ROOT_ID" \
-  --block-store-root "$BLOCK_STORE_DIR" \
-  --json-out "$QUALITY_PATH"
+if [[ "$BLOCK_STORE_TARGET" == "overlay" ]]; then
+  OVERLAY_MEMORY_CACHE_MAX_RESIDENT_BLOCKS="$(overlay_memory_cache_max_resident_blocks)"
+  lexonarchivebuilder-indexer quality \
+    --root-id "$ROOT_ID" \
+    --block-store-profile production \
+    --block-store-container-sas-url "$CONTAINER_SAS_URL" \
+    --block-store-filesystem-cache-root "$BLOCK_STORE_DIR" \
+    --block-store-memory-cache-max-resident-blocks "$OVERLAY_MEMORY_CACHE_MAX_RESIDENT_BLOCKS" \
+    --json-out "$QUALITY_PATH"
+else
+  lexonarchivebuilder-indexer quality \
+    --root-id "$ROOT_ID" \
+    --block-store-root "$BLOCK_STORE_DIR" \
+    --json-out "$QUALITY_PATH"
+fi
 
 python3 - "$RESULT_PATH" "$PROFILE_VERSION" "$ROOT_ID" "$ARTIFACT_PREFIX" <<'PY'
 import json
@@ -210,5 +239,7 @@ with open(result_path, "w", encoding="utf-8") as handle:
     handle.write("\n")
 PY
 
-sync_local_tree_to_blob "$BLOCK_STORE_DIR" "$CONTAINER_SAS_URL" "$DATASET_BLOCK_STORE_PREFIX"
+if [[ "$BLOCK_STORE_TARGET" == "filesystem" ]]; then
+  sync_local_tree_to_blob "$BLOCK_STORE_DIR" "$CONTAINER_SAS_URL" "$DATASET_BLOCK_STORE_PREFIX"
+fi
 sync_local_tree_to_blob "$REPLAY_JOURNAL_DIR" "$CONTAINER_SAS_URL" "$DATASET_REPLAY_JOURNAL_PREFIX"

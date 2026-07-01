@@ -29,11 +29,13 @@
 - **UR-EXP-19 [KNOWN]:** Do not solve the separate LAB block-storage-abstraction effort here.
 - **UR-EXP-20 [INFERRED]:** The hosted workflows should authenticate to Azure through repository-owned GitHub Actions federation rather than a developer-local Azure session.
 - **UR-EXP-21 [INFERRED]:** The new hosted automation boundary should orchestrate existing repository experiment/runtime surfaces without redefining indexer semantics, scale-test semantics, MCP semantics, or production-serving semantics.
-- **UR-EXP-22 [ASSUMPTION]:** A new block-store type is being introduced in another pull request as an overlay of memory, local filesystem, and Azure Blob Storage where writes always persist to Azure and reads are served from the first layer that has the data.
-- **UR-EXP-23 [KNOWN]:** All relevant repository components for this experiment path should be able to target either the existing regular filesystem block store or the future overlay block store.
-- **UR-EXP-24 [KNOWN]:** The overlay block-store implementation itself is out of scope for this increment because it is being built in another pull request.
-- **UR-EXP-25 [KNOWN]:** Any overlay block-store integration points introduced by this increment should remain clearly marked TODOs until the separate pull request lands.
+- **UR-EXP-22 [KNOWN]:** The approved overlay block-store shape is memory cache plus local filesystem cache plus Azure Blob Storage backing, with writes persisting to Azure and reads served from the first layer that has the data.
+- **UR-EXP-23 [KNOWN]:** All relevant repository components for this experiment path should be able to target either the existing regular filesystem block store or the approved overlay block store.
+- **UR-EXP-24 [KNOWN]:** This increment should consume the landed overlay block-store implementation rather than redesigning or replacing it.
+- **UR-EXP-25 [KNOWN]:** Hosted workflow changes should remove stale TODO-only overlay seams and instead use the approved executable overlay contract where that contract is now available.
 - **UR-EXP-26 [KNOWN]:** The indexing workflow should remain comparable to `test.ps1`, including the post-index quality/report step rather than only the clustering-and-block-assembly step.
+- **UR-EXP-27 [KNOWN]:** Enable the hosted workflow family to execute the overlay block-store path now that the overlay implementation is available.
+- **UR-EXP-28 [KNOWN]:** Keep both hosted block-store targets selectable, but make `overlay` the default target for hosted workflow runs.
 
 ## Change Manifest
 
@@ -48,7 +50,7 @@
 | CM-EXP-007 | Add | Require unconditional VM deallocation while preserving the resource group for manual post-run inspection | UR-EXP-15, UR-EXP-16, UR-EXP-17 |
 | CM-EXP-008 | Add | Align default runner-image selection with the lab pipeline's published `main` tag while preserving explicit tag override support | UR-EXP-12 |
 | CM-EXP-009 | Add | Preserve repository semantic boundaries by keeping hosted experiment automation separate from scale-test, indexer, MCP, and production-serving contracts | UR-EXP-19, UR-EXP-20, UR-EXP-21 |
-| CM-EXP-010 | Add | Preserve a clearly marked block-store selection seam so the experiment path can target either the current filesystem block store or the future overlay block store without requiring that overlay implementation in this increment | UR-EXP-22, UR-EXP-23, UR-EXP-24, UR-EXP-25 |
+| CM-EXP-010 | Revise | Replace the deferred overlay TODO seam with an executable hosted block-store target contract that keeps filesystem available while making overlay the default | UR-EXP-22, UR-EXP-23, UR-EXP-27, UR-EXP-28 |
 | CM-EXP-011 | Revise | Require the indexing-experiment workflow to include the rooted quality/report step needed to stay comparable to `test.ps1` | UR-EXP-14, UR-EXP-26 |
 
 ## Before / After
@@ -85,8 +87,8 @@
 
 ### BA-EXP-007
 
-- **Before [KNOWN]:** The hosted experiment spec did not describe how this increment should stay compatible with the existing filesystem block-store path while anticipating the separate overlay block-store effort.
-- **After [KNOWN]:** The requirements preserve a block-store selection seam for filesystem versus future overlay use, but require overlay-specific integration points in this increment to remain clearly marked TODOs.
+- **Before [KNOWN]:** The hosted experiment spec preserved a filesystem-versus-overlay selection seam, but treated overlay execution as a deferred integration path guarded by TODO markers rather than an approved executable hosted mode.
+- **After [KNOWN]:** The requirements now make overlay an approved executable hosted mode for both workflows, keep filesystem targeting available, and require the caller-visible default to be `overlay`.
 
 ### BA-EXP-008
 
@@ -166,18 +168,27 @@ The indexing-experiment workflow SHALL consume an existing reusable embedding da
 - **Constraint [KNOWN]:** The indexing workflow is downstream of the reusable embedding dataset and should not treat embedding as an unconditional prerequisite step.
 - **Traceability:** UR-EXP-5, UR-EXP-6, UR-EXP-8
 
-#### RQ-EXP-008A - Block-store target compatibility seam
+#### RQ-EXP-008A - Hosted block-store target contract
 
 The hosted workflow family and its supporting experiment-orchestration surfaces
-SHALL preserve a block-store target seam that can address either:
+SHALL support exactly two caller-selectable block-store targets:
 
 1. the existing regular filesystem block-store path
-2. the future overlay block-store path described in the separate pull request
+2. the approved overlay block-store path composed of memory cache, local filesystem cache, and Azure Blob Storage backing
 
-- **Constraint [KNOWN]:** The overlay block-store implementation itself is out of scope for this increment.
-- **Required property [KNOWN]:** Any overlay-specific integration points added by this increment must remain clearly marked TODOs until the separate pull request lands.
-- **Boundary [UNKNOWN]:** The exact caller-visible configuration contract for selecting filesystem versus overlay block-store targets is not yet specified in this phase.
-- **Traceability:** UR-EXP-22, UR-EXP-23, UR-EXP-24, UR-EXP-25
+- **Required property [KNOWN]:** The overlay target is an approved executable hosted mode rather than a deferred TODO-only integration seam.
+- **Required property [KNOWN]:** Both the embedding-refresh workflow and the indexing-experiment workflow use the same two-target contract.
+- **Boundary [KNOWN]:** The caller-visible selection contract keeps both targets available rather than removing filesystem support in this increment.
+- **Traceability:** UR-EXP-22, UR-EXP-23, UR-EXP-27, UR-EXP-28
+
+#### RQ-EXP-008B - Hosted block-store target default
+
+Whenever a hosted workflow caller does not explicitly choose a block-store
+target, the workflow family SHALL default that selection to `overlay`.
+
+- **Rationale [KNOWN]:** The hosted Azure-backed execution path should prefer the production-oriented overlay realization while preserving filesystem as an explicit fallback and comparison mode.
+- **Constraint [KNOWN]:** Defaulting to `overlay` must not remove the caller's ability to choose filesystem explicitly.
+- **Traceability:** UR-EXP-27, UR-EXP-28
 
 #### RQ-EXP-009 - Indexing-experiment profile input
 
@@ -291,7 +302,7 @@ The hosted workflow family SHALL orchestrate existing repository-owned experimen
 1. indexer request or execution semantics
 2. scale-test content-discovery semantics outside the manifest-owned source-list contract
 3. MCP request/response semantics
-4. the separately developed overlay block-store implementation beyond clearly marked TODO integration seams
+4. the separately developed overlay block-store implementation beyond consuming its approved hosted caller contract
 5. production-serving CDN and retrieval semantics
 
 - **Traceability:** UR-EXP-19, UR-EXP-21, UR-EXP-24, UR-EXP-25
@@ -313,14 +324,14 @@ The hosted workflow family SHALL remain an operator-automation and experiment-or
 - changing production CDN publication behavior
 - requiring SSH for the normal success path
 - broadening the manifest contract to bare working-group names in this increment
-- implementing the new overlay block-store in this change set
+- redesigning or reimplementing the upstream overlay block-store in this change set
 
 ## Invariant Impact Assessment
 
 | Invariant | Impact | Assessment |
 |---|---|---|
 | Indexing remains separate from search serving | Preserved | The hosted workflows orchestrate staged experiment execution without changing MCP-serving behavior |
-| Local/testing versus production semantics remain distinct | Preserved | The change adds hosted experiment orchestration but does not redefine the production-serving boundary |
+| Local/testing versus production semantics remain distinct | Preserved | The hosted workflows now prefer the production-oriented overlay target by default while preserving explicit filesystem selection for comparison and fallback without redefining the production-serving boundary |
 | The architecture remains extensible to future content types | Preserved | The reusable manifest and staged workflow boundary focus on orchestration and dataset reuse rather than hard-coding new content-model semantics into indexer or MCP layers |
 | Repository automation remains traceable and reusable | Preserved | The workflows reuse published images, Azure deployment primitives, checked-in manifest intent, and workflow-visible artifacts instead of relying on ad hoc local steps |
 
@@ -333,11 +344,16 @@ The hosted workflow family SHALL remain an operator-automation and experiment-or
   - `docs/specs/lexonarchivebuilder-deployment/requirements.md:11-35,90-152`
   - `docs/specs/lexonarchivebuilder-image-publishing/requirements.md:11-21,60-121`
   - `.github/workflows/publish-images.yml:1-70`
+  - `.github/workflows/run-embedding-refresh.yml:27-35,82-107`
+  - `.github/workflows/run-indexing-experiment.yml:32-39,87-118`
+  - `crates/lexonarchivebuilder-indexer/src/block_store.rs:36-64`
   - `crates/lexonarchivebuilder-indexer/src/config.rs:22-39,72-89`
   - `docs/specs/lexonarchivebuilder-indexer/requirements.md:141-144,186-188,230-232,552-568,703-779,1445`
   - user request in this session: "build a full github workflow to allow running experiments similar in nature to what test.ps1 currently does"
   - user revision in this session: "two workflows: 1) run just the embedding step over a set of working groups and store it in a azure blob store along with the replay journal 2) run the indexing experiment over a set of embeddings"
   - user clarification in this session: "Make the embeddings derive from a checked in file. Checked in file will then contain: 1) the list of work groups. 2) container name to store them in. It should also be incrementally updateable so if the content of the working groups changes, only new embeddings are added."
+  - user request in this session: "enable overlay and make it the default"
+  - user clarification in this session: "Keep both targets and default to `overlay`"
 - **Excluded from this requirements artifact [KNOWN]:**
   - workflow YAML structure and job graph details
   - Bicep module changes
