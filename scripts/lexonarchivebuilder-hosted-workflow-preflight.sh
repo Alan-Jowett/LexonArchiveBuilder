@@ -162,6 +162,7 @@ container_sas_url="https://example.blob.core.windows.net/${container_name}?sig=q
 storage_account_name="lexonpreflightsa"
 ssh_public_key="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCtest-preflight"
 ssh_source_prefixes_json='["203.0.113.10/32"]'
+preflight_sas_expiry="2099-01-01T00:00:00Z"
 
 hosted_experiment_common_script_b64="$(base64_encode_file "$HOSTED_EXPERIMENT_COMMON_SCRIPT")"
 embedding_workload_script_b64="$(base64_encode_file "$EMBEDDING_WORKLOAD_SCRIPT")"
@@ -203,7 +204,7 @@ python3 "${REPO_ROOT}/scripts/lexonarchivebuilder-write-deployment-parameters.py
   --vnet-name lexon-exp-preflight-vnet \
   --storage-account-name "$storage_account_name" \
   --container-name "$container_name" \
-  --sas-expiry 2026-07-02T00:00:00Z \
+  --sas-expiry "$preflight_sas_expiry" \
   --vm-name lexon-exp-embed-preflight \
   --ssh-public-key "$ssh_public_key" \
   --enable-public-ip true \
@@ -254,7 +255,7 @@ python3 "${REPO_ROOT}/scripts/lexonarchivebuilder-write-deployment-parameters.py
   --vnet-name lexon-exp-preflight-vnet \
   --storage-account-name "$storage_account_name" \
   --container-name "$container_name" \
-  --sas-expiry 2026-07-02T00:00:00Z \
+  --sas-expiry "$preflight_sas_expiry" \
   --vm-name lexon-exp-index-preflight \
   --ssh-public-key "$ssh_public_key" \
   --enable-public-ip false \

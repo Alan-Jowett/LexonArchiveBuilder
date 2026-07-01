@@ -56,6 +56,7 @@ var containerNameBase64 = base64(containerName)
 var workloadEnvironmentFileBase64 = base64(workloadEnvironmentFile)
 var workloadScriptBase64 = base64(workloadScript)
 var renderWorkloadStorageEnvScript = loadTextContent('render-workload-storage-env.py')
+var renderWorkloadStorageEnvScriptIndented = replace(renderWorkloadStorageEnvScript, '\n', '\n    ')
 var cloudInitTemplate = '''
 #cloud-config
 package_update: true
@@ -178,7 +179,7 @@ var cloudInitWithWorkloadFiles = replace(
     containerNameBase64
   ),
   '__RENDER_WORKLOAD_STORAGE_ENV_PY__',
-  renderWorkloadStorageEnvScript
+  renderWorkloadStorageEnvScriptIndented
 )
 var cloudInitWithWorkloadFilesAndStorageRenderer = replace(
   cloudInitWithWorkloadFiles,

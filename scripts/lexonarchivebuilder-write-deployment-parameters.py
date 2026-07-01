@@ -6,13 +6,17 @@ import argparse
 import json
 from pathlib import Path
 import sys
+from typing import List
 
 
-def parse_json_object(value: str, parser: argparse.ArgumentParser) -> object:
+def parse_ssh_source_prefixes(value: str, parser: argparse.ArgumentParser) -> List[str]:
     try:
-        return json.loads(value)
+        parsed = json.loads(value)
     except json.JSONDecodeError as exc:
         parser.error(f"--ssh-source-prefixes-json must be valid JSON: {exc.msg}")
+    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+        parser.error("--ssh-source-prefixes-json must be a JSON array of strings")
+    return parsed
 
 
 def read_text_file(path: str, parser: argparse.ArgumentParser) -> str:
@@ -51,7 +55,7 @@ def main() -> int:
     parser.add_argument("--github-run-id", required=True)
     parser.add_argument("--github-run-attempt", required=True)
     args = parser.parse_args()
-    ssh_source_prefixes = parse_json_object(args.ssh_source_prefixes_json, parser)
+    ssh_source_prefixes = parse_ssh_source_prefixes(args.ssh_source_prefixes_json, parser)
     workload_script = read_text_file(args.workload_script_path, parser)
 
     params = {
