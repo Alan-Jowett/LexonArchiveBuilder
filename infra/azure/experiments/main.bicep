@@ -76,9 +76,9 @@ module storage 'storage.bicep' = {
   }
 }
 var resolvedWorkloadEnvironmentFile = join([
-  format('CONTAINER_SAS_URL="{0}"', storage.outputs.containerSasUrl)
-  format('STORAGE_ACCOUNT_NAME="{0}"', storageAccountName)
-  format('CONTAINER_NAME="{0}"', containerName)
+  concat('CONTAINER_SAS_URL=', '''', storage.outputs.containerSasUrl, '''')
+  concat('STORAGE_ACCOUNT_NAME=', '''', storageAccountName, '''')
+  concat('CONTAINER_NAME=', '''', containerName, '''')
   workloadEnvironmentFile
 ], '\n')
 

@@ -207,7 +207,7 @@ target, the workflow family SHALL default that selection to `overlay`.
 
 - **Rationale [KNOWN]:** The hosted Azure-backed execution path should prefer the production-oriented overlay realization while preserving filesystem as an explicit fallback and comparison mode.
 - **Constraint [KNOWN]:** Defaulting to `overlay` must not remove the caller's ability to choose filesystem explicitly.
-- **Traceability:** UR-EXP-29, UR-EXP-30
+- **Traceability:** UR-EXP-28
 
 #### RQ-EXP-009 - Indexing-experiment profile input
 
