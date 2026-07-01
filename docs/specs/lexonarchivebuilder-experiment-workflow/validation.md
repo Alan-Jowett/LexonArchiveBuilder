@@ -209,3 +209,58 @@ production-serving semantics, or the separate block-storage-abstraction effort
 beyond consuming the approved hosted overlay-selection contract.
 
 **Traces to:** RQ-EXP-001, RQ-EXP-020, RQ-EXP-021, DSG-EXP-001, DSG-EXP-012
+
+### VAL-EXP-013
+
+Inspect the repository validation surface for the hosted workflow family.
+
+**Pass condition:** the repository defines a preflight validation layer for
+hosted workflow regressions that is separate from the live Azure confirmation
+run.
+
+**Traces to:** RQ-EXP-018B, RQ-EXP-018F, DSG-EXP-013, DSG-EXP-013D
+
+### VAL-EXP-013A
+
+Exercise the hosted workflow preflight layer against rendered workflow-owned
+artifacts.
+
+**Pass condition:** the validation surface checks generated env-file content,
+generated bootstrap/workload handoff content, and repository-owned invocation
+inputs rather than relying solely on static source inspection.
+
+**Traces to:** RQ-EXP-018C, RQ-EXP-018E, DSG-EXP-013A
+
+### VAL-EXP-013B
+
+Exercise the hosted workflow preflight layer without deploying Azure
+infrastructure.
+
+**Pass condition:** the covered regression class can be validated through
+repository-local or normal-CI execution paths without requiring a successful
+live Azure deployment for those checks.
+
+**Traces to:** RQ-EXP-018D, DSG-EXP-013B, DSG-EXP-013D
+
+### VAL-EXP-013C
+
+Seed the hosted workflow preflight layer with representative repository-owned
+failure fixtures from the currently observed regression class.
+
+**Pass condition:** malformed env-file separation, bad sourced-value quoting,
+broken bootstrap-to-workload wiring, and malformed repository-owned status or
+artifact handoff inputs are rejected before live Azure confirmation is
+required.
+
+**Traces to:** RQ-EXP-018C, RQ-EXP-018E, DSG-EXP-013A, DSG-EXP-013C
+
+### VAL-EXP-013D
+
+Compare the hosted workflow validation strategy against the live Azure workflow
+role.
+
+**Pass condition:** live Azure runs remain the integration-confirmation layer,
+but repository-owned preventable regressions are no longer expected to be
+discovered there first.
+
+**Traces to:** RQ-EXP-018F, DSG-EXP-013, DSG-EXP-013D

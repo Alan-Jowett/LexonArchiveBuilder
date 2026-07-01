@@ -76,3 +76,11 @@ jobs:
       - uses: swatinem/rust-cache@v2
       - name: Run tests
         run: cargo test --workspace --locked
+
+  hosted-workflow-preflight:
+    name: Hosted workflow preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run hosted workflow preflight validation
+        run: bash scripts/lexonarchivebuilder-hosted-workflow-preflight.sh

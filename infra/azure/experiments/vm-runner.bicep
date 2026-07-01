@@ -55,6 +55,7 @@ var storageAccountNameBase64 = base64(storageAccountName)
 var containerNameBase64 = base64(containerName)
 var workloadEnvironmentFileBase64 = base64(workloadEnvironmentFile)
 var workloadScriptBase64 = base64(workloadScript)
+var renderWorkloadStorageEnvScript = loadTextContent('render-workload-storage-env.py')
 var cloudInitTemplate = '''
 #cloud-config
 package_update: true
@@ -66,24 +67,30 @@ runcmd:
     systemctl enable docker
     systemctl start docker
     mkdir -p /opt/lexonarchivebuilder/runner
+    cat > /opt/lexonarchivebuilder/runner/render_workload_storage_env.py <<'PY'
+    __RENDER_WORKLOAD_STORAGE_ENV_PY__
+    PY
     printf '%s' '__WORKLOAD_ENVIRONMENT_FILE_BASE64__' | base64 -d > /opt/lexonarchivebuilder/runner/workload.env
     printf '\n' >> /opt/lexonarchivebuilder/runner/workload.env
     python3 - '__CONTAINER_SAS_URL_BASE64__' '__STORAGE_ACCOUNT_NAME_BASE64__' '__CONTAINER_NAME_BASE64__' >> /opt/lexonarchivebuilder/runner/workload.env <<'PY'
     import base64
-    import shlex
     import sys
 
+    sys.path.insert(0, '/opt/lexonarchivebuilder/runner')
+    from render_workload_storage_env import main
+
     container_sas_url_b64, storage_account_name_b64, container_name_b64 = sys.argv[1:4]
-    values = {
-        'CONTAINER_SAS_URL': base64.b64decode(container_sas_url_b64).decode('utf-8'),
-        'STORAGE_ACCOUNT_NAME': base64.b64decode(storage_account_name_b64).decode('utf-8'),
-        'CONTAINER_NAME': base64.b64decode(container_name_b64).decode('utf-8'),
-    }
-    for key, value in values.items():
-        print(f'{key}={shlex.quote(value)}')
+    raise SystemExit(
+        main(
+            base64.b64decode(container_sas_url_b64).decode('utf-8'),
+            base64.b64decode(storage_account_name_b64).decode('utf-8'),
+            base64.b64decode(container_name_b64).decode('utf-8'),
+        )
+    )
     PY
     printf '%s' '__WORKLOAD_SCRIPT_BASE64__' | base64 -d > /opt/lexonarchivebuilder/runner/workload.sh
     chmod 0600 /opt/lexonarchivebuilder/runner/workload.env
+    chmod 0644 /opt/lexonarchivebuilder/runner/render_workload_storage_env.py
     chmod 0755 /opt/lexonarchivebuilder/runner/workload.sh
     cat > /usr/local/bin/lexonarchivebuilder-runner-wrapper.sh <<'EOF'
     #!/usr/bin/env bash
@@ -170,13 +177,18 @@ var cloudInitWithWorkloadFiles = replace(
     '__CONTAINER_NAME_BASE64__',
     containerNameBase64
   ),
+  '__RENDER_WORKLOAD_STORAGE_ENV_PY__',
+  renderWorkloadStorageEnvScript
+)
+var cloudInitWithWorkloadFilesAndStorageRenderer = replace(
+  cloudInitWithWorkloadFiles,
   '__WORKLOAD_SCRIPT_BASE64__',
   workloadScriptBase64
 )
 var cloudInit = replace(
   replace(
     replace(
-      cloudInitWithWorkloadFiles,
+      cloudInitWithWorkloadFilesAndStorageRenderer,
       '__AZURE_SUBSCRIPTION_ID__',
       azureSubscriptionId
     ),

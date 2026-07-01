@@ -91,6 +91,7 @@ jobs:
           DEBUG_RETAIN_FAILED_VM_INPUT: ${{ inputs.debug_retain_failed_vm }}
         run: |
           set -euo pipefail
+          source scripts/lexonarchivebuilder-hosted-workflow-common.sh
 
           manifest_path="$MANIFEST_PATH_INPUT"
           if [[ ! -f "$manifest_path" ]]; then
@@ -104,60 +105,16 @@ jobs:
           ssh_public_key="$SSH_PUBLIC_KEY_INPUT"
           debug_retain_failed_vm="$DEBUG_RETAIN_FAILED_VM_INPUT"
 
-          if [[ ! "$runner_image_tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
-            printf 'runner_image_tag must be a valid Docker tag (1-128 chars: letters, digits, underscores, periods, or hyphens)\n' >&2
-            exit 1
-          fi
+          hosted_workflow_validate_runner_image_tag "$runner_image_tag"
 
           runner_image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/lexonarchivebuilder-scale-test:${runner_image_tag}"
 
-          manifest_json_minified="$(python3 - "$manifest_path" <<'PY'
-          import json
-          import re
-          import sys
-
-          with open(sys.argv[1], 'r', encoding='utf-8') as handle:
-              data = json.load(handle)
-
-          container_name = data.get('container_name')
-          if not isinstance(container_name, str) or not container_name.strip():
-              raise SystemExit('manifest must contain non-empty string field "container_name"')
-          container_name = container_name.strip()
-          if (
-              len(container_name) < 3
-              or len(container_name) > 63
-              or not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?', container_name)
-          ):
-              raise SystemExit(
-                  'manifest field "container_name" must be a valid Azure Blob container name '
-                  '(3-63 lowercase alphanumeric characters or hyphens, starting and ending with an alphanumeric character)'
-              )
-          data['container_name'] = container_name
-
-          if not isinstance(data.get('sources'), list) or not data['sources']:
-              raise SystemExit('manifest must contain non-empty array field "sources"')
-          normalized_sources = []
-          for source in data['sources']:
-              if not isinstance(source, str) or not source.strip():
-                  raise SystemExit('manifest sources must be non-empty strings')
-              normalized_sources.append(source.strip())
-          data['sources'] = normalized_sources
-
-          print(json.dumps(data, separators=(',', ':'), sort_keys=True))
-          PY
-          )"
+          manifest_json_minified="$(hosted_workflow_normalize_manifest_json "$manifest_path")"
           manifest_hash="$(printf '%s' "$manifest_json_minified" | sha256sum | cut -c1-10)"
           repo_hash="$(printf '%s' "$GITHUB_REPOSITORY" | sha256sum | cut -c1-6)"
           hosted_experiment_common_script_b64="$(base64 -w0 scripts/lexonarchivebuilder-hosted-experiment-common.sh)"
           hosted_experiment_workload_script_b64="$(base64 -w0 scripts/lexonarchivebuilder-embedding-refresh.sh)"
-          container_name="$(python3 - "$manifest_path" <<'PY'
-          import json
-          import sys
-
-          with open(sys.argv[1], 'r', encoding='utf-8') as handle:
-              print(json.load(handle)['container_name'].strip())
-          PY
-          )"
+          container_name="$(hosted_workflow_extract_container_name "$manifest_path")"
 
           resource_group="lexon-exp-${manifest_hash}"
           storage_account_name="lex${repo_hash}${manifest_hash}sa"
@@ -214,61 +171,37 @@ jobs:
           sas_expiry="$(date -u -d '+1 day' '+%Y-%m-%dT%H:%M:%SZ')"
 
           workload_env_file="$(
-            printf "%s\n" \
-              "RUN_NAME='${run_name}'" \
-              "RUNNER_IMAGE='${runner_image}'" \
-              "STAPI_IMAGE='${STAPI_IMAGE}'" \
-              "MANIFEST_JSON_B64='${manifest_json_b64}'" \
-              "HOSTED_EXPERIMENT_COMMON_SCRIPT_B64='${hosted_experiment_common_script_b64}'" \
-              "HOSTED_EXPERIMENT_WORKLOAD_SCRIPT_B64='${hosted_experiment_workload_script_b64}'" \
-              "DATASET_BLOCK_STORE_PREFIX='${dataset_block_store_prefix}'" \
-              "DATASET_REPLAY_JOURNAL_PREFIX='${dataset_replay_journal_prefix}'" \
-              "ARTIFACT_PREFIX='${artifact_prefix}'" \
-              "BLOCK_STORE_TARGET='${block_store_target}'" \
-              "DEBUG_RETAIN_ON_FAILURE='${debug_retain_failed_vm}'"
+            hosted_workflow_render_embedding_workload_env_file \
+              "$run_name" \
+              "$runner_image" \
+              "$STAPI_IMAGE" \
+              "$manifest_json_b64" \
+              "$hosted_experiment_common_script_b64" \
+              "$hosted_experiment_workload_script_b64" \
+              "$dataset_block_store_prefix" \
+              "$dataset_replay_journal_prefix" \
+              "$artifact_prefix" \
+              "$block_store_target" \
+              "$debug_retain_failed_vm"
           )"
 
-          python3 - "$container_name" "$storage_account_name" "$resource_group" "$vnet_name" "$vm_name" "$sas_expiry" "$ssh_public_key" "$enable_ssh_access" "$ssh_prefixes_json" "$workload_env_file" "$workload_script_path" > deployment.parameters.json <<'PY'
-          import json
-          import os
-          import pathlib
-          import sys
-
-          (container_name, storage_account_name, resource_group, vnet_name, vm_name,
-           sas_expiry, ssh_public_key, enable_ssh_access, ssh_prefixes_json,
-           workload_env_file, workload_script_path) = sys.argv[1:12]
-
-          workload_script = pathlib.Path(workload_script_path).read_text(encoding='utf-8')
-
-          params = {
-              "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
-              "contentVersion": "1.0.0.0",
-              "parameters": {
-                  "location": {"value": os.environ["AZURE_LOCATION"]},
-                  "vnetName": {"value": vnet_name},
-                  "storageAccountName": {"value": storage_account_name},
-                  "containerName": {"value": container_name},
-                  "sasExpiry": {"value": sas_expiry},
-                  "vmName": {"value": vm_name},
-                  "sshPublicKey": {"value": ssh_public_key},
-                  "enablePublicIp": {"value": enable_ssh_access.lower() == "true"},
-                  "enableSshAccess": {"value": enable_ssh_access.lower() == "true"},
-                  "sshSourcePrefixes": {"value": json.loads(ssh_prefixes_json)},
-                  "workloadEnvironmentFile": {"value": workload_env_file},
-                  "workloadScript": {"value": workload_script},
-                  "tags": {
-                      "value": {
-                          "lexon-workflow": "embedding-refresh",
-                          "lexon-manifest": resource_group,
-                          "github-run-id": os.environ["GITHUB_RUN_ID"],
-                          "github-run-attempt": os.environ["GITHUB_RUN_ATTEMPT"],
-                      }
-                  },
-              },
-          }
-
-          json.dump(params, sys.stdout, indent=2)
-          PY
+          python3 scripts/lexonarchivebuilder-write-deployment-parameters.py \
+            --workflow-name embedding-refresh \
+            --location "$AZURE_LOCATION" \
+            --resource-group "$resource_group" \
+            --vnet-name "$vnet_name" \
+            --storage-account-name "$storage_account_name" \
+            --container-name "$container_name" \
+            --sas-expiry "$sas_expiry" \
+            --vm-name "$vm_name" \
+            --ssh-public-key "$ssh_public_key" \
+            --enable-public-ip "$enable_ssh_access" \
+            --enable-ssh-access "$enable_ssh_access" \
+            --ssh-source-prefixes-json "$ssh_prefixes_json" \
+            --workload-environment-file "$workload_env_file" \
+            --workload-script-path "$workload_script_path" \
+            --github-run-id "$GITHUB_RUN_ID" \
+            --github-run-attempt "$GITHUB_RUN_ATTEMPT" > deployment.parameters.json
 
           {
             echo "manifest_path=$manifest_path"
