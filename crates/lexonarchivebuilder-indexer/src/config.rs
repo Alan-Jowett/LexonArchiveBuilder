@@ -2,7 +2,7 @@
 // Copyright (c) 2026 LexonArchiveBuilder contributors
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use ciborium::Value;
 use clap::{Args, ValueEnum};
@@ -190,7 +190,7 @@ pub enum ConfigError {
     #[error("batch request ref_name must not be empty")]
     MissingRefName,
     #[error(
-        "batch request ref_name must be a relative slash-separated ref name without empty, '.' or '..' segments"
+        "batch request ref_name must be a relative slash-separated ref name without empty, special, whitespace/control, or reserved URL/Windows-path segments"
     )]
     InvalidRefName,
     #[error("local embedding base_url must not be empty")]
@@ -378,11 +378,26 @@ fn normalized_ref_name_segments(ref_name: &str) -> Result<Vec<String>, ConfigErr
         .collect::<Vec<_>>();
     if segments
         .iter()
-        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+        .any(|segment| !is_valid_ref_name_segment(segment))
     {
         return Err(ConfigError::InvalidRefName);
     }
     Ok(segments)
+}
+
+fn is_valid_ref_name_segment(segment: &str) -> bool {
+    if segment.is_empty()
+        || segment.chars().any(|ch| {
+            ch.is_whitespace()
+                || ch.is_control()
+                || matches!(ch, '<' | '>' | ':' | '"' | '|' | '?' | '*' | '#' | '%')
+        })
+    {
+        return false;
+    }
+
+    let mut components = Path::new(segment).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 fn mutable_ref_relative_path(ref_name: &str) -> Result<String, ConfigError> {
@@ -987,6 +1002,26 @@ mod tests {
                     "https://example.blob.core.windows.net/archive-sync/refs/feature/test".into(),
             })
         );
+    }
+
+    #[test]
+    fn ref_name_segments_reject_urlish_windows_and_whitespace_characters() {
+        for ref_name in [
+            "feature/%2e%2e",
+            "feature/branch:name",
+            "feature/branch?preview",
+            "feature/branch#draft",
+            "feature/branch with space",
+            "feature/\tbranch",
+        ] {
+            assert!(
+                matches!(
+                    normalized_ref_name_segments(ref_name),
+                    Err(ConfigError::InvalidRefName)
+                ),
+                "expected invalid ref_name: {ref_name}"
+            );
+        }
     }
 
     #[test]
