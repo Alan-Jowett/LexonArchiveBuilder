@@ -79,7 +79,7 @@ pub enum LocalFilesystemContentResolverError {
     MissingArtifact { block_id: String },
     #[error("artifact block {block_id} uses unsupported legacy block version {version}")]
     ArtifactLegacyVersion { block_id: String, version: u64 },
-    #[error("artifact block {block_id} has unexpected v2 block type {type_name}")]
+    #[error("artifact block {block_id} has unexpected v2 block type_name {type_name}")]
     ArtifactWrongType { block_id: String, type_name: String },
     #[error("artifact block {block_id} does not contain normalized email payload bytes")]
     ArtifactMissingContent { block_id: String },

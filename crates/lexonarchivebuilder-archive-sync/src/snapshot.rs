@@ -44,7 +44,7 @@ pub enum SourceSnapshotAcquisitionError {
     )]
     ManifestBlockLegacyVersion { block_id: String, version: u64 },
     #[error(
-        "workflow journal manifest block `{block_id}` has unexpected v2 block type `{type_name}`"
+        "workflow journal manifest block `{block_id}` has unexpected v2 block type_name `{type_name}`"
     )]
     ManifestBlockWrongType { block_id: String, type_name: String },
     #[error("workflow journal manifest block `{block_id}` is missing payload bytes")]
