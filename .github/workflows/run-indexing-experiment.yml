@@ -20,7 +20,7 @@ name: Run indexing experiment
         default: main
         type: string
       ssh_public_key:
-        description: SSH public key for break-glass VM access
+        description: SSH public key for break-glass VM access when ssh_source_prefixes enables SSH
         required: false
         default: ''
         type: string
@@ -135,6 +135,12 @@ jobs:
 
           if not isinstance(data.get('sources'), list) or not data['sources']:
               raise SystemExit('manifest must contain non-empty array field "sources"')
+          normalized_sources = []
+          for source in data['sources']:
+              if not isinstance(source, str) or not source.strip():
+                  raise SystemExit('manifest sources must be non-empty strings')
+              normalized_sources.append(source.strip())
+          data['sources'] = normalized_sources
 
           print(json.dumps(data, separators=(',', ':'), sort_keys=True))
           PY
