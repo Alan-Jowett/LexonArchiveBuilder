@@ -21,6 +21,7 @@ const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_MAX_RETRIES: u32 = 5;
 const DEFAULT_RETRY_DELAY_MS: u64 = 1_000;
 const MIN_MAX_CONCURRENCY: usize = 1;
+pub const MUTABLE_REF_STORE_FILE_NAME: &str = "indexer-state.refs.json";
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, ValueEnum, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -172,6 +173,12 @@ pub struct BatchSummary {
     pub block_count: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MutableRefStoreLocation {
+    LocalFile { path: PathBuf },
+    AzureBlob { url: String, display_path: String },
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("batch request must contain at least one item for the selected stage")]
@@ -249,18 +256,30 @@ impl EnvironmentConfig {
         Ok(())
     }
 
-    pub fn resolve_block_store_root(&self, request_dir: &Path) -> Option<PathBuf> {
+    pub fn resolve_mutable_ref_store(&self, request_dir: &Path) -> Option<MutableRefStoreLocation> {
         match self {
             Self::Local {
                 block_store_root, ..
-            } => Some(resolve_path(request_dir, block_store_root)),
+            } => {
+                let block_store_root = resolve_path(request_dir, block_store_root);
+                let parent = block_store_root
+                    .parent()
+                    .unwrap_or(block_store_root.as_path());
+                Some(MutableRefStoreLocation::LocalFile {
+                    path: parent.join(MUTABLE_REF_STORE_FILE_NAME),
+                })
+            }
             Self::LocalOverlay { block_store, .. } | Self::Production { block_store, .. } => {
-                Some(resolve_path(
-                    request_dir,
-                    block_store.filesystem_cache_root.as_ref().expect(
-                        "validated overlay-backed requests include a filesystem cache root",
+                Some(MutableRefStoreLocation::AzureBlob {
+                    url: mutable_ref_store_blob_url(
+                        &block_store.container_sas_url,
+                        MUTABLE_REF_STORE_FILE_NAME,
                     ),
-                ))
+                    display_path: mutable_ref_store_blob_display_path(
+                        &block_store.container_sas_url,
+                        MUTABLE_REF_STORE_FILE_NAME,
+                    ),
+                })
             }
         }
     }
@@ -309,6 +328,25 @@ impl ProductionBlockStoreConfig {
         }
         Ok(())
     }
+}
+
+fn mutable_ref_store_blob_url(container_sas_url: &str, file_name: &str) -> String {
+    let (base, query) = match container_sas_url.split_once('?') {
+        Some((base, query)) => (base.trim_end_matches('/'), Some(query)),
+        None => (container_sas_url.trim_end_matches('/'), None),
+    };
+    match query {
+        Some(query) => format!("{base}/{file_name}?{query}"),
+        None => format!("{base}/{file_name}"),
+    }
+}
+
+fn mutable_ref_store_blob_display_path(container_sas_url: &str, file_name: &str) -> String {
+    let base = container_sas_url
+        .split_once('?')
+        .map_or(container_sas_url, |(base, _)| base)
+        .trim_end_matches('/');
+    format!("{base}/{file_name}")
 }
 
 impl BatchItemConfig {
@@ -861,8 +899,7 @@ mod tests {
     }
 
     #[test]
-    fn production_resolve_block_store_root_uses_filesystem_cache_root() {
-        let request_dir = Path::new("request-root");
+    fn production_resolve_mutable_ref_store_uses_branch_named_blob() {
         let environment = EnvironmentConfig::Production {
             block_store: ProductionBlockStoreConfig {
                 container_sas_url: "https://example.blob.core.windows.net/archive-sync?sig=test"
@@ -880,8 +917,11 @@ mod tests {
         };
 
         assert_eq!(
-            environment.resolve_block_store_root(request_dir),
-            Some(request_dir.join("cache"))
+            environment.resolve_mutable_ref_store(Path::new("request-root")),
+            Some(MutableRefStoreLocation::AzureBlob {
+                url: "https://example.blob.core.windows.net/archive-sync/indexer-state.refs.json?sig=test".into(),
+                display_path: "https://example.blob.core.windows.net/archive-sync/indexer-state.refs.json".into(),
+            })
         );
     }
 
