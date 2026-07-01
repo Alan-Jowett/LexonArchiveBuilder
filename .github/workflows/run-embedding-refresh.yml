@@ -91,8 +91,15 @@ jobs:
 
           ssh_prefixes_input="$SSH_SOURCE_PREFIXES_INPUT"
           block_store_target="$BLOCK_STORE_TARGET_INPUT"
-          runner_image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/lexonarchivebuilder-scale-test:${RUNNER_IMAGE_TAG_INPUT}"
+          runner_image_tag="$RUNNER_IMAGE_TAG_INPUT"
           ssh_public_key="$SSH_PUBLIC_KEY_INPUT"
+
+          if [[ ! "$runner_image_tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            printf 'runner_image_tag must be a valid Docker tag (1-128 chars: letters, digits, underscores, periods, or hyphens)\n' >&2
+            exit 1
+          fi
+
+          runner_image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/lexonarchivebuilder-scale-test:${runner_image_tag}"
 
           if [[ "$block_store_target" == 'overlay' ]]; then
             printf 'TODO(overlay-block-store): overlay block-store workflow execution depends on the separate overlay implementation PR and is not wired in this change set yet\n' >&2
