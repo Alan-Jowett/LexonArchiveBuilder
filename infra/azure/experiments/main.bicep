@@ -71,24 +71,12 @@ module storage 'storage.bicep' = {
     tags: tags
     storageAccountName: storageAccountName
     containerName: containerName
+    sasExpiry: sasExpiry
+    sasPermissions: sasPermissions
   }
 }
-
-resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
-  name: storageAccountName
-}
-
-var containerSasToken = storageAccount.listServiceSas('2023-05-01', {
-  canonicalizedResource: '/blob/${storageAccountName}/${containerName}'
-  signedResource: 'c'
-  signedProtocol: 'https'
-  signedPermission: sasPermissions
-  signedExpiry: sasExpiry
-  keyToSign: 'key1'
-}).serviceSasToken
-var containerSasUrl = 'https://${storageAccountName}.blob.${environment().suffixes.storage}/${containerName}?${containerSasToken}'
 var resolvedWorkloadEnvironmentFile = join([
-  format('CONTAINER_SAS_URL="{0}"', containerSasUrl)
+  format('CONTAINER_SAS_URL="{0}"', storage.outputs.containerSasUrl)
   format('STORAGE_ACCOUNT_NAME="{0}"', storageAccountName)
   format('CONTAINER_NAME="{0}"', containerName)
   workloadEnvironmentFile
