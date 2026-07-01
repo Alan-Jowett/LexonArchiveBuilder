@@ -43,7 +43,7 @@ var nicName = '${vmName}-nic'
 var publicIpName = '${vmName}-pip'
 var workloadEnvironmentFileBase64 = base64(workloadEnvironmentFile)
 var workloadScriptBase64 = base64(workloadScript)
-var cloudInit = '''
+var cloudInitTemplate = '''
 #cloud-config
 package_update: true
 runcmd:
@@ -54,8 +54,8 @@ runcmd:
     systemctl enable docker
     systemctl start docker
     mkdir -p /opt/lexonarchivebuilder/runner
-    printf '%s' '${workloadEnvironmentFileBase64}' | base64 -d > /opt/lexonarchivebuilder/runner/workload.env
-    printf '%s' '${workloadScriptBase64}' | base64 -d > /opt/lexonarchivebuilder/runner/workload.sh
+    printf '%s' '__WORKLOAD_ENVIRONMENT_FILE_BASE64__' | base64 -d > /opt/lexonarchivebuilder/runner/workload.env
+    printf '%s' '__WORKLOAD_SCRIPT_BASE64__' | base64 -d > /opt/lexonarchivebuilder/runner/workload.sh
     chmod 0600 /opt/lexonarchivebuilder/runner/workload.env
     chmod 0755 /opt/lexonarchivebuilder/runner/workload.sh
     cat > /usr/local/bin/lexonarchivebuilder-runner-wrapper.sh <<'EOF'
@@ -76,7 +76,7 @@ runcmd:
     DEALLOCATE_EXIT_CODE=0
     if [ "${TOKEN_EXIT_CODE}" -eq 0 ]; then
       set +e
-      curl --fail -sS --connect-timeout 5 --max-time 30 -X POST -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Length: 0' "https://management.azure.com/subscriptions/${azureSubscriptionId}/resourceGroups/${azureResourceGroupName}/providers/Microsoft.Compute/virtualMachines/${vmName}/deallocate?api-version=2023-09-01"
+      curl --fail -sS --connect-timeout 5 --max-time 30 -X POST -H "Authorization: Bearer ${ARM_TOKEN}" -H 'Content-Length: 0' "https://management.azure.com/subscriptions/__AZURE_SUBSCRIPTION_ID__/resourceGroups/__AZURE_RESOURCE_GROUP_NAME__/providers/Microsoft.Compute/virtualMachines/__VM_NAME__/deallocate?api-version=2023-09-01"
       DEALLOCATE_EXIT_CODE=$?
       set -e
     else
@@ -120,6 +120,27 @@ runcmd:
     systemctl enable lexonarchivebuilder-runner.service
     systemctl start lexonarchivebuilder-runner.service
 '''
+var cloudInit = replace(
+  replace(
+    replace(
+      replace(
+        replace(
+          cloudInitTemplate
+          '__WORKLOAD_ENVIRONMENT_FILE_BASE64__'
+          workloadEnvironmentFileBase64
+        )
+        '__WORKLOAD_SCRIPT_BASE64__'
+        workloadScriptBase64
+      )
+      '__AZURE_SUBSCRIPTION_ID__'
+      azureSubscriptionId
+    )
+    '__AZURE_RESOURCE_GROUP_NAME__'
+    azureResourceGroupName
+  )
+  '__VM_NAME__'
+  vmName
+)
 
 resource publicIp 'Microsoft.Network/publicIPAddresses@2023-09-01' = if (enablePublicIp) {
   name: publicIpName
