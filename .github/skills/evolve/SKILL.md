@@ -1,7 +1,6 @@
-<!-- SPDX-License-Identifier: MIT
-  Copyright (c) 2026 LexonArchiveBuilder contributors -->
-
 ---
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonArchiveBuilder contributors
 name: evolve
 description: >
   Incrementally evolve LexonArchiveBuilder through requirements discovery,

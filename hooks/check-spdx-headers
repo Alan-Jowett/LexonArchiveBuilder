@@ -42,7 +42,7 @@ read_repo_head() {
     if [[ "$mode" == "--staged" ]]; then
         git show ":$1" | sed -n '1,3p'
     else
-        sed -n '1,3p' "$1"
+        sed -n '1,3p' -- "$1"
     fi
 }
 

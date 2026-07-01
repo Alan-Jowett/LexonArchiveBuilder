@@ -1,7 +1,6 @@
-<!-- SPDX-License-Identifier: MIT
-  Copyright (c) 2026 LexonArchiveBuilder contributors -->
-
 ---
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonArchiveBuilder contributors
 name: maintain
 description: >
   Audit LexonArchiveBuilder for semantic drift, classify findings with the user,
