@@ -79,6 +79,7 @@
 - **Before [KNOWN]:** The requirements allowed MCP dependency integration to vary between local filesystem-backed block access and a plain Azure-backed production boundary, but they did not require every MCP tool to share a single overlay-capable storage-targeting contract.
 - **After [KNOWN]:** The requirements now constrain all MCP tools to a consistent two-mode block-store target model: direct local filesystem access or a fixed overlay block store composed of memory cache, local filesystem cache, and Azure Blob SAS-backed storage.
 
+
 ## Requirements
 
 ### Functional Requirements

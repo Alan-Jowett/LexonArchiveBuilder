@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use lexongraph_block::{Block, BlockHash};
+use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
 use lexongraph_block_store_azure::AzureBlobBlockStore;
 use lexongraph_block_store_fs::FilesystemBlockStore;
@@ -70,20 +70,21 @@ impl ConfiguredBlockStore {
 }
 
 impl BlockStore for ConfiguredBlockStore {
-    fn put(&self, block: &Block) -> Result<BlockHash, BlockStoreError> {
+    fn put_block_bytes(
+        &self,
+        block_id: &BlockHash,
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
         match self {
-            Self::Local(store) => store.put(block),
-            Self::Overlay(store) => store.put(block),
+            Self::Local(store) => store.put_block_bytes(block_id, block_bytes),
+            Self::Overlay(store) => store.put_block_bytes(block_id, block_bytes),
         }
     }
 
-    fn get(
-        &self,
-        block_id: &BlockHash,
-    ) -> Result<Option<lexongraph_block::ValidatedBlock>, BlockStoreError> {
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
         match self {
-            Self::Local(store) => store.get(block_id),
-            Self::Overlay(store) => store.get(block_id),
+            Self::Local(store) => store.get_block_bytes(block_id),
+            Self::Overlay(store) => store.get_block_bytes(block_id),
         }
     }
 

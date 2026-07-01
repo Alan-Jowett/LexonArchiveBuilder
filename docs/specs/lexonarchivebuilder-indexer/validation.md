@@ -18,7 +18,8 @@ upstream `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, 0.6.x published-profile
 evaluation, local testing sweep automation, upstream embedding-readback
 API adoption, LAB-owned replay-journaled split-stage recovery, and
-layer-parallel block-construction evolution in
+layer-parallel block-construction evolution, and v2 custom-block adoption for
+repository-owned non-search artifacts in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md` and
 `docs/specs/lexonarchivebuilder-indexer/design.md`.
 
@@ -453,6 +454,19 @@ mode outside the approved overlay shape.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-007, DSG-LFI-005, DSG-LFI-005B,
 DSG-LFI-005C, DSG-LFI-007, DSG-LFI-008
+
+### VAL-LFI-005A2
+
+Inspect representative repository-owned non-search artifact surfaces after the
+v2 custom-block transition.
+
+**Pass condition:** normalized email artifacts and mailbox provenance artifacts
+operate as LexonGraph v2 custom blocks, delegated branch and leaf index blocks
+remain on the current upstream-owned contract for this increment, and
+validation may rebuild stores instead of requiring reads from pre-v2 v1
+artifact blocks.
+
+**Traces to:** RQ-INDEXER-005A, DSG-LFI-005A1
 
 ### VAL-LFI-005B
 

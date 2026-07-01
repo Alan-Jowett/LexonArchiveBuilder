@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, upstream embedding-readback API adoption, and LAB-owned replay-journaled clustering-only recovery
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned replay-journaled split-stage recovery, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics and rooted TNN-recall diagnostics, rooted CLI search over stored trees, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, and layer-parallel block-construction evolution
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, upstream embedding-readback API adoption, LAB-owned replay-journaled clustering-only recovery, and v2 custom-block adoption for repository-owned non-search artifacts
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned replay-journaled split-stage recovery, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics and rooted TNN-recall diagnostics, rooted CLI search over stored trees, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, and v2 custom-block adoption for repository-owned non-search artifacts
 
 ## USER-REQUEST
 
@@ -167,6 +167,9 @@
 - **UR-154 [KNOWN]:** For this increment, a plain Azure Blob block-store target without the required memory-plus-filesystem overlay is not an approved indexer tool-targeting mode.
 - **UR-155 [INFERRED]:** The same block-store targeting contract should apply consistently across batch indexing, standalone clustering discovery, rooted quality assessment, rooted CLI search, and any other indexer-owned operator tool that traverses the shared `BlockStore` boundary.
 - **UR-156 [INFERRED]:** The new overlay-capable targeting contract must remain content-type-neutral and preserve the existing shared `BlockStore` abstraction family for indexed blocks, normalized email artifacts, and mailbox provenance artifacts.
+- **UR-157 [KNOWN]:** LexonGraph now has a v2 block format with custom-block support, and LexonArchiveBuilder should switch its repository-owned non-search artifact blocks from v1-style wrappers to v2 custom blocks.
+- **UR-158 [KNOWN]:** It is acceptable for this artifact-block transition to require rebuilt local or production-oriented stores for those repository-owned non-search artifacts; continued read compatibility with pre-v2 v1 artifact blocks is not required in this increment.
+- **UR-159 [INFERRED]:** This increment should not introduce a repository-owned branch-or-leaf translation layer for delegated index blocks while the upstream streaming indexer and search flow still own those contracts.
 
 ## Change Manifest
 
@@ -247,6 +250,7 @@
 | CM-INDEXER-073 | Revise | Move stored-embedding readback for repository-owned quality, search, and diagnostic consumers behind the new upstream LexonGraph embedding reconstruction API instead of repository-local decoding logic | UR-149, UR-150, UR-152 |
 | CM-INDEXER-074 | Add | Preserve existing CLI and MCP-visible contracts while making upstream LexonGraph the authority for supported stored embedding encodings and reconstruction semantics | UR-150, UR-151, UR-152 |
 | CM-INDEXER-075 | Revise | Replace the current local-versus-plain-Azure tool-targeting split with a repository-wide two-mode contract: direct local filesystem or a fixed overlay of memory cache plus local filesystem cache plus Azure Blob SAS-backed storage | UR-153, UR-154, UR-155, UR-156 |
+| CM-INDEXER-076 | Revise | Adopt LexonGraph v2 custom blocks for repository-owned non-search artifacts while leaving delegated branch and leaf index blocks on the current upstream-owned contract | UR-157, UR-158, UR-159 |
 
 ## Before / After
 
@@ -624,6 +628,11 @@
 
 - **Before [KNOWN]:** The requirements allowed indexer-owned tools to vary between a local filesystem block store and a plain Azure Blob production target, but they did not require a uniform overlay-capable targeting contract across every tool surface that uses the shared `BlockStore` boundary.
 - **After [KNOWN]:** The requirements now constrain all indexer-owned block-store-consuming tools to a consistent two-mode target model: direct local filesystem access or a fixed overlay block store composed of memory cache, local filesystem cache, and Azure Blob SAS-backed storage.
+
+### BA-INDEXER-076
+
+- **Before [KNOWN]:** The requirements depended on LexonGraph block persistence but did not state whether repository-owned non-search artifacts should keep using v1-style leaf wrappers or move to the new v2 custom-block envelope.
+- **After [KNOWN]:** The requirements now bind repository-owned non-search artifacts to LexonGraph v2 custom blocks, explicitly allow rebuilt artifact stores instead of continued v1 read compatibility for those artifacts, and leave delegated branch and leaf index blocks on the current upstream-owned contract in this increment.
 
 ## Requirements
 
@@ -1033,6 +1042,17 @@ LexonArchiveBuilder SHALL provide a concrete implementation of `lexongraph_block
 - **Mailbox retention [KNOWN]:** Mailbox provenance artifacts SHALL be retained so the original source material remains available for re-normalization, re-chunking, and re-ingestion flows.
 - **Traceability:** UR-3, UR-6, UR-9, UR-12, UR-13, UR-18, UR-22, UR-25, UR-26, UR-27, UR-28, UR-80, UR-86, UR-153, UR-154, UR-155, UR-156
 
+#### RQ-INDEXER-005A - LexonGraph v2 custom-block adoption for repository-owned artifacts
+
+LexonArchiveBuilder SHALL read and write its repository-owned non-search
+artifact blocks using LexonGraph v2 custom blocks.
+
+- **Included artifact families [KNOWN]:** This applies to normalized email artifacts, mailbox provenance artifacts, and similar repository-owned non-search artifacts that LexonArchiveBuilder itself defines and persists through the shared `BlockStore` boundary.
+- **Migration boundary [KNOWN]:** This transition may require rebuilt local filesystem stores, rebuilt overlay-backed stores, and regenerated repository-owned non-search artifacts; continued read compatibility with pre-v2 v1 artifact blocks is not required in this increment.
+- **Upstream boundary [KNOWN]:** Delegated branch and leaf index blocks remain on the current upstream-owned contract for this increment; LexonArchiveBuilder does not introduce a repository-owned branch-or-leaf format translation layer around the delegated streaming indexer.
+- **Contract stability [INFERRED]:** Operator-facing batch, CLI, and MCP semantics remain unchanged apart from the repository-owned artifact-format change.
+- **Traceability:** UR-157, UR-158, UR-159
+
 #### RQ-INDEXER-006 - Embedding provider integration
 
 LexonArchiveBuilder SHALL obtain embeddings through a provider that satisfies `lexongraph_embeddings_trait::EmbeddingProvider` and is reached through an OpenAI-compatible HTTP embedding interface.
@@ -1419,6 +1439,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - Requiring the rooted CLI search tool to replace or redefine the existing MCP search surface in this increment
 - Defining a repository-local search algorithm or a second repository-local search corpus model instead of using `lexongraph-search` over the approved rooted-tree boundary
 - Defining or maintaining a repository-local branch-embedding decoding matrix for evolving branch encodings when the upstream LexonGraph embedding readback API already owns the supported branch reconstruction semantics
+- Preserving mixed-format or pre-v2 v1 compatibility for repository-owned non-search artifact blocks after the approved v2 custom-block transition
 
 ## Invariant Impact Assessment
 
@@ -1472,6 +1493,8 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
   - user clarification in this session selecting: "Uniform content-type-agnostic control (Recommended)"
   - user clarification in this session selecting: "Yes, keep the same contract and default across environments (Recommended)"
   - user clarification in this session selecting: "Yes, that is the acceptance target (Recommended)"
+  - user request in this session: "lexongraph now has a v2 of the block format. Switch over to using that instead of the v1 format."
+  - user clarification in this session selecting: "Require rebuilding stores and support only v2 blocks"
   - user request in this session: "another requirement: Add an option to allow the user to provide a text string and an embedding endpoint, then generate an embedding, search using the lexongraph-search api, and return the top k matching leaf nodes. The MCP server already does something similar, but I want an easy cli tool to do it as well"
   - user clarification in this session selecting: "Caller-supplied root/tree (Recommended)"
   - user clarification in this session selecting: "Human-readable results plus machine-readable JSON output (Recommended)"

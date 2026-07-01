@@ -6,8 +6,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use lexongraph_block::{Block, BlockHash, Content, EmbeddingSpec, LeafBlock, LeafEntry, VERSION_1};
-use lexongraph_block_store::{BlockStore, BlockStoreError};
+use ciborium::Value;
+use lexongraph_block::{BlockError, BlockHash, DecodedBlock, VersionedBlock, v2};
+use lexongraph_block_store::{BlockStore, BlockStoreError, BlockStoreExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -15,6 +16,7 @@ use thiserror::Error;
 use crate::{WorkKind, WorkflowJournal, WorkflowJournalError, WorkflowStage};
 
 const SNAPSHOT_MANIFEST_SCHEMA_VERSION: u32 = 1;
+const SNAPSHOT_ARTIFACT_BLOCK_TYPE: &str = "lexonarchivebuilder/source-snapshot-artifact";
 
 #[derive(Debug, Error)]
 pub enum SourceSnapshotAcquisitionError {
@@ -37,10 +39,18 @@ pub enum SourceSnapshotAcquisitionError {
     InvalidManifestBlockId { block_id: String },
     #[error("workflow journal references missing manifest block `{block_id}`")]
     MissingManifestBlock { block_id: String },
-    #[error("workflow journal manifest block `{block_id}` is not a leaf block")]
-    ManifestBlockNotLeaf { block_id: String },
-    #[error("workflow journal manifest block `{block_id}` is missing a content entry")]
+    #[error(
+        "workflow journal manifest block `{block_id}` uses unsupported legacy block version {version}"
+    )]
+    ManifestBlockLegacyVersion { block_id: String, version: u64 },
+    #[error(
+        "workflow journal manifest block `{block_id}` has unexpected custom block type `{type_name}`"
+    )]
+    ManifestBlockWrongType { block_id: String, type_name: String },
+    #[error("workflow journal manifest block `{block_id}` is missing payload bytes")]
     ManifestBlockMissingContent { block_id: String },
+    #[error("failed to decode source snapshot custom block `{block_id}`: {message}")]
+    DecodeManifestBlock { block_id: String, message: String },
     #[error(
         "workflow journal manifest block `{block_id}` has unexpected media type `{media_type}`"
     )]
@@ -105,6 +115,12 @@ pub enum SourceSnapshotAcquisitionError {
     StoreManifest {
         #[source]
         source: BlockStoreError,
+    },
+    #[error("failed to build source snapshot block for media type `{media_type}`: {source}")]
+    BuildSnapshotBlock {
+        media_type: String,
+        #[source]
+        source: BlockError,
     },
     #[error("failed to load source snapshot manifest block `{block_id}`: {source}")]
     LoadManifest {
@@ -312,7 +328,7 @@ pub fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner>(
     let manifest_bytes = serde_json::to_vec_pretty(&manifest)
         .map_err(|source| SourceSnapshotAcquisitionError::SerializeManifest { source })?;
     let manifest_block_id = store
-        .put(&snapshot_block("application/json", manifest_bytes))
+        .put_versioned(&snapshot_block("application/json", manifest_bytes)?)
         .map_err(|source| SourceSnapshotAcquisitionError::StoreManifest { source })?
         .to_string();
 
@@ -402,7 +418,7 @@ fn collect_snapshot_entries<S: BlockStore>(
         })?;
         let byte_length = bytes.len() as u64;
         let block_id = store
-            .put(&snapshot_block("application/octet-stream", bytes))
+            .put_versioned(&snapshot_block("application/octet-stream", bytes)?)
             .map_err(
                 |source| SourceSnapshotAcquisitionError::StoreSnapshotPayload {
                     path: child.display().to_string(),
@@ -443,8 +459,8 @@ fn load_source_snapshot_manifest<S: BlockStore>(
     manifest_block_id: &str,
 ) -> Result<SourceSnapshotManifest, SourceSnapshotAcquisitionError> {
     let manifest_hash = parse_block_hash(manifest_block_id)?;
-    let validated = store
-        .get(&manifest_hash)
+    let decoded = store
+        .get_decoded(&manifest_hash)
         .map_err(|source| SourceSnapshotAcquisitionError::LoadManifest {
             block_id: manifest_block_id.to_string(),
             source,
@@ -452,31 +468,50 @@ fn load_source_snapshot_manifest<S: BlockStore>(
         .ok_or_else(|| SourceSnapshotAcquisitionError::MissingManifestBlock {
             block_id: manifest_block_id.to_string(),
         })?;
-    let Block::Leaf(block) = validated.block else {
-        return Err(SourceSnapshotAcquisitionError::ManifestBlockNotLeaf {
-            block_id: manifest_block_id.to_string(),
-        });
-    };
-    let entry = block.entries.first().ok_or_else(|| {
-        SourceSnapshotAcquisitionError::ManifestBlockMissingContent {
-            block_id: manifest_block_id.to_string(),
+    let validated = match decoded {
+        DecodedBlock::V1(_) => {
+            return Err(SourceSnapshotAcquisitionError::ManifestBlockLegacyVersion {
+                block_id: manifest_block_id.to_string(),
+                version: 1,
+            });
         }
-    })?;
-    if entry.content.media_type != "application/json" {
+        DecodedBlock::V2(validated) => validated,
+    };
+    let custom = match v2::into_typed_block(validated).map_err(|error| {
+        SourceSnapshotAcquisitionError::DecodeManifestBlock {
+            block_id: manifest_block_id.to_string(),
+            message: error.to_string(),
+        }
+    })? {
+        v2::TypedBlock::Custom(custom) => custom,
+        other => {
+            return Err(SourceSnapshotAcquisitionError::ManifestBlockWrongType {
+                block_id: manifest_block_id.to_string(),
+                type_name: typed_block_name(&other).to_string(),
+            });
+        }
+    };
+    if custom.type_name != SNAPSHOT_ARTIFACT_BLOCK_TYPE {
+        return Err(SourceSnapshotAcquisitionError::ManifestBlockWrongType {
+            block_id: manifest_block_id.to_string(),
+            type_name: custom.type_name,
+        });
+    }
+    let (media_type, body) = custom_block_payload(&custom.content, manifest_block_id)?;
+    if media_type != "application/json" {
         return Err(
             SourceSnapshotAcquisitionError::ManifestBlockWrongMediaType {
                 block_id: manifest_block_id.to_string(),
-                media_type: entry.content.media_type.clone(),
+                media_type,
             },
         );
     }
-    let manifest: SourceSnapshotManifest =
-        serde_json::from_slice(&entry.content.body).map_err(|source| {
-            SourceSnapshotAcquisitionError::ParseManifest {
-                block_id: manifest_block_id.to_string(),
-                source,
-            }
-        })?;
+    let manifest: SourceSnapshotManifest = serde_json::from_slice(&body).map_err(|source| {
+        SourceSnapshotAcquisitionError::ParseManifest {
+            block_id: manifest_block_id.to_string(),
+            source,
+        }
+    })?;
     if manifest.schema_version != SNAPSHOT_MANIFEST_SCHEMA_VERSION {
         return Err(
             SourceSnapshotAcquisitionError::UnsupportedManifestSchemaVersion {
@@ -489,24 +524,73 @@ fn load_source_snapshot_manifest<S: BlockStore>(
     Ok(manifest)
 }
 
-fn snapshot_block(media_type: &str, body: Vec<u8>) -> Block {
-    Block::Leaf(LeafBlock {
-        version: VERSION_1,
-        level: 0,
-        embedding_spec: EmbeddingSpec {
-            dims: 0,
-            encoding: "f32le".into(),
+fn snapshot_block(
+    media_type: &str,
+    body: Vec<u8>,
+) -> Result<VersionedBlock, SourceSnapshotAcquisitionError> {
+    let block = v2::build_custom_block(
+        SNAPSHOT_ARTIFACT_BLOCK_TYPE,
+        Value::Map(vec![
+            (
+                Value::Text("media_type".into()),
+                Value::Text(media_type.to_string()),
+            ),
+            (Value::Text("body".into()), Value::Bytes(body)),
+        ]),
+    )
+    .map_err(
+        |source| SourceSnapshotAcquisitionError::BuildSnapshotBlock {
+            media_type: media_type.to_string(),
+            source,
         },
-        entries: vec![LeafEntry {
-            embedding: Vec::new(),
-            metadata: Vec::new(),
-            content: Content {
-                media_type: media_type.into(),
-                body,
+    )?;
+    Ok(VersionedBlock::V2(block))
+}
+
+fn custom_block_payload(
+    content: &Value,
+    block_id: &str,
+) -> Result<(String, Vec<u8>), SourceSnapshotAcquisitionError> {
+    let Value::Map(fields) = content else {
+        return Err(SourceSnapshotAcquisitionError::DecodeManifestBlock {
+            block_id: block_id.to_string(),
+            message: "snapshot custom block content must be a CBOR map".into(),
+        });
+    };
+    let media_type = fields
+        .iter()
+        .find_map(|(key, value)| match (key, value) {
+            (Value::Text(name), Value::Text(media_type)) if name == "media_type" => {
+                Some(media_type.clone())
+            }
+            _ => None,
+        })
+        .ok_or_else(
+            || SourceSnapshotAcquisitionError::ManifestBlockWrongMediaType {
+                block_id: block_id.to_string(),
+                media_type: "<missing>".into(),
             },
-        }],
-        ext: None,
-    })
+        )?;
+    let body = fields
+        .iter()
+        .find_map(|(key, value)| match (key, value) {
+            (Value::Text(name), Value::Bytes(body)) if name == "body" => Some(body.clone()),
+            _ => None,
+        })
+        .ok_or_else(
+            || SourceSnapshotAcquisitionError::ManifestBlockMissingContent {
+                block_id: block_id.to_string(),
+            },
+        )?;
+    Ok((media_type, body))
+}
+
+fn typed_block_name(block: &v2::TypedBlock) -> &str {
+    match block {
+        v2::TypedBlock::Branch(branch) => &branch.type_name,
+        v2::TypedBlock::Leaf(leaf) => &leaf.type_name,
+        v2::TypedBlock::Custom(custom) => &custom.type_name,
+    }
 }
 
 fn mailbox_work_item_id(relative_path: &str) -> String {
@@ -902,17 +986,20 @@ mod tests {
         let temp = tempdir().unwrap();
         let store = FilesystemBlockStore::new(temp.path().join("blocks")).unwrap();
         let manifest_block_id = store
-            .put(&snapshot_block(
-                "application/json",
-                serde_json::to_vec(&SourceSnapshotManifest {
-                    schema_version: SNAPSHOT_MANIFEST_SCHEMA_VERSION,
-                    source_uri: "rsync://example.invalid/other".into(),
-                    source_snapshot_id: "snapshot-123".into(),
-                    acquired_at: "2026-06-19T22:00:00Z".into(),
-                    entries: Vec::new(),
-                })
+            .put_versioned(
+                &snapshot_block(
+                    "application/json",
+                    serde_json::to_vec(&SourceSnapshotManifest {
+                        schema_version: SNAPSHOT_MANIFEST_SCHEMA_VERSION,
+                        source_uri: "rsync://example.invalid/other".into(),
+                        source_snapshot_id: "snapshot-123".into(),
+                        acquired_at: "2026-06-19T22:00:00Z".into(),
+                        entries: Vec::new(),
+                    })
+                    .unwrap(),
+                )
                 .unwrap(),
-            ))
+            )
             .unwrap()
             .to_string();
         let runner = CopyTreeRsyncRunner::new(temp.path().join("source"));
@@ -1025,17 +1112,23 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_blocks_use_zero_dimensional_artifact_embeddings() {
-        let Block::Leaf(block) = snapshot_block("application/json", b"{}".to_vec()) else {
-            panic!("snapshot blocks should be leaves");
+    fn snapshot_blocks_use_custom_v2_payload_envelope() {
+        let VersionedBlock::V2(block) = snapshot_block("application/json", b"{}".to_vec()).unwrap()
+        else {
+            panic!("snapshot blocks should use the v2 envelope");
         };
-        let entry = block
-            .entries
-            .first()
-            .expect("snapshot block should have content");
+        let v2::TypedBlock::Custom(custom) = v2::into_typed_block(v2::ValidatedBlock {
+            hash: lexongraph_block::v2::serialize_block(&block).unwrap().hash,
+            block,
+        })
+        .unwrap() else {
+            panic!("snapshot blocks should be custom blocks");
+        };
+        let (media_type, body) = custom_block_payload(&custom.content, "test").unwrap();
 
-        assert_eq!(block.embedding_spec.dims, 0);
-        assert_eq!(entry.embedding, Vec::<u8>::new());
+        assert_eq!(custom.type_name, SNAPSHOT_ARTIFACT_BLOCK_TYPE);
+        assert_eq!(media_type, "application/json");
+        assert_eq!(body, b"{}".to_vec());
     }
 
     #[test]
@@ -1043,17 +1136,20 @@ mod tests {
         let temp = tempdir().unwrap();
         let store = FilesystemBlockStore::new(temp.path().join("blocks")).unwrap();
         let manifest_block_id = store
-            .put(&snapshot_block(
-                "application/json",
-                serde_json::to_vec(&SourceSnapshotManifest {
-                    schema_version: SNAPSHOT_MANIFEST_SCHEMA_VERSION + 1,
-                    source_uri: "rsync://example.invalid/mailman".into(),
-                    source_snapshot_id: "snapshot-123".into(),
-                    acquired_at: "2026-06-19T22:00:00Z".into(),
-                    entries: Vec::new(),
-                })
+            .put_versioned(
+                &snapshot_block(
+                    "application/json",
+                    serde_json::to_vec(&SourceSnapshotManifest {
+                        schema_version: SNAPSHOT_MANIFEST_SCHEMA_VERSION + 1,
+                        source_uri: "rsync://example.invalid/mailman".into(),
+                        source_snapshot_id: "snapshot-123".into(),
+                        acquired_at: "2026-06-19T22:00:00Z".into(),
+                        entries: Vec::new(),
+                    })
+                    .unwrap(),
+                )
                 .unwrap(),
-            ))
+            )
             .unwrap()
             .to_string();
 

@@ -10,7 +10,8 @@ Phase 2 validation patch for the approved production-only
 `docs/specs/lexonarchivebuilder-archive-sync/requirements.md` and
 `docs/specs/lexonarchivebuilder-archive-sync/design.md`, including the
 Azure-backed rsync source-snapshot acquisition revision that reuses the updated
-LexonGraph Azure Blob-backed `BlockStore` realization.
+LexonGraph Azure Blob-backed `BlockStore` realization plus v2 custom-block
+adoption for source-snapshot artifacts.
 
 ## Validation Scope
 
@@ -109,6 +110,18 @@ call shapes, and any repository-owned manifest convention remains layered on
 that seam rather than replacing it.
 
 **Traces to:** RQ-ARCHIVE-004D, RQ-ARCHIVE-014, RQ-ARCHIVE-018, DSG-LAS-004C
+
+### VAL-LAS-003D1
+
+Inspect representative source-snapshot artifacts after the v2 custom-block
+transition.
+
+**Pass condition:** source-snapshot payload and manifest blocks use LexonGraph
+v2 custom blocks, downstream mailbox/chunk/index flows remain on their current
+delegated contracts for this increment, and validation may rebuild source-
+snapshot stores instead of requiring reads from pre-v2 v1 snapshot blocks.
+
+**Traces to:** RQ-ARCHIVE-004E, DSG-LAS-004D
 
 ### VAL-LAS-004
 
