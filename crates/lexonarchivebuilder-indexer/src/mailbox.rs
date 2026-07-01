@@ -58,6 +58,8 @@ pub enum MailboxExpansionError {
         #[source]
         source: lexongraph_block::BlockError,
     },
+    #[error("mailbox source {path} produced unsupported artifact media type {media_type}")]
+    UnsupportedArtifactMediaType { path: PathBuf, media_type: String },
     #[error("failed to store artifact block for mailbox {path}: {source}")]
     StoreArtifact {
         path: PathBuf,
@@ -443,7 +445,7 @@ fn store_artifact_block(
     body: Vec<u8>,
 ) -> Result<BlockHash, MailboxExpansionError> {
     let block = v2::build_custom_block(
-        artifact_block_type(media_type),
+        artifact_block_type(path, media_type)?,
         Value::Map(vec![
             (
                 Value::Text("media_type".into()),
@@ -465,11 +467,17 @@ fn store_artifact_block(
         })
 }
 
-fn artifact_block_type(media_type: &str) -> &'static str {
+fn artifact_block_type(
+    path: &Path,
+    media_type: &str,
+) -> Result<&'static str, MailboxExpansionError> {
     match media_type {
-        ARTIFACT_MEDIA_TYPE_MAILBOX => MAILBOX_ARTIFACT_BLOCK_TYPE,
-        ARTIFACT_MEDIA_TYPE_NORMALIZED_EMAIL => NORMALIZED_EMAIL_ARTIFACT_BLOCK_TYPE,
-        _ => panic!("unsupported artifact media type `{media_type}`"),
+        ARTIFACT_MEDIA_TYPE_MAILBOX => Ok(MAILBOX_ARTIFACT_BLOCK_TYPE),
+        ARTIFACT_MEDIA_TYPE_NORMALIZED_EMAIL => Ok(NORMALIZED_EMAIL_ARTIFACT_BLOCK_TYPE),
+        _ => Err(MailboxExpansionError::UnsupportedArtifactMediaType {
+            path: path.to_path_buf(),
+            media_type: media_type.to_string(),
+        }),
     }
 }
 
@@ -773,6 +781,19 @@ mod tests {
         assert!(matches!(
             error,
             MailboxExpansionError::WrongExtension { path } if path == mailbox_path
+        ));
+    }
+
+    #[test]
+    fn artifact_block_type_reports_unsupported_media_type() {
+        let path = Path::new("mailbox.mbox");
+
+        let error = artifact_block_type(path, "application/example").unwrap_err();
+
+        assert!(matches!(
+            error,
+            MailboxExpansionError::UnsupportedArtifactMediaType { path, media_type }
+                if path == Path::new("mailbox.mbox") && media_type == "application/example"
         ));
     }
 
