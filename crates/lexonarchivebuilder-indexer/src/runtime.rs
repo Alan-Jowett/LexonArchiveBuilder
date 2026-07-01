@@ -461,6 +461,8 @@ pub enum RuntimeError {
     MissingReplayMetadata { block_id: String },
     #[error("leaf-indexing worker task failed: {0}")]
     LeafTaskJoin(#[from] JoinError),
+    #[error("blocking mutable-ref task failed: {0}")]
+    BlockingMutableRefTaskJoin(JoinError),
     #[error("failed to write batch summary {path}: {source}")]
     WriteSummary {
         path: String,
@@ -1376,7 +1378,7 @@ where
     if stage.includes_ingestion()
         && let Some(mutable_ref_store) = io.mutable_ref_store
     {
-        prepare_mutable_ref_store(mutable_ref_store)?;
+        prepare_mutable_ref_store_async(mutable_ref_store.clone()).await?;
     }
 
     if stage == ExecutionStage::IngestionAndEmbedding {
@@ -1430,8 +1432,19 @@ where
         )
         .await
     } else {
-        let (replay_batches, embedding_provider) =
-            load_replay_batches_from_store(&block_store, &embedding_spec, max_concurrency, io)?;
+        let Some(mutable_ref_store) = mutable_ref_store.clone() else {
+            return Err(RuntimeError::MissingReplayJournalHead {
+                path: "<unresolved block store root>".into(),
+            });
+        };
+        let (replay_batches, embedding_provider) = load_replay_batches_from_store_async(
+            block_store.clone(),
+            embedding_spec.clone(),
+            max_concurrency,
+            mutable_ref_store,
+            Arc::clone(&progress),
+        )
+        .await?;
         run_streaming_stage(
             resolver,
             embedding_provider,
@@ -1504,7 +1517,12 @@ async fn run_ingestion_only_stage(
                 .zip(constructed.block_ids.iter().copied())
                 .map(|(item, block_id)| replay_journal_record_from_item(block_id, item))
                 .collect::<Vec<_>>();
-            append_replay_journal_records(block_store, mutable_ref_store, &records)?;
+            append_replay_journal_records_async(
+                block_store.clone(),
+                mutable_ref_store.clone(),
+                records,
+            )
+            .await?;
         }
         completed_items += batch_item_count;
         if let Some(message) = batch.completion_message {
@@ -1724,6 +1742,10 @@ where
                         || response.status() == StatusCode::REQUEST_TIMEOUT
                         || response.status() == StatusCode::TOO_MANY_REQUESTS) =>
             {
+                last_error = Some(mutable_ref_store_io_error(format!(
+                    "retryable HTTP status {} while accessing mutable ref store",
+                    response.status()
+                )));
                 std::thread::sleep(MUTABLE_REF_STORE_HTTP_RETRY_DELAY);
             }
             Ok(response) => return Ok(response),
@@ -1800,22 +1822,47 @@ fn write_mutable_ref_store_bytes(
                 })?;
             }
             let temp_path = path.with_extension("tmp");
+            let backup_path = path.with_extension("bak");
             fs::write(&temp_path, encoded).map_err(|source| {
                 RuntimeError::WriteMutableRefStore {
                     path: temp_path.display().to_string(),
                     source,
                 }
             })?;
-            if path.exists() {
-                fs::remove_file(path).map_err(|source| RuntimeError::WriteMutableRefStore {
-                    path: path.display().to_string(),
-                    source,
+            let had_existing_file = path.exists();
+            if had_existing_file {
+                if backup_path.exists() {
+                    fs::remove_file(&backup_path).map_err(|source| {
+                        RuntimeError::WriteMutableRefStore {
+                            path: backup_path.display().to_string(),
+                            source,
+                        }
+                    })?;
+                }
+                fs::rename(path, &backup_path).map_err(|source| {
+                    RuntimeError::WriteMutableRefStore {
+                        path: path.display().to_string(),
+                        source,
+                    }
                 })?;
             }
-            fs::rename(&temp_path, path).map_err(|source| RuntimeError::WriteMutableRefStore {
-                path: path.display().to_string(),
-                source,
-            })?;
+            if let Err(source) = fs::rename(&temp_path, path) {
+                if had_existing_file {
+                    let _ = fs::rename(&backup_path, path);
+                }
+                return Err(RuntimeError::WriteMutableRefStore {
+                    path: path.display().to_string(),
+                    source,
+                });
+            }
+            if had_existing_file && backup_path.exists() {
+                fs::remove_file(&backup_path).map_err(|source| {
+                    RuntimeError::WriteMutableRefStore {
+                        path: backup_path.display().to_string(),
+                        source,
+                    }
+                })?;
+            }
             Ok(())
         }
         MutableRefStoreLocation::AzureBlob { url, display_path } => {
@@ -1862,6 +1909,14 @@ fn prepare_mutable_ref_store(location: &MutableRefStoreLocation) -> Result<(), R
     }
 }
 
+async fn prepare_mutable_ref_store_async(
+    location: MutableRefStoreLocation,
+) -> Result<(), RuntimeError> {
+    tokio::task::spawn_blocking(move || prepare_mutable_ref_store(&location))
+        .await
+        .map_err(RuntimeError::BlockingMutableRefTaskJoin)?
+}
+
 fn load_mutable_ref_store(
     location: &MutableRefStoreLocation,
 ) -> Result<MutableRefStoreState, RuntimeError> {
@@ -1895,6 +1950,15 @@ fn publish_current_root(
     let mut refs = load_mutable_ref_store(mutable_ref_store)?;
     refs.current_root_block_id = Some(root_id.to_string());
     write_mutable_ref_store(mutable_ref_store, &refs)
+}
+
+async fn publish_current_root_async(
+    mutable_ref_store: MutableRefStoreLocation,
+    root_id: BlockHash,
+) -> Result<(), RuntimeError> {
+    tokio::task::spawn_blocking(move || publish_current_root(&mutable_ref_store, &root_id))
+        .await
+        .map_err(RuntimeError::BlockingMutableRefTaskJoin)?
 }
 
 fn append_replay_journal_records(
@@ -1950,6 +2014,18 @@ fn append_replay_journal_records(
 
     refs.replay_journal_head_block_id = current_head;
     write_mutable_ref_store(mutable_ref_store, &refs)
+}
+
+async fn append_replay_journal_records_async(
+    store: ConfiguredBlockStore,
+    mutable_ref_store: MutableRefStoreLocation,
+    records: Vec<ReplayJournalRecord>,
+) -> Result<(), RuntimeError> {
+    tokio::task::spawn_blocking(move || {
+        append_replay_journal_records(&store, &mutable_ref_store, &records)
+    })
+    .await
+    .map_err(RuntimeError::BlockingMutableRefTaskJoin)?
 }
 
 fn replay_journal_block_body_size(
@@ -2617,10 +2693,15 @@ where
             &result.block_ids,
             &result.root_id,
         ));
-        append_replay_journal_records(block_store, mutable_ref_store, &records)?;
+        append_replay_journal_records_async(
+            block_store.clone(),
+            mutable_ref_store.clone(),
+            records,
+        )
+        .await?;
     }
     if let Some(mutable_ref_store) = io.mutable_ref_store {
-        publish_current_root(mutable_ref_store, &result.root_id)?;
+        publish_current_root_async(mutable_ref_store.clone(), result.root_id).await?;
     }
 
     let mut block_ids = result
@@ -2680,6 +2761,24 @@ fn load_replay_batches_from_store(
         mutable_ref_store,
         io.progress,
     )
+}
+
+async fn load_replay_batches_from_store_async(
+    store: ConfiguredBlockStore,
+    embedding_spec: EmbeddingSpec,
+    max_concurrency: usize,
+    mutable_ref_store: MutableRefStoreLocation,
+    progress: ProgressReporter,
+) -> Result<(Vec<ReplayBatch>, StoredLeafEmbeddingProvider), RuntimeError> {
+    tokio::task::spawn_blocking(move || {
+        let io = RuntimeIo {
+            mutable_ref_store: Some(&mutable_ref_store),
+            progress: &progress,
+        };
+        load_replay_batches_from_store(&store, &embedding_spec, max_concurrency, io)
+    })
+    .await
+    .map_err(RuntimeError::BlockingMutableRefTaskJoin)?
 }
 
 fn load_replay_batches_from_journal(
