@@ -50,7 +50,7 @@ runcmd:
   - |
     set -eu
     apt-get update
-    apt-get install -y --no-install-recommends ca-certificates curl docker.io docker-compose-plugin python3
+    apt-get install -y --no-install-recommends ca-certificates curl docker.io python3
     systemctl enable docker
     systemctl start docker
     mkdir -p /opt/lexonarchivebuilder/runner
