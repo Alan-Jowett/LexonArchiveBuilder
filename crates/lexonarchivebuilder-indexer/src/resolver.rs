@@ -333,12 +333,10 @@ fn custom_block_payload(
             }
             _ => None,
         })
-        .ok_or_else(
-            || LocalFilesystemContentResolverError::ArtifactWrongMediaType {
-                block_id: block_id.to_string(),
-                media_type: "<missing>".into(),
-            },
-        )?;
+        .ok_or_else(|| LocalFilesystemContentResolverError::ArtifactDecode {
+            block_id: block_id.to_string(),
+            message: "artifact custom block content is missing media_type".into(),
+        })?;
     let body = fields
         .iter()
         .find_map(|(key, value)| match (key, value) {
