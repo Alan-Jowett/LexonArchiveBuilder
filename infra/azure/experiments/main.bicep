@@ -75,22 +75,24 @@ module storage 'storage.bicep' = {
 }
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
-  name: storage.outputs.storageAccountName
+  name: storageAccountName
 }
 
 var containerSasToken = storageAccount.listServiceSas('2023-05-01', {
-  canonicalizedResource: '/blob/${storage.outputs.storageAccountName}/${storage.outputs.containerName}'
+  canonicalizedResource: '/blob/${storageAccountName}/${containerName}'
   signedResource: 'c'
   signedProtocol: 'https'
   signedPermission: sasPermissions
   signedExpiry: sasExpiry
   keyToSign: 'key1'
 }).serviceSasToken
-var containerSasUrl = '${storage.outputs.blobEndpoint}${storage.outputs.containerName}?${containerSasToken}'
-var resolvedWorkloadEnvironmentFile = 'CONTAINER_SAS_URL=''${containerSasUrl}''
-STORAGE_ACCOUNT_NAME=''${storage.outputs.storageAccountName}''
-CONTAINER_NAME=''${storage.outputs.containerName}''
-${workloadEnvironmentFile}'
+var containerSasUrl = 'https://${storageAccountName}.blob.${environment().suffixes.storage}/${containerName}?${containerSasToken}'
+var resolvedWorkloadEnvironmentFile = '''
+CONTAINER_SAS_URL='${containerSasUrl}'
+STORAGE_ACCOUNT_NAME='${storageAccountName}'
+CONTAINER_NAME='${containerName}'
+${workloadEnvironmentFile}
+'''
 
 module runner 'vm-runner.bicep' = {
   name: 'lab-experiment-runner-${deploymentSuffix}'

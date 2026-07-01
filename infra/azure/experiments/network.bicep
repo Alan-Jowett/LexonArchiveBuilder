@@ -24,26 +24,28 @@ param enableSshAccess bool = false
 @description('Allowed source prefixes for SSH.')
 param sshSourcePrefixes array = []
 
+var sshSecurityRules = [
+  for (prefix, index) in sshSourcePrefixes: {
+    name: 'allow-ssh-${index}'
+    properties: {
+      access: 'Allow'
+      direction: 'Inbound'
+      priority: 100 + index
+      protocol: 'Tcp'
+      sourceAddressPrefix: prefix
+      sourcePortRange: '*'
+      destinationAddressPrefix: '*'
+      destinationPortRange: '22'
+    }
+  }
+]
+
 resource vmSubnetNsg 'Microsoft.Network/networkSecurityGroups@2023-09-01' = {
   name: '${vnetName}-vm-nsg'
   location: location
   tags: tags
   properties: {
-    securityRules: enableSshAccess ? [
-      for (prefix, index) in sshSourcePrefixes: {
-        name: 'allow-ssh-${index}'
-        properties: {
-          access: 'Allow'
-          direction: 'Inbound'
-          priority: 100 + index
-          protocol: 'Tcp'
-          sourceAddressPrefix: prefix
-          sourcePortRange: '*'
-          destinationAddressPrefix: '*'
-          destinationPortRange: '22'
-        }
-      }
-    ] : []
+    securityRules: enableSshAccess ? sshSecurityRules : []
   }
 }
 
