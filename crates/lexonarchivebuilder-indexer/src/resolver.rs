@@ -10,14 +10,17 @@ use std::{
 };
 
 use ciborium::Value;
-use lexongraph_block::{Block, BlockHash, Content};
-use lexongraph_block_store::BlockStore;
+use lexongraph_block::{BlockHash, Content, DecodedBlock, VERSION_1, v2};
+use lexongraph_block_store::BlockStoreExt;
 use lexongraph_streaming_indexer::ContentResolver;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::block_store::ConfiguredBlockStore;
-use crate::mailbox::{CHUNK_MEDIA_TYPE, chunk_email_core};
+use crate::mailbox::{
+    CHUNK_MEDIA_TYPE, NORMALIZED_EMAIL_ARTIFACT_BLOCK_TYPE, NORMALIZED_EMAIL_SCHEMA_VERSION,
+    chunk_email_core,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ContentRef {
@@ -74,9 +77,11 @@ pub enum LocalFilesystemContentResolverError {
     BlockStore(#[from] lexongraph_block_store::BlockStoreError),
     #[error("artifact block {block_id} was not found")]
     MissingArtifact { block_id: String },
-    #[error("artifact block {block_id} is not a leaf artifact block")]
-    ArtifactNotLeaf { block_id: String },
-    #[error("artifact block {block_id} does not contain normalized email content")]
+    #[error("artifact block {block_id} uses unsupported legacy block version {version}")]
+    ArtifactLegacyVersion { block_id: String, version: u64 },
+    #[error("artifact block {block_id} has unexpected v2 block type_name {type_name}")]
+    ArtifactWrongType { block_id: String, type_name: String },
+    #[error("artifact block {block_id} does not contain normalized email payload bytes")]
     ArtifactMissingContent { block_id: String },
     #[error("artifact block {block_id} has unexpected media type {media_type}")]
     ArtifactWrongMediaType {
@@ -215,32 +220,50 @@ fn load_email_chunks(
     email_artifact_ref: &str,
 ) -> Result<Vec<String>, LocalFilesystemContentResolverError> {
     let block_id = parse_block_hash(email_artifact_ref)?;
-    let Some(validated) = store.get(&block_id)? else {
+    let Some(decoded) = store.get_decoded(&block_id)? else {
         return Err(LocalFilesystemContentResolverError::MissingArtifact {
             block_id: email_artifact_ref.to_string(),
         });
     };
-    let Block::Leaf(leaf) = validated.block else {
-        return Err(LocalFilesystemContentResolverError::ArtifactNotLeaf {
-            block_id: email_artifact_ref.to_string(),
-        });
-    };
-    let Some(entry) = leaf.entries.first() else {
-        return Err(
-            LocalFilesystemContentResolverError::ArtifactMissingContent {
+    let validated = match decoded {
+        DecodedBlock::V1(_) => {
+            return Err(LocalFilesystemContentResolverError::ArtifactLegacyVersion {
                 block_id: email_artifact_ref.to_string(),
-            },
-        );
+                version: VERSION_1,
+            });
+        }
+        DecodedBlock::V2(validated) => validated,
     };
-    if entry.content.media_type != "application/vnd.lexonarchivebuilder.normalized-email+cbor" {
+    let custom = match v2::into_typed_block(validated).map_err(|error| {
+        LocalFilesystemContentResolverError::ArtifactDecode {
+            block_id: email_artifact_ref.to_string(),
+            message: error.to_string(),
+        }
+    })? {
+        v2::TypedBlock::Custom(custom) => custom,
+        other => {
+            return Err(LocalFilesystemContentResolverError::ArtifactWrongType {
+                block_id: email_artifact_ref.to_string(),
+                type_name: typed_block_name(&other).to_string(),
+            });
+        }
+    };
+    if custom.type_name != NORMALIZED_EMAIL_ARTIFACT_BLOCK_TYPE {
+        return Err(LocalFilesystemContentResolverError::ArtifactWrongType {
+            block_id: email_artifact_ref.to_string(),
+            type_name: custom.type_name,
+        });
+    }
+    let (media_type, body) = custom_block_payload(&custom.content, email_artifact_ref)?;
+    if media_type != "application/vnd.lexonarchivebuilder.normalized-email+cbor" {
         return Err(
             LocalFilesystemContentResolverError::ArtifactWrongMediaType {
                 block_id: email_artifact_ref.to_string(),
-                media_type: entry.content.media_type.clone(),
+                media_type,
             },
         );
     }
-    let body = normalized_email_body(&entry.content.body, email_artifact_ref)?;
+    let body = normalized_email_body(&body, email_artifact_ref)?;
     Ok(chunk_email_core(&body))
 }
 
@@ -271,6 +294,69 @@ fn normalized_email_body(
                 block_id: block_id.to_string(),
             },
         )
+        .and_then(|body| {
+            fields
+                .iter()
+                .find_map(|(key, value)| match (key, value) {
+                    (Value::Text(name), Value::Integer(version)) if name == "schema_version" => {
+                        u64::try_from(*version).ok()
+                    }
+                    _ => None,
+                })
+                .filter(|version| *version == NORMALIZED_EMAIL_SCHEMA_VERSION)
+                .ok_or_else(|| LocalFilesystemContentResolverError::ArtifactDecode {
+                    block_id: block_id.to_string(),
+                    message: format!(
+                        "normalized email artifact must use schema_version {}",
+                        NORMALIZED_EMAIL_SCHEMA_VERSION
+                    ),
+                })?;
+            Ok(body)
+        })
+}
+
+fn custom_block_payload(
+    content: &Value,
+    block_id: &str,
+) -> Result<(String, Vec<u8>), LocalFilesystemContentResolverError> {
+    let Value::Map(fields) = content else {
+        return Err(LocalFilesystemContentResolverError::ArtifactDecode {
+            block_id: block_id.to_string(),
+            message: "artifact custom block content must be a CBOR map".into(),
+        });
+    };
+    let media_type = fields
+        .iter()
+        .find_map(|(key, value)| match (key, value) {
+            (Value::Text(name), Value::Text(media_type)) if name == "media_type" => {
+                Some(media_type.clone())
+            }
+            _ => None,
+        })
+        .ok_or_else(|| LocalFilesystemContentResolverError::ArtifactDecode {
+            block_id: block_id.to_string(),
+            message: "artifact custom block content is missing media_type".into(),
+        })?;
+    let body = fields
+        .iter()
+        .find_map(|(key, value)| match (key, value) {
+            (Value::Text(name), Value::Bytes(body)) if name == "body" => Some(body.clone()),
+            _ => None,
+        })
+        .ok_or_else(
+            || LocalFilesystemContentResolverError::ArtifactMissingContent {
+                block_id: block_id.to_string(),
+            },
+        )?;
+    Ok((media_type, body))
+}
+
+fn typed_block_name(block: &v2::TypedBlock) -> &str {
+    match block {
+        v2::TypedBlock::Branch(branch) => &branch.type_name,
+        v2::TypedBlock::Leaf(leaf) => &leaf.type_name,
+        v2::TypedBlock::Custom(custom) => &custom.type_name,
+    }
 }
 
 fn parse_block_hash(value: &str) -> Result<BlockHash, LocalFilesystemContentResolverError> {
@@ -316,7 +402,8 @@ mod tests {
     use std::fmt;
     use std::fs;
 
-    use lexongraph_block::{Block, BlockHash, Content, LeafEntry, VERSION_1, build_leaf_block};
+    use lexongraph_block::{BlockHash, Content, VersionedBlock, v2};
+    use lexongraph_block_store::BlockStoreExt;
     use lexongraph_streaming_indexer::{IndexItem, Metadata, conformance};
     use tempfile::tempdir;
 
@@ -513,30 +600,30 @@ mod tests {
     fn normalized_email_artifact_ref(store: &ConfiguredBlockStore, body: &str) -> String {
         let mut encoded = Vec::new();
         ciborium::ser::into_writer(
-            &Value::Map(vec![(
-                Value::Text("body".into()),
-                Value::Text(body.to_string()),
-            )]),
+            &Value::Map(vec![
+                (
+                    Value::Text("schema_version".into()),
+                    Value::Integer(NORMALIZED_EMAIL_SCHEMA_VERSION.into()),
+                ),
+                (Value::Text("body".into()), Value::Text(body.to_string())),
+            ]),
             &mut encoded,
         )
         .unwrap();
-        let block = build_leaf_block(
-            VERSION_1,
-            lexongraph_block::EmbeddingSpec {
-                dims: 0,
-                encoding: "f32le".into(),
-            },
-            vec![LeafEntry {
-                embedding: Vec::new(),
-                metadata: Vec::new(),
-                content: Content {
-                    media_type: "application/vnd.lexonarchivebuilder.normalized-email+cbor".into(),
-                    body: encoded,
-                },
-            }],
-            None,
+        let block = v2::build_custom_block(
+            NORMALIZED_EMAIL_ARTIFACT_BLOCK_TYPE,
+            Value::Map(vec![
+                (
+                    Value::Text("media_type".into()),
+                    Value::Text("application/vnd.lexonarchivebuilder.normalized-email+cbor".into()),
+                ),
+                (Value::Text("body".into()), Value::Bytes(encoded)),
+            ]),
         )
         .unwrap();
-        store.put(&Block::Leaf(block)).unwrap().to_string()
+        store
+            .put_versioned(&VersionedBlock::V2(block))
+            .unwrap()
+            .to_string()
     }
 }

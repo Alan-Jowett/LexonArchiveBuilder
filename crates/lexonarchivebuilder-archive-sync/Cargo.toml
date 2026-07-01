@@ -8,6 +8,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ciborium.workspace = true
 lexongraph-block.workspace = true
 lexongraph-block-store.workspace = true
 serde.workspace = true

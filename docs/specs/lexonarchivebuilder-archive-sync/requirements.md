@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 2 - Specification Changes
-- **Status:** Approved requirements revision being propagated into design and validation for Azure-backed rsync snapshot acquisition through the updated LexonGraph Azure Blob-backed block storage
-- **Scope:** `lexonarchivebuilder-archive-sync` as a separate production workflow layered on top of existing LexonArchiveBuilder indexing and storage boundaries
+- **Status:** Approved requirements revision being propagated into design and validation for Azure-backed rsync snapshot acquisition through the updated LexonGraph Azure Blob-backed block storage, plus v2 custom-block adoption for source-snapshot artifacts
+- **Scope:** `lexonarchivebuilder-archive-sync` as a separate production workflow layered on top of existing LexonArchiveBuilder indexing and storage boundaries, including source-snapshot acquisition and v2 custom-block alignment for source-snapshot artifacts
 
 ## USER-REQUEST
 
@@ -53,6 +53,9 @@
 - **UR-ARCHIVE-40 [KNOWN]:** The rsync snapshot payloads and manifests should use the updated Azure-backed LexonGraph `BlockStore` realization rather than a separate workflow-specific Azure Blob storage path.
 - **UR-ARCHIVE-41 [KNOWN]:** This increment should remain production-only and should not change MCP behavior.
 - **UR-ARCHIVE-42 [KNOWN]:** The source-snapshot boundary should stay reusable for future content types and future source types rather than remaining mailbox-source-specific.
+- **UR-ARCHIVE-43 [KNOWN]:** LexonGraph now has a v2 block format with custom-block support, and `lexonarchivebuilder-archive-sync` should use it for source-snapshot payload and manifest blocks.
+- **UR-ARCHIVE-44 [KNOWN]:** It is acceptable for this transition to require rebuilt source-snapshot stores; continued read compatibility with pre-v2 v1 source-snapshot blocks is not required in this increment.
+- **UR-ARCHIVE-45 [INFERRED]:** The workflow's resumability, auditability, and publication contracts should be preserved across the source-snapshot v2 transition while downstream mailbox, chunk, embedding, and index flows remain on their existing delegated contracts in this increment.
 
 ## Change Manifest
 
@@ -82,6 +85,7 @@
 | CM-ARCHIVE-013 | Add | Constrain the first increment to production-only Azure-oriented execution while leaving local/testing concerns out of scope | UR-ARCHIVE-18, UR-ARCHIVE-21 |
 | CM-ARCHIVE-014 | Add | Define the first production runtime shape as a VM-hosted, boot-triggered, Compose-launched workflow compatible with spot-instance semantics | UR-ARCHIVE-3, UR-ARCHIVE-4, UR-ARCHIVE-11, UR-ARCHIVE-14, UR-ARCHIVE-18 |
 | CM-ARCHIVE-015 | Revise | Preserve search-serving separation, immutable artifact behavior, and future content extensibility while introducing mailbox-focused workflow stages now | UR-ARCHIVE-20, UR-ARCHIVE-21, UR-ARCHIVE-30 |
+| CM-ARCHIVE-016 | Revise | Adopt LexonGraph v2 custom blocks for source-snapshot payloads and manifests while leaving downstream mailbox, chunk, embedding, and index flows on their existing delegated contracts | UR-ARCHIVE-43, UR-ARCHIVE-44, UR-ARCHIVE-45 |
 
 ## Before / After
 
@@ -154,6 +158,11 @@
 
 - **Before [KNOWN]:** The source-snapshot boundary preserved future extensibility in general terms, but it did not explicitly state that the acquisition contract itself should remain reusable beyond the first mailbox source.
 - **After [KNOWN]:** The requirements explicitly preserve a reusable source-snapshot acquisition boundary for future content and source types while keeping the first increment mailbox-focused and production-only.
+
+### BA-ARCHIVE-015
+
+- **Before [KNOWN]:** The requirements bound source-snapshot persistence to the shared `BlockStore` family but did not state whether source-snapshot payloads and manifests should continue using v1-style wrappers or move to v2 custom blocks.
+- **After [KNOWN]:** The requirements now bind source-snapshot payloads and manifests to LexonGraph v2 custom blocks, explicitly allow rebuilt source-snapshot stores instead of continued read compatibility with pre-v2 v1 snapshot blocks, and leave downstream mailbox, chunk, embedding, and index flows on their current delegated contracts in this increment.
 
 ## Glossary
 
@@ -290,6 +299,17 @@ realization.
 - **Boundary [INFERRED]:** Source-specific discovery metadata may still evolve independently, but higher workflow stages must not depend on raw Azure Blob API call shapes.
 - **Extensibility [KNOWN]:** This storage-boundary reuse must remain applicable to future source and content types that participate in the same workflow family.
 - **Traceability:** UR-ARCHIVE-15, UR-ARCHIVE-39, UR-ARCHIVE-40, UR-ARCHIVE-42
+
+#### RQ-ARCHIVE-004E - LexonGraph v2 custom-block adoption for source snapshots
+
+The workflow SHALL persist and consume source-snapshot payloads and manifests
+using LexonGraph v2 custom blocks.
+
+- **Included artifacts [KNOWN]:** This applies to source-snapshot payload and manifest blocks owned by `lexonarchivebuilder-archive-sync`.
+- **Migration boundary [KNOWN]:** Rebuilt source-snapshot stores are acceptable; continued read compatibility with pre-v2 v1 source-snapshot blocks is not required in this increment.
+- **Downstream boundary [KNOWN]:** Downstream mailbox, chunk, embedding, and index flows remain on their existing delegated contracts in this increment; archive-sync does not introduce a repository-owned branch-or-leaf format translation layer around those stages.
+- **Recoverability boundary [INFERRED]:** Resume and audit guarantees apply to source-snapshot artifacts created under the v2 custom-block contract for a given generation rather than requiring mixed-format resume across a v1-to-v2 snapshot transition.
+- **Traceability:** UR-ARCHIVE-43, UR-ARCHIVE-44, UR-ARCHIVE-45
 
 #### RQ-ARCHIVE-005 - Mailbox block admission
 
@@ -565,6 +585,7 @@ New information SHALL be represented by new immutable artifacts.
 - Inventing a second repository-local indexing algorithm instead of reusing or extending the approved indexer path
 - Finalizing exact field names or serialization details for the root-history artifact beyond the required provenance metadata
 - Finalizing the exact block-addressing, container-layout, or naming scheme for source snapshots, journals, or failure artifacts
+- Preserving mixed-format or pre-v2 v1 compatibility for source-snapshot payloads and manifests after the approved v2 custom-block transition
 - Generalizing the first source beyond `rsync.ietf.org::mailman-archive/` in this increment
 - Defining non-mailbox content derivation rules for the first increment
 
@@ -618,6 +639,8 @@ New information SHALL be represented by new immutable artifacts.
   - user clarification in this session selecting: `Use the updated Azure-backed LexonGraph BlockStore for the rsync snapshot payloads and manifests`
   - user clarification in this session selecting: `Keep it production-only and leave MCP behavior unchanged`
   - user clarification in this session selecting: `Establish a reusable source-snapshot boundary for future content types and sources`
+  - user request in this session: "lexongraph now has a v2 of the block format. Switch over to using that instead of the v1 format."
+  - user clarification in this session selecting: "Require rebuilding stores and support only v2 blocks"
   - `README.md:7-13`
   - `README.md:20-28`
   - `README.md:42-49`

@@ -9,7 +9,8 @@ Phase 2 specification patch for the approved production-only
 `lexonarchivebuilder-archive-sync` workflow in
 `docs/specs/lexonarchivebuilder-archive-sync/requirements.md`, including the
 Azure-backed rsync source-snapshot acquisition revision that reuses the updated
-LexonGraph Azure Blob-backed `BlockStore` realization.
+LexonGraph Azure Blob-backed `BlockStore` realization plus v2 custom-block
+adoption for source-snapshot artifacts.
 
 ## Scope
 
@@ -184,6 +185,22 @@ repository-owned manifest convention on that seam without redefining the seam
 itself.
 
 **Traces to:** RQ-ARCHIVE-004D, RQ-ARCHIVE-014, RQ-ARCHIVE-018
+
+### DSG-LAS-004D `V2 custom blocks for source snapshots`
+
+`lexonarchivebuilder-archive-sync` uses LexonGraph v2 custom blocks for
+source-snapshot payload and manifest blocks.
+
+The workflow does not add a repository-owned bridge between v1 and v2 for those
+source-snapshot artifacts. If the format transition invalidates an existing
+source-snapshot store, operators may rebuild that store and rerun source
+acquisition so resume and audit guarantees continue within the v2 custom-block
+contract rather than across mixed-format snapshot state.
+
+Downstream mailbox, chunk, embedding, and index flows remain on their current
+delegated contracts in this increment.
+
+**Traces to:** RQ-ARCHIVE-004E, RQ-ARCHIVE-011, RQ-ARCHIVE-011C
 
 ### DSG-LAS-005 `Mailbox admission and delta derivation`
 

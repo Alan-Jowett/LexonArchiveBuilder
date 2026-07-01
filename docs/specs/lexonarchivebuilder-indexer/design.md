@@ -19,7 +19,8 @@ rapid profile validation, upstream wgpu-acceleration revision
 compatibility, 0.6.x published-profile evaluation, local testing sweep
 automation, upstream embedding-readback API adoption, LAB-owned
 replay-journaled split-stage recovery, and layer-parallel
-block-construction evolution in
+block-construction evolution, and v2 custom-block adoption for repository-owned
+non-search artifacts in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md`.
 
 ## Scope
@@ -982,6 +983,27 @@ realization may require a fresh or rebuilt local store instead of preserving
 reads from the old layout.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-010B
+
+### DSG-LFI-005A1 `V2 custom blocks for repository-owned artifacts`
+
+LexonArchiveBuilder adopts LexonGraph v2 custom blocks for the repository-owned
+non-search artifacts that it defines itself.
+
+This applies to normalized email artifacts, mailbox provenance artifacts, and
+similar repository-owned artifact blocks that are not delegated search tree
+nodes.
+
+The design intentionally does not introduce a repository-owned mixed-format
+compatibility layer for those artifacts. Operators may rebuild local or
+overlay-backed stores and regenerate repository-owned non-search artifacts under
+the v2 custom-block contract rather than translating old artifact blocks in
+place.
+
+Delegated branch and leaf index blocks remain on the current upstream-owned
+contract in this increment so LexonArchiveBuilder does not fork or wrap the
+streaming indexer's branch-or-leaf hashing rules.
+
+**Traces to:** RQ-INDEXER-005A, RQ-INDEXER-010A
 
 ### DSG-LFI-005B `Rooted assessment traversal through BlockStore`
 

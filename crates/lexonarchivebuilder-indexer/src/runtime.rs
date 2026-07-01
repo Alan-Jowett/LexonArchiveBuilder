@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use lexongraph_block::{
     Block, BlockError, BlockHash, EmbeddingSpec, LeafEntry, SerializedBlock, VERSION_1,
-    build_leaf_block, deserialize_block, serialize_block,
+    build_leaf_block, deserialize_block,
 };
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
@@ -2053,11 +2053,12 @@ async fn construct_leaf_block_batch(
             source,
         })?;
         let block = Block::Leaf(block);
-        let serialized =
-            serialize_block(&block).map_err(|source| RuntimeError::SerializeIteratedBlock {
+        let serialized = lexongraph_block::serialize_block(&block).map_err(|source| {
+            RuntimeError::SerializeIteratedBlock {
                 block_id: "<leaf>".into(),
                 source,
-            })?;
+            }
+        })?;
         constructed.block_ids.push(serialized.hash);
         constructed.blocks.push(serialized);
     }
@@ -4311,7 +4312,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let serialized = serialize_block(&Block::Branch(branch)).unwrap();
+        let serialized = lexongraph_block::serialize_block(&Block::Branch(branch)).unwrap();
 
         assert_eq!(
             serialized_branch_size(&embedding_spec, entry_count).unwrap(),

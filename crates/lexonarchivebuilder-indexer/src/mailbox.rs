@@ -7,10 +7,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ciborium::Value;
-use lexongraph_block::{
-    Block, BlockHash, Content, EmbeddingSpec, LeafEntry, VERSION_1, build_leaf_block,
-};
-use lexongraph_block_store::{BlockStore, BlockStoreError};
+use lexongraph_block::{BlockHash, VersionedBlock, v2};
+use lexongraph_block_store::{BlockStore, BlockStoreError, BlockStoreExt};
 use lexongraph_streaming_indexer::{IndexItem, Metadata};
 use mailparse::{MailHeaderMap, ParsedMail, parse_mail};
 use thiserror::Error;
@@ -19,12 +17,14 @@ use crate::config::{BatchItemConfig, BatchRequest, metadata_to_lexongraph};
 use crate::paths::resolve_path;
 use crate::resolver::ContentRef;
 
-const ARTIFACT_EMBEDDING_ENCODING: &str = "f32le";
 const ARTIFACT_MEDIA_TYPE_MAILBOX: &str = "application/mbox";
 const ARTIFACT_MEDIA_TYPE_NORMALIZED_EMAIL: &str =
     "application/vnd.lexonarchivebuilder.normalized-email+cbor";
+const MAILBOX_ARTIFACT_BLOCK_TYPE: &str = "lexonarchivebuilder/mailbox-artifact";
+pub(crate) const NORMALIZED_EMAIL_ARTIFACT_BLOCK_TYPE: &str =
+    "lexonarchivebuilder/normalized-email-artifact";
 pub(crate) const CHUNK_MEDIA_TYPE: &str = "text/plain";
-const NORMALIZED_EMAIL_SCHEMA_VERSION: u64 = 1;
+pub(crate) const NORMALIZED_EMAIL_SCHEMA_VERSION: u64 = 1;
 const MAX_CHUNK_CHARS: usize = 1_000;
 
 #[derive(Debug, Error)]
@@ -58,6 +58,8 @@ pub enum MailboxExpansionError {
         #[source]
         source: lexongraph_block::BlockError,
     },
+    #[error("mailbox source {path} produced unsupported artifact media type {media_type}")]
+    UnsupportedArtifactMediaType { path: PathBuf, media_type: String },
     #[error("failed to store artifact block for mailbox {path}: {source}")]
     StoreArtifact {
         path: PathBuf,
@@ -442,18 +444,15 @@ fn store_artifact_block(
     media_type: &str,
     body: Vec<u8>,
 ) -> Result<BlockHash, MailboxExpansionError> {
-    let block = build_leaf_block(
-        VERSION_1,
-        artifact_embedding_spec(),
-        vec![LeafEntry {
-            embedding: Vec::new(),
-            metadata: Vec::new(),
-            content: Content {
-                media_type: media_type.to_string(),
-                body,
-            },
-        }],
-        None,
+    let block = v2::build_custom_block(
+        artifact_block_type(path, media_type)?,
+        Value::Map(vec![
+            (
+                Value::Text("media_type".into()),
+                Value::Text(media_type.to_string()),
+            ),
+            (Value::Text("body".into()), Value::Bytes(body)),
+        ]),
     )
     .map_err(|source| MailboxExpansionError::BuildArtifact {
         path: path.to_path_buf(),
@@ -461,17 +460,24 @@ fn store_artifact_block(
     })?;
 
     store
-        .put(&Block::Leaf(block))
+        .put_versioned(&VersionedBlock::V2(block))
         .map_err(|source| MailboxExpansionError::StoreArtifact {
             path: path.to_path_buf(),
             source,
         })
 }
 
-fn artifact_embedding_spec() -> EmbeddingSpec {
-    EmbeddingSpec {
-        dims: 0,
-        encoding: ARTIFACT_EMBEDDING_ENCODING.to_string(),
+fn artifact_block_type(
+    path: &Path,
+    media_type: &str,
+) -> Result<&'static str, MailboxExpansionError> {
+    match media_type {
+        ARTIFACT_MEDIA_TYPE_MAILBOX => Ok(MAILBOX_ARTIFACT_BLOCK_TYPE),
+        ARTIFACT_MEDIA_TYPE_NORMALIZED_EMAIL => Ok(NORMALIZED_EMAIL_ARTIFACT_BLOCK_TYPE),
+        _ => Err(MailboxExpansionError::UnsupportedArtifactMediaType {
+            path: path.to_path_buf(),
+            media_type: media_type.to_string(),
+        }),
     }
 }
 
@@ -775,6 +781,19 @@ mod tests {
         assert!(matches!(
             error,
             MailboxExpansionError::WrongExtension { path } if path == mailbox_path
+        ));
+    }
+
+    #[test]
+    fn artifact_block_type_reports_unsupported_media_type() {
+        let path = Path::new("mailbox.mbox");
+
+        let error = artifact_block_type(path, "application/example").unwrap_err();
+
+        assert!(matches!(
+            error,
+            MailboxExpansionError::UnsupportedArtifactMediaType { path, media_type }
+                if path == Path::new("mailbox.mbox") && media_type == "application/example"
         ));
     }
 
