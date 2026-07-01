@@ -31,6 +31,15 @@ param azureSubscriptionId string
 @description('Resource group name used when the VM deallocates itself after a run.')
 param azureResourceGroupName string
 
+@description('Container SAS URL used by the hosted workload.')
+param containerSasUrl string
+
+@description('Storage account name used by the hosted workload.')
+param storageAccountName string
+
+@description('Blob container name used by the hosted workload.')
+param containerName string
+
 @description('Environment file content written before the workload script runs.')
 @maxLength(32000)
 param workloadEnvironmentFile string
@@ -41,6 +50,9 @@ param workloadScript string
 
 var nicName = '${vmName}-nic'
 var publicIpName = '${vmName}-pip'
+var containerSasUrlBase64 = base64(containerSasUrl)
+var storageAccountNameBase64 = base64(storageAccountName)
+var containerNameBase64 = base64(containerName)
 var workloadEnvironmentFileBase64 = base64(workloadEnvironmentFile)
 var workloadScriptBase64 = base64(workloadScript)
 var cloudInitTemplate = '''
@@ -55,6 +67,20 @@ runcmd:
     systemctl start docker
     mkdir -p /opt/lexonarchivebuilder/runner
     printf '%s' '__WORKLOAD_ENVIRONMENT_FILE_BASE64__' | base64 -d > /opt/lexonarchivebuilder/runner/workload.env
+    python3 - '__CONTAINER_SAS_URL_BASE64__' '__STORAGE_ACCOUNT_NAME_BASE64__' '__CONTAINER_NAME_BASE64__' >> /opt/lexonarchivebuilder/runner/workload.env <<'PY'
+    import base64
+    import shlex
+    import sys
+
+    container_sas_url_b64, storage_account_name_b64, container_name_b64 = sys.argv[1:4]
+    values = {
+        'CONTAINER_SAS_URL': base64.b64decode(container_sas_url_b64).decode('utf-8'),
+        'STORAGE_ACCOUNT_NAME': base64.b64decode(storage_account_name_b64).decode('utf-8'),
+        'CONTAINER_NAME': base64.b64decode(container_name_b64).decode('utf-8'),
+    }
+    for key, value in values.items():
+        print(f'{key}={shlex.quote(value)}')
+    PY
     printf '%s' '__WORKLOAD_SCRIPT_BASE64__' | base64 -d > /opt/lexonarchivebuilder/runner/workload.sh
     chmod 0600 /opt/lexonarchivebuilder/runner/workload.env
     chmod 0755 /opt/lexonarchivebuilder/runner/workload.sh
@@ -125,7 +151,7 @@ runcmd:
     systemctl enable lexonarchivebuilder-runner.service
     systemctl start lexonarchivebuilder-runner.service
 '''
-var cloudInit = replace(
+var cloudInitWithWorkloadFiles = replace(
   replace(
     replace(
       replace(
@@ -134,9 +160,22 @@ var cloudInit = replace(
           '__WORKLOAD_ENVIRONMENT_FILE_BASE64__',
           workloadEnvironmentFileBase64
         ),
-        '__WORKLOAD_SCRIPT_BASE64__',
-        workloadScriptBase64
+        '__CONTAINER_SAS_URL_BASE64__',
+        containerSasUrlBase64
       ),
+      '__STORAGE_ACCOUNT_NAME_BASE64__',
+      storageAccountNameBase64
+    ),
+    '__CONTAINER_NAME_BASE64__',
+    containerNameBase64
+  ),
+  '__WORKLOAD_SCRIPT_BASE64__',
+  workloadScriptBase64
+)
+var cloudInit = replace(
+  replace(
+    replace(
+      cloudInitWithWorkloadFiles,
       '__AZURE_SUBSCRIPTION_ID__',
       azureSubscriptionId
     ),
