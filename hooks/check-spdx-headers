@@ -38,11 +38,11 @@ is_governed_path() {
     esac
 }
 
-read_repo_file() {
+read_repo_head() {
     if [[ "$mode" == "--staged" ]]; then
-        git show ":$1"
+        git show ":$1" | sed -n '1,3p'
     else
-        cat "$1"
+        sed -n '1,3p' "$1"
     fi
 }
 
@@ -124,7 +124,7 @@ while IFS= read -r -d '' file; do
         continue
     fi
 
-    content="$(read_repo_file "$file")"
+    content="$(read_repo_head "$file")"
 
     case "$file" in
         *.md)
