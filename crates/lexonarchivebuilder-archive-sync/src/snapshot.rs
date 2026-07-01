@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use ciborium::Value;
-use lexongraph_block::{BlockError, BlockHash, DecodedBlock, VersionedBlock, v2};
+use lexongraph_block::{BlockError, BlockHash, DecodedBlock, VERSION_1, VersionedBlock, v2};
 use lexongraph_block_store::{BlockStore, BlockStoreError, BlockStoreExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -472,7 +472,7 @@ fn load_source_snapshot_manifest<S: BlockStore>(
         DecodedBlock::V1(_) => {
             return Err(SourceSnapshotAcquisitionError::ManifestBlockLegacyVersion {
                 block_id: manifest_block_id.to_string(),
-                version: 1,
+                version: VERSION_1,
             });
         }
         DecodedBlock::V2(validated) => validated,

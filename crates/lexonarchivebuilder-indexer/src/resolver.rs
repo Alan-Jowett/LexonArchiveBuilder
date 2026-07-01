@@ -10,7 +10,7 @@ use std::{
 };
 
 use ciborium::Value;
-use lexongraph_block::{BlockHash, Content, DecodedBlock, v2};
+use lexongraph_block::{BlockHash, Content, DecodedBlock, VERSION_1, v2};
 use lexongraph_block_store::BlockStoreExt;
 use lexongraph_streaming_indexer::ContentResolver;
 use sha2::{Digest, Sha256};
@@ -229,7 +229,7 @@ fn load_email_chunks(
         DecodedBlock::V1(_) => {
             return Err(LocalFilesystemContentResolverError::ArtifactLegacyVersion {
                 block_id: email_artifact_ref.to_string(),
-                version: 1,
+                version: VERSION_1,
             });
         }
         DecodedBlock::V2(validated) => validated,
