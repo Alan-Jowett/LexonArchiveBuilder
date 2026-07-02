@@ -115,10 +115,13 @@ STATUS_PATH="${RUN_ROOT}/status.json"
 WORKLOAD_LOG_PATH="${RUN_ROOT}/workload.log"
 MANIFEST_COPY_PATH="${RUN_ROOT}/manifest.json"
 SOURCES_LOG="${RUN_ROOT}/sources.txt"
+CAPTURE_WORKLOAD_LOG="${HOSTED_EXPERIMENT_CAPTURE_WORKLOAD_LOG:-false}"
 
 mkdir -p "$RUN_ROOT" "$BLOCK_STORE_DIR" "$REPLAY_JOURNAL_DIR"
 cp "$MANIFEST_PATH" "$MANIFEST_COPY_PATH"
-exec > >(tee -a "$WORKLOAD_LOG_PATH") 2>&1
+if [[ "$CAPTURE_WORKLOAD_LOG" == "true" ]]; then
+  exec > >(tee -a "$WORKLOAD_LOG_PATH") 2>&1
+fi
 
 SUCCESS=false
 cleanup() {
@@ -177,7 +180,7 @@ PY
   if [[ -f "$STATUS_PATH" ]]; then
     upload_file_to_blob "$STATUS_PATH" "$CONTAINER_SAS_URL" "$status_blob"
   fi
-  if [[ -f "$WORKLOAD_LOG_PATH" ]]; then
+  if [[ "$CAPTURE_WORKLOAD_LOG" == "true" && -f "$WORKLOAD_LOG_PATH" ]]; then
     upload_file_to_blob "$WORKLOAD_LOG_PATH" "$CONTAINER_SAS_URL" "$workload_log_blob"
   fi
   if [[ -f "$SOURCES_LOG" ]]; then

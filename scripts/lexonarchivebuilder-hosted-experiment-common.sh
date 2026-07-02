@@ -167,6 +167,7 @@ blob_path_exists() {
   local blob_path="$2"
   python3 - "$container_sas_url" "$blob_path" <<'PY'
 import sys
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -190,8 +191,11 @@ request_url = urlunsplit(
     (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
 )
 
-with urllib.request.urlopen(request_url) as response:
-    payload = response.read()
+try:
+    with urllib.request.urlopen(request_url, timeout=30) as response:
+        payload = response.read()
+except (TimeoutError, OSError, urllib.error.URLError, urllib.error.HTTPError):
+    raise SystemExit(1)
 
 root = ET.fromstring(payload)
 raise SystemExit(0 if root.find(".//Blob") is not None else 1)

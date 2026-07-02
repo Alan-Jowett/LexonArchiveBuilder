@@ -239,6 +239,7 @@ jobs:
               --query '[0].value' \
               --output tsv
           )"
+          printf '::add-mask::%s\n' "$account_key"
           sas_token="$(
             az storage container generate-sas \
               --account-name '${{ steps.storage.outputs.storageAccountName }}' \
@@ -250,7 +251,6 @@ jobs:
               --output tsv
           )"
           container_sas_url="${{ steps.storage.outputs.blobEndpoint }}${{ steps.storage.outputs.containerName }}?${sas_token}"
-          printf '::add-mask::%s\n' "$account_key"
           printf '::add-mask::%s\n' "$sas_token"
           printf '::add-mask::%s\n' "$container_sas_url"
           printf 'CONTAINER_SAS_URL=%s\n' "$container_sas_url" >>"$GITHUB_ENV"
