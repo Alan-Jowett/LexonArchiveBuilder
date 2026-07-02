@@ -3,6 +3,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
@@ -13,6 +14,9 @@ use lexongraph_block_store_overlay::{OverlayBlockStore, OverlayStoreLayer, Passi
 
 use crate::config::{EnvironmentConfig, ProductionBlockStoreConfig};
 use crate::paths::resolve_path;
+
+const AZURE_BLOCK_WRITE_RETRY_ATTEMPTS: u32 = 5;
+const AZURE_BLOCK_WRITE_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug)]
 pub enum ConfiguredBlockStore {
@@ -44,7 +48,11 @@ impl ConfiguredBlockStore {
         config
             .validate()
             .map_err(|error| BlockStoreError::BackendFailure(error.to_string()))?;
-        let azure_backing_store = AzureBlobBlockStore::new(&config.container_sas_url)?;
+        let azure_backing_store = RetryingBlockStore::new(
+            AzureBlobBlockStore::new(&config.container_sas_url)?,
+            AZURE_BLOCK_WRITE_RETRY_ATTEMPTS,
+            AZURE_BLOCK_WRITE_RETRY_DELAY,
+        );
         let memory_cache = MemoryBlockStore::new(
             config
                 .memory_cache_max_resident_blocks
@@ -96,8 +104,82 @@ impl BlockStore for ConfiguredBlockStore {
     }
 }
 
+#[derive(Debug)]
+struct RetryingBlockStore<S> {
+    store: S,
+    max_attempts: u32,
+    retry_delay: Duration,
+}
+
+impl<S> RetryingBlockStore<S> {
+    fn new(store: S, max_attempts: u32, retry_delay: Duration) -> Self {
+        Self {
+            store,
+            max_attempts,
+            retry_delay,
+        }
+    }
+}
+
+impl<S: BlockStore> BlockStore for RetryingBlockStore<S> {
+    fn put_block_bytes(
+        &self,
+        block_id: &BlockHash,
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        let max_attempts = self.max_attempts.max(1);
+        let mut last_error = None;
+        for attempt in 1..=max_attempts {
+            match self.store.put_block_bytes(block_id, block_bytes) {
+                Ok(()) => return Ok(()),
+                Err(error) if attempt < max_attempts && should_retry_block_store_write(&error) => {
+                    last_error = Some(error);
+                    std::thread::sleep(self.retry_delay);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            BlockStoreError::BackendFailure("Azure block write retry loop exhausted".into())
+        }))
+    }
+
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        self.store.get_block_bytes(block_id)
+    }
+
+    fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
+        self.store.iter_block_ids()
+    }
+}
+
+fn should_retry_block_store_write(error: &BlockStoreError) -> bool {
+    let BlockStoreError::BackendFailure(message) = error else {
+        return false;
+    };
+
+    let message = message.to_ascii_lowercase();
+    message.contains("error sending request")
+        || message.contains("connection reset")
+        || message.contains("connection refused")
+        || message.contains("connection aborted")
+        || message.contains("broken pipe")
+        || message.contains("dns error")
+        || message.contains("temporary failure")
+        || message.contains("timed out")
+        || message.contains("request timeout")
+        || message.contains("too many requests")
+        || message.contains("500 internal server error")
+        || message.contains("502 bad gateway")
+        || message.contains("503 service unavailable")
+        || message.contains("504 gateway timeout")
+}
+
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
     use lexongraph_block::{Block, Content, EmbeddingSpec, LeafBlock, LeafEntry, VERSION_1};
     use tempfile::tempdir;
 
@@ -251,6 +333,81 @@ mod tests {
         assert!(matches!(store, ConfiguredBlockStore::Overlay(_)));
     }
 
+    #[test]
+    fn retrying_block_store_retries_transient_backend_failures() {
+        let attempts = Rc::new(Cell::new(0_u32));
+        let attempts_for_put = Rc::clone(&attempts);
+        let store = RetryingBlockStore::new(
+            TestBlockStore {
+                put_fn: Box::new(move |_, _| {
+                    attempts_for_put.set(attempts_for_put.get() + 1);
+                    if attempts_for_put.get() < 3 {
+                        Err(BlockStoreError::BackendFailure(
+                            "failed to publish block: error sending request".into(),
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                }),
+            },
+            3,
+            Duration::ZERO,
+        );
+
+        store
+            .put_block_bytes(&sample_block_id(), b"payload")
+            .unwrap();
+        assert_eq!(attempts.get(), 3);
+    }
+
+    #[test]
+    fn retrying_block_store_does_not_retry_non_retryable_failures() {
+        let attempts = Rc::new(Cell::new(0_u32));
+        let attempts_for_put = Rc::clone(&attempts);
+        let store = RetryingBlockStore::new(
+            TestBlockStore {
+                put_fn: Box::new(move |_, _| {
+                    attempts_for_put.set(attempts_for_put.get() + 1);
+                    Err(BlockStoreError::BackendFailure(
+                        "failed to publish block: backend returned 403 Forbidden".into(),
+                    ))
+                }),
+            },
+            5,
+            Duration::ZERO,
+        );
+
+        let error = store
+            .put_block_bytes(&sample_block_id(), b"payload")
+            .unwrap_err();
+        assert_eq!(attempts.get(), 1);
+        assert!(error.to_string().contains("403 Forbidden"));
+    }
+
+    #[test]
+    fn retrying_block_store_stops_after_max_attempts() {
+        let attempts = Rc::new(Cell::new(0_u32));
+        let attempts_for_put = Rc::clone(&attempts);
+        let store = RetryingBlockStore::new(
+            TestBlockStore {
+                put_fn: Box::new(move |_, _| {
+                    attempts_for_put.set(attempts_for_put.get() + 1);
+                    Err(BlockStoreError::BackendFailure(
+                        "failed to publish block: error sending request".into(),
+                    ))
+                }),
+            },
+            4,
+            Duration::ZERO,
+        );
+
+        let error = store
+            .put_block_bytes(&sample_block_id(), b"payload")
+            .unwrap_err();
+        assert_eq!(attempts.get(), 4);
+        assert!(error.to_string().contains("error sending request"));
+    }
+
     fn sample_block() -> Block {
         Block::Leaf(LeafBlock {
             version: VERSION_1,
@@ -269,5 +426,38 @@ mod tests {
             }],
             ext: None,
         })
+    }
+
+    fn sample_block_id() -> BlockHash {
+        lexongraph_block::serialize_block(&sample_block())
+            .unwrap()
+            .hash
+    }
+
+    type PutFn = dyn Fn(&BlockHash, &[u8]) -> Result<(), BlockStoreError>;
+
+    struct TestBlockStore {
+        put_fn: Box<PutFn>,
+    }
+
+    impl BlockStore for TestBlockStore {
+        fn put_block_bytes(
+            &self,
+            block_id: &BlockHash,
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            (self.put_fn)(block_id, block_bytes)
+        }
+
+        fn get_block_bytes(
+            &self,
+            _block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            Ok(None)
+        }
+
+        fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
+            Ok(Box::new(std::iter::empty()))
+        }
     }
 }

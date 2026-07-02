@@ -180,6 +180,7 @@ fi
 write_mailbox_request \
   "$REQUEST_PATH" \
   "block-store" \
+  "$MANIFEST_CONTAINER_NAME" \
   "$CONTAINER_SAS_URL" \
   "$BLOCK_STORE_TARGET" \
   "http://127.0.0.1:8080" \

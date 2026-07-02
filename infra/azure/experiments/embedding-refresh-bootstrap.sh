@@ -10,6 +10,7 @@ WORK_ROOT="/opt/lexonarchivebuilder/work/${RUN_NAME}"
 HOSTED_SCRIPTS_DIR="${WORK_ROOT}/hosted-scripts"
 mkdir -p "$WORK_ROOT"
 BOOTSTRAP_LOG_PATH="${WORK_ROOT}/bootstrap-wrapper.log"
+WORKLOAD_LOG_PATH="${WORK_ROOT}/workload.log"
 BOOTSTRAP_STATUS_PATH="${WORK_ROOT}/bootstrap-status.json"
 BOOTSTRAP_CLOUD_INIT_LOG_PATH="${WORK_ROOT}/bootstrap-cloud-init-output.log"
 BOOTSTRAP_STAPI_LOG_PATH="${WORK_ROOT}/bootstrap-stapi.log"
@@ -88,6 +89,9 @@ publish_bootstrap_failure_artifacts() {
   local exit_code="$1"
 
   if workload_status_exists >/dev/null 2>&1; then
+    if [[ -f "$WORKLOAD_LOG_PATH" ]]; then
+      upload_blob_file "$WORKLOAD_LOG_PATH" "${ARTIFACT_PREFIX}/workload.log" || printf 'warning: failed to upload workload.log\n' >&2
+    fi
     return 0
   fi
 
@@ -141,6 +145,7 @@ docker run -d \
   "$STAPI_IMAGE" >/dev/null
 wait_for_tcp_port 127.0.0.1 8080 "${STAPI_WAIT_TIMEOUT_SECS:-60}"
 
+set +e
 docker run --rm \
   --entrypoint bash \
   --add-host host.docker.internal:host-gateway \
@@ -155,4 +160,11 @@ docker run --rm \
   --dataset-replay-journal-prefix "$DATASET_REPLAY_JOURNAL_PREFIX" \
   --artifact-prefix "$ARTIFACT_PREFIX" \
   --block-store-target "$BLOCK_STORE_TARGET" \
-  --embedding-base-url "http://host.docker.internal:8080"
+  --embedding-base-url "http://host.docker.internal:8080" \
+  >"$WORKLOAD_LOG_PATH" 2>&1
+workload_exit_code=$?
+set -e
+if [[ $workload_exit_code -ne 0 ]]; then
+  printf 'docker_run_exit_code=%s\n' "$workload_exit_code" >>"$WORKLOAD_LOG_PATH"
+  exit "$workload_exit_code"
+fi

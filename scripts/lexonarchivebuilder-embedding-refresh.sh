@@ -196,6 +196,7 @@ mirror_manifest_sources "$RUN_ROOT"
 write_mailbox_request \
   "$REQUEST_PATH" \
   "block-store" \
+  "$MANIFEST_CONTAINER_NAME" \
   "$CONTAINER_SAS_URL" \
   "$BLOCK_STORE_TARGET" \
   "$EMBEDDING_BASE_URL" \

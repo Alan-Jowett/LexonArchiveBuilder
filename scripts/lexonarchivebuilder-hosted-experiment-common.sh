@@ -177,11 +177,7 @@ download_blob_tree_if_present() {
   local blob_url
 
   mkdir -p "$destination"
-  if ! blob_path_exists "$container_sas_url" "$blob_path"; then
-    return 0
-  fi
-
-  blob_url="$(append_path_to_container_sas_url "$container_sas_url" "$blob_path")"
+  blob_url="$(append_path_to_container_sas_url "$container_sas_url" "${blob_path%/}/*")"
   azcopy copy "$blob_url" "$destination" --recursive=true >/dev/null
 }
 
@@ -265,12 +261,13 @@ mirror_manifest_sources() {
 write_mailbox_request() {
   local request_path="$1"
   local block_store_root="$2"
-  local container_sas_url="$3"
-  local block_store_target="$4"
-  local embedding_base_url="$5"
-  local stage="$6"
-  local profile_version="${7:-}"
-  local include_items="$8"
+  local ref_name="$3"
+  local container_sas_url="$4"
+  local block_store_target="$5"
+  local embedding_base_url="$6"
+  local stage="$7"
+  local profile_version="${8:-}"
+  local include_items="$9"
   local index mailbox_path month overlay_memory_cache_blocks
 
   if [[ "$block_store_target" == "overlay" ]]; then
@@ -303,6 +300,7 @@ write_mailbox_request() {
     printf '    "dims": 384,\n'
     printf '    "encoding": "f32le"\n'
     printf '  },\n'
+    printf '  "ref_name": "%s",\n' "$(json_escape "$ref_name")"
     printf '  "block_size_target": 65536,\n'
     printf '  "stage": "%s"' "$(json_escape "$stage")"
     if [[ -n "$profile_version" ]]; then

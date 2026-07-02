@@ -145,6 +145,7 @@ INDEXING_BOOTSTRAP_SCRIPT="${REPO_ROOT}/infra/azure/experiments/indexing-experim
 HOSTED_EXPERIMENT_COMMON_SCRIPT="${REPO_ROOT}/scripts/lexonarchivebuilder-hosted-experiment-common.sh"
 EMBEDDING_WORKLOAD_SCRIPT="${REPO_ROOT}/scripts/lexonarchivebuilder-embedding-refresh.sh"
 INDEXING_WORKLOAD_SCRIPT="${REPO_ROOT}/scripts/lexonarchivebuilder-indexing-experiment.sh"
+LOCAL_WORKFLOW_RUNNER="${REPO_ROOT}/scripts/lexonarchivebuilder-run-hosted-workflow-local.sh"
 
 TEMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEMP_ROOT"' EXIT
@@ -270,5 +271,47 @@ assert_generated_parameters \
   indexing-experiment \
   "$indexing_env_file" \
   "$INDEXING_BOOTSTRAP_SCRIPT"
+
+bash "${LOCAL_WORKFLOW_RUNNER}" \
+  --workflow embedding-refresh \
+  --manifest "$MANIFEST_PATH" \
+  --location eastus \
+  --runner-image-tag main \
+  --block-store-target overlay \
+  --ssh-public-key "$ssh_public_key" \
+  --github-run-id 123456789 \
+  --github-run-attempt 1 \
+  --artifacts-dir "${TEMP_ROOT}/local-embedding-refresh" \
+  --prepare-only
+
+bash "${LOCAL_WORKFLOW_RUNNER}" \
+  --workflow indexing-experiment \
+  --manifest "$MANIFEST_PATH" \
+  --location eastus \
+  --profile-version 0.6.0 \
+  --runner-image-tag main \
+  --block-store-target filesystem \
+  --ssh-public-key "$ssh_public_key" \
+  --github-run-id 123456789 \
+  --github-run-attempt 1 \
+  --artifacts-dir "${TEMP_ROOT}/local-indexing-experiment" \
+  --prepare-only
+
+[[ -f "${TEMP_ROOT}/local-embedding-refresh/deployment.parameters.json" ]] || {
+  printf 'error: local embedding refresh prepare-only did not write deployment parameters\n' >&2
+  exit 1
+}
+[[ -f "${TEMP_ROOT}/local-indexing-experiment/deployment.parameters.json" ]] || {
+  printf 'error: local indexing experiment prepare-only did not write deployment parameters\n' >&2
+  exit 1
+}
+[[ -f "${TEMP_ROOT}/local-embedding-refresh/prepare-summary.json" ]] || {
+  printf 'error: local embedding refresh prepare-only did not write prepare summary\n' >&2
+  exit 1
+}
+[[ -f "${TEMP_ROOT}/local-indexing-experiment/prepare-summary.json" ]] || {
+  printf 'error: local indexing experiment prepare-only did not write prepare summary\n' >&2
+  exit 1
+}
 
 printf 'Hosted workflow preflight validation passed\n'
