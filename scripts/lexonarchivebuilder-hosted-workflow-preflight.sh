@@ -342,9 +342,10 @@ assert_workflow_contains \
   'tags="$storage_tags_json"' \
   '"lexon-scope": "long-term"' \
   '- name: Generate workflow container SAS' \
+  "az storage account keys list \\" \
+  "--resource-group '\${{ steps.prepare.outputs.long_term_resource_group }}' \\" \
+  "--account-key \"\$account_key\" \\" \
   "az storage container generate-sas \\" \
-  "--as-user \\" \
-  "--auth-mode login \\" \
   "printf 'CONTAINER_SAS_URL=%s\\n' \"\$container_sas_url\" >>\"\$GITHUB_ENV\"" \
   'DEBUG_RETAIN_FAILED_VM_INPUT: ${{ inputs.debug_retain_failed_vm }}' \
   'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
@@ -369,9 +370,10 @@ assert_workflow_contains \
   'tags="$storage_tags_json"' \
   '"lexon-scope": "long-term"' \
   '- name: Generate workflow container SAS' \
+  "az storage account keys list \\" \
+  "--resource-group '\${{ steps.prepare.outputs.long_term_resource_group }}' \\" \
+  "--account-key \"\$account_key\" \\" \
   "az storage container generate-sas \\" \
-  "--as-user \\" \
-  "--auth-mode login \\" \
   "printf 'CONTAINER_SAS_URL=%s\\n' \"\$container_sas_url\" >>\"\$GITHUB_ENV\"" \
   'DEBUG_RETAIN_FAILED_VM_INPUT: ${{ inputs.debug_retain_failed_vm }}' \
   'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
