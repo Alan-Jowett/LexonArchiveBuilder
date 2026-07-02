@@ -49,7 +49,7 @@ impl ConfiguredBlockStore {
             .validate()
             .map_err(|error| BlockStoreError::BackendFailure(error.to_string()))?;
         let azure_backing_store = RetryingBlockStore::new(
-            AzureBlobBlockStore::new(&config.container_sas_url)?,
+            FreshAzureBlobBlockStore::new(&config.container_sas_url)?,
             AZURE_BLOCK_WRITE_RETRY_ATTEMPTS,
             AZURE_BLOCK_WRITE_RETRY_DELAY,
         );
@@ -101,6 +101,51 @@ impl BlockStore for ConfiguredBlockStore {
             Self::Local(store) => store.iter_block_ids(),
             Self::Overlay(store) => store.iter_block_ids(),
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct FreshAzureBlobBlockStore {
+    container_sas_url: String,
+}
+
+impl FreshAzureBlobBlockStore {
+    fn new(container_sas_url: &str) -> Result<Self, BlockStoreError> {
+        AzureBlobBlockStore::new(container_sas_url)?;
+        Ok(Self {
+            container_sas_url: container_sas_url.to_string(),
+        })
+    }
+
+    fn with_store<T>(
+        &self,
+        execute: impl FnOnce(&AzureBlobBlockStore) -> Result<T, BlockStoreError>,
+    ) -> Result<T, BlockStoreError> {
+        let store = AzureBlobBlockStore::new(&self.container_sas_url)?;
+        execute(&store)
+    }
+}
+
+impl BlockStore for FreshAzureBlobBlockStore {
+    fn put_block_bytes(
+        &self,
+        block_id: &BlockHash,
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        self.with_store(|store| store.put_block_bytes(block_id, block_bytes))
+    }
+
+    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        self.with_store(|store| store.get_block_bytes(block_id))
+    }
+
+    fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
+        let block_ids = self.with_store(|store| {
+            store
+                .iter_block_ids()?
+                .collect::<Result<Vec<_>, BlockStoreError>>()
+        })?;
+        Ok(Box::new(block_ids.into_iter().map(Ok)))
     }
 }
 
