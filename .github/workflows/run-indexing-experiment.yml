@@ -99,34 +99,27 @@ jobs:
           fi
 
           ssh_prefixes_input="$SSH_SOURCE_PREFIXES_INPUT"
-          block_store_target="$BLOCK_STORE_TARGET_INPUT"
           profile_version="$PROFILE_VERSION_INPUT"
           runner_image_tag="$RUNNER_IMAGE_TAG_INPUT"
           ssh_public_key="$SSH_PUBLIC_KEY_INPUT"
 
           hosted_workflow_validate_runner_image_tag "$runner_image_tag"
 
-          runner_image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/lexonarchivebuilder-scale-test:${runner_image_tag}"
-
           hosted_workflow_validate_profile_version "$profile_version"
 
           manifest_json_minified="$(hosted_workflow_normalize_manifest_json "$manifest_path")"
           manifest_hash="$(printf '%s' "$manifest_json_minified" | sha256sum | cut -c1-10)"
           repo_hash="$(printf '%s' "$GITHUB_REPOSITORY" | sha256sum | cut -c1-6)"
-          hosted_experiment_common_script_b64="$(base64 -w0 scripts/lexonarchivebuilder-hosted-experiment-common.sh)"
-          hosted_experiment_workload_script_b64="$(base64 -w0 scripts/lexonarchivebuilder-indexing-experiment.sh)"
+          batch_suffix="$(date -u '+%Y%m%d%H%M%S')-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           container_name="$(hosted_workflow_extract_container_name "$manifest_path")"
 
-          resource_group="lexon-exp-${manifest_hash}"
+          long_term_resource_group="lexon-exp-${manifest_hash}"
+          batch_resource_group="${long_term_resource_group}-batch-${batch_suffix}"
           storage_account_name="lex${repo_hash}${manifest_hash}sa"
-          vnet_name="lexon-exp-${manifest_hash}-vnet"
+          vnet_name="lexon-exp-${manifest_hash}-batch-vnet-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           vm_name="lexon-exp-index-${manifest_hash}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           run_name="index-${manifest_hash}-${profile_version//./-}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           artifact_prefix="artifacts/indexing-experiment/${profile_version}/${run_name}"
-          dataset_block_store_prefix="datasets/block-store"
-          dataset_replay_journal_prefix="datasets/block-store.replay-journal"
-          manifest_json_b64="$(printf '%s' "$manifest_json_minified" | base64 -w0)"
-          workload_script_path='infra/azure/experiments/indexing-experiment-bootstrap.sh'
 
           enable_ssh_access=false
           ssh_prefixes_json='[]'
@@ -165,60 +158,123 @@ jobs:
             ssh_public_key="$(<"${ssh_key_path}.pub")"
             rm -f "$ssh_key_path" "$ssh_key_path.pub"
           fi
-
-          sas_expiry="$(date -u -d '+1 day' '+%Y-%m-%dT%H:%M:%SZ')"
-
-          workload_env_file="$(
-            hosted_workflow_render_indexing_workload_env_file \
-              "$run_name" \
-              "$runner_image" \
-              "$manifest_json_b64" \
-              "$hosted_experiment_common_script_b64" \
-              "$hosted_experiment_workload_script_b64" \
-              "$dataset_block_store_prefix" \
-              "$dataset_replay_journal_prefix" \
-              "$artifact_prefix" \
-              "$block_store_target" \
-              "$profile_version"
-          )"
-
-          python3 scripts/lexonarchivebuilder-write-deployment-parameters.py \
-            --workflow-name indexing-experiment \
-            --location "$AZURE_LOCATION" \
-            --resource-group "$resource_group" \
-            --vnet-name "$vnet_name" \
-            --storage-account-name "$storage_account_name" \
-            --container-name "$container_name" \
-            --sas-expiry "$sas_expiry" \
-            --vm-name "$vm_name" \
-            --ssh-public-key "$ssh_public_key" \
-            --enable-public-ip "$enable_ssh_access" \
-            --enable-ssh-access "$enable_ssh_access" \
-            --ssh-source-prefixes-json "$ssh_prefixes_json" \
-            --workload-environment-file "$workload_env_file" \
-            --workload-script-path "$workload_script_path" \
-            --github-run-id "$GITHUB_RUN_ID" \
-            --github-run-attempt "$GITHUB_RUN_ATTEMPT" > deployment.parameters.json
-
           {
             echo "manifest_path=$manifest_path"
-            echo "resource_group=$resource_group"
+            echo "long_term_resource_group=$long_term_resource_group"
+            echo "batch_resource_group=$batch_resource_group"
             echo "storage_account_name=$storage_account_name"
             echo "container_name=$container_name"
             echo "vnet_name=$vnet_name"
             echo "vm_name=$vm_name"
             echo "run_name=$run_name"
             echo "artifact_prefix=$artifact_prefix"
+            echo "enable_ssh_access=$enable_ssh_access"
+            echo "ssh_prefixes_json=$ssh_prefixes_json"
+            echo "ssh_public_key<<__EOF__"
+            printf '%s\n' "$ssh_public_key"
+            echo "__EOF__"
           } >>"$GITHUB_OUTPUT"
 
-      - name: Ensure resource group exists
+      - name: Ensure long-term resource group exists
         shell: bash
         run: |
           set -euo pipefail
           az group create \
-            --name '${{ steps.prepare.outputs.resource_group }}' \
+            --name '${{ steps.prepare.outputs.long_term_resource_group }}' \
             --location "$AZURE_LOCATION" \
-            --tags lexon-workflow=indexing-experiment github-run-id="${GITHUB_RUN_ID}" github-run-attempt="${GITHUB_RUN_ATTEMPT}" >/dev/null
+            --tags lexon-workflow=indexing-experiment lexon-scope=long-term github-run-id="${GITHUB_RUN_ID}" github-run-attempt="${GITHUB_RUN_ATTEMPT}" >/dev/null
+
+      - name: Deploy reusable storage
+        id: storage
+        shell: bash
+        run: |
+          set -euo pipefail
+          sas_expiry="$(date -u -d '+1 day' '+%Y-%m-%dT%H:%M:%SZ')"
+          outputs_json="$(
+            az deployment group create \
+              --resource-group '${{ steps.prepare.outputs.long_term_resource_group }}' \
+              --template-file infra/azure/experiments/storage.bicep \
+              --parameters \
+                location="$AZURE_LOCATION" \
+                storageAccountName='${{ steps.prepare.outputs.storage_account_name }}' \
+                containerName='${{ steps.prepare.outputs.container_name }}' \
+                sasExpiry="$sas_expiry" \
+              --query properties.outputs \
+              --output json
+          )"
+
+          python3 - "$outputs_json" >>"$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+
+          outputs = json.loads(sys.argv[1])
+          for key in ("blobEndpoint", "storageAccountName", "containerName", "containerSasUrl"):
+              value = outputs[key]["value"]
+              print(f"{key}={value}")
+          PY
+
+      - name: Write batch deployment parameters
+        shell: bash
+        env:
+          MANIFEST_PATH_INPUT: ${{ steps.prepare.outputs.manifest_path }}
+          PROFILE_VERSION_INPUT: ${{ inputs.profile_version }}
+          RUNNER_IMAGE_TAG_INPUT: ${{ inputs.runner_image_tag }}
+          BLOCK_STORE_TARGET_INPUT: ${{ inputs.block_store_target }}
+          CONTAINER_SAS_URL_INPUT: ${{ steps.storage.outputs.containerSasUrl }}
+          SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}
+        run: |
+          set -euo pipefail
+          source scripts/lexonarchivebuilder-hosted-workflow-common.sh
+          manifest_json_minified="$(hosted_workflow_normalize_manifest_json "$MANIFEST_PATH_INPUT")"
+          manifest_json_b64="$(printf '%s' "$manifest_json_minified" | base64 -w0)"
+          runner_image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/lexonarchivebuilder-scale-test:${RUNNER_IMAGE_TAG_INPUT}"
+          workload_env_file="$(
+            hosted_workflow_render_indexing_workload_env_file \
+              '${{ steps.prepare.outputs.run_name }}' \
+              "$runner_image" \
+              "$manifest_json_b64" \
+              "$(base64 -w0 scripts/lexonarchivebuilder-hosted-experiment-common.sh)" \
+              "$(base64 -w0 scripts/lexonarchivebuilder-indexing-experiment.sh)" \
+              'datasets/block-store' \
+              'datasets/block-store.replay-journal' \
+              '${{ steps.prepare.outputs.artifact_prefix }}' \
+              "$BLOCK_STORE_TARGET_INPUT" \
+              "$PROFILE_VERSION_INPUT"
+          )"
+          python3 scripts/lexonarchivebuilder-write-deployment-parameters.py \
+            --workflow-name indexing-experiment \
+            --location "$AZURE_LOCATION" \
+            --resource-group '${{ steps.prepare.outputs.batch_resource_group }}' \
+            --vnet-name '${{ steps.prepare.outputs.vnet_name }}' \
+            --storage-account-name '${{ steps.storage.outputs.storageAccountName }}' \
+            --container-name '${{ steps.storage.outputs.containerName }}' \
+            --container-sas-url "$CONTAINER_SAS_URL_INPUT" \
+            --vm-name '${{ steps.prepare.outputs.vm_name }}' \
+            --ssh-public-key "$SSH_PUBLIC_KEY_INPUT" \
+            --enable-public-ip '${{ steps.prepare.outputs.enable_ssh_access }}' \
+            --enable-ssh-access '${{ steps.prepare.outputs.enable_ssh_access }}' \
+            --ssh-source-prefixes-json '${{ steps.prepare.outputs.ssh_prefixes_json }}' \
+            --workload-environment-file "$workload_env_file" \
+            --workload-script-path 'infra/azure/experiments/indexing-experiment-bootstrap.sh' \
+            --github-run-id "$GITHUB_RUN_ID" \
+            --github-run-attempt "$GITHUB_RUN_ATTEMPT" > deployment.parameters.json
+
+      - name: Expose workflow container SAS
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_sas_url='${{ steps.storage.outputs.containerSasUrl }}'
+          printf '::add-mask::%s\n' "$container_sas_url"
+          printf 'CONTAINER_SAS_URL=%s\n' "$container_sas_url" >>"$GITHUB_ENV"
+
+      - name: Ensure batch resource group exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          az group create \
+            --name '${{ steps.prepare.outputs.batch_resource_group }}' \
+            --location "$AZURE_LOCATION" \
+            --tags lexon-workflow=indexing-experiment lexon-scope=batch github-run-id="${GITHUB_RUN_ID}" github-run-attempt="${GITHUB_RUN_ATTEMPT}" >/dev/null
 
       - name: Deploy experiment runner
         id: deploy
@@ -227,7 +283,7 @@ jobs:
           set -euo pipefail
           outputs_json="$(
             az deployment group create \
-              --resource-group '${{ steps.prepare.outputs.resource_group }}' \
+              --resource-group '${{ steps.prepare.outputs.batch_resource_group }}' \
               --template-file infra/azure/experiments/main.bicep \
               --parameters @deployment.parameters.json \
               --query properties.outputs \
@@ -239,38 +295,10 @@ jobs:
           import sys
 
           outputs = json.loads(sys.argv[1])
-          for key in ("blobEndpoint", "storageAccountName", "containerName", "vmName", "vmPublicIpAddress"):
+          for key in ("vmName", "vmPublicIpAddress"):
               value = outputs[key]["value"]
               print(f"{key}={value}")
           PY
-
-      - name: Generate workflow container SAS
-        shell: bash
-        run: |
-          set -euo pipefail
-          sas_expiry="$(date -u -d '+1 day' '+%Y-%m-%dT%H:%M:%SZ')"
-          account_key="$(
-            az storage account keys list \
-              --resource-group '${{ steps.prepare.outputs.resource_group }}' \
-              --account-name '${{ steps.deploy.outputs.storageAccountName }}' \
-              --query '[0].value' \
-              --output tsv
-          )"
-          sas_token="$(
-            az storage container generate-sas \
-              --account-name '${{ steps.deploy.outputs.storageAccountName }}' \
-              --name '${{ steps.deploy.outputs.containerName }}' \
-              --permissions racwl \
-              --expiry "$sas_expiry" \
-              --https-only \
-              --account-key "$account_key" \
-              --output tsv
-          )"
-          container_sas_url="${{ steps.deploy.outputs.blobEndpoint }}${{ steps.deploy.outputs.containerName }}?${sas_token}"
-          printf '::add-mask::%s\n' "$account_key"
-          printf '::add-mask::%s\n' "$sas_token"
-          printf '::add-mask::%s\n' "$container_sas_url"
-          printf 'CONTAINER_SAS_URL=%s\n' "$container_sas_url" >>"$GITHUB_ENV"
 
       - name: Wait for experiment artifact
         id: wait
@@ -343,14 +371,14 @@ jobs:
             exit 1
           fi
 
-      - name: Always deallocate VM
+      - name: Delete batch resource group
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          az vm deallocate \
-            --resource-group '${{ steps.prepare.outputs.resource_group }}' \
-            --name '${{ steps.prepare.outputs.vm_name }}' \
+          az group delete \
+            --name '${{ steps.prepare.outputs.batch_resource_group }}' \
+            --yes \
             --no-wait >/dev/null 2>&1 || true
 
       - name: Upload indexing experiment artifact
@@ -372,9 +400,10 @@ jobs:
             echo "|---|---|"
             echo "| Manifest | \`${{ steps.prepare.outputs.manifest_path }}\` |"
             echo "| Profile | \`${{ inputs.profile_version }}\` |"
-            echo "| Resource group | \`${{ steps.prepare.outputs.resource_group }}\` |"
-            echo "| Storage account | \`${{ steps.deploy.outputs.storageAccountName }}\` |"
-            echo "| Container | \`${{ steps.deploy.outputs.containerName }}\` |"
+            echo "| Long-term resource group | \`${{ steps.prepare.outputs.long_term_resource_group }}\` |"
+            echo "| Batch resource group | \`${{ steps.prepare.outputs.batch_resource_group }}\` |"
+            echo "| Storage account | \`${{ steps.storage.outputs.storageAccountName }}\` |"
+            echo "| Container | \`${{ steps.storage.outputs.containerName }}\` |"
             echo "| VM | \`${{ steps.deploy.outputs.vmName }}\` |"
             echo "| Public IP | \`${{ steps.deploy.outputs.vmPublicIpAddress }}\` |"
             echo "| Run name | \`${{ steps.prepare.outputs.run_name }}\` |"
