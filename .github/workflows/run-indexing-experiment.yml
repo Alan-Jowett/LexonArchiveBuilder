@@ -189,7 +189,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sas_expiry="$(date -u -d '+1 day' '+%Y-%m-%dT%H:%M:%SZ')"
           storage_tags_json="$(python3 - "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" <<'PY'
           import json
           import sys
@@ -210,7 +209,6 @@ jobs:
                 tags="$storage_tags_json" \
                 storageAccountName='${{ steps.prepare.outputs.storage_account_name }}' \
                 containerName='${{ steps.prepare.outputs.container_name }}' \
-                sasExpiry="$sas_expiry" \
               --query properties.outputs \
               --output json
           )"
@@ -220,10 +218,38 @@ jobs:
           import sys
 
           outputs = json.loads(sys.argv[1])
-          for key in ("blobEndpoint", "storageAccountName", "containerName", "containerSasUrl"):
+          for key in ("blobEndpoint", "storageAccountName", "containerName"):
               value = outputs[key]["value"]
               print(f"{key}={value}")
           PY
+
+      - name: Generate workflow container SAS
+        shell: bash
+        run: |
+          set -euo pipefail
+          sas_expiry="$(date -u -d '+1 day' '+%Y-%m-%dT%H:%M:%SZ')"
+          account_key="$(
+            az storage account keys list \
+              --resource-group '${{ steps.prepare.outputs.long_term_resource_group }}' \
+              --account-name '${{ steps.storage.outputs.storageAccountName }}' \
+              --query '[0].value' \
+              --output tsv
+          )"
+          sas_token="$(
+            az storage container generate-sas \
+              --account-name '${{ steps.storage.outputs.storageAccountName }}' \
+              --name '${{ steps.storage.outputs.containerName }}' \
+              --permissions racwl \
+              --expiry "$sas_expiry" \
+              --https-only \
+              --account-key "$account_key" \
+              --output tsv
+          )"
+          container_sas_url="${{ steps.storage.outputs.blobEndpoint }}${{ steps.storage.outputs.containerName }}?${sas_token}"
+          printf '::add-mask::%s\n' "$account_key"
+          printf '::add-mask::%s\n' "$sas_token"
+          printf '::add-mask::%s\n' "$container_sas_url"
+          printf 'CONTAINER_SAS_URL=%s\n' "$container_sas_url" >>"$GITHUB_ENV"
 
       - name: Write batch deployment parameters
         shell: bash
@@ -232,7 +258,6 @@ jobs:
           PROFILE_VERSION_INPUT: ${{ inputs.profile_version }}
           RUNNER_IMAGE_TAG_INPUT: ${{ inputs.runner_image_tag }}
           BLOCK_STORE_TARGET_INPUT: ${{ inputs.block_store_target }}
-          CONTAINER_SAS_URL_INPUT: ${{ steps.storage.outputs.containerSasUrl }}
           SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}
         run: |
           set -euo pipefail
@@ -260,7 +285,7 @@ jobs:
             --vnet-name '${{ steps.prepare.outputs.vnet_name }}' \
             --storage-account-name '${{ steps.storage.outputs.storageAccountName }}' \
             --container-name '${{ steps.storage.outputs.containerName }}' \
-            --container-sas-url "$CONTAINER_SAS_URL_INPUT" \
+            --container-sas-url "$CONTAINER_SAS_URL" \
             --vm-name '${{ steps.prepare.outputs.vm_name }}' \
             --ssh-public-key "$SSH_PUBLIC_KEY_INPUT" \
             --enable-public-ip '${{ steps.prepare.outputs.enable_ssh_access }}' \
@@ -270,16 +295,6 @@ jobs:
             --workload-script-path 'infra/azure/experiments/indexing-experiment-bootstrap.sh' \
             --github-run-id "$GITHUB_RUN_ID" \
             --github-run-attempt "$GITHUB_RUN_ATTEMPT" > deployment.parameters.json
-
-      - name: Expose workflow container SAS
-        shell: bash
-        env:
-          CONTAINER_SAS_URL_INPUT: ${{ steps.storage.outputs.containerSasUrl }}
-        run: |
-          set -euo pipefail
-          container_sas_url="$CONTAINER_SAS_URL_INPUT"
-          printf '::add-mask::%s\n' "$container_sas_url"
-          printf 'CONTAINER_SAS_URL=%s\n' "$container_sas_url" >>"$GITHUB_ENV"
 
       - name: Ensure batch resource group exists
         shell: bash

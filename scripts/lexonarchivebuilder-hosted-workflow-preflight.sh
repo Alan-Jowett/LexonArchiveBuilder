@@ -190,6 +190,8 @@ INDEXING_WORKLOAD_SCRIPT="${REPO_ROOT}/scripts/lexonarchivebuilder-indexing-expe
 EMBEDDING_WORKFLOW="${REPO_ROOT}/.github/workflows/run-embedding-refresh.yml"
 INDEXING_WORKFLOW="${REPO_ROOT}/.github/workflows/run-indexing-experiment.yml"
 EXPERIMENT_MAIN_BICEP="${REPO_ROOT}/infra/azure/experiments/main.bicep"
+EXPERIMENT_STORAGE_BICEP="${REPO_ROOT}/infra/azure/experiments/storage.bicep"
+EXPERIMENT_VM_RUNNER_BICEP="${REPO_ROOT}/infra/azure/experiments/vm-runner.bicep"
 
 TEMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEMP_ROOT"' EXIT
@@ -324,11 +326,14 @@ assert_workflow_contains \
   'batch_resource_group="${long_term_resource_group}-batch-${batch_suffix}"' \
   'tags="$storage_tags_json"' \
   '"lexon-scope": "long-term"' \
+  '- name: Generate workflow container SAS' \
+  "az storage account keys list \\" \
+  "az storage container generate-sas \\" \
+  "printf 'CONTAINER_SAS_URL=%s\\n' \"\$container_sas_url\" >>\"\$GITHUB_ENV\"" \
   'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
   '--ssh-public-key "$SSH_PUBLIC_KEY_INPUT"' \
   "printf '%s' \"\$ssh_public_key\"" \
-  'CONTAINER_SAS_URL_INPUT: ${{ steps.storage.outputs.containerSasUrl }}' \
-  'container_sas_url="$CONTAINER_SAS_URL_INPUT"' \
+  '--container-sas-url "$CONTAINER_SAS_URL"' \
   '- name: Delete batch resource group' \
   "if: \${{ always() && !(failure() && inputs.debug_retain_failed_vm) }}" \
   "az group delete \\" \
@@ -342,11 +347,14 @@ assert_workflow_contains \
   'batch_resource_group="${long_term_resource_group}-batch-${batch_suffix}"' \
   'tags="$storage_tags_json"' \
   '"lexon-scope": "long-term"' \
+  '- name: Generate workflow container SAS' \
+  "az storage account keys list \\" \
+  "az storage container generate-sas \\" \
+  "printf 'CONTAINER_SAS_URL=%s\\n' \"\$container_sas_url\" >>\"\$GITHUB_ENV\"" \
   'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
   '--ssh-public-key "$SSH_PUBLIC_KEY_INPUT"' \
   "printf '%s' \"\$ssh_public_key\"" \
-  'CONTAINER_SAS_URL_INPUT: ${{ steps.storage.outputs.containerSasUrl }}' \
-  'container_sas_url="$CONTAINER_SAS_URL_INPUT"' \
+  '--container-sas-url "$CONTAINER_SAS_URL"' \
   '- name: Delete batch resource group' \
   "az group delete \\" \
   "--name '\${{ steps.prepare.outputs.batch_resource_group }}'" \
@@ -357,5 +365,16 @@ assert_file_contains \
   "$EXPERIMENT_MAIN_BICEP" \
   "@secure()" \
   "param containerSasUrl string"
+
+assert_file_contains \
+  "$EXPERIMENT_VM_RUNNER_BICEP" \
+  "@secure()" \
+  "param containerSasUrl string"
+
+assert_file_contains \
+  "$EXPERIMENT_STORAGE_BICEP" \
+  "output storageAccountName string = storage.name" \
+  "output containerName string = container.name" \
+  "output blobEndpoint string = storage.properties.primaryEndpoints.blob"
 
 printf 'Hosted workflow preflight validation passed\n'
