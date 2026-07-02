@@ -227,18 +227,25 @@ jobs:
         run: |
           set -euo pipefail
           sas_expiry="$(date -u -d '+1 day' '+%Y-%m-%dT%H:%M:%SZ')"
+          account_key="$(
+            az storage account keys list \
+              --resource-group '${{ steps.prepare.outputs.long_term_resource_group }}' \
+              --account-name '${{ steps.storage.outputs.storageAccountName }}' \
+              --query '[0].value' \
+              --output tsv
+          )"
           sas_token="$(
             az storage container generate-sas \
               --account-name '${{ steps.storage.outputs.storageAccountName }}' \
+              --account-key "$account_key" \
               --name '${{ steps.storage.outputs.containerName }}' \
-              --as-user \
-              --auth-mode login \
               --permissions racwl \
               --expiry "$sas_expiry" \
               --https-only \
               --output tsv
           )"
           container_sas_url="${{ steps.storage.outputs.blobEndpoint }}${{ steps.storage.outputs.containerName }}?${sas_token}"
+          printf '::add-mask::%s\n' "$account_key"
           printf '::add-mask::%s\n' "$sas_token"
           printf '::add-mask::%s\n' "$container_sas_url"
           printf 'CONTAINER_SAS_URL=%s\n' "$container_sas_url" >>"$GITHUB_ENV"
@@ -364,12 +371,14 @@ jobs:
 
           summary_url="$(blob_url_for '${{ steps.prepare.outputs.artifact_prefix }}/summary.json')"
           manifest_url="$(blob_url_for '${{ steps.prepare.outputs.artifact_prefix }}/manifest.json')"
+          workload_log_url="$(blob_url_for '${{ steps.prepare.outputs.artifact_prefix }}/workload.log')"
           bootstrap_log_url="$(blob_url_for '${{ steps.prepare.outputs.artifact_prefix }}/bootstrap-wrapper.log')"
           bootstrap_cloud_init_url="$(blob_url_for '${{ steps.prepare.outputs.artifact_prefix }}/bootstrap-cloud-init-output.log')"
           bootstrap_stapi_url="$(blob_url_for '${{ steps.prepare.outputs.artifact_prefix }}/bootstrap-stapi.log')"
 
           curl --fail --silent --show-error --location "$summary_url" --output embedding-refresh-artifact/summary.json || true
           curl --fail --silent --show-error --location "$manifest_url" --output embedding-refresh-artifact/manifest.json || true
+          curl --fail --silent --show-error --location "$workload_log_url" --output embedding-refresh-artifact/workload.log || true
           curl --fail --silent --show-error --location "$bootstrap_status_url" --output embedding-refresh-artifact/bootstrap-status.json || true
           curl --fail --silent --show-error --location "$bootstrap_log_url" --output embedding-refresh-artifact/bootstrap-wrapper.log || true
           curl --fail --silent --show-error --location "$bootstrap_cloud_init_url" --output embedding-refresh-artifact/bootstrap-cloud-init-output.log || true

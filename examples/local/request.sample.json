@@ -15,6 +15,7 @@
     "encoding": "f32le"
   },
   "block_size_target": 65536,
+  "ref_name": "sample-local",
   "items": [
     {
       "kind": "mailbox",

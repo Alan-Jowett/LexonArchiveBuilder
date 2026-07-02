@@ -165,9 +165,37 @@ PY
 blob_path_exists() {
   local container_sas_url="$1"
   local blob_path="$2"
-  local blob_url
-  blob_url="$(append_path_to_container_sas_url "$container_sas_url" "$blob_path")"
-  azcopy list "$blob_url" >/dev/null 2>&1
+  python3 - "$container_sas_url" "$blob_path" <<'PY'
+import sys
+import urllib.request
+import xml.etree.ElementTree as ET
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+container_sas_url, blob_path = sys.argv[1:3]
+prefix = blob_path.strip("/")
+if prefix:
+    prefix = f"{prefix}/"
+
+parts = urlsplit(container_sas_url)
+query = parse_qsl(parts.query, keep_blank_values=True)
+query.extend(
+    [
+        ("restype", "container"),
+        ("comp", "list"),
+        ("prefix", prefix),
+        ("maxresults", "1"),
+    ]
+)
+request_url = urlunsplit(
+    (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
+)
+
+with urllib.request.urlopen(request_url) as response:
+    payload = response.read()
+
+root = ET.fromstring(payload)
+raise SystemExit(0 if root.find(".//Blob") is not None else 1)
+PY
 }
 
 download_blob_tree_if_present() {
@@ -262,6 +290,14 @@ mirror_manifest_sources() {
   fi
 }
 
+default_ref_name() {
+  if [[ -z "${MANIFEST_CONTAINER_NAME:-}" ]]; then
+    printf 'error: manifest container name must be loaded before deriving ref_name\n' >&2
+    exit 1
+  fi
+  printf '%s' "$MANIFEST_CONTAINER_NAME"
+}
+
 write_mailbox_request() {
   local request_path="$1"
   local block_store_root="$2"
@@ -271,7 +307,9 @@ write_mailbox_request() {
   local stage="$6"
   local profile_version="${7:-}"
   local include_items="$8"
-  local index mailbox_path month overlay_memory_cache_blocks
+  local index mailbox_path month overlay_memory_cache_blocks ref_name
+
+  ref_name="$(default_ref_name)"
 
   if [[ "$block_store_target" == "overlay" ]]; then
     overlay_memory_cache_blocks="$(overlay_memory_cache_max_resident_blocks)"
@@ -309,6 +347,7 @@ write_mailbox_request() {
       printf ',\n  "profile_version": "%s"' "$(json_escape "$profile_version")"
     fi
     printf ',\n'
+    printf '  "ref_name": "%s",\n' "$(json_escape "$ref_name")"
     printf '  "items": [\n'
 
     if [[ "$include_items" == "yes" ]]; then
