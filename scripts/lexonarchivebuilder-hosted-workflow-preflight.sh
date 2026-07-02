@@ -336,8 +336,10 @@ assert_workflow_contains \
   '--container-sas-url "$CONTAINER_SAS_URL"' \
   '- name: Delete batch resource group' \
   "if: \${{ always() && !(failure() && inputs.debug_retain_failed_vm) }}" \
+  "batch_resource_group='\${{ steps.prepare.outputs.batch_resource_group }}'" \
+  "if [[ -z \"\$batch_resource_group\" ]]; then" \
   "az group delete \\" \
-  "--name '\${{ steps.prepare.outputs.batch_resource_group }}'" \
+  '--name "$batch_resource_group"' \
   'echo "| Long-term resource group | \`${{ steps.prepare.outputs.long_term_resource_group }}\` |"' \
   'echo "| Batch resource group | \`${{ steps.prepare.outputs.batch_resource_group }}\` |"'
 
@@ -356,8 +358,10 @@ assert_workflow_contains \
   "printf '%s' \"\$ssh_public_key\"" \
   '--container-sas-url "$CONTAINER_SAS_URL"' \
   '- name: Delete batch resource group' \
+  "batch_resource_group='\${{ steps.prepare.outputs.batch_resource_group }}'" \
+  "if [[ -z \"\$batch_resource_group\" ]]; then" \
   "az group delete \\" \
-  "--name '\${{ steps.prepare.outputs.batch_resource_group }}'" \
+  '--name "$batch_resource_group"' \
   'echo "| Long-term resource group | \`${{ steps.prepare.outputs.long_term_resource_group }}\` |"' \
   'echo "| Batch resource group | \`${{ steps.prepare.outputs.batch_resource_group }}\` |"'
 

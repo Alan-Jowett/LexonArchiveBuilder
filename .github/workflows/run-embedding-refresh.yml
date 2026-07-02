@@ -412,8 +412,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          batch_resource_group='${{ steps.prepare.outputs.batch_resource_group }}'
+          if [[ -z "$batch_resource_group" ]]; then
+            printf 'Skipping batch resource-group cleanup because no batch resource group was recorded.\n' >&2
+            exit 0
+          fi
           az group delete \
-            --name '${{ steps.prepare.outputs.batch_resource_group }}' \
+            --name "$batch_resource_group" \
             --yes \
             --no-wait >/dev/null 2>&1 || true
 
