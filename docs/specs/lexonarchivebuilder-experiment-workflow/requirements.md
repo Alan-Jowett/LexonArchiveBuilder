@@ -47,6 +47,11 @@
 - **UR-EXP-34 [KNOWN]:** Preventable hosted-workflow defects such as bad script formatting, env-file formatting, quoting, or separators should be catchable locally.
 - **UR-EXP-35 [KNOWN]:** The validation surface should exercise generated workflow-owned artifacts and handoff seams rather than relying only on static source inspection.
 - **UR-EXP-36 [KNOWN]:** Live Azure workflow runs should remain integration confirmation, but should not be the primary place repository-owned formatting and wiring defects are first discovered.
+- **UR-EXP-37 [KNOWN]:** The experiment workflow should split Azure resources into a predictable long-term resource group for durable storage and a per-run batch resource group for ephemeral compute.
+- **UR-EXP-38 [KNOWN]:** The long-term resource group should contain the storage account and use a predictable name.
+- **UR-EXP-39 [KNOWN]:** The batch resource group should use a name similar to the long-term one, but with a random or datetime suffix.
+- **UR-EXP-40 [KNOWN]:** When the workflow reclaims the run in the normal path, it should delete the batch resource group instead of leaving it behind.
+- **UR-EXP-41 [KNOWN]:** Default cleanup should delete the batch resource group, while explicit debug retention remains the exception for failed runs.
 
 ## Change Manifest
 
@@ -58,15 +63,19 @@
 | CM-EXP-004 | Add | Require incremental embedding refresh so changed source content adds only new embeddings and preserves prior reusable embedding state | UR-EXP-4, UR-EXP-6, UR-EXP-10 |
 | CM-EXP-005 | Add | Define hosted caller inputs for single-profile experiment selection, runner-image tag override, and break-glass SSH public-key injection | UR-EXP-11, UR-EXP-12, UR-EXP-13 |
 | CM-EXP-006 | Add | Define Azure-backed execution and Blob-backed artifact retrieval for both workflows while leaving block-store abstraction redesign out of scope | UR-EXP-14, UR-EXP-17, UR-EXP-18, UR-EXP-19 |
-| CM-EXP-007 | Add | Require unconditional VM deallocation while preserving the resource group for manual post-run inspection | UR-EXP-15, UR-EXP-16, UR-EXP-17 |
+| CM-EXP-007 | Revise | Split the minimal Azure execution environment into predictable durable storage scope and reclaimable per-run compute scope | UR-EXP-15, UR-EXP-16, UR-EXP-17, UR-EXP-37, UR-EXP-38, UR-EXP-39 |
 | CM-EXP-008 | Add | Align default runner-image selection with the lab pipeline's published `main` tag while preserving explicit tag override support | UR-EXP-12 |
 | CM-EXP-009 | Add | Preserve repository semantic boundaries by keeping hosted experiment automation separate from scale-test, indexer, MCP, and production-serving contracts | UR-EXP-19, UR-EXP-20, UR-EXP-21 |
 | CM-EXP-010 | Revise | Replace the deferred overlay TODO seam with an executable hosted block-store target contract that keeps filesystem available while making overlay the default | UR-EXP-22, UR-EXP-23, UR-EXP-27, UR-EXP-28 |
 | CM-EXP-011 | Revise | Require the indexing-experiment workflow to include the rooted quality/report step needed to stay comparable to `test.ps1` | UR-EXP-14, UR-EXP-26 |
 | CM-EXP-012 | Revise | Extend the hosted artifact contract so embedding-refresh bootstrap failures still publish durable status and diagnostic artifacts | UR-EXP-29, UR-EXP-30 |
 | CM-EXP-013 | Add | Require workflow-visible bootstrap failure classification and retrieval of early-failure diagnostic artifacts | UR-EXP-29, UR-EXP-30 |
-| CM-EXP-014 | Revise | Allow an explicit debug-retention mode that can preserve failed VMs temporarily without changing the default deallocation contract | UR-EXP-31 |
+| CM-EXP-014 | Revise | Allow an explicit debug-retention mode that can preserve failed runs temporarily without changing the default batch-resource-group deletion contract | UR-EXP-31, UR-EXP-41 |
 | CM-EXP-015 | Add | Define a repository-owned preflight validation layer for locally preventable hosted-workflow regressions before live Azure confirmation | UR-EXP-32, UR-EXP-33, UR-EXP-34, UR-EXP-35, UR-EXP-36 |
+| CM-EXP-016 | Add | Define a predictable long-term storage resource-group and storage-account naming contract for reusable experiment datasets | UR-EXP-37, UR-EXP-38 |
+| CM-EXP-017 | Add | Define a related per-run batch resource-group naming contract with a uniqueness suffix for reclaimable infrastructure | UR-EXP-37, UR-EXP-39 |
+| CM-EXP-018 | Revise | Change the normal reclaim contract so workflows delete the batch resource group while preserving the long-term storage resource group | UR-EXP-40, UR-EXP-41 |
+| CM-EXP-019 | Revise | Extend the workflow outcome surface to distinguish long-term and batch resource-group identifiers while preserving storage-account visibility | UR-EXP-17, UR-EXP-38, UR-EXP-40 |
 
 ## Before / After
 
@@ -92,8 +101,8 @@
 
 ### BA-EXP-005
 
-- **Before [KNOWN]:** Existing Azure VM lifecycle requirements do not define a hosted-workflow fallback that always deallocates the VM after either staged workflow concludes.
-- **After [KNOWN]:** Both hosted workflows must always attempt VM deallocation while leaving the resource group intact for manual cleanup and inspection.
+- **Before [KNOWN]:** Existing Azure lifecycle requirements do not define a hosted-workflow fallback that reclaims all per-run compute infrastructure after either staged workflow concludes.
+- **After [KNOWN]:** Both hosted workflows must reclaim the ephemeral batch execution environment by deleting the batch resource group in the normal path while preserving the long-term storage resource group.
 
 ### BA-EXP-006
 
@@ -118,12 +127,22 @@
 ### BA-EXP-010
 
 - **Before [KNOWN]:** The cleanup contract requires deallocation on failure but does not define an approved way to preserve a failed VM briefly for deliberate operator debugging.
-- **After [KNOWN]:** The workflow boundary keeps deallocation as the default while allowing an explicit debug-retention mode for failure investigation.
+- **After [KNOWN]:** The workflow boundary keeps batch-resource-group deletion as the default while allowing an explicit debug-retention mode for failure investigation.
 
 ### BA-EXP-011
 
 - **Before [KNOWN]:** The repository has no approved hosted-workflow preflight validation layer for preventable composition defects such as malformed env files, bad quoting, broken separators, or broken bootstrap/workload handoff seams, so these failures are discovered mainly through live Azure runs.
 - **After [KNOWN]:** The specification requires a repository-owned preflight validation layer that exercises rendered workflow-owned artifacts and catches the covered regression class through local or normal-CI execution before live Azure confirmation is required.
+
+### BA-EXP-012
+
+- **Before [KNOWN]:** Both hosted workflows use one resource-group identity for durable Blob-backed storage resources and reclaimable per-run VM resources.
+- **After [KNOWN]:** The hosted workflow boundary separates durable reusable storage into one predictable long-term resource group and per-run compute into one related batch resource group with a uniqueness suffix.
+
+### BA-EXP-013
+
+- **Before [KNOWN]:** The workflow outcome surface distinguishes only one resource-group name plus the storage-account name.
+- **After [KNOWN]:** The workflow outcome surface distinguishes the long-term storage resource-group name, the per-run batch resource-group name, and the storage-account name.
 
 ## Requirements
 
@@ -250,12 +269,29 @@ The hosted workflow family SHALL accept an SSH public key that can be injected i
 The hosted workflow family SHALL deploy the minimal Azure environment needed to execute one embedding refresh or one indexing experiment and retrieve the relevant artifacts.
 
 - **Required capabilities [KNOWN]:**
-  1. one VM capable of running the approved container for the selected workflow
-  2. one Azure Blob container reachable through a SAS credential path accepted by the relevant container
-  3. deployment outputs sufficient for post-run operator inspection, including the resource-group name and storage-account name
+  1. one predictable long-term storage resource group that owns the durable workflow storage account and Blob container surface
+  2. one batch resource group per workflow run that owns the VM capable of running the approved container for the selected workflow and any other reclaimable per-run infrastructure
+  3. one Azure Blob container reachable through a SAS credential path accepted by the relevant container
+  4. deployment outputs sufficient for post-run operator inspection, including the long-term resource-group name, the batch resource-group name, and the storage-account name
 - **Boundary [KNOWN]:** This increment may assume the relevant container accepts the working-group list, the profile selector where applicable, and the Blob-container SAS input.
 - **Boundary [UNKNOWN]:** The exact IaC module/package reuse versus new experiment-specific IaC shape is not yet chosen in this phase.
-- **Traceability:** UR-EXP-14, UR-EXP-17, UR-EXP-18, UR-EXP-19
+- **Traceability:** UR-EXP-14, UR-EXP-17, UR-EXP-18, UR-EXP-19, UR-EXP-37, UR-EXP-38, UR-EXP-39, UR-EXP-40
+
+#### RQ-EXP-012A - Predictable long-term storage naming
+
+The hosted workflow family SHALL derive the long-term storage resource-group name and workflow storage-account name from a predictable repository-owned naming rule so repeated runs against the same durable dataset contract can target the same long-term Azure storage scope.
+
+- **Required property [KNOWN]:** The long-term naming contract is stable across runs and suitable for operator expectations around durable storage location.
+- **Boundary [UNKNOWN]:** Whether the stable key is based on manifest identity, container identity, or another repository-owned dataset identity is not yet specified in this phase.
+- **Traceability:** UR-EXP-37, UR-EXP-38
+
+#### RQ-EXP-012B - Per-run batch resource-group naming
+
+Each hosted workflow run SHALL derive a batch resource-group name from the same long-term naming family but append a uniqueness suffix sufficient to distinguish reclaimable per-run infrastructure.
+
+- **Required property [KNOWN]:** The suffix must prevent collisions across repeated runs.
+- **Allowed realization [KNOWN]:** A random suffix, a datetime-based suffix, or a combination of both is acceptable so long as the relationship to the long-term name remains operator-recognizable.
+- **Traceability:** UR-EXP-37, UR-EXP-39
 
 #### RQ-EXP-013 - Embedding-refresh execution
 
@@ -317,11 +353,11 @@ When the embedding-refresh workflow fails before normal workload artifacts are a
 
 #### RQ-EXP-017 - Workflow outcome surface
 
-Each hosted workflow SHALL surface whether the run passed or failed and SHALL also surface the resource-group name and storage-account name associated with the run.
+Each hosted workflow SHALL surface whether the run passed or failed and SHALL also surface the long-term resource-group name, the batch resource-group name, and the storage-account name associated with the run.
 
-- **Rationale [KNOWN]:** Operators need a quick run verdict plus stable identifiers for manual Azure inspection.
+- **Rationale [KNOWN]:** Operators need a quick run verdict plus stable identifiers for durable-storage inspection and per-run cleanup follow-up.
 - **Boundary [UNKNOWN]:** Whether these values are emitted as job outputs, workflow summary entries, or both is not yet specified in this phase.
-- **Traceability:** UR-EXP-14, UR-EXP-17
+- **Traceability:** UR-EXP-14, UR-EXP-17, UR-EXP-38, UR-EXP-40
 
 #### RQ-EXP-017A - Early failure classification
 
@@ -330,21 +366,22 @@ The embedding-refresh workflow SHALL surface whether a failed run stopped during
 - **Required property [KNOWN]:** The surfaced classification must be derivable from a machine-readable status artifact rather than only from free-form logs.
 - **Traceability:** UR-EXP-29, UR-EXP-30
 
-#### RQ-EXP-018 - Always-on VM deallocation
+#### RQ-EXP-018 - Batch-environment reclaim
 
-Each hosted workflow SHALL always attempt to deallocate the experiment VM after VM-side execution concludes, regardless of whether the run succeeded or failed.
+Each hosted workflow SHALL always attempt to reclaim the experiment batch environment after VM-side execution concludes, regardless of whether the run succeeded or failed.
 
-- **Required property [KNOWN]:** Workflow-level cleanup must provide a fallback even when VM-side self-deallocation does not occur.
-- **Constraint [KNOWN]:** This cleanup requirement applies to failure paths as well as success paths.
-- **Traceability:** UR-EXP-15
+- **Required property [KNOWN]:** The normal cleanup action deletes the batch resource group, thereby reclaiming the VM and the rest of the per-run infrastructure together.
+- **Required property [KNOWN]:** Cleanup must still provide a fallback even when VM-side self-deallocation does not occur before the workflow regains control.
+- **Constraint [KNOWN]:** This cleanup requirement applies to failure paths as well as success paths unless explicit debug retention is enabled for an eligible failed run.
+- **Traceability:** UR-EXP-15, UR-EXP-40, UR-EXP-41
 
 #### RQ-EXP-018A - Debug-retention override
 
-The hosted workflow family SHALL support an explicit operator-selected debug-retention mode that preserves or delays deallocation for failed runs long enough for manual investigation.
+The hosted workflow family SHALL support an explicit operator-selected debug-retention mode that preserves or delays deletion of the batch resource group for failed runs long enough for manual investigation.
 
-- **Required property [KNOWN]:** Default behavior remains automatic deallocation; retention is an opt-in debugging mode rather than the normal failure-path contract.
-- **Constraint [KNOWN]:** The retained VM path must not imply automatic resource-group deletion.
-- **Traceability:** UR-EXP-15, UR-EXP-16, UR-EXP-31
+- **Required property [KNOWN]:** Default behavior remains automatic batch-resource-group deletion; retention is an opt-in debugging mode rather than the normal failure-path contract.
+- **Constraint [KNOWN]:** The retained batch path does not change preservation of the long-term storage resource group.
+- **Traceability:** UR-EXP-15, UR-EXP-16, UR-EXP-31, UR-EXP-41
 
 #### RQ-EXP-018B - Hosted-workflow preflight validation boundary
 
@@ -396,12 +433,13 @@ and runtime behavior.
 - **Required property [KNOWN]:** Live Azure runs remain necessary for end-to-end confirmation, but they are no longer the intended first discovery mechanism for covered repository-owned defects.
 - **Traceability:** UR-EXP-32, UR-EXP-35, UR-EXP-36
 
-#### RQ-EXP-019 - Resource-group preservation
+#### RQ-EXP-019 - Long-term resource-group preservation
 
-The hosted workflow family SHALL NOT delete the experiment resource group automatically as part of normal or failure-path cleanup.
+The hosted workflow family SHALL NOT delete the long-term storage resource group automatically as part of normal or failure-path cleanup.
 
-- **Operational intent [KNOWN]:** Resource-group cleanup remains a manual operator step so failed runs can still be inspected in Azure after the workflow completes.
-- **Traceability:** UR-EXP-16, UR-EXP-17
+- **Operational intent [KNOWN]:** Durable reusable storage must outlive individual experiment runs.
+- **Clarification [KNOWN]:** This preservation requirement applies to the long-term storage resource group, not to the reclaimable batch resource group.
+- **Traceability:** UR-EXP-16, UR-EXP-17, UR-EXP-38, UR-EXP-40
 
 ### Boundary and Invariant Requirements
 
@@ -428,7 +466,7 @@ The hosted workflow family SHALL remain an operator-automation and experiment-or
 
 - redefining the experiment containers' internal CLI or API beyond the accepted input assumptions
 - solving the separate LAB block-storage-abstraction effort
-- deleting the Azure resource group automatically after the workflow run
+- deleting the long-term storage resource group automatically after the workflow run
 - replacing the existing local experiment workflows for all use cases
 - changing MCP server behavior
 - changing production CDN publication behavior
@@ -444,6 +482,7 @@ The hosted workflow family SHALL remain an operator-automation and experiment-or
 | Local/testing versus production semantics remain distinct | Preserved | The hosted workflows now prefer the production-oriented overlay target by default while preserving explicit filesystem selection for comparison and fallback without redefining the production-serving boundary |
 | The architecture remains extensible to future content types | Preserved | The reusable manifest and staged workflow boundary focus on orchestration and dataset reuse rather than hard-coding new content-model semantics into indexer or MCP layers |
 | Repository automation remains traceable and reusable | Preserved | The workflows reuse published images, Azure deployment primitives, checked-in manifest intent, and workflow-visible artifacts instead of relying on ad hoc local steps |
+| Durable state remains separable from reclaimable compute | Strengthened | The split between long-term storage scope and per-run batch scope makes repeated experiment reuse and cleanup behavior explicit without changing indexer or MCP contracts |
 
 ## Coverage Notes
 
@@ -466,6 +505,7 @@ The hosted workflow family SHALL remain an operator-automation and experiment-or
   - user clarification in this session: "Keep both targets and default to `overlay`"
   - user request in this session: "/evolve we are waisting a lot of time and resource trying to debug this live. Why don't we have validation for the scripts / steps / proceses in the expermintal workflows? Isn't there some way we could test this?"
   - user clarification in this session: "avoid repeated regressions in preventable stuff like bad script / env file / etc formatting and catch that locally"
+  - user request in this session: "the experiment workflow currently creates both the long-term storage account and the batch/ephmeral vm in the same resource group. this make cleanup harder than it needs to be. I want the workflows for the experiments split into two types of resource groups: a long-term resource group with the storage account with a predicatable name and a batch resource group with name similar to the long term one, but with a random / datetime suffix. Then when the workflow completes, if the vm is to be reclaimed, just delete the batch/ephmeral resource group"
 - **Excluded from this requirements artifact [KNOWN]:**
   - workflow YAML structure and job graph details
   - Bicep module changes

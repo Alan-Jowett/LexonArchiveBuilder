@@ -140,10 +140,24 @@ new always-on control plane.
 Inspect the minimal Azure execution surface for each hosted workflow.
 
 **Pass condition:** each workflow uses only the VM-plus-Blob execution shape
-needed for one run, surfaces the resource-group and storage-account identifiers,
-and does not expand into a production-serving deployment contract.
+needed for one run, separates durable storage scope from reclaimable per-run
+compute scope, surfaces the long-term resource-group, batch resource-group, and
+storage-account identifiers, and does not expand into a production-serving
+deployment contract.
 
 **Traces to:** RQ-EXP-012, RQ-EXP-017, RQ-EXP-021, DSG-EXP-010, DSG-EXP-012
+
+### VAL-EXP-009A
+
+Inspect the Azure naming contract for durable and reclaimable workflow-owned
+resources.
+
+**Pass condition:** the long-term storage resource-group and storage-account
+names are derived from a predictable repository-owned rule, while each batch
+resource-group name remains recognizably related but includes a uniqueness
+suffix that prevents collisions across repeated runs.
+
+**Traces to:** RQ-EXP-012A, RQ-EXP-012B, DSG-EXP-010B
 
 ### VAL-EXP-010
 
@@ -182,8 +196,9 @@ requiring manual Azure guest inspection as the primary diagnostic path.
 
 Inspect workflow cleanup behavior on both success and failure paths.
 
-**Pass condition:** each hosted workflow always attempts VM deallocation, and
-neither workflow deletes the Azure resource group automatically.
+**Pass condition:** each hosted workflow reclaims the batch execution
+environment, and in the normal reclaim path deletes the batch resource group
+while preserving the long-term storage resource group.
 
 **Traces to:** RQ-EXP-018, RQ-EXP-019, DSG-EXP-012
 
@@ -193,9 +208,10 @@ Inspect embedding-refresh failure cleanup behavior with and without the
 debug-retention mode enabled.
 
 **Pass condition:** the default failure path attempts diagnostic publication
-before deallocation and still deallocates automatically, while the explicit
-debug-retention mode preserves or delays VM deallocation for failed runs without
-introducing automatic resource-group deletion.
+before batch cleanup and still deletes the batch resource group automatically,
+while the explicit debug-retention mode preserves or delays batch
+resource-group deletion for failed runs without changing long-term
+resource-group preservation.
 
 **Traces to:** RQ-EXP-015A, RQ-EXP-016A, RQ-EXP-018A, RQ-EXP-019, DSG-EXP-012A, DSG-EXP-012B
 

@@ -106,19 +106,44 @@ assert_generated_parameters() {
   local expected_workflow_name="$2"
   local expected_workload_env_file="$3"
   local expected_workload_script_path="$4"
+  local expected_container_sas_url="$5"
 
-  python3 - "$parameters_path" "$expected_workflow_name" "$expected_workload_env_file" "$expected_workload_script_path" <<'PY'
+  python3 - "$parameters_path" "$expected_workflow_name" "$expected_workload_env_file" "$expected_workload_script_path" "$expected_container_sas_url" <<'PY'
 import json
 import pathlib
 import sys
 
-parameters_path, expected_workflow_name, expected_workload_env_file, expected_workload_script_path = sys.argv[1:5]
+(
+    parameters_path,
+    expected_workflow_name,
+    expected_workload_env_file,
+    expected_workload_script_path,
+    expected_container_sas_url,
+) = sys.argv[1:6]
 payload = json.loads(pathlib.Path(parameters_path).read_text(encoding="utf-8"))
 params = payload["parameters"]
 
 assert params["tags"]["value"]["lexon-workflow"] == expected_workflow_name
 assert params["workloadEnvironmentFile"]["value"] == expected_workload_env_file
 assert params["workloadScript"]["value"] == pathlib.Path(expected_workload_script_path).read_text(encoding="utf-8")
+assert params["containerSasUrl"]["value"] == expected_container_sas_url
+PY
+}
+
+assert_workflow_contains() {
+local workflow_path="$1"
+shift
+python3 - "$workflow_path" "$@" <<'PY'
+import pathlib
+import sys
+
+workflow_path = pathlib.Path(sys.argv[1])
+text = workflow_path.read_text(encoding="utf-8")
+missing = [snippet for snippet in sys.argv[2:] if snippet not in text]
+if missing:
+  raise SystemExit(
+      f"workflow contract check failed for {workflow_path}: missing snippets: {missing}"
+  )
 PY
 }
 
@@ -145,6 +170,8 @@ INDEXING_BOOTSTRAP_SCRIPT="${REPO_ROOT}/infra/azure/experiments/indexing-experim
 HOSTED_EXPERIMENT_COMMON_SCRIPT="${REPO_ROOT}/scripts/lexonarchivebuilder-hosted-experiment-common.sh"
 EMBEDDING_WORKLOAD_SCRIPT="${REPO_ROOT}/scripts/lexonarchivebuilder-embedding-refresh.sh"
 INDEXING_WORKLOAD_SCRIPT="${REPO_ROOT}/scripts/lexonarchivebuilder-indexing-experiment.sh"
+EMBEDDING_WORKFLOW="${REPO_ROOT}/.github/workflows/run-embedding-refresh.yml"
+INDEXING_WORKFLOW="${REPO_ROOT}/.github/workflows/run-indexing-experiment.yml"
 
 TEMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEMP_ROOT"' EXIT
@@ -200,11 +227,11 @@ assert_env_roundtrip \
 python3 "${REPO_ROOT}/scripts/lexonarchivebuilder-write-deployment-parameters.py" \
   --workflow-name embedding-refresh \
   --location eastus \
-  --resource-group lexon-exp-preflight \
-  --vnet-name lexon-exp-preflight-vnet \
+  --resource-group lexon-exp-preflight-batch-20260701-123456 \
+  --vnet-name lexon-exp-preflight-batch-vnet-123456789-1 \
   --storage-account-name "$storage_account_name" \
   --container-name "$container_name" \
-  --sas-expiry "$preflight_sas_expiry" \
+  --container-sas-url "$container_sas_url" \
   --vm-name lexon-exp-embed-preflight \
   --ssh-public-key "$ssh_public_key" \
   --enable-public-ip true \
@@ -218,7 +245,8 @@ assert_generated_parameters \
   "${TEMP_ROOT}/embedding.parameters.json" \
   embedding-refresh \
   "$embedding_env_file" \
-  "$EMBEDDING_BOOTSTRAP_SCRIPT"
+  "$EMBEDDING_BOOTSTRAP_SCRIPT" \
+  "$container_sas_url"
 
 indexing_env_file="$(
   hosted_workflow_render_indexing_workload_env_file \
@@ -251,11 +279,11 @@ assert_env_roundtrip \
 python3 "${REPO_ROOT}/scripts/lexonarchivebuilder-write-deployment-parameters.py" \
   --workflow-name indexing-experiment \
   --location eastus \
-  --resource-group lexon-exp-preflight \
-  --vnet-name lexon-exp-preflight-vnet \
+  --resource-group lexon-exp-preflight-batch-20260701-123457 \
+  --vnet-name lexon-exp-preflight-batch-vnet-123456789-1 \
   --storage-account-name "$storage_account_name" \
   --container-name "$container_name" \
-  --sas-expiry "$preflight_sas_expiry" \
+  --container-sas-url "$container_sas_url" \
   --vm-name lexon-exp-index-preflight \
   --ssh-public-key "$ssh_public_key" \
   --enable-public-ip false \
@@ -269,6 +297,40 @@ assert_generated_parameters \
   "${TEMP_ROOT}/indexing.parameters.json" \
   indexing-experiment \
   "$indexing_env_file" \
-  "$INDEXING_BOOTSTRAP_SCRIPT"
+  "$INDEXING_BOOTSTRAP_SCRIPT" \
+  "$container_sas_url"
+
+assert_workflow_contains \
+  "$EMBEDDING_WORKFLOW" \
+  'long_term_resource_group="lexon-exp-${manifest_hash}"' \
+  'batch_resource_group="${long_term_resource_group}-batch-${batch_suffix}"' \
+  'tags="$storage_tags_json"' \
+  '"lexon-scope": "long-term"' \
+  'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
+  '--ssh-public-key "$SSH_PUBLIC_KEY_INPUT"' \
+  'CONTAINER_SAS_URL_INPUT: ${{ steps.storage.outputs.containerSasUrl }}' \
+  'container_sas_url="$CONTAINER_SAS_URL_INPUT"' \
+  '- name: Delete batch resource group' \
+  "if: \${{ always() && !(failure() && inputs.debug_retain_failed_vm) }}" \
+  "az group delete \\" \
+  "--name '\${{ steps.prepare.outputs.batch_resource_group }}'" \
+  'echo "| Long-term resource group | \`${{ steps.prepare.outputs.long_term_resource_group }}\` |"' \
+  'echo "| Batch resource group | \`${{ steps.prepare.outputs.batch_resource_group }}\` |"'
+
+assert_workflow_contains \
+  "$INDEXING_WORKFLOW" \
+  'long_term_resource_group="lexon-exp-${manifest_hash}"' \
+  'batch_resource_group="${long_term_resource_group}-batch-${batch_suffix}"' \
+  'tags="$storage_tags_json"' \
+  '"lexon-scope": "long-term"' \
+  'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
+  '--ssh-public-key "$SSH_PUBLIC_KEY_INPUT"' \
+  'CONTAINER_SAS_URL_INPUT: ${{ steps.storage.outputs.containerSasUrl }}' \
+  'container_sas_url="$CONTAINER_SAS_URL_INPUT"' \
+  '- name: Delete batch resource group' \
+  "az group delete \\" \
+  "--name '\${{ steps.prepare.outputs.batch_resource_group }}'" \
+  'echo "| Long-term resource group | \`${{ steps.prepare.outputs.long_term_resource_group }}\` |"' \
+  'echo "| Batch resource group | \`${{ steps.prepare.outputs.batch_resource_group }}\` |"'
 
 printf 'Hosted workflow preflight validation passed\n'
