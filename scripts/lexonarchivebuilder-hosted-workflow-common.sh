@@ -85,6 +85,7 @@ hosted_workflow_render_embedding_workload_env_file() {
   local artifact_prefix="$9"
   local block_store_target="${10}"
   local debug_retain_failed_vm="${11}"
+  local capture_workload_log="${12}"
 
   hosted_workflow_render_shell_env \
     "RUN_NAME=${run_name}" \
@@ -97,7 +98,8 @@ hosted_workflow_render_embedding_workload_env_file() {
     "DATASET_REPLAY_JOURNAL_PREFIX=${dataset_replay_journal_prefix}" \
     "ARTIFACT_PREFIX=${artifact_prefix}" \
     "BLOCK_STORE_TARGET=${block_store_target}" \
-    "DEBUG_RETAIN_ON_FAILURE=${debug_retain_failed_vm}"
+    "DEBUG_RETAIN_ON_FAILURE=${debug_retain_failed_vm}" \
+    "HOSTED_EXPERIMENT_CAPTURE_WORKLOAD_LOG=${capture_workload_log}"
 }
 
 hosted_workflow_render_indexing_workload_env_file() {

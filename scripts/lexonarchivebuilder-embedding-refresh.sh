@@ -112,11 +112,16 @@ REPLAY_JOURNAL_DIR="${RUN_ROOT}/block-store.replay-journal"
 REQUEST_PATH="${RUN_ROOT}/request.json"
 SUMMARY_PATH="${RUN_ROOT}/summary.json"
 STATUS_PATH="${RUN_ROOT}/status.json"
+WORKLOAD_LOG_PATH="${RUN_ROOT}/workload.log"
 MANIFEST_COPY_PATH="${RUN_ROOT}/manifest.json"
 SOURCES_LOG="${RUN_ROOT}/sources.txt"
+CAPTURE_WORKLOAD_LOG="${HOSTED_EXPERIMENT_CAPTURE_WORKLOAD_LOG:-false}"
 
 mkdir -p "$RUN_ROOT" "$BLOCK_STORE_DIR" "$REPLAY_JOURNAL_DIR"
 cp "$MANIFEST_PATH" "$MANIFEST_COPY_PATH"
+if [[ "$CAPTURE_WORKLOAD_LOG" == "true" ]]; then
+  exec > >(tee -a "$WORKLOAD_LOG_PATH") 2>&1
+fi
 
 SUCCESS=false
 cleanup() {
@@ -124,6 +129,7 @@ cleanup() {
   local summary_blob="${ARTIFACT_PREFIX}/summary.json"
   local request_blob="${ARTIFACT_PREFIX}/request.json"
   local status_blob="${ARTIFACT_PREFIX}/status.json"
+  local workload_log_blob="${ARTIFACT_PREFIX}/workload.log"
   local sources_blob="${ARTIFACT_PREFIX}/sources.txt"
   local manifest_blob="${ARTIFACT_PREFIX}/manifest.json"
   local status_block_store_prefix="$DATASET_BLOCK_STORE_PREFIX"
@@ -173,6 +179,9 @@ PY
   fi
   if [[ -f "$STATUS_PATH" ]]; then
     upload_file_to_blob "$STATUS_PATH" "$CONTAINER_SAS_URL" "$status_blob"
+  fi
+  if [[ "$CAPTURE_WORKLOAD_LOG" == "true" && -f "$WORKLOAD_LOG_PATH" ]]; then
+    upload_file_to_blob "$WORKLOAD_LOG_PATH" "$CONTAINER_SAS_URL" "$workload_log_blob"
   fi
   if [[ -f "$SOURCES_LOG" ]]; then
     upload_file_to_blob "$SOURCES_LOG" "$CONTAINER_SAS_URL" "$sources_blob"

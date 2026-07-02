@@ -77,7 +77,8 @@ assert_env_roundtrip() {
   local expected_workload_script="$8"
   local expected_common_script="$9"
   local expected_debug_retain_on_failure="${10:-}"
-  local expected_profile_version="${11:-}"
+  local expected_capture_workload_log="${11:-}"
+  local expected_profile_version="${12:-}"
 
   local decoded_common_script="${env_path}.decoded-common.sh"
   local decoded_workload_script="${env_path}.decoded-workload.sh"
@@ -92,6 +93,9 @@ assert_env_roundtrip() {
     [[ "$BLOCK_STORE_TARGET" == "$expected_block_store_target" ]] || { printf 'error: BLOCK_STORE_TARGET roundtrip failed\n' >&2; exit 1; }
     if [[ -n "$expected_debug_retain_on_failure" ]]; then
       [[ "${DEBUG_RETAIN_ON_FAILURE:-}" == "$expected_debug_retain_on_failure" ]] || { printf 'error: DEBUG_RETAIN_ON_FAILURE roundtrip failed\n' >&2; exit 1; }
+    fi
+    if [[ -n "$expected_capture_workload_log" ]]; then
+      [[ "${HOSTED_EXPERIMENT_CAPTURE_WORKLOAD_LOG:-}" == "$expected_capture_workload_log" ]] || { printf 'error: HOSTED_EXPERIMENT_CAPTURE_WORKLOAD_LOG roundtrip failed\n' >&2; exit 1; }
     fi
     if [[ -n "$expected_profile_version" ]]; then
       [[ "$PROFILE_VERSION" == "$expected_profile_version" ]] || { printf 'error: PROFILE_VERSION roundtrip failed\n' >&2; exit 1; }
@@ -238,6 +242,7 @@ embedding_env_file="$(
     "$dataset_replay_journal_prefix" \
     "$artifact_prefix_embedding" \
     "overlay" \
+    "false" \
     "false"
 )"
 printf '%s\n' "$embedding_env_file" > "${TEMP_ROOT}/embedding.env"
@@ -253,6 +258,7 @@ assert_env_roundtrip \
   "overlay" \
   "$EMBEDDING_WORKLOAD_SCRIPT" \
   "$HOSTED_EXPERIMENT_COMMON_SCRIPT" \
+  "false" \
   "false"
 
 python3 "${REPO_ROOT}/scripts/lexonarchivebuilder-write-deployment-parameters.py" \
@@ -308,6 +314,7 @@ assert_env_roundtrip \
   "$INDEXING_WORKLOAD_SCRIPT" \
   "$HOSTED_EXPERIMENT_COMMON_SCRIPT" \
   "false" \
+  "" \
   "0.6.0"
 
 python3 "${REPO_ROOT}/scripts/lexonarchivebuilder-write-deployment-parameters.py" \
@@ -337,21 +344,32 @@ assert_generated_parameters \
 
 assert_workflow_contains \
   "$EMBEDDING_WORKFLOW" \
+  'capture_workload_log:' \
   'long_term_resource_group="lexon-exp-${manifest_hash}"' \
   'batch_resource_group="${long_term_resource_group}-batch-${batch_suffix}"' \
   'tags="$storage_tags_json"' \
   '"lexon-scope": "long-term"' \
   '- name: Generate workflow container SAS' \
+  "az storage account keys list \\" \
+  "--resource-group '\${{ steps.prepare.outputs.long_term_resource_group }}' \\" \
+  "--account-name '\${{ steps.storage.outputs.storageAccountName }}' \\" \
+  "--query '[0].value' \\" \
+  "if [[ -z \"\$account_key\" ]]; then" \
   "az storage container generate-sas \\" \
-  "--as-user \\" \
-  "--auth-mode login \\" \
+  "--account-key \"\$account_key\" \\" \
+  "printf '::add-mask::%s\\n' \"\$account_key\"" \
+  "printf '::add-mask::%s\\n' \"\$sas_token\"" \
+  "printf '::add-mask::%s\\n' \"\$container_sas_url\"" \
   "printf 'CONTAINER_SAS_URL=%s\\n' \"\$container_sas_url\" >>\"\$GITHUB_ENV\"" \
   'DEBUG_RETAIN_FAILED_VM_INPUT: ${{ inputs.debug_retain_failed_vm }}' \
+  'CAPTURE_WORKLOAD_LOG_INPUT: ${{ inputs.capture_workload_log }}' \
   'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
   '--ssh-public-key "$SSH_PUBLIC_KEY_INPUT"' \
   "printf 'ssh_public_key=%s\\n' \"\$ssh_public_key\"" \
   '--container-sas-url "$CONTAINER_SAS_URL"' \
   '"$DEBUG_RETAIN_FAILED_VM_INPUT"' \
+  '"$CAPTURE_WORKLOAD_LOG_INPUT"' \
+  "if [[ '\${{ inputs.capture_workload_log }}' == 'true' ]]; then" \
   '- name: Delete batch resource group' \
   "if: \${{ always() && !(failure() && inputs.debug_retain_failed_vm) }}" \
   "batch_resource_group='\${{ steps.prepare.outputs.batch_resource_group }}'" \
@@ -369,9 +387,16 @@ assert_workflow_contains \
   'tags="$storage_tags_json"' \
   '"lexon-scope": "long-term"' \
   '- name: Generate workflow container SAS' \
+  "az storage account keys list \\" \
+  "--resource-group '\${{ steps.prepare.outputs.long_term_resource_group }}' \\" \
+  "--account-name '\${{ steps.storage.outputs.storageAccountName }}' \\" \
+  "--query '[0].value' \\" \
+  "if [[ -z \"\$account_key\" ]]; then" \
   "az storage container generate-sas \\" \
-  "--as-user \\" \
-  "--auth-mode login \\" \
+  "--account-key \"\$account_key\" \\" \
+  "printf '::add-mask::%s\\n' \"\$account_key\"" \
+  "printf '::add-mask::%s\\n' \"\$sas_token\"" \
+  "printf '::add-mask::%s\\n' \"\$container_sas_url\"" \
   "printf 'CONTAINER_SAS_URL=%s\\n' \"\$container_sas_url\" >>\"\$GITHUB_ENV\"" \
   'DEBUG_RETAIN_FAILED_VM_INPUT: ${{ inputs.debug_retain_failed_vm }}' \
   'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
@@ -404,5 +429,9 @@ assert_file_contains \
   "output storageAccountName string = storage.name" \
   "output containerName string = container.name" \
   "output blobEndpoint string = storage.properties.primaryEndpoints.blob"
+
+assert_file_contains \
+  "${REPO_ROOT}/scripts/lexonarchivebuilder-hosted-workflow-common.sh" \
+  "HOSTED_EXPERIMENT_CAPTURE_WORKLOAD_LOG=\${capture_workload_log}"
 
 printf 'Hosted workflow preflight validation passed\n'

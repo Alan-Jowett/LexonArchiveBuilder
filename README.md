@@ -125,7 +125,8 @@ cargo run -p lexonarchivebuilder-indexer -- run --request examples\local\request
 
 The sample request assumes the embedding endpoint is available at
 `http://stapi:8080`. For manual testing against an already-running STAPI
-container, update the request file's `base_url` to match that endpoint.
+container, update the request file's `base_url` to match that endpoint. Batch
+requests also need a stable `ref_name`; the sample uses `sample-local`.
 
 ### Running with Docker Compose
 

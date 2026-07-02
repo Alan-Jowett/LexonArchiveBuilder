@@ -86,12 +86,13 @@ PY
 
 publish_bootstrap_failure_artifacts() {
   local exit_code="$1"
+  local workload_status_present=false
 
   if workload_status_exists >/dev/null 2>&1; then
-    return 0
+    workload_status_present=true
+  else
+    write_bootstrap_status "$exit_code"
   fi
-
-  write_bootstrap_status "$exit_code"
 
   if [[ -f /var/log/cloud-init-output.log ]]; then
     cp /var/log/cloud-init-output.log "$BOOTSTRAP_CLOUD_INIT_LOG_PATH"
@@ -101,7 +102,9 @@ publish_bootstrap_failure_artifacts() {
     docker logs lexonarchivebuilder-experiment-stapi >"$BOOTSTRAP_STAPI_LOG_PATH" 2>&1 || printf 'warning: failed to capture stapi container logs\n' >&2
   fi
 
-  upload_blob_file "$BOOTSTRAP_STATUS_PATH" "${ARTIFACT_PREFIX}/bootstrap-status.json" || printf 'warning: failed to upload bootstrap-status.json\n' >&2
+  if [[ "$workload_status_present" != true ]]; then
+    upload_blob_file "$BOOTSTRAP_STATUS_PATH" "${ARTIFACT_PREFIX}/bootstrap-status.json" || printf 'warning: failed to upload bootstrap-status.json\n' >&2
+  fi
   upload_blob_file "$BOOTSTRAP_LOG_PATH" "${ARTIFACT_PREFIX}/bootstrap-wrapper.log" || printf 'warning: failed to upload bootstrap-wrapper.log\n' >&2
   if [[ -f "$BOOTSTRAP_CLOUD_INIT_LOG_PATH" ]]; then
     upload_blob_file "$BOOTSTRAP_CLOUD_INIT_LOG_PATH" "${ARTIFACT_PREFIX}/bootstrap-cloud-init-output.log" || printf 'warning: failed to upload bootstrap-cloud-init-output.log\n' >&2

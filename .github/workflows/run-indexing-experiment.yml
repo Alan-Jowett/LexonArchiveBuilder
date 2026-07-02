@@ -232,12 +232,25 @@ jobs:
         run: |
           set -euo pipefail
           sas_expiry="$(date -u -d '+1 day' '+%Y-%m-%dT%H:%M:%SZ')"
+          account_key="$(
+            az storage account keys list \
+              --resource-group '${{ steps.prepare.outputs.long_term_resource_group }}' \
+              --account-name '${{ steps.storage.outputs.storageAccountName }}' \
+              --query '[0].value' \
+              --output tsv
+          )"
+          if [[ -z "$account_key" ]]; then
+            printf 'Failed to retrieve storage account key for %s in resource group %s\n' \
+              '${{ steps.storage.outputs.storageAccountName }}' \
+              '${{ steps.prepare.outputs.long_term_resource_group }}' >&2
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$account_key"
           sas_token="$(
             az storage container generate-sas \
               --account-name '${{ steps.storage.outputs.storageAccountName }}' \
+              --account-key "$account_key" \
               --name '${{ steps.storage.outputs.containerName }}' \
-              --as-user \
-              --auth-mode login \
               --permissions racwl \
               --expiry "$sas_expiry" \
               --https-only \
