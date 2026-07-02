@@ -257,6 +257,7 @@ jobs:
           PROFILE_VERSION_INPUT: ${{ inputs.profile_version }}
           RUNNER_IMAGE_TAG_INPUT: ${{ inputs.runner_image_tag }}
           BLOCK_STORE_TARGET_INPUT: ${{ inputs.block_store_target }}
+          DEBUG_RETAIN_FAILED_VM_INPUT: ${{ inputs.debug_retain_failed_vm }}
           SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}
         run: |
           set -euo pipefail
