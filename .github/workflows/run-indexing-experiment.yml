@@ -40,6 +40,11 @@ name: Run indexing experiment
         options:
           - filesystem
           - overlay
+      debug_retain_failed_vm:
+        description: Keep failed VM allocated for break-glass investigation
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -394,7 +399,7 @@ jobs:
           fi
 
       - name: Delete batch resource group
-        if: always()
+        if: ${{ always() && !(failure() && inputs.debug_retain_failed_vm) }}
         shell: bash
         run: |
           set -euo pipefail
@@ -435,4 +440,5 @@ jobs:
             echo "| Public IP | \`${{ steps.deploy.outputs.vmPublicIpAddress }}\` |"
             echo "| Run name | \`${{ steps.prepare.outputs.run_name }}\` |"
             echo "| Artifact prefix | \`${{ steps.prepare.outputs.artifact_prefix }}\` |"
+            echo "| Debug retain failed batch RG | \`${{ inputs.debug_retain_failed_vm }}\` |"
           } >>"$GITHUB_STEP_SUMMARY"

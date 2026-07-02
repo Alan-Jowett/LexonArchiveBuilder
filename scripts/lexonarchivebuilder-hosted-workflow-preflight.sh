@@ -348,6 +348,7 @@ assert_workflow_contains \
   "$INDEXING_WORKFLOW" \
   'long_term_resource_group="lexon-exp-${manifest_hash}"' \
   'batch_resource_group="${long_term_resource_group}-batch-${batch_suffix}"' \
+  'debug_retain_failed_vm:' \
   'tags="$storage_tags_json"' \
   '"lexon-scope": "long-term"' \
   '- name: Generate workflow container SAS' \
@@ -360,12 +361,14 @@ assert_workflow_contains \
   "printf '%s' \"\$ssh_public_key\"" \
   '--container-sas-url "$CONTAINER_SAS_URL"' \
   '- name: Delete batch resource group' \
+  "if: \${{ always() && !(failure() && inputs.debug_retain_failed_vm) }}" \
   "batch_resource_group='\${{ steps.prepare.outputs.batch_resource_group }}'" \
   "if [[ -z \"\$batch_resource_group\" ]]; then" \
   "az group delete \\" \
   '--name "$batch_resource_group"' \
   'echo "| Long-term resource group | \`${{ steps.prepare.outputs.long_term_resource_group }}\` |"' \
-  'echo "| Batch resource group | \`${{ steps.prepare.outputs.batch_resource_group }}\` |"'
+  'echo "| Batch resource group | \`${{ steps.prepare.outputs.batch_resource_group }}\` |"' \
+  'echo "| Debug retain failed batch RG | \`${{ inputs.debug_retain_failed_vm }}\` |"'
 
 assert_file_contains \
   "$EXPERIMENT_MAIN_BICEP" \
