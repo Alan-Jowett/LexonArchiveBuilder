@@ -147,6 +147,23 @@ if missing:
 PY
 }
 
+assert_file_contains() {
+local file_path="$1"
+shift
+python3 - "$file_path" "$@" <<'PY'
+import pathlib
+import sys
+
+file_path = pathlib.Path(sys.argv[1])
+text = file_path.read_text(encoding="utf-8")
+missing = [snippet for snippet in sys.argv[2:] if snippet not in text]
+if missing:
+  raise SystemExit(
+      f"file contract check failed for {file_path}: missing snippets: {missing}"
+  )
+PY
+}
+
 render_final_workload_env() {
   local base_env_path="$1"
   local container_sas_url="$2"
@@ -172,6 +189,7 @@ EMBEDDING_WORKLOAD_SCRIPT="${REPO_ROOT}/scripts/lexonarchivebuilder-embedding-re
 INDEXING_WORKLOAD_SCRIPT="${REPO_ROOT}/scripts/lexonarchivebuilder-indexing-experiment.sh"
 EMBEDDING_WORKFLOW="${REPO_ROOT}/.github/workflows/run-embedding-refresh.yml"
 INDEXING_WORKFLOW="${REPO_ROOT}/.github/workflows/run-indexing-experiment.yml"
+EXPERIMENT_MAIN_BICEP="${REPO_ROOT}/infra/azure/experiments/main.bicep"
 
 TEMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEMP_ROOT"' EXIT
@@ -308,6 +326,7 @@ assert_workflow_contains \
   '"lexon-scope": "long-term"' \
   'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
   '--ssh-public-key "$SSH_PUBLIC_KEY_INPUT"' \
+  "printf '%s' \"\$ssh_public_key\"" \
   'CONTAINER_SAS_URL_INPUT: ${{ steps.storage.outputs.containerSasUrl }}' \
   'container_sas_url="$CONTAINER_SAS_URL_INPUT"' \
   '- name: Delete batch resource group' \
@@ -325,6 +344,7 @@ assert_workflow_contains \
   '"lexon-scope": "long-term"' \
   'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
   '--ssh-public-key "$SSH_PUBLIC_KEY_INPUT"' \
+  "printf '%s' \"\$ssh_public_key\"" \
   'CONTAINER_SAS_URL_INPUT: ${{ steps.storage.outputs.containerSasUrl }}' \
   'container_sas_url="$CONTAINER_SAS_URL_INPUT"' \
   '- name: Delete batch resource group' \
@@ -332,5 +352,10 @@ assert_workflow_contains \
   "--name '\${{ steps.prepare.outputs.batch_resource_group }}'" \
   'echo "| Long-term resource group | \`${{ steps.prepare.outputs.long_term_resource_group }}\` |"' \
   'echo "| Batch resource group | \`${{ steps.prepare.outputs.batch_resource_group }}\` |"'
+
+assert_file_contains \
+  "$EXPERIMENT_MAIN_BICEP" \
+  "@secure()" \
+  "param containerSasUrl string"
 
 printf 'Hosted workflow preflight validation passed\n'

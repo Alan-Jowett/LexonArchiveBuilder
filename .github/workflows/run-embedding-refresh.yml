@@ -172,7 +172,7 @@ jobs:
             echo "enable_ssh_access=$enable_ssh_access"
             echo "ssh_prefixes_json=$ssh_prefixes_json"
             echo "ssh_public_key<<__EOF__"
-            printf '%s\n' "$ssh_public_key"
+            printf '%s' "$ssh_public_key"
             echo "__EOF__"
           } >>"$GITHUB_OUTPUT"
 

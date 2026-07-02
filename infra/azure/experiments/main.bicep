@@ -19,6 +19,7 @@ param storageAccountName string
 param containerName string
 
 @description('Container SAS URL for the reusable experiment storage container.')
+@secure()
 param containerSasUrl string
 
 @description('Name of the runner VM.')
