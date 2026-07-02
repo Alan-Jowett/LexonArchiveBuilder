@@ -44,7 +44,7 @@ def main() -> int:
     parser.add_argument("--vnet-name", required=True)
     parser.add_argument("--storage-account-name", required=True)
     parser.add_argument("--container-name", required=True)
-    parser.add_argument("--sas-expiry", required=True)
+    parser.add_argument("--container-sas-url", required=True)
     parser.add_argument("--vm-name", required=True)
     parser.add_argument("--ssh-public-key", required=True)
     parser.add_argument("--enable-public-ip", required=True, type=parse_bool)
@@ -66,7 +66,7 @@ def main() -> int:
             "vnetName": {"value": args.vnet_name},
             "storageAccountName": {"value": args.storage_account_name},
             "containerName": {"value": args.container_name},
-            "sasExpiry": {"value": args.sas_expiry},
+            "containerSasUrl": {"value": args.container_sas_url},
             "vmName": {"value": args.vm_name},
             "sshPublicKey": {"value": args.ssh_public_key},
             "enablePublicIp": {"value": args.enable_public_ip},
@@ -77,7 +77,8 @@ def main() -> int:
             "tags": {
                 "value": {
                     "lexon-workflow": args.workflow_name,
-                    "lexon-manifest": args.resource_group,
+                    "lexon-scope": "batch",
+                    "lexon-batch-resource-group": args.resource_group,
                     "github-run-id": args.github_run_id,
                     "github-run-attempt": args.github_run_attempt,
                 }

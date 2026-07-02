@@ -110,7 +110,8 @@ hosted_workflow_render_indexing_workload_env_file() {
   local dataset_replay_journal_prefix="$7"
   local artifact_prefix="$8"
   local block_store_target="$9"
-  local profile_version="${10}"
+  local debug_retain_failed_vm="${10}"
+  local profile_version="${11}"
 
   hosted_workflow_render_shell_env \
     "RUN_NAME=${run_name}" \
@@ -122,5 +123,6 @@ hosted_workflow_render_indexing_workload_env_file() {
     "DATASET_REPLAY_JOURNAL_PREFIX=${dataset_replay_journal_prefix}" \
     "ARTIFACT_PREFIX=${artifact_prefix}" \
     "BLOCK_STORE_TARGET=${block_store_target}" \
+    "DEBUG_RETAIN_ON_FAILURE=${debug_retain_failed_vm}" \
     "PROFILE_VERSION=${profile_version}"
 }

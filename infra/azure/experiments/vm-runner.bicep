@@ -32,6 +32,7 @@ param azureSubscriptionId string
 param azureResourceGroupName string
 
 @description('Container SAS URL used by the hosted workload.')
+@secure()
 param containerSasUrl string
 
 @description('Storage account name used by the hosted workload.')

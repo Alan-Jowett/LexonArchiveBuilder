@@ -18,11 +18,9 @@ param storageAccountName string
 @description('Name of the blob container.')
 param containerName string
 
-@description('Expiry timestamp for the container SAS token.')
-param sasExpiry string
-
-@description('Service SAS permissions for the experiment container.')
-param sasPermissions string = 'racwl'
+@description('Container SAS URL for the reusable experiment storage container.')
+@secure()
+param containerSasUrl string
 
 @description('Name of the runner VM.')
 param vmName string
@@ -64,17 +62,6 @@ module network 'network.bicep' = {
   }
 }
 
-module storage 'storage.bicep' = {
-  name: 'lab-experiment-storage-${deploymentSuffix}'
-  params: {
-    location: location
-    tags: tags
-    storageAccountName: storageAccountName
-    containerName: containerName
-    sasExpiry: sasExpiry
-    sasPermissions: sasPermissions
-  }
-}
 module runner 'vm-runner.bicep' = {
   name: 'lab-experiment-runner-${deploymentSuffix}'
   params: {
@@ -88,7 +75,7 @@ module runner 'vm-runner.bicep' = {
     enablePublicIp: enablePublicIp
     azureSubscriptionId: subscription().subscriptionId
     azureResourceGroupName: resourceGroup().name
-    containerSasUrl: storage.outputs.containerSasUrl
+    containerSasUrl: containerSasUrl
     storageAccountName: storageAccountName
     containerName: containerName
     workloadEnvironmentFile: workloadEnvironmentFile
@@ -96,8 +83,5 @@ module runner 'vm-runner.bicep' = {
   }
 }
 
-output storageAccountName string = storage.outputs.storageAccountName
-output containerName string = storage.outputs.containerName
-output blobEndpoint string = storage.outputs.blobEndpoint
 output vmName string = vmName
 output vmPublicIpAddress string = runner.outputs.publicIpAddress

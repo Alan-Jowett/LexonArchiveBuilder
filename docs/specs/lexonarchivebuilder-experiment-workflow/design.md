@@ -284,16 +284,40 @@ needed for one VM-hosted run plus artifact persistence and inspection.
 
 The common execution shape is:
 
-1. one VM that runs the selected workflow's container workload
-2. one Blob container reachable through an approved SAS-backed access path
-3. surfaced deployment identifiers including resource-group and storage-account
-   names for manual inspection
+1. one predictable long-term storage resource group that owns the durable
+   workflow storage account and Blob container surface
+2. one per-run batch resource group that owns the VM-hosted execution
+   environment and other reclaimable run-local infrastructure
+3. one Blob container reachable through an approved SAS-backed access path
+4. surfaced deployment identifiers including long-term resource-group, batch
+   resource-group, and storage-account names for manual inspection
 
 The first design baseline leaves the exact Bicep module factoring open but
 constrains the hosted workflow to remain a minimal experiment-orchestration
 surface rather than a production-serving deployment expansion.
 
 **Traces to:** RQ-EXP-012, RQ-EXP-017, RQ-EXP-021
+
+### DSG-EXP-010B `Stable long-term naming with related batch suffixing`
+
+The Azure naming contract distinguishes durable dataset identity from per-run
+execution identity.
+
+Within that contract:
+
+1. the long-term storage resource group and workflow storage account are derived
+   from a predictable repository-owned naming rule
+2. repeated runs against the same reusable dataset contract resolve to that same
+   long-term storage scope
+3. each batch resource group reuses the same naming family but appends a
+   uniqueness suffix so operators can relate it to the long-term scope while
+   avoiding run-to-run collisions
+
+The design baseline intentionally leaves the exact stable key and suffix recipe
+open so long as the resulting names preserve operator recognizability and
+support deterministic durable-state targeting plus distinct reclaimable runs.
+
+**Traces to:** RQ-EXP-012A, RQ-EXP-012B
 
 ### DSG-EXP-010A `Hosted overlay-target execution wiring`
 
@@ -383,13 +407,16 @@ immediate break-glass Azure inspection for early failures.
 Each hosted workflow concludes by surfacing:
 
 1. pass/fail outcome
-2. resource-group name
-3. storage-account name
+2. long-term storage resource-group name
+3. batch resource-group name
+4. storage-account name
 
-and by always attempting VM deallocation regardless of success or failure.
+and by reclaiming the batch execution environment in the normal path regardless
+of success or failure.
 
-Resource-group deletion is intentionally excluded from the workflow contract so
-operators can inspect Azure state manually after failures or surprising runs.
+The normal reclaim action is deletion of the batch resource group, which
+reclaims the VM together with the other per-run infrastructure while preserving
+the long-term storage resource group that owns the durable Blob-backed state.
 
 This design combines guest-side success-path shutdown with workflow-side cleanup
 fallback instead of trusting only one cleanup mechanism.
@@ -402,24 +429,25 @@ Failure-path cleanup remains subordinate to diagnostic publication.
 
 The design requires the embedding-refresh bootstrap/wrapper path to attempt
 diagnostic capture and Blob publication before the workflow's default
-deallocation behavior removes the easiest source of failure evidence.
+batch-cleanup behavior removes the easiest source of failure evidence.
 
 This is a best-effort ordering guarantee, not a promise that every possible
-guest failure can always produce every diagnostic file.
+guest failure can always produce every diagnostic file before batch-resource-group
+reclamation occurs.
 
 **Traces to:** RQ-EXP-015A, RQ-EXP-016A, RQ-EXP-018
 
 ### DSG-EXP-012B `Opt-in debug retention`
 
-The hosted workflow family preserves automatic VM deallocation as the normal
-success and failure contract, but exposes an explicit debug-retention mode for
-manual investigation of failed runs.
+The hosted workflow family preserves automatic batch-resource-group deletion as
+the normal success and failure contract, but exposes an explicit
+debug-retention mode for manual investigation of failed runs.
 
 Within that mode:
 
 1. retention is caller-selected rather than automatic
-2. retention affects VM deallocation timing only for failures
-3. resource-group preservation remains unchanged
+2. retention affects batch-resource-group deletion timing only for failures
+3. the long-term storage resource group remains preserved in all cases
 
 This keeps cost and cleanup expectations stable for normal runs while giving
 operators an approved path for deeper investigation when automated diagnostics
