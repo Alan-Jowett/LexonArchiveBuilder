@@ -36,7 +36,7 @@ name: Run embedding refresh
           - filesystem
           - overlay
       debug_retain_failed_vm:
-        description: Keep failed VM allocated for break-glass investigation
+        description: Retain the failed batch resource group and keep the VM allocated for break-glass investigation
         required: true
         default: false
         type: boolean

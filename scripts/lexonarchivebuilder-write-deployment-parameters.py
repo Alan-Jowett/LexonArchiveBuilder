@@ -77,7 +77,8 @@ def main() -> int:
             "tags": {
                 "value": {
                     "lexon-workflow": args.workflow_name,
-                    "lexon-manifest": args.resource_group,
+                    "lexon-scope": "batch",
+                    "lexon-batch-resource-group": args.resource_group,
                     "github-run-id": args.github_run_id,
                     "github-run-attempt": args.github_run_attempt,
                 }

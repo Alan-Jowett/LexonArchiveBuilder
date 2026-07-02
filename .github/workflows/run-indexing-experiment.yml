@@ -41,7 +41,7 @@ name: Run indexing experiment
           - filesystem
           - overlay
       debug_retain_failed_vm:
-        description: Keep failed VM allocated for break-glass investigation
+        description: Retain the failed batch resource group and keep the VM allocated for break-glass investigation
         required: true
         default: false
         type: boolean
@@ -93,6 +93,7 @@ jobs:
           SSH_PUBLIC_KEY_INPUT: ${{ inputs.ssh_public_key }}
           SSH_SOURCE_PREFIXES_INPUT: ${{ inputs.ssh_source_prefixes }}
           BLOCK_STORE_TARGET_INPUT: ${{ inputs.block_store_target }}
+          DEBUG_RETAIN_FAILED_VM_INPUT: ${{ inputs.debug_retain_failed_vm }}
         run: |
           set -euo pipefail
           source scripts/lexonarchivebuilder-hosted-workflow-common.sh
@@ -274,7 +275,8 @@ jobs:
               'datasets/block-store.replay-journal' \
               '${{ steps.prepare.outputs.artifact_prefix }}' \
               "$BLOCK_STORE_TARGET_INPUT" \
-              "$PROFILE_VERSION_INPUT"
+             "$DEBUG_RETAIN_FAILED_VM_INPUT" \
+             "$PROFILE_VERSION_INPUT"
           )"
           python3 scripts/lexonarchivebuilder-write-deployment-parameters.py \
             --workflow-name indexing-experiment \

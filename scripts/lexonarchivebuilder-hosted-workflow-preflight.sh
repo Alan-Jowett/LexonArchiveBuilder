@@ -76,7 +76,8 @@ assert_env_roundtrip() {
   local expected_block_store_target="$7"
   local expected_workload_script="$8"
   local expected_common_script="$9"
-  local expected_profile_version="${10:-}"
+  local expected_debug_retain_on_failure="${10:-}"
+  local expected_profile_version="${11:-}"
 
   local decoded_common_script="${env_path}.decoded-common.sh"
   local decoded_workload_script="${env_path}.decoded-workload.sh"
@@ -89,6 +90,9 @@ assert_env_roundtrip() {
     [[ "$CONTAINER_NAME" == "$expected_container_name" ]] || { printf 'error: CONTAINER_NAME roundtrip failed\n' >&2; exit 1; }
     [[ "$ARTIFACT_PREFIX" == "$expected_artifact_prefix" ]] || { printf 'error: ARTIFACT_PREFIX roundtrip failed\n' >&2; exit 1; }
     [[ "$BLOCK_STORE_TARGET" == "$expected_block_store_target" ]] || { printf 'error: BLOCK_STORE_TARGET roundtrip failed\n' >&2; exit 1; }
+    if [[ -n "$expected_debug_retain_on_failure" ]]; then
+      [[ "${DEBUG_RETAIN_ON_FAILURE:-}" == "$expected_debug_retain_on_failure" ]] || { printf 'error: DEBUG_RETAIN_ON_FAILURE roundtrip failed\n' >&2; exit 1; }
+    fi
     if [[ -n "$expected_profile_version" ]]; then
       [[ "$PROFILE_VERSION" == "$expected_profile_version" ]] || { printf 'error: PROFILE_VERSION roundtrip failed\n' >&2; exit 1; }
     fi
@@ -107,8 +111,9 @@ assert_generated_parameters() {
   local expected_workload_env_file="$3"
   local expected_workload_script_path="$4"
   local expected_container_sas_url="$5"
+  local expected_batch_resource_group="$6"
 
-  python3 - "$parameters_path" "$expected_workflow_name" "$expected_workload_env_file" "$expected_workload_script_path" "$expected_container_sas_url" <<'PY'
+  python3 - "$parameters_path" "$expected_workflow_name" "$expected_workload_env_file" "$expected_workload_script_path" "$expected_container_sas_url" "$expected_batch_resource_group" <<'PY'
 import json
 import pathlib
 import sys
@@ -119,11 +124,16 @@ import sys
     expected_workload_env_file,
     expected_workload_script_path,
     expected_container_sas_url,
-) = sys.argv[1:6]
+    expected_batch_resource_group,
+) = sys.argv[1:7]
 payload = json.loads(pathlib.Path(parameters_path).read_text(encoding="utf-8"))
 params = payload["parameters"]
+tags = params["tags"]["value"]
 
-assert params["tags"]["value"]["lexon-workflow"] == expected_workflow_name
+assert tags["lexon-workflow"] == expected_workflow_name
+assert tags["lexon-scope"] == "batch"
+assert tags["lexon-batch-resource-group"] == expected_batch_resource_group
+assert "lexon-manifest" not in tags
 assert params["workloadEnvironmentFile"]["value"] == expected_workload_env_file
 assert params["workloadScript"]["value"] == pathlib.Path(expected_workload_script_path).read_text(encoding="utf-8")
 assert params["containerSasUrl"]["value"] == expected_container_sas_url
@@ -242,7 +252,8 @@ assert_env_roundtrip \
   "$artifact_prefix_embedding" \
   "overlay" \
   "$EMBEDDING_WORKLOAD_SCRIPT" \
-  "$HOSTED_EXPERIMENT_COMMON_SCRIPT"
+  "$HOSTED_EXPERIMENT_COMMON_SCRIPT" \
+  "false"
 
 python3 "${REPO_ROOT}/scripts/lexonarchivebuilder-write-deployment-parameters.py" \
   --workflow-name embedding-refresh \
@@ -266,7 +277,8 @@ assert_generated_parameters \
   embedding-refresh \
   "$embedding_env_file" \
   "$EMBEDDING_BOOTSTRAP_SCRIPT" \
-  "$container_sas_url"
+  "$container_sas_url" \
+  lexon-exp-preflight-batch-20260701-123456
 
 indexing_env_file="$(
   hosted_workflow_render_indexing_workload_env_file \
@@ -279,6 +291,7 @@ indexing_env_file="$(
     "$dataset_replay_journal_prefix" \
     "$artifact_prefix_indexing" \
     "filesystem" \
+    "false" \
     "0.6.0"
 )"
 printf '%s\n' "$indexing_env_file" > "${TEMP_ROOT}/indexing.env"
@@ -294,6 +307,7 @@ assert_env_roundtrip \
   "filesystem" \
   "$INDEXING_WORKLOAD_SCRIPT" \
   "$HOSTED_EXPERIMENT_COMMON_SCRIPT" \
+  "false" \
   "0.6.0"
 
 python3 "${REPO_ROOT}/scripts/lexonarchivebuilder-write-deployment-parameters.py" \
@@ -318,7 +332,8 @@ assert_generated_parameters \
   indexing-experiment \
   "$indexing_env_file" \
   "$INDEXING_BOOTSTRAP_SCRIPT" \
-  "$container_sas_url"
+  "$container_sas_url" \
+  lexon-exp-preflight-batch-20260701-123457
 
 assert_workflow_contains \
   "$EMBEDDING_WORKFLOW" \
@@ -331,10 +346,12 @@ assert_workflow_contains \
   "--as-user \\" \
   "--auth-mode login \\" \
   "printf 'CONTAINER_SAS_URL=%s\\n' \"\$container_sas_url\" >>\"\$GITHUB_ENV\"" \
+  'DEBUG_RETAIN_FAILED_VM_INPUT: ${{ inputs.debug_retain_failed_vm }}' \
   'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
   '--ssh-public-key "$SSH_PUBLIC_KEY_INPUT"' \
   "printf '%s' \"\$ssh_public_key\"" \
   '--container-sas-url "$CONTAINER_SAS_URL"' \
+  '"$DEBUG_RETAIN_FAILED_VM_INPUT"' \
   '- name: Delete batch resource group' \
   "if: \${{ always() && !(failure() && inputs.debug_retain_failed_vm) }}" \
   "batch_resource_group='\${{ steps.prepare.outputs.batch_resource_group }}'" \
@@ -356,10 +373,12 @@ assert_workflow_contains \
   "--as-user \\" \
   "--auth-mode login \\" \
   "printf 'CONTAINER_SAS_URL=%s\\n' \"\$container_sas_url\" >>\"\$GITHUB_ENV\"" \
+  'DEBUG_RETAIN_FAILED_VM_INPUT: ${{ inputs.debug_retain_failed_vm }}' \
   'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
   '--ssh-public-key "$SSH_PUBLIC_KEY_INPUT"' \
   "printf '%s' \"\$ssh_public_key\"" \
   '--container-sas-url "$CONTAINER_SAS_URL"' \
+  '"$DEBUG_RETAIN_FAILED_VM_INPUT"' \
   '- name: Delete batch resource group' \
   "if: \${{ always() && !(failure() && inputs.debug_retain_failed_vm) }}" \
   "batch_resource_group='\${{ steps.prepare.outputs.batch_resource_group }}'" \
