@@ -190,12 +190,24 @@ jobs:
         run: |
           set -euo pipefail
           sas_expiry="$(date -u -d '+1 day' '+%Y-%m-%dT%H:%M:%SZ')"
+          storage_tags_json="$(python3 - "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" <<'PY'
+          import json
+          import sys
+          print(json.dumps({
+              "lexon-workflow": "indexing-experiment",
+              "lexon-scope": "long-term",
+              "github-run-id": sys.argv[1],
+              "github-run-attempt": sys.argv[2],
+          }))
+          PY
+          )"
           outputs_json="$(
             az deployment group create \
               --resource-group '${{ steps.prepare.outputs.long_term_resource_group }}' \
               --template-file infra/azure/experiments/storage.bicep \
               --parameters \
                 location="$AZURE_LOCATION" \
+                tags="$storage_tags_json" \
                 storageAccountName='${{ steps.prepare.outputs.storage_account_name }}' \
                 containerName='${{ steps.prepare.outputs.container_name }}' \
                 sasExpiry="$sas_expiry" \
@@ -261,9 +273,11 @@ jobs:
 
       - name: Expose workflow container SAS
         shell: bash
+        env:
+          CONTAINER_SAS_URL_INPUT: ${{ steps.storage.outputs.containerSasUrl }}
         run: |
           set -euo pipefail
-          container_sas_url='${{ steps.storage.outputs.containerSasUrl }}'
+          container_sas_url="$CONTAINER_SAS_URL_INPUT"
           printf '::add-mask::%s\n' "$container_sas_url"
           printf 'CONTAINER_SAS_URL=%s\n' "$container_sas_url" >>"$GITHUB_ENV"
 

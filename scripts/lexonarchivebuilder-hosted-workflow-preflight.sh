@@ -304,8 +304,12 @@ assert_workflow_contains \
   "$EMBEDDING_WORKFLOW" \
   'long_term_resource_group="lexon-exp-${manifest_hash}"' \
   'batch_resource_group="${long_term_resource_group}-batch-${batch_suffix}"' \
+  'tags="$storage_tags_json"' \
+  '"lexon-scope": "long-term"' \
   'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
   '--ssh-public-key "$SSH_PUBLIC_KEY_INPUT"' \
+  'CONTAINER_SAS_URL_INPUT: ${{ steps.storage.outputs.containerSasUrl }}' \
+  'container_sas_url="$CONTAINER_SAS_URL_INPUT"' \
   '- name: Delete batch resource group' \
   "if: \${{ always() && !(failure() && inputs.debug_retain_failed_vm) }}" \
   "az group delete \\" \
@@ -317,8 +321,12 @@ assert_workflow_contains \
   "$INDEXING_WORKFLOW" \
   'long_term_resource_group="lexon-exp-${manifest_hash}"' \
   'batch_resource_group="${long_term_resource_group}-batch-${batch_suffix}"' \
+  'tags="$storage_tags_json"' \
+  '"lexon-scope": "long-term"' \
   'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
   '--ssh-public-key "$SSH_PUBLIC_KEY_INPUT"' \
+  'CONTAINER_SAS_URL_INPUT: ${{ steps.storage.outputs.containerSasUrl }}' \
+  'container_sas_url="$CONTAINER_SAS_URL_INPUT"' \
   '- name: Delete batch resource group' \
   "az group delete \\" \
   "--name '\${{ steps.prepare.outputs.batch_resource_group }}'" \
