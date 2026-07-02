@@ -327,8 +327,9 @@ assert_workflow_contains \
   'tags="$storage_tags_json"' \
   '"lexon-scope": "long-term"' \
   '- name: Generate workflow container SAS' \
-  "az storage account keys list \\" \
   "az storage container generate-sas \\" \
+  "--as-user \\" \
+  "--auth-mode login \\" \
   "printf 'CONTAINER_SAS_URL=%s\\n' \"\$container_sas_url\" >>\"\$GITHUB_ENV\"" \
   'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
   '--ssh-public-key "$SSH_PUBLIC_KEY_INPUT"' \
@@ -350,8 +351,9 @@ assert_workflow_contains \
   'tags="$storage_tags_json"' \
   '"lexon-scope": "long-term"' \
   '- name: Generate workflow container SAS' \
-  "az storage account keys list \\" \
   "az storage container generate-sas \\" \
+  "--as-user \\" \
+  "--auth-mode login \\" \
   "printf 'CONTAINER_SAS_URL=%s\\n' \"\$container_sas_url\" >>\"\$GITHUB_ENV\"" \
   'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
   '--ssh-public-key "$SSH_PUBLIC_KEY_INPUT"' \

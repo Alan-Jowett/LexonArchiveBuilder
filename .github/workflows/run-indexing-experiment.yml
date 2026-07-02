@@ -228,25 +228,18 @@ jobs:
         run: |
           set -euo pipefail
           sas_expiry="$(date -u -d '+1 day' '+%Y-%m-%dT%H:%M:%SZ')"
-          account_key="$(
-            az storage account keys list \
-              --resource-group '${{ steps.prepare.outputs.long_term_resource_group }}' \
-              --account-name '${{ steps.storage.outputs.storageAccountName }}' \
-              --query '[0].value' \
-              --output tsv
-          )"
           sas_token="$(
             az storage container generate-sas \
               --account-name '${{ steps.storage.outputs.storageAccountName }}' \
               --name '${{ steps.storage.outputs.containerName }}' \
+              --as-user \
+              --auth-mode login \
               --permissions racwl \
               --expiry "$sas_expiry" \
               --https-only \
-              --account-key "$account_key" \
               --output tsv
           )"
           container_sas_url="${{ steps.storage.outputs.blobEndpoint }}${{ steps.storage.outputs.containerName }}?${sas_token}"
-          printf '::add-mask::%s\n' "$account_key"
           printf '::add-mask::%s\n' "$sas_token"
           printf '::add-mask::%s\n' "$container_sas_url"
           printf 'CONTAINER_SAS_URL=%s\n' "$container_sas_url" >>"$GITHUB_ENV"
