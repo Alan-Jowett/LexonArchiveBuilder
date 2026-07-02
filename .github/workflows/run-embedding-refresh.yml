@@ -40,6 +40,11 @@ name: Run embedding refresh
         required: true
         default: false
         type: boolean
+      capture_workload_log:
+        description: Capture and upload workload.log (may include mailbox names or source details)
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -234,6 +239,12 @@ jobs:
               --query '[0].value' \
               --output tsv
           )"
+          if [[ -z "$account_key" ]]; then
+            printf 'Failed to retrieve storage account key for %s in resource group %s\n' \
+              '${{ steps.storage.outputs.storageAccountName }}' \
+              '${{ steps.prepare.outputs.long_term_resource_group }}' >&2
+            exit 1
+          fi
           printf '::add-mask::%s\n' "$account_key"
           sas_token="$(
             az storage container generate-sas \
@@ -257,6 +268,7 @@ jobs:
           RUNNER_IMAGE_TAG_INPUT: ${{ inputs.runner_image_tag }}
           BLOCK_STORE_TARGET_INPUT: ${{ inputs.block_store_target }}
           DEBUG_RETAIN_FAILED_VM_INPUT: ${{ inputs.debug_retain_failed_vm }}
+          CAPTURE_WORKLOAD_LOG_INPUT: ${{ inputs.capture_workload_log }}
           SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}
         run: |
           set -euo pipefail
@@ -276,7 +288,8 @@ jobs:
               'datasets/block-store.replay-journal' \
               '${{ steps.prepare.outputs.artifact_prefix }}' \
               "$BLOCK_STORE_TARGET_INPUT" \
-              "$DEBUG_RETAIN_FAILED_VM_INPUT"
+              "$DEBUG_RETAIN_FAILED_VM_INPUT" \
+              "$CAPTURE_WORKLOAD_LOG_INPUT"
           )"
           python3 scripts/lexonarchivebuilder-write-deployment-parameters.py \
             --workflow-name embedding-refresh \
@@ -378,7 +391,9 @@ jobs:
 
           curl --fail --silent --show-error --location "$summary_url" --output embedding-refresh-artifact/summary.json || true
           curl --fail --silent --show-error --location "$manifest_url" --output embedding-refresh-artifact/manifest.json || true
-          curl --fail --silent --show-error --location "$workload_log_url" --output embedding-refresh-artifact/workload.log || true
+          if [[ '${{ inputs.capture_workload_log }}' == 'true' ]]; then
+            curl --fail --silent --show-error --location "$workload_log_url" --output embedding-refresh-artifact/workload.log || true
+          fi
           curl --fail --silent --show-error --location "$bootstrap_status_url" --output embedding-refresh-artifact/bootstrap-status.json || true
           curl --fail --silent --show-error --location "$bootstrap_log_url" --output embedding-refresh-artifact/bootstrap-wrapper.log || true
           curl --fail --silent --show-error --location "$bootstrap_cloud_init_url" --output embedding-refresh-artifact/bootstrap-cloud-init-output.log || true

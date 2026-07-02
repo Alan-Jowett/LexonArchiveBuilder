@@ -194,8 +194,9 @@ request_url = urlunsplit(
 try:
     with urllib.request.urlopen(request_url, timeout=30) as response:
         payload = response.read()
-except (TimeoutError, OSError, urllib.error.URLError, urllib.error.HTTPError):
-    raise SystemExit(1)
+except (TimeoutError, OSError, urllib.error.URLError, urllib.error.HTTPError) as exc:
+    print(f"error: failed to query blob path '{blob_path}': {exc}", file=sys.stderr)
+    raise SystemExit(2)
 
 root = ET.fromstring(payload)
 raise SystemExit(0 if root.find(".//Blob") is not None else 1)
@@ -209,8 +210,14 @@ download_blob_tree_if_present() {
   local blob_url
 
   mkdir -p "$destination"
-  if ! blob_path_exists "$container_sas_url" "$blob_path"; then
-    return 0
+  if blob_path_exists "$container_sas_url" "$blob_path"; then
+    :
+  else
+    local status=$?
+    if [[ $status -eq 1 ]]; then
+      return 0
+    fi
+    return "$status"
   fi
 
   blob_url="$(append_path_to_container_sas_url "$container_sas_url" "$blob_path")"

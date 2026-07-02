@@ -239,6 +239,12 @@ jobs:
               --query '[0].value' \
               --output tsv
           )"
+          if [[ -z "$account_key" ]]; then
+            printf 'Failed to retrieve storage account key for %s in resource group %s\n' \
+              '${{ steps.storage.outputs.storageAccountName }}' \
+              '${{ steps.prepare.outputs.long_term_resource_group }}' >&2
+            exit 1
+          fi
           printf '::add-mask::%s\n' "$account_key"
           sas_token="$(
             az storage container generate-sas \
