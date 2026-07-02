@@ -349,7 +349,7 @@ assert_workflow_contains \
   'DEBUG_RETAIN_FAILED_VM_INPUT: ${{ inputs.debug_retain_failed_vm }}' \
   'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
   '--ssh-public-key "$SSH_PUBLIC_KEY_INPUT"' \
-  "printf '%s' \"\$ssh_public_key\"" \
+  "printf 'ssh_public_key=%s\\n' \"\$ssh_public_key\"" \
   '--container-sas-url "$CONTAINER_SAS_URL"' \
   '"$DEBUG_RETAIN_FAILED_VM_INPUT"' \
   '- name: Delete batch resource group' \
@@ -376,7 +376,7 @@ assert_workflow_contains \
   'DEBUG_RETAIN_FAILED_VM_INPUT: ${{ inputs.debug_retain_failed_vm }}' \
   'SSH_PUBLIC_KEY_INPUT: ${{ steps.prepare.outputs.ssh_public_key }}' \
   '--ssh-public-key "$SSH_PUBLIC_KEY_INPUT"' \
-  "printf '%s' \"\$ssh_public_key\"" \
+  "printf 'ssh_public_key=%s\\n' \"\$ssh_public_key\"" \
   '--container-sas-url "$CONTAINER_SAS_URL"' \
   '"$DEBUG_RETAIN_FAILED_VM_INPUT"' \
   '- name: Delete batch resource group' \
