@@ -198,7 +198,12 @@ except (TimeoutError, OSError, urllib.error.URLError, urllib.error.HTTPError) as
     print(f"error: failed to query blob path '{blob_path}': {exc}", file=sys.stderr)
     raise SystemExit(2)
 
-root = ET.fromstring(payload)
+try:
+    root = ET.fromstring(payload)
+except ET.ParseError as exc:
+    print(f"error: failed to parse blob listing for '{blob_path}': {exc}", file=sys.stderr)
+    raise SystemExit(2)
+
 raise SystemExit(0 if root.find(".//Blob") is not None else 1)
 PY
 }
