@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
-use lexongraph_block_store_azure::AzureBlobBlockStore;
+use lexongraph_block_store_azure_sdk::AzureBlobBlockStore;
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_block_store_memory::MemoryBlockStore;
 use lexongraph_block_store_overlay::{OverlayBlockStore, OverlayStoreLayer, PassiveLayer};
