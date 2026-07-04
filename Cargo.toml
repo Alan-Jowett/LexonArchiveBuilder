@@ -32,7 +32,7 @@ tokio = { version = "1.52.3", features = ["io-std", "io-util", "macros", "rt-mul
 lexonarchivebuilder-indexer = { path = "crates/lexonarchivebuilder-indexer" }
 lexongraph-block = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "6ab84e54749709c28aa73ad36c5e228c92228858", package = "lexongraph-block" }
 lexongraph-block-store = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "6ab84e54749709c28aa73ad36c5e228c92228858", package = "lexongraph-block-store" }
-lexongraph-block-store-azure = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "6ab84e54749709c28aa73ad36c5e228c92228858", package = "lexongraph-block-store-azure" }
+lexongraph-block-store-azure-sdk = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "6ab84e54749709c28aa73ad36c5e228c92228858", package = "lexongraph-block-store-azure-sdk" }
 lexongraph-block-store-fs = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "6ab84e54749709c28aa73ad36c5e228c92228858", package = "lexongraph-block-store-fs" }
 lexongraph-block-store-memory = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "6ab84e54749709c28aa73ad36c5e228c92228858", package = "lexongraph-block-store-memory" }
 lexongraph-block-store-overlay = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "6ab84e54749709c28aa73ad36c5e228c92228858", package = "lexongraph-block-store-overlay" }
