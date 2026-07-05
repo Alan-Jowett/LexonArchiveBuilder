@@ -300,11 +300,13 @@ pub async fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner + Sync>(
         });
     }
 
-    fs::create_dir_all(snapshot_root).map_err(|source| {
-        SourceSnapshotAcquisitionError::CreateSnapshotRoot {
-            path: snapshot_root.display().to_string(),
-            source,
-        }
+    run_blocking_snapshot_io(|| {
+        fs::create_dir_all(snapshot_root).map_err(|source| {
+            SourceSnapshotAcquisitionError::CreateSnapshotRoot {
+                path: snapshot_root.display().to_string(),
+                source,
+            }
+        })
     })?;
 
     journal.set_stage(WorkflowStage::SourceAcquisition);
@@ -374,34 +376,39 @@ async fn collect_snapshot_entries<S: BlockStore>(
     let mut entries = Vec::new();
     let mut pending = vec![current.to_path_buf()];
     while let Some(path) = pending.pop() {
-        let file_type = fs::symlink_metadata(&path)
-            .map_err(
-                |source| SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
-                    path: path.display().to_string(),
-                    source,
-                },
-            )?
-            .file_type();
+        let file_type = run_blocking_snapshot_io(|| {
+            fs::symlink_metadata(&path)
+                .map_err(
+                    |source| SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
+                        path: path.display().to_string(),
+                        source,
+                    },
+                )
+                .map(|metadata| metadata.file_type())
+        })?;
         if file_type.is_symlink() {
             continue;
         }
         if file_type.is_dir() {
-            let directory_entries = fs::read_dir(&path).map_err(|source| {
-                SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
-                    path: path.display().to_string(),
-                    source,
-                }
-            })?;
-            let mut children = Vec::new();
-            for child in directory_entries {
-                let child = child.map_err(|source| {
+            let mut children = run_blocking_snapshot_io(|| {
+                let directory_entries = fs::read_dir(&path).map_err(|source| {
                     SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
                         path: path.display().to_string(),
                         source,
                     }
                 })?;
-                children.push(child.path());
-            }
+                let mut children = Vec::new();
+                for child in directory_entries {
+                    let child = child.map_err(|source| {
+                        SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
+                            path: path.display().to_string(),
+                            source,
+                        }
+                    })?;
+                    children.push(child.path());
+                }
+                Ok::<Vec<PathBuf>, SourceSnapshotAcquisitionError>(children)
+            })?;
             children.sort();
             for child in children.into_iter().rev() {
                 pending.push(child);
