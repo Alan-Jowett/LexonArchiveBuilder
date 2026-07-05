@@ -16,7 +16,7 @@ use lexongraph_streaming_indexer::ContentResolver;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::block_store::ConfiguredBlockStore;
+use crate::block_store::{ConfiguredBlockStore, block_on_block_store_future};
 use crate::mailbox::{
     CHUNK_MEDIA_TYPE, NORMALIZED_EMAIL_ARTIFACT_BLOCK_TYPE, NORMALIZED_EMAIL_SCHEMA_VERSION,
     chunk_email_core,
@@ -220,7 +220,7 @@ fn load_email_chunks(
     email_artifact_ref: &str,
 ) -> Result<Vec<String>, LocalFilesystemContentResolverError> {
     let block_id = parse_block_hash(email_artifact_ref)?;
-    let Some(decoded) = store.get_decoded(&block_id)? else {
+    let Some(decoded) = block_on_block_store_future(store.get_decoded(&block_id))? else {
         return Err(LocalFilesystemContentResolverError::MissingArtifact {
             block_id: email_artifact_ref.to_string(),
         });
@@ -409,6 +409,10 @@ mod tests {
 
     use super::*;
     use crate::block_store::ConfiguredBlockStore;
+
+    fn put_versioned_block(store: &ConfiguredBlockStore, block: &VersionedBlock) -> BlockHash {
+        crate::block_store::block_on_block_store_future(store.put_versioned(block)).unwrap()
+    }
 
     #[derive(Clone)]
     struct ResolverHarness {
@@ -621,9 +625,6 @@ mod tests {
             ]),
         )
         .unwrap();
-        store
-            .put_versioned(&VersionedBlock::V2(block))
-            .unwrap()
-            .to_string()
+        put_versioned_block(store, &VersionedBlock::V2(block)).to_string()
     }
 }

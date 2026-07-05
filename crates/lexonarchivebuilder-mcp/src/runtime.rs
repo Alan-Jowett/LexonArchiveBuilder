@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use lexonarchivebuilder_indexer::BatchSummary;
@@ -166,23 +167,41 @@ impl McpRuntime {
         &self,
         request: SearchChunksRequest,
     ) -> Result<SearchChunksResponse, RuntimeError> {
-        let top_k = request.top_k.unwrap_or(self.config.top_k);
+        Self::search_chunks_with_context(self.request_dir.clone(), self.config.clone(), request)
+            .await
+    }
+
+    pub(crate) fn search_chunks_blocking(
+        &self,
+        request: SearchChunksRequest,
+    ) -> Result<SearchChunksResponse, RuntimeError> {
+        let request_dir = self.request_dir.clone();
+        let config = self.config.clone();
+        Self::block_on_search_future(move || {
+            Self::search_chunks_with_context(request_dir, config, request)
+        })
+    }
+
+    async fn search_chunks_with_context(
+        request_dir: PathBuf,
+        config: McpConfig,
+        request: SearchChunksRequest,
+    ) -> Result<SearchChunksResponse, RuntimeError> {
+        let top_k = request.top_k.unwrap_or(config.top_k);
         if top_k == 0 {
             return Err(RuntimeError::InvalidTopK);
         }
-        let traversal_width = request
-            .traversal_width
-            .unwrap_or(self.config.traversal_width);
+        let traversal_width = request.traversal_width.unwrap_or(config.traversal_width);
         if traversal_width == 0 {
             return Err(RuntimeError::InvalidTraversalWidth);
         }
 
-        let root_id = self.resolve_root_id()?;
-        let embedding_spec: EmbeddingSpec = (&self.config.embedding_spec).into();
+        let root_id = resolve_root_id_async(&request_dir, &config).await?;
+        let embedding_spec: EmbeddingSpec = (&config.embedding_spec).into();
         let embedding_provider =
-            ConfiguredEmbeddingProvider::from_environment(&self.config.environment)?;
+            ConfiguredEmbeddingProvider::from_environment(&config.environment)?;
         let block_store =
-            ConfiguredBlockStore::from_environment(&self.request_dir, &self.config.environment)?;
+            ConfiguredBlockStore::from_environment(&request_dir, &config.environment)?;
         let target_embedding = embedding_provider
             .embed(
                 &EmbeddingInput {
@@ -193,6 +212,7 @@ impl McpRuntime {
             )
             .await?;
         let target = EncodedTargetEmbedding::new(target_embedding, embedding_spec);
+        let root_id_text = root_id.to_string();
         let searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
         let result = search_with_partial_retry(
             &searcher,
@@ -201,10 +221,11 @@ impl McpRuntime {
             traversal_width,
             top_k,
             &block_store,
-        )?;
+        )
+        .await?;
 
         Ok(SearchChunksResponse {
-            root_id: root_id.to_string(),
+            root_id: root_id_text,
             top_k,
             traversal_width,
             results: result
@@ -231,6 +252,40 @@ impl McpRuntime {
         unsupported_named_retrieval(NamedItemKind::Document, request.name)
     }
 
+    fn block_on_search_future<F, Fut, T>(make_future: F) -> T
+    where
+        F: FnOnce() -> Fut + Send,
+        Fut: Future<Output = T>,
+        T: Send,
+    {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            match handle.runtime_flavor() {
+                tokio::runtime::RuntimeFlavor::MultiThread => {
+                    tokio::task::block_in_place(|| handle.block_on(make_future()))
+                }
+                tokio::runtime::RuntimeFlavor::CurrentThread => std::thread::scope(|scope| {
+                    scope
+                        .spawn(|| {
+                            tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .expect("failed to build tokio runtime for MCP search bridge")
+                                .block_on(make_future())
+                        })
+                        .join()
+                        .expect("MCP search bridge thread panicked")
+                }),
+                _ => unreachable!("unsupported tokio runtime flavor"),
+            }
+        } else {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build tokio runtime for MCP search bridge")
+                .block_on(make_future())
+        }
+    }
+
     pub fn get_email(&self, request: NamedRetrievalRequest) -> NamedRetrievalResponse {
         unsupported_named_retrieval(NamedItemKind::Email, request.name)
     }
@@ -238,36 +293,41 @@ impl McpRuntime {
     pub fn get_thread(&self, request: NamedRetrievalRequest) -> NamedRetrievalResponse {
         unsupported_named_retrieval(NamedItemKind::Thread, request.name)
     }
+}
 
-    fn resolve_root_id(&self) -> Result<BlockHash, RuntimeError> {
-        let root_literal = if let Some(root_id) = self.config.root_id_literal() {
-            root_id.to_string()
-        } else {
-            let summary_path = self
-                .config
-                .resolve_summary_path(&self.request_dir)
-                .expect("summary path must exist when root_id literal is absent");
-            let bytes = fs::read(&summary_path).map_err(|source| RuntimeError::ReadSummary {
-                path: summary_path.display().to_string(),
-                source,
-            })?;
-            let summary: BatchSummary =
-                serde_json::from_slice(&bytes).map_err(|source| RuntimeError::ParseSummary {
+async fn resolve_root_id_async(
+    request_dir: &Path,
+    config: &McpConfig,
+) -> Result<BlockHash, RuntimeError> {
+    let root_literal = if let Some(root_id) = config.root_id_literal() {
+        root_id.to_string()
+    } else {
+        let summary_path = config
+            .resolve_summary_path(request_dir)
+            .expect("summary path must exist when root_id literal is absent");
+        let bytes =
+            tokio::fs::read(&summary_path)
+                .await
+                .map_err(|source| RuntimeError::ReadSummary {
                     path: summary_path.display().to_string(),
                     source,
                 })?;
-            if summary.root_id == INGESTION_ONLY_ROOT_ID_PLACEHOLDER {
-                return Err(RuntimeError::IngestionOnlySummary {
-                    path: summary_path.display().to_string(),
-                });
-            }
-            summary.root_id
-        };
+        let summary: BatchSummary =
+            serde_json::from_slice(&bytes).map_err(|source| RuntimeError::ParseSummary {
+                path: summary_path.display().to_string(),
+                source,
+            })?;
+        if summary.root_id == INGESTION_ONLY_ROOT_ID_PLACEHOLDER {
+            return Err(RuntimeError::IngestionOnlySummary {
+                path: summary_path.display().to_string(),
+            });
+        }
+        summary.root_id
+    };
 
-        parse_block_hash(&root_literal).map_err(|_| RuntimeError::InvalidRootId {
-            value: root_literal,
-        })
-    }
+    parse_block_hash(&root_literal).map_err(|_| RuntimeError::InvalidRootId {
+        value: root_literal,
+    })
 }
 
 fn unsupported_named_retrieval(kind: NamedItemKind, name: String) -> NamedRetrievalResponse {
@@ -301,7 +361,7 @@ mod tests {
     use super::*;
     use crate::config::IndexConfig;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn search_chunks_returns_indexed_chunk_content_from_local_profile() {
         let temp = tempdir().unwrap();
         let document_path = temp.path().join("overview.txt");
@@ -396,7 +456,7 @@ mod tests {
         server.join();
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn search_chunks_surfaces_email_chunk_provenance_metadata() {
         let temp = tempdir().unwrap();
         let mailbox_path = temp.path().join("2026-01.mbox");
@@ -626,7 +686,10 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            runtime.resolve_root_id(),
+            McpRuntime::block_on_search_future(|| resolve_root_id_async(
+                &runtime.request_dir,
+                &runtime.config
+            )),
             Err(RuntimeError::IngestionOnlySummary { .. })
         ));
     }

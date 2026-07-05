@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonArchiveBuilder contributors
 
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use lexongraph_block::BlockHash;
-use lexongraph_block_store::{BlockIdIterator, BlockStore, BlockStoreError};
+use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
 use lexongraph_block_store_azure_sdk::AzureBlobBlockStore;
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_block_store_memory::MemoryBlockStore;
@@ -69,26 +71,119 @@ impl ConfiguredBlockStore {
     }
 }
 
+pub(crate) fn block_on_block_store_future<F>(future: F) -> F::Output
+where
+    F: Future + Send,
+    F::Output: Send,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        match handle.runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| handle.block_on(future))
+            }
+            tokio::runtime::RuntimeFlavor::CurrentThread => std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("failed to build tokio runtime for block-store bridge")
+                            .block_on(future)
+                    })
+                    .join()
+                    .expect("block-store bridge thread panicked")
+            }),
+            _ => unreachable!("unsupported tokio runtime flavor"),
+        }
+    } else {
+        block_on_future(future)
+    }
+}
+
+pub(crate) fn block_on_future<F>(future: F) -> F::Output
+where
+    F: Future,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        match handle.runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| handle.block_on(future))
+            }
+            tokio::runtime::RuntimeFlavor::CurrentThread => {
+                panic!(
+                    "block_on_future cannot run inside a current-thread Tokio runtime; \
+                     use block_on_future_factory to construct the future inside a bridge thread"
+                )
+            }
+            _ => unreachable!("unsupported tokio runtime flavor"),
+        }
+    } else {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build tokio runtime for block-store bridge")
+            .block_on(future)
+    }
+}
+
+pub(crate) fn block_on_future_factory<F, Fut, T>(make_future: F) -> T
+where
+    F: FnOnce() -> Fut + Send,
+    Fut: Future<Output = T>,
+    T: Send,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        match handle.runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| handle.block_on(make_future()))
+            }
+            tokio::runtime::RuntimeFlavor::CurrentThread => std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("failed to build tokio runtime for future bridge")
+                            .block_on(make_future())
+                    })
+                    .join()
+                    .expect("future bridge thread panicked")
+            }),
+            _ => unreachable!("unsupported tokio runtime flavor"),
+        }
+    } else {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build tokio runtime for future bridge")
+            .block_on(make_future())
+    }
+}
+
+#[async_trait]
 impl BlockStore for ConfiguredBlockStore {
-    fn put_block_bytes(
+    async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
         match self {
-            Self::Local(store) => store.put_block_bytes(block_id, block_bytes),
-            Self::Overlay(store) => store.put_block_bytes(block_id, block_bytes),
+            Self::Local(store) => store.put_block_bytes(block_id, block_bytes).await,
+            Self::Overlay(store) => store.put_block_bytes(block_id, block_bytes).await,
         }
     }
 
-    fn get_block_bytes(&self, block_id: &BlockHash) -> Result<Option<Vec<u8>>, BlockStoreError> {
+    async fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
         match self {
-            Self::Local(store) => store.get_block_bytes(block_id),
-            Self::Overlay(store) => store.get_block_bytes(block_id),
+            Self::Local(store) => store.get_block_bytes(block_id).await,
+            Self::Overlay(store) => store.get_block_bytes(block_id).await,
         }
     }
 
-    fn iter_block_ids(&self) -> Result<BlockIdIterator<'_>, BlockStoreError> {
+    fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
         match self {
             Self::Local(store) => store.iter_block_ids(),
             Self::Overlay(store) => store.iter_block_ids(),
@@ -98,18 +193,23 @@ impl BlockStore for ConfiguredBlockStore {
 
 #[cfg(test)]
 mod tests {
+    use futures::TryStreamExt;
     use lexongraph_block::{Block, Content, EmbeddingSpec, LeafBlock, LeafEntry, VERSION_1};
     use tempfile::tempdir;
 
     use super::*;
     use crate::config::ProductionEmbeddingConfig;
 
+    fn put_block(store: &impl BlockStore, block: &Block) -> BlockHash {
+        block_on_block_store_future(store.put(block)).unwrap()
+    }
+
     #[test]
     fn local_filesystem_store_uses_upstream_layout() {
         let dir = tempdir().unwrap();
         let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
         let block = sample_block();
-        let block_id = store.put(&block).unwrap();
+        let block_id = put_block(&store, &block);
         let block_id_text = block_id.to_string();
         let expected_path = dir
             .path()
@@ -158,13 +258,12 @@ mod tests {
             FilesystemBlockStore::new(dir.path().join("blocks")).unwrap(),
         );
         let block = sample_block();
-        let block_id = store.put(&block).unwrap();
+        let block_id = put_block(&store, &block);
 
-        let block_ids = store
-            .iter_block_ids()
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
+        let block_ids = block_on_block_store_future(async {
+            store.iter_block_ids()?.try_collect::<Vec<_>>().await
+        })
+        .unwrap();
 
         assert_eq!(block_ids, vec![block_id]);
     }

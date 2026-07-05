@@ -13,6 +13,7 @@ use lexongraph_streaming_indexer::{IndexItem, Metadata};
 use mailparse::{MailHeaderMap, ParsedMail, parse_mail};
 use thiserror::Error;
 
+use crate::block_store::block_on_block_store_future;
 use crate::config::{BatchItemConfig, BatchRequest, metadata_to_lexongraph};
 use crate::paths::resolve_path;
 use crate::resolver::ContentRef;
@@ -459,12 +460,12 @@ fn store_artifact_block(
         source,
     })?;
 
-    store
-        .put_versioned(&VersionedBlock::V2(block))
-        .map_err(|source| MailboxExpansionError::StoreArtifact {
+    block_on_block_store_future(store.put_versioned(&VersionedBlock::V2(block))).map_err(|source| {
+        MailboxExpansionError::StoreArtifact {
             path: path.to_path_buf(),
             source,
-        })
+        }
+    })
 }
 
 fn artifact_block_type(

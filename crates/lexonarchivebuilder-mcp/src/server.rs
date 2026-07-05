@@ -43,8 +43,7 @@ impl LexonArchiveBuilderMcpServer {
         params: Parameters<SearchChunksRequest>,
     ) -> Result<Json<SearchChunksResponse>, String> {
         self.runtime
-            .search_chunks(params.0)
-            .await
+            .search_chunks_blocking(params.0)
             .map(Json)
             .map_err(|error| error.to_string())
     }
