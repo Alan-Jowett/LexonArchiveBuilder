@@ -40,7 +40,7 @@ pub fn parse_block_hash(value: &str) -> Result<BlockHash, ParseBlockHashError> {
     Ok(BlockHash::from_bytes(bytes))
 }
 
-pub fn search_with_partial_retry(
+pub async fn search_with_partial_retry(
     searcher: &Searcher<DefaultEmbeddingCompatibility, DefaultCandidateScorer>,
     root_id: &BlockHash,
     target: &EncodedTargetEmbedding,
@@ -48,12 +48,17 @@ pub fn search_with_partial_retry(
     top_k: usize,
     store: &dyn BlockStore,
 ) -> Result<SearchResult, SearchError> {
-    match searcher.search(root_id, target, traversal_width, top_k, store) {
+    match searcher
+        .search(root_id, target, traversal_width, top_k, store)
+        .await
+    {
         Ok(result) => Ok(result),
         Err(SearchError::Exhausted {
             reachable_leaves, ..
         }) if reachable_leaves > 0 => {
-            searcher.search(root_id, target, traversal_width, reachable_leaves, store)
+            searcher
+                .search(root_id, target, traversal_width, reachable_leaves, store)
+                .await
         }
         Err(error) => Err(error),
     }

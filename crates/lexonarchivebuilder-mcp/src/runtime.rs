@@ -194,14 +194,16 @@ impl McpRuntime {
             .await?;
         let target = EncodedTargetEmbedding::new(target_embedding, embedding_spec);
         let searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
-        let result = search_with_partial_retry(
-            &searcher,
-            &root_id,
-            &target,
-            traversal_width,
-            top_k,
-            &block_store,
-        )?;
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(search_with_partial_retry(
+                &searcher,
+                &root_id,
+                &target,
+                traversal_width,
+                top_k,
+                &block_store,
+            ))
+        })?;
 
         Ok(SearchChunksResponse {
             root_id: root_id.to_string(),
@@ -301,7 +303,7 @@ mod tests {
     use super::*;
     use crate::config::IndexConfig;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn search_chunks_returns_indexed_chunk_content_from_local_profile() {
         let temp = tempdir().unwrap();
         let document_path = temp.path().join("overview.txt");
@@ -396,7 +398,7 @@ mod tests {
         server.join();
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn search_chunks_surfaces_email_chunk_provenance_metadata() {
         let temp = tempdir().unwrap();
         let mailbox_path = temp.path().join("2026-01.mbox");

@@ -9,6 +9,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
 ciborium.workspace = true
 clap.workspace = true
 half.workspace = true
@@ -31,6 +32,7 @@ thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+futures.workspace = true
 lexongraph-embeddings-trait = { workspace = true, features = ["conformance"] }
 lexongraph-streaming-indexer = { workspace = true, features = ["conformance"] }
 tempfile.workspace = true

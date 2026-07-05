@@ -19,6 +19,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::block_store::block_on_block_store_future;
 use crate::search::default_traversal_width as default_search_traversal_width;
 use crate::tree_tools::{
     decode_embedding_values, metadata_values_to_text_map, search_with_partial_retry,
@@ -325,7 +326,7 @@ pub fn assess_rooted_tree_with_config(
     if tnn_recall.traversal_width == 0 {
         return Err(TreeQualityError::InvalidTnnRecallTraversalWidth);
     }
-    let Some(root) = store.get(root_id)? else {
+    let Some(root) = block_on_block_store_future(store.get(root_id))? else {
         return Err(TreeQualityError::MissingRootBlock {
             root_id: root_id.to_string(),
         });
@@ -667,7 +668,7 @@ fn handle_child_entry(
         });
         return Ok(());
     }
-    let Some(validated_child) = store.get(&entry.child)? else {
+    let Some(validated_child) = block_on_block_store_future(store.get(&entry.child))? else {
         state.push_finding(TreeQualityFinding {
             severity: FindingSeverity::Error,
             kind: FindingKind::MissingChildBlock,
@@ -1071,14 +1072,14 @@ fn approximate_neighbors(
         )?,
         root_query_embedding_spec.clone(),
     );
-    let result = search_with_partial_retry(
+    let result = crate::block_store::block_on_future(search_with_partial_retry(
         searcher,
         root_id,
         &target,
         traversal_width,
         max_k.saturating_add(1),
         store,
-    )
+    ))
     .map_err(TreeQualityError::from_search_error)?;
     result
         .leaves
@@ -1692,36 +1693,41 @@ mod tests {
         Block, BranchBlock, Content, EbcpDescriptor, EbcpRotation, LeafBlock, LeafEntry, VERSION_1,
         ebcp_extension_map,
     };
+    use lexongraph_block_store::BlockStore;
     use lexongraph_block_store_fs::FilesystemBlockStore;
+
+    fn put_block(store: &impl BlockStore, block: &Block) -> BlockHash {
+        crate::block_store::block_on_block_store_future(store.put(block)).unwrap()
+    }
 
     #[test]
     fn assessment_reports_structural_findings_and_quality_statistics() {
         let dir = tempdir().unwrap();
         let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
 
-        let left_left = store.put(&leaf_block(0, &[1.0, 0.0])).unwrap();
-        let left_right = store.put(&leaf_block(0, &[-1.0, 0.0])).unwrap();
-        let right_left = store.put(&leaf_block(0, &[0.2, 0.0])).unwrap();
-        let right_right = store.put(&leaf_block(0, &[-0.2, 0.0])).unwrap();
+        let left_left = put_block(&store, &leaf_block(0, &[1.0, 0.0]));
+        let left_right = put_block(&store, &leaf_block(0, &[-1.0, 0.0]));
+        let right_left = put_block(&store, &leaf_block(0, &[0.2, 0.0]));
+        let right_right = put_block(&store, &leaf_block(0, &[-0.2, 0.0]));
 
-        let left_branch = store
-            .put(&branch_block(
-                1,
-                vec![([1.0, 0.0], left_left), ([-1.0, 0.0], left_right)],
-            ))
-            .unwrap();
-        let right_branch = store
-            .put(&branch_block(
+        let left_branch = put_block(
+            &store,
+            &branch_block(1, vec![([1.0, 0.0], left_left), ([-1.0, 0.0], left_right)]),
+        );
+        let right_branch = put_block(
+            &store,
+            &branch_block(
                 2,
                 vec![([0.2, 0.0], right_left), ([-0.2, 0.0], right_right)],
-            ))
-            .unwrap();
-        let root = store
-            .put(&branch_block(
+            ),
+        );
+        let root = put_block(
+            &store,
+            &branch_block(
                 2,
                 vec![([0.2, 0.0], left_branch), ([-0.2, 0.0], right_branch)],
-            ))
-            .unwrap();
+            ),
+        );
 
         let report = assess_rooted_tree(&root, &store).unwrap();
 
@@ -1760,14 +1766,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
 
-        let alpha = store.put(&named_leaf_block("alpha", &[1.0, 0.0])).unwrap();
-        let beta = store.put(&named_leaf_block("beta", &[0.0, 1.0])).unwrap();
-        let root = store
-            .put(&branch_block(
-                1,
-                vec![([1.0, 0.0], alpha), ([0.0, 1.0], beta)],
-            ))
-            .unwrap();
+        let alpha = put_block(&store, &named_leaf_block("alpha", &[1.0, 0.0]));
+        let beta = put_block(&store, &named_leaf_block("beta", &[0.0, 1.0]));
+        let root = put_block(
+            &store,
+            &branch_block(1, vec![([1.0, 0.0], alpha), ([0.0, 1.0], beta)]),
+        );
 
         let report = assess_rooted_tree_with_config(
             &root,
@@ -1801,14 +1805,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
 
-        let alpha = store.put(&named_leaf_block("alpha", &[1.0, 0.0])).unwrap();
-        let beta = store.put(&named_leaf_block("beta", &[0.0, 1.0])).unwrap();
-        let root = store
-            .put(&ebcp_branch_block(
-                1,
-                vec![([1.0, 0.0], alpha), ([0.0, 1.0], beta)],
-            ))
-            .unwrap();
+        let alpha = put_block(&store, &named_leaf_block("alpha", &[1.0, 0.0]));
+        let beta = put_block(&store, &named_leaf_block("beta", &[0.0, 1.0]));
+        let root = put_block(
+            &store,
+            &ebcp_branch_block(1, vec![([1.0, 0.0], alpha), ([0.0, 1.0], beta)]),
+        );
 
         let report = assess_rooted_tree_with_config(
             &root,
@@ -1834,18 +1836,15 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
 
-        let matching = store
-            .put(&named_leaf_block("matching", &[1.0, 0.0]))
-            .unwrap();
-        let mismatched = store
-            .put(&named_leaf_block_with_dims("mismatched", &[0.0, 1.0, 0.0]))
-            .unwrap();
-        let root = store
-            .put(&branch_block(
-                1,
-                vec![([1.0, 0.0], matching), ([0.0, 1.0], mismatched)],
-            ))
-            .unwrap();
+        let matching = put_block(&store, &named_leaf_block("matching", &[1.0, 0.0]));
+        let mismatched = put_block(
+            &store,
+            &named_leaf_block_with_dims("mismatched", &[0.0, 1.0, 0.0]),
+        );
+        let root = put_block(
+            &store,
+            &branch_block(1, vec![([1.0, 0.0], matching), ([0.0, 1.0], mismatched)]),
+        );
 
         let report = assess_rooted_tree_with_config(
             &root,
@@ -1881,15 +1880,16 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
 
-        let alpha = store.put(&named_leaf_block("alpha", &[1.0, 0.0])).unwrap();
-        let beta = store.put(&named_leaf_block("beta", &[0.0, 1.0])).unwrap();
-        let zero = store.put(&named_leaf_block("zero", &[0.0, 0.0])).unwrap();
-        let root = store
-            .put(&branch_block(
+        let alpha = put_block(&store, &named_leaf_block("alpha", &[1.0, 0.0]));
+        let beta = put_block(&store, &named_leaf_block("beta", &[0.0, 1.0]));
+        let zero = put_block(&store, &named_leaf_block("zero", &[0.0, 0.0]));
+        let root = put_block(
+            &store,
+            &branch_block(
                 1,
                 vec![([1.0, 0.0], alpha), ([0.0, 1.0], beta), ([0.0, 0.0], zero)],
-            ))
-            .unwrap();
+            ),
+        );
 
         let report = assess_rooted_tree_with_config(
             &root,
@@ -1919,7 +1919,7 @@ mod tests {
     fn assessment_rejects_zero_tnn_recall_traversal_width() {
         let dir = tempdir().unwrap();
         let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
-        let root = store.put(&leaf_block(0, &[1.0, 0.0])).unwrap();
+        let root = put_block(&store, &leaf_block(0, &[1.0, 0.0]));
 
         let error = assess_rooted_tree_with_config(
             &root,
@@ -1942,7 +1942,7 @@ mod tests {
     fn assessment_writes_json_artifact() {
         let dir = tempdir().unwrap();
         let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
-        let root = store.put(&leaf_block(0, &[1.0, 0.0])).unwrap();
+        let root = put_block(&store, &leaf_block(0, &[1.0, 0.0]));
 
         let report = assess_rooted_tree(&root, &store).unwrap();
         assert_eq!(report.corpus_tnn_recall.effective_sample_size, 0);
@@ -1969,8 +1969,9 @@ mod tests {
     fn assessment_reports_invalid_embedding_length() {
         let dir = tempdir().unwrap();
         let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
-        let root = store
-            .put(&Block::Leaf(LeafBlock {
+        let root = put_block(
+            &store,
+            &Block::Leaf(LeafBlock {
                 version: VERSION_1,
                 level: 0,
                 embedding_spec: EmbeddingSpec {
@@ -1986,8 +1987,8 @@ mod tests {
                     },
                 }],
                 ext: None,
-            }))
-            .unwrap();
+            }),
+        );
 
         let error = assess_rooted_tree(&root, &store).unwrap_err();
         assert!(matches!(

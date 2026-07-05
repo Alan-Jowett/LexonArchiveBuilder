@@ -93,7 +93,11 @@ where
         return Err(RootedSearchError::InvalidTraversalWidth);
     }
 
-    let Some(root) = store.get(root_id).map_err(RootedSearchError::BlockStore)? else {
+    let Some(root) = store
+        .get(root_id)
+        .await
+        .map_err(RootedSearchError::BlockStore)?
+    else {
         return Err(RootedSearchError::MissingRootBlock {
             root_id: root_id.to_string(),
         });
@@ -115,6 +119,7 @@ where
     let searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
     let result =
         search_with_partial_retry(&searcher, root_id, &target, traversal_width, top_k, store)
+            .await
             .map_err(RootedSearchError::Search)?;
 
     Ok(RootedSearchReport {
@@ -261,9 +266,11 @@ mod tests {
 
         let alpha = store
             .put(&leaf_block("alpha", &[1.0, 0.0], "alpha body"))
+            .await
             .unwrap();
         let beta = store
             .put(&leaf_block("beta", &[0.0, 1.0], "beta body"))
+            .await
             .unwrap();
         let root = store
             .put(&Block::Branch(BranchBlock {
@@ -285,6 +292,7 @@ mod tests {
                 ],
                 ext: None,
             }))
+            .await
             .unwrap();
 
         let report = search_rooted_tree(
@@ -325,9 +333,11 @@ mod tests {
 
         let alpha = store
             .put(&leaf_block("alpha", &[1.0, 0.0], "alpha body"))
+            .await
             .unwrap();
         let beta = store
             .put(&leaf_block("beta", &[0.0, 1.0], "beta body"))
+            .await
             .unwrap();
         let root = store
             .put(&Block::Branch(BranchBlock {
@@ -349,6 +359,7 @@ mod tests {
                 ],
                 ext: None,
             }))
+            .await
             .unwrap();
 
         let report = search_rooted_tree(

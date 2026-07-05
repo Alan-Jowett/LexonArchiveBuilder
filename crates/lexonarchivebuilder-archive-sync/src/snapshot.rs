@@ -237,7 +237,7 @@ pub struct AcquiredSourceSnapshot {
     pub reused_existing: bool,
 }
 
-pub fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner>(
+pub async fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner>(
     store: &S,
     journal: &mut WorkflowJournal,
     source_uri: &str,
@@ -267,7 +267,7 @@ pub fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner>(
             .corpus_manifest_identity
             .clone()
             .ok_or(SourceSnapshotAcquisitionError::MissingCompletedManifestIdentity)?;
-        let manifest = load_source_snapshot_manifest(store, &manifest_block_id)?;
+        let manifest = load_source_snapshot_manifest(store, &manifest_block_id).await?;
         if manifest.source_uri != source_uri {
             return Err(SourceSnapshotAcquisitionError::ManifestSourceUriMismatch {
                 block_id: manifest_block_id,
@@ -315,7 +315,7 @@ pub fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner>(
 
     runner.sync(source_uri, snapshot_root)?;
 
-    let entries = collect_snapshot_entries(store, snapshot_root, snapshot_root)?;
+    let entries = collect_snapshot_entries(store, snapshot_root, snapshot_root).await?;
     let source_snapshot_id = derive_source_snapshot_id(source_uri, &entries)
         .map_err(|source| SourceSnapshotAcquisitionError::SerializeManifest { source })?;
     let manifest = SourceSnapshotManifest {
@@ -329,6 +329,7 @@ pub fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner>(
         .map_err(|source| SourceSnapshotAcquisitionError::SerializeManifest { source })?;
     let manifest_block_id = store
         .put_versioned(&snapshot_block("application/json", manifest_bytes)?)
+        .await
         .map_err(|source| SourceSnapshotAcquisitionError::StoreManifest { source })?
         .to_string();
 
@@ -365,72 +366,77 @@ pub fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner>(
     })
 }
 
-fn collect_snapshot_entries<S: BlockStore>(
+async fn collect_snapshot_entries<S: BlockStore>(
     store: &S,
     snapshot_root: &Path,
     current: &Path,
 ) -> Result<Vec<SourceSnapshotManifestEntry>, SourceSnapshotAcquisitionError> {
     let mut entries = Vec::new();
-    let directory_entries = fs::read_dir(current).map_err(|source| {
-        SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
-            path: current.display().to_string(),
-            source,
-        }
-    })?;
-    let mut children = Vec::new();
-    for child in directory_entries {
-        let child =
-            child.map_err(
-                |source| SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
-                    path: current.display().to_string(),
-                    source,
-                },
-            )?;
-        children.push(child.path());
-    }
-    children.sort();
-
-    for child in children {
-        let file_type = fs::symlink_metadata(&child)
-            .map_err(
-                |source| SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
-                    path: child.display().to_string(),
-                    source,
-                },
-            )?
-            .file_type();
-        if file_type.is_symlink() {
-            continue;
-        }
-        if file_type.is_dir() {
-            entries.extend(collect_snapshot_entries(store, snapshot_root, &child)?);
-            continue;
-        }
-        if !file_type.is_file() {
-            continue;
-        }
-        let relative_path = normalize_relative_path(snapshot_root, &child)?;
-        let bytes = fs::read(&child).map_err(|source| {
-            SourceSnapshotAcquisitionError::ReadSnapshotFile {
-                path: child.display().to_string(),
+    let mut pending = vec![current.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let directory_entries = fs::read_dir(&directory).map_err(|source| {
+            SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
+                path: directory.display().to_string(),
                 source,
             }
         })?;
-        let byte_length = bytes.len() as u64;
-        let block_id = store
-            .put_versioned(&snapshot_block("application/octet-stream", bytes)?)
-            .map_err(
-                |source| SourceSnapshotAcquisitionError::StoreSnapshotPayload {
+        let mut children = Vec::new();
+        for child in directory_entries {
+            let child =
+                child.map_err(
+                    |source| SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
+                        path: directory.display().to_string(),
+                        source,
+                    },
+                )?;
+            children.push(child.path());
+        }
+        children.sort();
+        children.reverse();
+
+        for child in children {
+            let file_type = fs::symlink_metadata(&child)
+                .map_err(
+                    |source| SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
+                        path: child.display().to_string(),
+                        source,
+                    },
+                )?
+                .file_type();
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                pending.push(child);
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let relative_path = normalize_relative_path(snapshot_root, &child)?;
+            let bytes = fs::read(&child).map_err(|source| {
+                SourceSnapshotAcquisitionError::ReadSnapshotFile {
                     path: child.display().to_string(),
                     source,
-                },
-            )?
-            .to_string();
-        entries.push(SourceSnapshotManifestEntry {
-            relative_path,
-            block_id,
-            byte_length,
-        });
+                }
+            })?;
+            let byte_length = bytes.len() as u64;
+            let block_id = store
+                .put_versioned(&snapshot_block("application/octet-stream", bytes)?)
+                .await
+                .map_err(
+                    |source| SourceSnapshotAcquisitionError::StoreSnapshotPayload {
+                        path: child.display().to_string(),
+                        source,
+                    },
+                )?
+                .to_string();
+            entries.push(SourceSnapshotManifestEntry {
+                relative_path,
+                block_id,
+                byte_length,
+            });
+        }
     }
 
     Ok(entries)
@@ -454,13 +460,14 @@ fn derive_source_snapshot_id(
     Ok(hex_encode(&digest))
 }
 
-fn load_source_snapshot_manifest<S: BlockStore>(
+async fn load_source_snapshot_manifest<S: BlockStore>(
     store: &S,
     manifest_block_id: &str,
 ) -> Result<SourceSnapshotManifest, SourceSnapshotAcquisitionError> {
     let manifest_hash = parse_block_hash(manifest_block_id)?;
     let decoded = store
         .get_decoded(&manifest_hash)
+        .await
         .map_err(|source| SourceSnapshotAcquisitionError::LoadManifest {
             block_id: manifest_block_id.to_string(),
             source,
@@ -653,6 +660,7 @@ fn decode_hex_nibble(value: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::future::Future;
 
     use lexongraph_block_store_fs::FilesystemBlockStore;
     use tempfile::tempdir;
@@ -662,6 +670,14 @@ mod tests {
         EffectiveIndexingConfigurationState, GenerationState, SourceSnapshotState,
         WorkflowJournalInit,
     };
+
+    fn block_on<T>(future: impl Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(future)
+    }
 
     struct CopyTreeRsyncRunner {
         source_root: PathBuf,
@@ -715,14 +731,14 @@ mod tests {
         let runner = CopyTreeRsyncRunner::new(source_root.clone());
         let mut journal = sample_journal();
 
-        let snapshot = acquire_source_snapshot(
+        let snapshot = block_on(acquire_source_snapshot(
             &store,
             &mut journal,
             "rsync://example.invalid/mailman",
             &temp.path().join("mirror"),
             "2026-06-19T22:00:00Z",
             &runner,
-        )
+        ))
         .unwrap();
 
         assert!(!snapshot.reused_existing);
@@ -768,25 +784,25 @@ mod tests {
         let runner = CopyTreeRsyncRunner::new(source_root.clone());
 
         let mut first_journal = sample_journal();
-        let first = acquire_source_snapshot(
+        let first = block_on(acquire_source_snapshot(
             &store,
             &mut first_journal,
             "rsync://example.invalid/mailman",
             &temp.path().join("mirror-a"),
             "2026-06-19T22:00:00Z",
             &runner,
-        )
+        ))
         .unwrap();
 
         let mut second_journal = sample_journal();
-        let second = acquire_source_snapshot(
+        let second = block_on(acquire_source_snapshot(
             &store,
             &mut second_journal,
             "rsync://example.invalid/mailman",
             &temp.path().join("mirror-b"),
             "2026-06-19T22:15:00Z",
             &runner,
-        )
+        ))
         .unwrap();
 
         assert_eq!(first.source_snapshot_id, second.source_snapshot_id);
@@ -801,14 +817,14 @@ mod tests {
         let store = FilesystemBlockStore::new(temp.path().join("blocks")).unwrap();
         let runner = CopyTreeRsyncRunner::new(source_root.clone());
         let mut first_journal = sample_journal();
-        let first_snapshot = acquire_source_snapshot(
+        let first_snapshot = block_on(acquire_source_snapshot(
             &store,
             &mut first_journal,
             "rsync://example.invalid/mailman",
             &temp.path().join("mirror-a"),
             "2026-06-19T22:00:00Z",
             &runner,
-        )
+        ))
         .unwrap();
         let mut journal = sample_journal();
         journal.current_stage = WorkflowStage::MailboxAdmission;
@@ -817,14 +833,14 @@ mod tests {
         journal.source_snapshot.corpus_manifest_identity =
             Some(first_snapshot.manifest_block_id.clone());
 
-        let snapshot = acquire_source_snapshot(
+        let snapshot = block_on(acquire_source_snapshot(
             &store,
             &mut journal,
             "rsync://example.invalid/mailman",
             &temp.path().join("mirror"),
             "2026-06-19T22:15:00Z",
             &runner,
-        )
+        ))
         .unwrap();
 
         assert!(snapshot.reused_existing);
@@ -848,14 +864,14 @@ mod tests {
         let store = FilesystemBlockStore::new(temp.path().join("blocks")).unwrap();
         let runner = CopyTreeRsyncRunner::new(source_root.clone());
         let mut first_journal = sample_journal();
-        let first_snapshot = acquire_source_snapshot(
+        let first_snapshot = block_on(acquire_source_snapshot(
             &store,
             &mut first_journal,
             "rsync://example.invalid/mailman",
             &temp.path().join("mirror-a"),
             "2026-06-19T22:00:00Z",
             &runner,
-        )
+        ))
         .unwrap();
 
         let mut resumed_journal = sample_journal();
@@ -865,14 +881,14 @@ mod tests {
         resumed_journal.source_snapshot.corpus_manifest_identity =
             Some(first_snapshot.manifest_block_id.clone());
 
-        let snapshot = acquire_source_snapshot(
+        let snapshot = block_on(acquire_source_snapshot(
             &store,
             &mut resumed_journal,
             "rsync://example.invalid/mailman",
             &temp.path().join("mirror-b"),
             "2026-06-19T22:15:00Z",
             &runner,
-        )
+        ))
         .unwrap();
 
         assert!(snapshot.reused_existing);
@@ -907,14 +923,14 @@ mod tests {
         let store = FilesystemBlockStore::new(temp.path().join("blocks")).unwrap();
         let runner = CopyTreeRsyncRunner::new(source_root.clone());
         let mut first_journal = sample_journal();
-        let first_snapshot = acquire_source_snapshot(
+        let first_snapshot = block_on(acquire_source_snapshot(
             &store,
             &mut first_journal,
             "rsync://example.invalid/mailman",
             &temp.path().join("mirror-a"),
             "2026-06-19T22:00:00Z",
             &runner,
-        )
+        ))
         .unwrap();
 
         let mut resumed_journal = sample_journal();
@@ -930,14 +946,14 @@ mod tests {
             .completed
             .insert("mailbox:ietf/2026-01.mbox".into());
 
-        let snapshot = acquire_source_snapshot(
+        let snapshot = block_on(acquire_source_snapshot(
             &store,
             &mut resumed_journal,
             "rsync://example.invalid/mailman",
             &temp.path().join("mirror-b"),
             "2026-06-19T22:15:00Z",
             &runner,
-        )
+        ))
         .unwrap();
 
         assert!(snapshot.reused_existing);
@@ -966,14 +982,14 @@ mod tests {
         let mut journal = sample_journal();
         journal.source_snapshot.source_uri = "  rsync://example.invalid/mailman  ".into();
 
-        let snapshot = acquire_source_snapshot(
+        let snapshot = block_on(acquire_source_snapshot(
             &store,
             &mut journal,
             "rsync://example.invalid/mailman",
             &temp.path().join("mirror"),
             "2026-06-19T22:00:00Z",
             &runner,
-        )
+        ))
         .unwrap();
 
         assert!(!snapshot.reused_existing);
@@ -983,8 +999,8 @@ mod tests {
     fn completed_manifest_reuse_rejects_mismatched_manifest_source_uri() {
         let temp = tempdir().unwrap();
         let store = FilesystemBlockStore::new(temp.path().join("blocks")).unwrap();
-        let manifest_block_id = store
-            .put_versioned(
+        let manifest_block_id = block_on(
+            store.put_versioned(
                 &snapshot_block(
                     "application/json",
                     serde_json::to_vec(&SourceSnapshotManifest {
@@ -997,22 +1013,23 @@ mod tests {
                     .unwrap(),
                 )
                 .unwrap(),
-            )
-            .unwrap()
-            .to_string();
+            ),
+        )
+        .unwrap()
+        .to_string();
         let runner = CopyTreeRsyncRunner::new(temp.path().join("source"));
         let mut journal = sample_journal();
         journal.source_snapshot.acquisition_completed_at = Some("2026-06-19T22:00:00Z".into());
         journal.source_snapshot.corpus_manifest_identity = Some(manifest_block_id);
 
-        let error = acquire_source_snapshot(
+        let error = block_on(acquire_source_snapshot(
             &store,
             &mut journal,
             "rsync://example.invalid/mailman",
             &temp.path().join("mirror"),
             "2026-06-19T22:15:00Z",
             &runner,
-        )
+        ))
         .unwrap_err();
 
         assert!(matches!(
@@ -1036,14 +1053,14 @@ mod tests {
             .additional_provenance
             .insert("stale".into(), "value".into());
 
-        acquire_source_snapshot(
+        block_on(acquire_source_snapshot(
             &store,
             &mut journal,
             "rsync://example.invalid/mailman",
             &temp.path().join("mirror"),
             "2026-06-19T22:00:00Z",
             &runner,
-        )
+        ))
         .unwrap();
 
         assert!(
@@ -1066,14 +1083,14 @@ mod tests {
         let store = FilesystemBlockStore::new(temp.path().join("blocks")).unwrap();
         let mut journal = sample_journal();
 
-        let error = acquire_source_snapshot(
+        let error = block_on(acquire_source_snapshot(
             &store,
             &mut journal,
             "rsync://example.invalid/mailman",
             &temp.path().join("mirror"),
             "2026-06-19T22:00:00Z",
             &FailingRsyncRunner,
-        )
+        ))
         .unwrap_err();
 
         assert!(matches!(
@@ -1133,8 +1150,8 @@ mod tests {
     fn manifest_loader_rejects_unsupported_schema_versions() {
         let temp = tempdir().unwrap();
         let store = FilesystemBlockStore::new(temp.path().join("blocks")).unwrap();
-        let manifest_block_id = store
-            .put_versioned(
+        let manifest_block_id = block_on(
+            store.put_versioned(
                 &snapshot_block(
                     "application/json",
                     serde_json::to_vec(&SourceSnapshotManifest {
@@ -1147,11 +1164,13 @@ mod tests {
                     .unwrap(),
                 )
                 .unwrap(),
-            )
-            .unwrap()
-            .to_string();
+            ),
+        )
+        .unwrap()
+        .to_string();
 
-        let error = load_source_snapshot_manifest(&store, &manifest_block_id).unwrap_err();
+        let error =
+            block_on(load_source_snapshot_manifest(&store, &manifest_block_id)).unwrap_err();
 
         assert!(matches!(
             error,

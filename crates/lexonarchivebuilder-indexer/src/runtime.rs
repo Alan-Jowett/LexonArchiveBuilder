@@ -29,7 +29,7 @@ use thiserror::Error;
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 
-use crate::block_store::ConfiguredBlockStore;
+use crate::block_store::{ConfiguredBlockStore, block_on_block_store_future};
 #[cfg(test)]
 use crate::config::MUTABLE_REF_ROOT_DIR;
 use crate::config::{
@@ -2198,9 +2198,7 @@ fn store_replay_journal_block(
         });
     }
     let versioned = replay_journal_custom_block(body)?;
-    store
-        .put_versioned(&versioned)
-        .map_err(RuntimeError::BlockStore)
+    block_on_block_store_future(store.put_versioned(&versioned)).map_err(RuntimeError::BlockStore)
 }
 
 fn load_replay_journal_records(
@@ -2229,7 +2227,7 @@ fn load_replay_journal_records(
                 message: error.to_string(),
             }
         })?;
-        let Some(decoded) = store.get_decoded(&block_hash)? else {
+        let Some(decoded) = block_on_block_store_future(store.get_decoded(&block_hash))? else {
             return Err(RuntimeError::ReadReplayJournal {
                 block_id: current_block_id,
                 source: io::Error::new(ErrorKind::NotFound, "referenced journal block is missing"),
@@ -2446,7 +2444,7 @@ fn replay_journal_records_from_block_ids(
 ) -> Result<Vec<ReplayJournalRecord>, RuntimeError> {
     let mut records = Vec::new();
     for block_id in block_ids {
-        let Some(validated) = store.get(block_id)? else {
+        let Some(validated) = block_on_block_store_future(store.get(block_id))? else {
             return Err(RuntimeError::MissingIteratedBlock {
                 block_id: block_id.to_string(),
             });
@@ -2933,7 +2931,7 @@ fn load_replay_batches_from_journal(
                 });
             }
         };
-        let Some(validated) = store.get(&block_id)? else {
+        let Some(validated) = block_on_block_store_future(store.get(&block_id))? else {
             return Err(RuntimeError::ReadReplayJournal {
                 block_id: block_id.to_string(),
                 source: io::Error::new(
@@ -3358,7 +3356,7 @@ fn persist_staged_blocks(
                 source,
             }
         })?;
-        let persisted = store.put(&validated.block)?;
+        let persisted = block_on_block_store_future(store.put(&validated.block))?;
         if persisted != block.hash {
             return Err(RuntimeError::StagedBlockHashMismatch {
                 expected: block.hash.to_string(),
@@ -3451,6 +3449,17 @@ mod tests {
     };
 
     use super::*;
+
+    fn put_block(store: &ConfiguredBlockStore, block: &Block) -> BlockHash {
+        crate::block_store::block_on_block_store_future(store.put(block)).unwrap()
+    }
+
+    fn get_block(
+        store: &ConfiguredBlockStore,
+        block_id: &BlockHash,
+    ) -> Option<lexongraph_block::ValidatedBlock> {
+        crate::block_store::block_on_block_store_future(store.get(block_id)).unwrap()
+    }
 
     #[allow(clippy::too_many_arguments)]
     fn test_streaming_status(
@@ -3953,8 +3962,8 @@ mod tests {
                 None,
             )
             .unwrap();
-            let block_id = store.put(&Block::Leaf(block)).unwrap();
-            let validated = store.get(&block_id).unwrap().unwrap();
+            let block_id = put_block(&store, &Block::Leaf(block));
+            let validated = get_block(&store, &block_id).unwrap();
             let (item, _) = replay_item_from_validated_block(&validated, &embedding_spec)
                 .unwrap()
                 .unwrap();
@@ -5697,7 +5706,7 @@ mod tests {
             None,
         )
         .unwrap();
-        block_store.put(&Block::Leaf(invalid_leaf)).unwrap();
+        put_block(&block_store, &Block::Leaf(invalid_leaf));
 
         let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
         let progress: ProgressReporter = Arc::new(|_| {});
@@ -5934,10 +5943,10 @@ mod tests {
             )
             .unwrap(),
         );
-        let block_one_id = block_store.put(&block_one).unwrap();
-        let block_two_id = block_store.put(&block_two).unwrap();
-        let validated_one = block_store.get(&block_one_id).unwrap().unwrap();
-        let validated_two = block_store.get(&block_two_id).unwrap().unwrap();
+        let block_one_id = put_block(&block_store, &block_one);
+        let block_two_id = put_block(&block_store, &block_two);
+        let validated_one = get_block(&block_store, &block_one_id).unwrap();
+        let validated_two = get_block(&block_store, &block_two_id).unwrap();
         let (item_one, _) = replay_item_from_validated_block(&validated_one, &embedding_spec)
             .unwrap()
             .unwrap();
