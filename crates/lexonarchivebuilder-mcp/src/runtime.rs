@@ -196,7 +196,7 @@ impl McpRuntime {
             return Err(RuntimeError::InvalidTraversalWidth);
         }
 
-        let root_id = resolve_root_id(&request_dir, &config)?;
+        let root_id = resolve_root_id_async(&request_dir, &config).await?;
         let embedding_spec: EmbeddingSpec = (&config.embedding_spec).into();
         let embedding_provider =
             ConfiguredEmbeddingProvider::from_environment(&config.environment)?;
@@ -295,17 +295,23 @@ impl McpRuntime {
     }
 }
 
-fn resolve_root_id(request_dir: &Path, config: &McpConfig) -> Result<BlockHash, RuntimeError> {
+async fn resolve_root_id_async(
+    request_dir: &Path,
+    config: &McpConfig,
+) -> Result<BlockHash, RuntimeError> {
     let root_literal = if let Some(root_id) = config.root_id_literal() {
         root_id.to_string()
     } else {
         let summary_path = config
             .resolve_summary_path(request_dir)
             .expect("summary path must exist when root_id literal is absent");
-        let bytes = fs::read(&summary_path).map_err(|source| RuntimeError::ReadSummary {
-            path: summary_path.display().to_string(),
-            source,
-        })?;
+        let bytes =
+            tokio::fs::read(&summary_path)
+                .await
+                .map_err(|source| RuntimeError::ReadSummary {
+                    path: summary_path.display().to_string(),
+                    source,
+                })?;
         let summary: BatchSummary =
             serde_json::from_slice(&bytes).map_err(|source| RuntimeError::ParseSummary {
                 path: summary_path.display().to_string(),
@@ -680,7 +686,10 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            resolve_root_id(&runtime.request_dir, &runtime.config),
+            McpRuntime::block_on_search_future(|| resolve_root_id_async(
+                &runtime.request_dir,
+                &runtime.config
+            )),
             Err(RuntimeError::IngestionOnlySummary { .. })
         ));
     }

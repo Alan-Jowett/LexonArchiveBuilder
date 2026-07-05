@@ -237,7 +237,7 @@ pub struct AcquiredSourceSnapshot {
     pub reused_existing: bool,
 }
 
-pub async fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner>(
+pub async fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner + Sync>(
     store: &S,
     journal: &mut WorkflowJournal,
     source_uri: &str,
@@ -313,7 +313,7 @@ pub async fn acquire_source_snapshot<S: BlockStore, R: RsyncRunner>(
     journal.source_snapshot.corpus_manifest_identity = None;
     journal.source_snapshot.additional_provenance.clear();
 
-    runner.sync(source_uri, snapshot_root)?;
+    run_blocking_snapshot_io(|| runner.sync(source_uri, snapshot_root))?;
 
     let entries = collect_snapshot_entries(store, snapshot_root, snapshot_root).await?;
     let source_snapshot_id = derive_source_snapshot_id(source_uri, &entries)
@@ -412,11 +412,12 @@ async fn collect_snapshot_entries<S: BlockStore>(
             continue;
         }
         let relative_path = normalize_relative_path(snapshot_root, &path)?;
-        let bytes =
-            fs::read(&path).map_err(|source| SourceSnapshotAcquisitionError::ReadSnapshotFile {
+        let bytes = tokio::fs::read(&path).await.map_err(|source| {
+            SourceSnapshotAcquisitionError::ReadSnapshotFile {
                 path: path.display().to_string(),
                 source,
-            })?;
+            }
+        })?;
         let byte_length = bytes.len() as u64;
         let block_id = store
             .put_versioned(&snapshot_block("application/octet-stream", bytes)?)
@@ -454,6 +455,27 @@ fn derive_source_snapshot_id(
     })?;
     let digest = Sha256::digest(bytes);
     Ok(hex_encode(&digest))
+}
+
+fn run_blocking_snapshot_io<F, T>(operation: F) -> T
+where
+    F: FnOnce() -> T + Send,
+    T: Send,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        match handle.runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => tokio::task::block_in_place(operation),
+            tokio::runtime::RuntimeFlavor::CurrentThread => std::thread::scope(|scope| {
+                scope
+                    .spawn(operation)
+                    .join()
+                    .expect("snapshot blocking I/O thread panicked")
+            }),
+            _ => unreachable!("unsupported tokio runtime flavor"),
+        }
+    } else {
+        operation()
+    }
 }
 
 async fn load_source_snapshot_manifest<S: BlockStore>(
@@ -655,8 +677,8 @@ fn decode_hex_nibble(value: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
     use std::future::Future;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use lexongraph_block_store_fs::FilesystemBlockStore;
     use tempfile::tempdir;
@@ -677,25 +699,25 @@ mod tests {
 
     struct CopyTreeRsyncRunner {
         source_root: PathBuf,
-        calls: Cell<usize>,
+        calls: AtomicUsize,
     }
 
     impl CopyTreeRsyncRunner {
         fn new(source_root: PathBuf) -> Self {
             Self {
                 source_root,
-                calls: Cell::new(0),
+                calls: AtomicUsize::new(0),
             }
         }
 
         fn call_count(&self) -> usize {
-            self.calls.get()
+            self.calls.load(Ordering::Relaxed)
         }
     }
 
     impl RsyncRunner for CopyTreeRsyncRunner {
         fn sync(&self, _: &str, destination: &Path) -> Result<(), SourceSnapshotAcquisitionError> {
-            self.calls.set(self.calls.get() + 1);
+            self.calls.fetch_add(1, Ordering::Relaxed);
             copy_tree(&self.source_root, destination).map_err(|source| {
                 SourceSnapshotAcquisitionError::CreateSnapshotRoot {
                     path: destination.display().to_string(),
