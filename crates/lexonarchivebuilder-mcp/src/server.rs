@@ -42,9 +42,10 @@ impl LexonArchiveBuilderMcpServer {
         &self,
         params: Parameters<SearchChunksRequest>,
     ) -> Result<Json<SearchChunksResponse>, String> {
-        self.runtime
-            .search_chunks(params.0)
+        let runtime = self.runtime.clone();
+        tokio::task::spawn_blocking(move || runtime.search_chunks_blocking(params.0))
             .await
+            .map_err(|error| format!("search_chunks task failed: {error}"))?
             .map(Json)
             .map_err(|error| error.to_string())
     }
