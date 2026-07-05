@@ -1072,14 +1072,17 @@ fn approximate_neighbors(
         )?,
         root_query_embedding_spec.clone(),
     );
-    let result = crate::block_store::block_on_future(search_with_partial_retry(
-        searcher,
-        root_id,
-        &target,
-        traversal_width,
-        max_k.saturating_add(1),
-        store,
-    ))
+    let result = crate::block_store::block_on_future_factory(move || async move {
+        search_with_partial_retry(
+            searcher,
+            root_id,
+            &target,
+            traversal_width,
+            max_k.saturating_add(1),
+            store,
+        )
+        .await
+    })
     .map_err(TreeQualityError::from_search_error)?;
     result
         .leaves

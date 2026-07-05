@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use lexonarchivebuilder_indexer::BatchSummary;
@@ -193,20 +194,24 @@ impl McpRuntime {
             )
             .await?;
         let target = EncodedTargetEmbedding::new(target_embedding, embedding_spec);
-        let searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(search_with_partial_retry(
+        let root_id_text = root_id.to_string();
+        let search_root_id = root_id;
+        let search_store = block_store.clone();
+        let result = block_on_search_future(move || async move {
+            let searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
+            search_with_partial_retry(
                 &searcher,
-                &root_id,
+                &search_root_id,
                 &target,
                 traversal_width,
                 top_k,
-                &block_store,
-            ))
+                &search_store,
+            )
+            .await
         })?;
 
         Ok(SearchChunksResponse {
-            root_id: root_id.to_string(),
+            root_id: root_id_text,
             top_k,
             traversal_width,
             results: result
@@ -240,7 +245,43 @@ impl McpRuntime {
     pub fn get_thread(&self, request: NamedRetrievalRequest) -> NamedRetrievalResponse {
         unsupported_named_retrieval(NamedItemKind::Thread, request.name)
     }
+}
 
+fn block_on_search_future<F, Fut, T>(make_future: F) -> T
+where
+    F: FnOnce() -> Fut + Send,
+    Fut: Future<Output = T>,
+    T: Send,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        match handle.runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| handle.block_on(make_future()))
+            }
+            tokio::runtime::RuntimeFlavor::CurrentThread => std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("failed to build tokio runtime for MCP search bridge")
+                            .block_on(make_future())
+                    })
+                    .join()
+                    .expect("MCP search bridge thread panicked")
+            }),
+            _ => unreachable!("unsupported tokio runtime flavor"),
+        }
+    } else {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build tokio runtime for MCP search bridge")
+            .block_on(make_future())
+    }
+}
+
+impl McpRuntime {
     fn resolve_root_id(&self) -> Result<BlockHash, RuntimeError> {
         let root_literal = if let Some(root_id) = self.config.root_id_literal() {
             root_id.to_string()

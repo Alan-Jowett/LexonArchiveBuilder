@@ -105,13 +105,58 @@ where
     F: Future,
 {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        tokio::task::block_in_place(|| handle.block_on(future))
+        match handle.runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| handle.block_on(future))
+            }
+            tokio::runtime::RuntimeFlavor::CurrentThread => {
+                panic!(
+                    "block_on_future cannot run inside a current-thread Tokio runtime; \
+                     use block_on_future_factory to construct the future inside a bridge thread"
+                )
+            }
+            _ => unreachable!("unsupported tokio runtime flavor"),
+        }
     } else {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("failed to build tokio runtime for block-store bridge")
             .block_on(future)
+    }
+}
+
+pub(crate) fn block_on_future_factory<F, Fut, T>(make_future: F) -> T
+where
+    F: FnOnce() -> Fut + Send,
+    Fut: Future<Output = T>,
+    T: Send,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        match handle.runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| handle.block_on(make_future()))
+            }
+            tokio::runtime::RuntimeFlavor::CurrentThread => std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("failed to build tokio runtime for future bridge")
+                            .block_on(make_future())
+                    })
+                    .join()
+                    .expect("future bridge thread panicked")
+            }),
+            _ => unreachable!("unsupported tokio runtime flavor"),
+        }
+    } else {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build tokio runtime for future bridge")
+            .block_on(make_future())
     }
 }
 

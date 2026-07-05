@@ -373,70 +373,66 @@ async fn collect_snapshot_entries<S: BlockStore>(
 ) -> Result<Vec<SourceSnapshotManifestEntry>, SourceSnapshotAcquisitionError> {
     let mut entries = Vec::new();
     let mut pending = vec![current.to_path_buf()];
-    while let Some(directory) = pending.pop() {
-        let directory_entries = fs::read_dir(&directory).map_err(|source| {
-            SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
-                path: directory.display().to_string(),
-                source,
-            }
-        })?;
-        let mut children = Vec::new();
-        for child in directory_entries {
-            let child =
-                child.map_err(
-                    |source| SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
-                        path: directory.display().to_string(),
-                        source,
-                    },
-                )?;
-            children.push(child.path());
+    while let Some(path) = pending.pop() {
+        let file_type = fs::symlink_metadata(&path)
+            .map_err(
+                |source| SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
+                    path: path.display().to_string(),
+                    source,
+                },
+            )?
+            .file_type();
+        if file_type.is_symlink() {
+            continue;
         }
-        children.sort();
-        children.reverse();
-
-        for child in children {
-            let file_type = fs::symlink_metadata(&child)
-                .map_err(
-                    |source| SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
-                        path: child.display().to_string(),
-                        source,
-                    },
-                )?
-                .file_type();
-            if file_type.is_symlink() {
-                continue;
-            }
-            if file_type.is_dir() {
-                pending.push(child);
-                continue;
-            }
-            if !file_type.is_file() {
-                continue;
-            }
-            let relative_path = normalize_relative_path(snapshot_root, &child)?;
-            let bytes = fs::read(&child).map_err(|source| {
-                SourceSnapshotAcquisitionError::ReadSnapshotFile {
-                    path: child.display().to_string(),
+        if file_type.is_dir() {
+            let directory_entries = fs::read_dir(&path).map_err(|source| {
+                SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
+                    path: path.display().to_string(),
                     source,
                 }
             })?;
-            let byte_length = bytes.len() as u64;
-            let block_id = store
-                .put_versioned(&snapshot_block("application/octet-stream", bytes)?)
-                .await
-                .map_err(
-                    |source| SourceSnapshotAcquisitionError::StoreSnapshotPayload {
-                        path: child.display().to_string(),
+            let mut children = Vec::new();
+            for child in directory_entries {
+                let child = child.map_err(|source| {
+                    SourceSnapshotAcquisitionError::EnumerateSnapshotRoot {
+                        path: path.display().to_string(),
                         source,
-                    },
-                )?
-                .to_string();
-            entries.push(SourceSnapshotManifestEntry {
-                relative_path,
-                block_id,
-                byte_length,
-            });
+                    }
+                })?;
+                children.push(child.path());
+            }
+            children.sort();
+            for child in children.into_iter().rev() {
+                pending.push(child);
+            }
+            continue;
         }
+        if !file_type.is_file() {
+            continue;
+        }
+        let relative_path = normalize_relative_path(snapshot_root, &path)?;
+        let bytes =
+            fs::read(&path).map_err(|source| SourceSnapshotAcquisitionError::ReadSnapshotFile {
+                path: path.display().to_string(),
+                source,
+            })?;
+        let byte_length = bytes.len() as u64;
+        let block_id = store
+            .put_versioned(&snapshot_block("application/octet-stream", bytes)?)
+            .await
+            .map_err(
+                |source| SourceSnapshotAcquisitionError::StoreSnapshotPayload {
+                    path: path.display().to_string(),
+                    source,
+                },
+            )?
+            .to_string();
+        entries.push(SourceSnapshotManifestEntry {
+            relative_path,
+            block_id,
+            byte_length,
+        });
     }
 
     Ok(entries)
@@ -770,6 +766,57 @@ mod tests {
                 .entries
                 .iter()
                 .all(|entry| !entry.block_id.is_empty() && entry.byte_length > 0)
+        );
+    }
+
+    #[test]
+    fn acquisition_preserves_recursive_manifest_entry_order_for_nested_directories() {
+        let temp = tempdir().unwrap();
+        let source_root = temp.path().join("source");
+        fs::create_dir_all(source_root.join("alpha").join("nested")).unwrap();
+        fs::write(
+            source_root.join("alpha").join("2026-01.mbox"),
+            b"alpha mailbox",
+        )
+        .unwrap();
+        fs::write(
+            source_root
+                .join("alpha")
+                .join("nested")
+                .join("2026-02.mbox"),
+            b"nested mailbox",
+        )
+        .unwrap();
+        fs::write(source_root.join("zeta.mbox"), b"root mailbox").unwrap();
+
+        let store = FilesystemBlockStore::new(temp.path().join("blocks")).unwrap();
+        let runner = CopyTreeRsyncRunner::new(source_root);
+        let mut journal = sample_journal();
+
+        let snapshot = block_on(acquire_source_snapshot(
+            &store,
+            &mut journal,
+            "rsync://example.invalid/mailman",
+            &temp.path().join("mirror"),
+            "2026-06-19T22:00:00Z",
+            &runner,
+        ))
+        .unwrap();
+        let manifest = snapshot
+            .manifest
+            .expect("fresh acquisition should return manifest");
+
+        assert_eq!(
+            manifest
+                .entries
+                .iter()
+                .map(|entry| entry.relative_path.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "alpha/2026-01.mbox",
+                "alpha/nested/2026-02.mbox",
+                "zeta.mbox",
+            ]
         );
     }
 
