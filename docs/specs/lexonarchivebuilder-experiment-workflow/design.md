@@ -288,15 +288,22 @@ The common execution shape is:
    workflow storage account and Blob container surface
 2. one per-run batch resource group that owns the VM-hosted execution
    environment and other reclaimable run-local infrastructure
-3. one Blob container reachable through an approved SAS-backed access path
-4. surfaced deployment identifiers including long-term resource-group, batch
+3. one hosted runner VM whose baseline size is `Standard_DS1_v2`
+4. one Blob container reachable through an approved SAS-backed access path
+5. surfaced deployment identifiers including long-term resource-group, batch
    resource-group, and storage-account names for manual inspection
 
 The first design baseline leaves the exact Bicep module factoring open but
 constrains the hosted workflow to remain a minimal experiment-orchestration
 surface rather than a production-serving deployment expansion.
 
-**Traces to:** RQ-EXP-012, RQ-EXP-017, RQ-EXP-021
+The runner-size baseline is fixed at `Standard_DS1_v2` because the earlier
+`Standard_F1s` shape has shown insufficient memory in live embedding-refresh
+execution. The design rationale is the approximately 3.5 GiB RAM capacity of
+`Standard_DS1_v2`; any quoted hourly cost remains operator guidance tied to a
+specific Azure pricing view rather than a design invariant.
+
+**Traces to:** RQ-EXP-012, RQ-EXP-012C, RQ-EXP-017, RQ-EXP-021
 
 ### DSG-EXP-010B `Stable long-term naming with related batch suffixing`
 
@@ -547,7 +554,7 @@ mechanism for the first layer of defects.
 | DSG-EXP-007 | RQ-EXP-010 |
 | DSG-EXP-008 | RQ-EXP-003, RQ-EXP-011 |
 | DSG-EXP-009 | RQ-EXP-003, RQ-EXP-004, RQ-EXP-021 |
-| DSG-EXP-010 | RQ-EXP-012, RQ-EXP-017, RQ-EXP-021 |
+| DSG-EXP-010 | RQ-EXP-012, RQ-EXP-012C, RQ-EXP-017, RQ-EXP-021 |
 | DSG-EXP-010A | RQ-EXP-008A, RQ-EXP-008B, RQ-EXP-012, RQ-EXP-020 |
 | DSG-EXP-011 | RQ-EXP-015, RQ-EXP-016, RQ-EXP-014A |
 | DSG-EXP-011A | RQ-EXP-015A, RQ-EXP-017A |

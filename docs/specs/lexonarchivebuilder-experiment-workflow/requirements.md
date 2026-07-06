@@ -52,6 +52,10 @@
 - **UR-EXP-39 [KNOWN]:** The batch resource group should use a name similar to the long-term one, but with a random or datetime suffix.
 - **UR-EXP-40 [KNOWN]:** When the workflow reclaims the run in the normal path, it should delete the batch resource group instead of leaving it behind.
 - **UR-EXP-41 [KNOWN]:** Default cleanup should delete the batch resource group, while explicit debug retention remains the exception for failed runs.
+- **UR-EXP-42 [KNOWN]:** The hosted experiment runner VM is running out of memory on `Standard_F1s`.
+- **UR-EXP-43 [KNOWN]:** The hosted experiment runner VM should use `Standard_DS1_v2` instead of `Standard_F1s`.
+- **UR-EXP-44 [KNOWN]:** The intended sizing rationale is that `Standard_DS1_v2` provides approximately 3.5 GiB of RAM.
+- **UR-EXP-45 [INFERRED]:** Any operator-visible hourly cost statement for `Standard_DS1_v2` should name its Azure pricing basis rather than treating one region-specific hourly estimate as a semantic invariant.
 
 ## Change Manifest
 
@@ -76,6 +80,8 @@
 | CM-EXP-017 | Add | Define a related per-run batch resource-group naming contract with a uniqueness suffix for reclaimable infrastructure | UR-EXP-37, UR-EXP-39 |
 | CM-EXP-018 | Revise | Change the normal reclaim contract so workflows delete the batch resource group while preserving the long-term storage resource group | UR-EXP-40, UR-EXP-41 |
 | CM-EXP-019 | Revise | Extend the workflow outcome surface to distinguish long-term and batch resource-group identifiers while preserving storage-account visibility | UR-EXP-17, UR-EXP-38, UR-EXP-40 |
+| CM-EXP-020 | Revise | Change the hosted experiment runner VM baseline from `Standard_F1s` to `Standard_DS1_v2` to address observed memory exhaustion during embedding-refresh runs | UR-EXP-42, UR-EXP-43, UR-EXP-44 |
+| CM-EXP-021 | Add | Require any operator-visible runner-VM cost statement to identify its pricing basis rather than treating a quoted hourly estimate as a stable workflow invariant | UR-EXP-45 |
 
 ## Before / After
 
@@ -143,6 +149,21 @@
 
 - **Before [KNOWN]:** The workflow outcome surface distinguishes only one resource-group name plus the storage-account name.
 - **After [KNOWN]:** The workflow outcome surface distinguishes the long-term storage resource-group name, the per-run batch resource-group name, and the storage-account name.
+
+### BA-EXP-014
+
+- **Before [KNOWN]:** The hosted experiment runner VM baseline is `Standard_F1s`.
+- **After [KNOWN]:** The hosted experiment runner VM baseline is `Standard_DS1_v2`.
+
+### BA-EXP-015
+
+- **Before [KNOWN]:** The hosted experiment requirements do not record the memory-capacity rationale behind the runner VM size choice.
+- **After [KNOWN]:** The hosted experiment requirements explicitly justify the runner VM baseline in terms of the approved approximately 3.5 GiB RAM capacity.
+
+### BA-EXP-016
+
+- **Before [KNOWN]:** Any hourly-cost expectation for the hosted runner VM is implicit and therefore vulnerable to pricing-view drift.
+- **After [INFERRED]:** The hosted experiment requirements treat runner-VM hourly cost as operator guidance that must name its pricing basis if surfaced.
 
 ## Requirements
 
@@ -292,6 +313,15 @@ Each hosted workflow run SHALL derive a batch resource-group name from the same 
 - **Required property [KNOWN]:** The suffix must prevent collisions across repeated runs.
 - **Allowed realization [KNOWN]:** A random suffix, a datetime-based suffix, or a combination of both is acceptable so long as the relationship to the long-term name remains operator-recognizable.
 - **Traceability:** UR-EXP-37, UR-EXP-39
+
+#### RQ-EXP-012C - Hosted runner VM baseline
+
+The hosted workflow family SHALL provision its batch execution VM with baseline size `Standard_DS1_v2`.
+
+- **Rationale [KNOWN]:** The previously used `Standard_F1s` baseline has shown memory exhaustion during live embedding-refresh runs.
+- **Required property [KNOWN]:** The approved baseline provides approximately 3.5 GiB of RAM.
+- **Boundary [INFERRED]:** Any operator-visible hourly price for this VM size is guidance tied to a specific Azure pricing view rather than a stable semantic invariant of the workflow boundary.
+- **Traceability:** UR-EXP-42, UR-EXP-43, UR-EXP-44, UR-EXP-45
 
 #### RQ-EXP-013 - Embedding-refresh execution
 

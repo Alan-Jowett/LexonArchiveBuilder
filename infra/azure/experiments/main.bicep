@@ -26,7 +26,7 @@ param containerSasUrl string
 param vmName string
 
 @description('Size of the runner VM.')
-param vmSize string = 'Standard_F1s'
+param vmSize string = 'Standard_DS1_v2'
 
 @description('Admin username for the runner VM.')
 param adminUsername string = 'azureuser'

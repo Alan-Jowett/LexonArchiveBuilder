@@ -20,7 +20,7 @@
 - **UR-DEPLOY-7 [KNOWN]:** The SAS token must be stored in Key Vault or configured directly on the CDN origin, and it must never be exposed to clients.
 - **UR-DEPLOY-8 [KNOWN]:** CDN origin access must be the only approved caller path to the storage account, with storage firewall and private-network controls enforcing that restriction.
 - **UR-DEPLOY-9 [KNOWN]:** The CDN layer must include a parameterized public endpoint, origin authentication, URL rewrite, and caching rules.
-- **UR-DEPLOY-10 [KNOWN]:** The deployment must include an indexing VM on Ubuntu LTS sized `F1s`.
+- **UR-DEPLOY-10 [KNOWN]:** The deployment must include an indexing VM on Ubuntu LTS.
 - **UR-DEPLOY-11 [KNOWN]:** The indexing VM bootstrap must install Docker and Docker Compose, pull GHCR images, run the indexing compose stack, execute a boot -> index -> shutdown workflow, and shut the VM down on completion.
 - **UR-DEPLOY-12 [KNOWN]:** The deployment must include an embedding VM on Ubuntu LTS sized `B1s`.
 - **UR-DEPLOY-13 [KNOWN]:** The embedding VM bootstrap must install Docker and Docker Compose, pull a GHCR embedding-service image, start the embedding API container, and configure restart policies.
@@ -37,6 +37,9 @@
 - **UR-DEPLOY-24 [INFERRED]:** The deployment should preserve LexonArchiveBuilder's intended CDN-backed RAG shape with no central control plane or extra server-side processing beyond indexing.
 - **UR-DEPLOY-25 [INFERRED]:** The requested deployment boundary spans existing indexer, MCP, and production workflow seams, so it should remain separate from `lexonarchivebuilder-indexer` and `lexonarchivebuilder-archive-sync`.
 - **UR-DEPLOY-26 [UNKNOWN]:** The authoritative MVP production embedding direction is not yet reconciled with the repository baseline that currently names Azure OpenAI for production while this request introduces a self-hosted embedding VM.
+- **UR-DEPLOY-27 [KNOWN]:** The MVP deployment indexing VM should move from `F1s` to `Standard_DS1_v2` to align with the approved higher-memory baseline.
+- **UR-DEPLOY-28 [KNOWN]:** The intended sizing rationale is that `Standard_DS1_v2` provides approximately 3.5 GiB of RAM.
+- **UR-DEPLOY-29 [INFERRED]:** Any deployment-spec hourly-cost statement for `Standard_DS1_v2` should identify its Azure pricing basis rather than treating one quoted hourly estimate as a stable semantic invariant.
 
 ## Change Manifest
 
@@ -53,6 +56,8 @@
 | CM-DEPLOY-009 | Revise | Replace the README's still-TBD production deployment shape with an explicit MVP deployment requirements baseline for this new boundary | UR-DEPLOY-1, UR-DEPLOY-17, UR-DEPLOY-24 |
 | CM-DEPLOY-010 | Add | Preserve repository invariants around indexing/search separation, local-versus-production split, and no central control plane while adding Azure deployment requirements | UR-DEPLOY-23, UR-DEPLOY-24, UR-DEPLOY-25 |
 | CM-DEPLOY-011 | Add | Record the unresolved production-embedding direction conflict introduced by the requested embedding VM | UR-DEPLOY-12, UR-DEPLOY-26 |
+| CM-DEPLOY-012 | Revise | Change the MVP indexing VM baseline from `F1s` to `Standard_DS1_v2` to align the deployment contract with the approved higher-memory baseline | UR-DEPLOY-27, UR-DEPLOY-28 |
+| CM-DEPLOY-013 | Add | Require deployment-owned VM-cost statements to identify their pricing basis when they cite `Standard_DS1_v2` hourly pricing | UR-DEPLOY-29 |
 
 ## Before / After
 
@@ -85,6 +90,16 @@
 
 - **Before [KNOWN]:** Local/testing and production boundaries were described at the architecture level, but the repository did not define a Bicep module structure for a production MVP deployment package.
 - **After [KNOWN]:** The requirements define a module-oriented IaC surface with explicit parameter and output expectations.
+
+### BA-DEPLOY-007
+
+- **Before [KNOWN]:** The MVP deployment requirements name an indexing VM sized `F1s`.
+- **After [KNOWN]:** The MVP deployment requirements name an indexing VM sized `Standard_DS1_v2`.
+
+### BA-DEPLOY-008
+
+- **Before [KNOWN]:** The deployment requirements do not encode the memory-capacity rationale behind the indexing VM size choice.
+- **After [KNOWN]:** The deployment requirements record the indexing VM baseline as the approved approximately 3.5 GiB RAM shape and treat hourly-cost statements as pricing-basis-sensitive guidance.
 
 ## Requirements
 
@@ -265,11 +280,13 @@ The CDN configuration SHALL preserve the ability to serve already cached content
 
 #### RQ-DEPLOY-014 - Indexing VM baseline
 
-The MVP deployment SHALL provision one Ubuntu LTS indexing VM sized `F1s`.
+The MVP deployment SHALL provision one Ubuntu LTS indexing VM sized `Standard_DS1_v2`.
 
 - **Optional access [KNOWN]:** A public IP is optional in this increment.
 - **Identity [KNOWN]:** Managed identity must be enabled.
-- **Traceability:** UR-DEPLOY-10, UR-DEPLOY-22
+- **Capacity [KNOWN]:** The approved baseline provides approximately 3.5 GiB of RAM.
+- **Boundary [INFERRED]:** Any operator-visible hourly price for this VM size is guidance tied to a specific Azure pricing view rather than a stable deployment invariant.
+- **Traceability:** UR-DEPLOY-10, UR-DEPLOY-22, UR-DEPLOY-27, UR-DEPLOY-28, UR-DEPLOY-29
 
 #### RQ-DEPLOY-015 - Indexing VM bootstrap and batch lifecycle
 

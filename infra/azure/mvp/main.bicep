@@ -93,7 +93,7 @@ param cdnCustomDomainHostName string = ''
 param indexerVmName string = 'lab-indexer-vm'
 
 @description('VM size for the indexing VM.')
-param indexerVmSize string = 'Standard_F1s'
+param indexerVmSize string = 'Standard_DS1_v2'
 
 @description('Name of the embedding VM.')
 param embedderVmName string = 'lab-embedder-vm'

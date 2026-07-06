@@ -254,8 +254,8 @@ remains enabled for the hidden-origin Akamai path.
 
 ### DSG-LFD-006 `Indexer VM runtime`
 
-The indexing runtime is hosted on one Ubuntu LTS `F1s` VM with managed
-identity enabled.
+The indexing runtime is hosted on one Ubuntu LTS `Standard_DS1_v2` VM with
+managed identity enabled.
 
 Its bootstrap sequence is deployment-owned and performs the approved runtime
 bring-up steps:
@@ -268,6 +268,11 @@ bring-up steps:
 
 This VM remains batch-oriented and restartable for later reindex activation,
 without becoming a continuously serving application tier.
+
+The approved sizing rationale is the approximately 3.5 GiB RAM capacity of
+`Standard_DS1_v2`, replacing the earlier `F1s` baseline that no longer matches
+current workload expectations. Any quoted hourly cost remains an operator-facing
+pricing note rather than a design invariant.
 
 **Traces to:** RQ-DEPLOY-014, RQ-DEPLOY-015, RQ-DEPLOY-016
 
