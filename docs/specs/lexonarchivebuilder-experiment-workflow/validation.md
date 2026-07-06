@@ -141,11 +141,11 @@ Inspect the minimal Azure execution surface for each hosted workflow.
 
 **Pass condition:** each workflow uses only the VM-plus-Blob execution shape
 needed for one run, separates durable storage scope from reclaimable per-run
-compute scope, surfaces the long-term resource-group, batch resource-group, and
-storage-account identifiers, and does not expand into a production-serving
-deployment contract.
+compute scope, uses the approved `Standard_DS1_v2` hosted runner baseline,
+surfaces the long-term resource-group, batch resource-group, and storage-account
+identifiers, and does not expand into a production-serving deployment contract.
 
-**Traces to:** RQ-EXP-012, RQ-EXP-017, RQ-EXP-021, DSG-EXP-010, DSG-EXP-012
+**Traces to:** RQ-EXP-012, RQ-EXP-012C, RQ-EXP-017, RQ-EXP-021, DSG-EXP-010, DSG-EXP-012
 
 ### VAL-EXP-009A
 

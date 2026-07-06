@@ -183,10 +183,11 @@ DSG-LFD-007A
 
 Inspect the indexing VM runtime contract.
 
-**Pass condition:** the deployment provisions one Ubuntu LTS `F1s` VM with
-managed identity, bootstraps Docker and Docker Compose, acquires the approved
-GHCR images, runs the indexing compose stack as one boot -> index -> shutdown
-activation, and remains restartable for later reindex execution.
+**Pass condition:** the deployment provisions one Ubuntu LTS
+`Standard_DS1_v2` VM with managed identity, bootstraps Docker and Docker
+Compose, acquires the approved GHCR images, runs the indexing compose stack as
+one boot -> index -> shutdown activation, and remains restartable for later
+reindex execution.
 
 **Traces to:** RQ-DEPLOY-014, RQ-DEPLOY-015, RQ-DEPLOY-016, DSG-LFD-006
 

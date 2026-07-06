@@ -11,7 +11,7 @@ param tags object = {}
 param vmName string
 
 @description('Size of the runner VM.')
-param vmSize string = 'Standard_F1s'
+param vmSize string = 'Standard_DS1_v2'
 
 @description('Subnet resource ID for the runner VM.')
 param subnetId string
