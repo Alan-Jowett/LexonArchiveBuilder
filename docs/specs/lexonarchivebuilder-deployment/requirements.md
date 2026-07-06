@@ -20,7 +20,7 @@
 - **UR-DEPLOY-7 [KNOWN]:** The SAS token must be stored in Key Vault or configured directly on the CDN origin, and it must never be exposed to clients.
 - **UR-DEPLOY-8 [KNOWN]:** CDN origin access must be the only approved caller path to the storage account, with storage firewall and private-network controls enforcing that restriction.
 - **UR-DEPLOY-9 [KNOWN]:** The CDN layer must include a parameterized public endpoint, origin authentication, URL rewrite, and caching rules.
-- **UR-DEPLOY-10 [KNOWN]:** The deployment must include an indexing VM on Ubuntu LTS sized `F1s`.
+- **UR-DEPLOY-10 [KNOWN]:** The deployment must include an indexing VM on Ubuntu LTS.
 - **UR-DEPLOY-11 [KNOWN]:** The indexing VM bootstrap must install Docker and Docker Compose, pull GHCR images, run the indexing compose stack, execute a boot -> index -> shutdown workflow, and shut the VM down on completion.
 - **UR-DEPLOY-12 [KNOWN]:** The deployment must include an embedding VM on Ubuntu LTS sized `B1s`.
 - **UR-DEPLOY-13 [KNOWN]:** The embedding VM bootstrap must install Docker and Docker Compose, pull a GHCR embedding-service image, start the embedding API container, and configure restart policies.
