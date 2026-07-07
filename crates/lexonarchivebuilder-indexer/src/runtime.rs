@@ -1392,8 +1392,15 @@ pub async fn validate_request_file_with_overrides(
     if let Some(stage) = stage_override {
         request.stage = stage;
     }
-    let request_dir = request_path.parent().unwrap_or_else(|| Path::new("."));
-    validate_request_with_overrides(request_dir, request, clustering_overrides)
+    let request_dir = request_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        validate_request_with_overrides(&request_dir, request, clustering_overrides)
+    })
+    .await
+    .map_err(RuntimeError::BlockingMutableRefTaskJoin)?
 }
 
 pub async fn run_request(
@@ -4703,11 +4710,14 @@ mod tests {
             ClusteringConfigOverrides::default(),
         )
         .await
-        .unwrap_err()
-        .to_string();
+        .unwrap_err();
 
-        assert!(error.contains("requires cluster_count 64"));
-        assert!(error.contains("block size target 65536"));
+        let RuntimeError::StreamingIndexer(error) = error else {
+            panic!("expected streaming indexer validation error");
+        };
+        let message = error.to_string();
+        assert!(message.contains("requires cluster_count 64"));
+        assert!(message.contains("block size target 65536"));
     }
 
     #[test]
