@@ -358,6 +358,12 @@ struct StoredLeafEmbeddingProvider {
     embeddings_by_input_hash: Arc<HashMap<[u8; 32], Vec<u8>>>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ValidateOnlyResolver;
+
+#[derive(Clone, Copy, Debug)]
+struct ValidateOnlyEmbeddingProvider;
+
 #[derive(Clone, Debug)]
 struct RecordingEmbeddingProvider<EP> {
     inner: EP,
@@ -554,6 +560,36 @@ impl EmbeddingProvider for StoredLeafEmbeddingProvider {
             .get(&key)
             .cloned()
             .ok_or(StoredLeafEmbeddingProviderError::MissingStoredEmbedding)
+    }
+}
+
+impl ContentResolver<ContentRef> for ValidateOnlyResolver {
+    type Error = io::Error;
+
+    fn resolve(&self, _content_ref: &ContentRef) -> Result<lexongraph_block::Content, Self::Error> {
+        Err(io::Error::other(
+            "validate-only resolver should not be used for content resolution",
+        ))
+    }
+
+    fn fingerprint(&self, _content_ref: &ContentRef) -> Result<BlockHash, Self::Error> {
+        Err(io::Error::other(
+            "validate-only resolver should not be used for fingerprinting",
+        ))
+    }
+}
+
+impl EmbeddingProvider for ValidateOnlyEmbeddingProvider {
+    type Error = io::Error;
+
+    async fn embed(
+        &self,
+        _input: &EmbeddingInput,
+        _spec: &EmbeddingSpec,
+    ) -> Result<Vec<u8>, Self::Error> {
+        Err(io::Error::other(
+            "validate-only embedding provider should not be asked to embed",
+        ))
     }
 }
 
@@ -1339,6 +1375,27 @@ pub async fn run_request_file_with_outputs(
     .await
 }
 
+pub async fn validate_request_file_with_overrides(
+    request_path: &Path,
+    stage_override: Option<ExecutionStage>,
+    clustering_overrides: ClusteringConfigOverrides,
+) -> Result<(), RuntimeError> {
+    let bytes = fs::read(request_path).map_err(|source| RuntimeError::ReadRequest {
+        path: request_path.display().to_string(),
+        source,
+    })?;
+    let mut request: BatchRequest =
+        serde_json::from_slice(&bytes).map_err(|source| RuntimeError::ParseRequest {
+            path: request_path.display().to_string(),
+            source,
+        })?;
+    if let Some(stage) = stage_override {
+        request.stage = stage;
+    }
+    let request_dir = request_path.parent().unwrap_or_else(|| Path::new("."));
+    validate_request_with_overrides(request_dir, request, clustering_overrides)
+}
+
 pub async fn run_request(
     request_dir: &Path,
     request: BatchRequest,
@@ -1359,6 +1416,47 @@ pub async fn run_request_with_overrides(
         |message| eprintln!("{message}"),
     )
     .await
+}
+
+fn validate_request_with_overrides(
+    request_dir: &Path,
+    request: BatchRequest,
+    clustering_overrides: ClusteringConfigOverrides,
+) -> Result<(), RuntimeError> {
+    request.validate()?;
+    let clustering = clustering_overrides.to_configured_clustering(request.profile_version)?;
+    let stage = request.stage;
+    let _block_store = ConfiguredBlockStore::from_environment(request_dir, &request.environment)?;
+    let mutable_ref_store = request
+        .environment
+        .resolve_mutable_ref_store(request_dir, &request.ref_name);
+
+    if stage.includes_clustering() {
+        let _: StreamingIndexingRun<ContentRef, _, _, _, _> =
+            StreamingIndexingRun::with_published_profile(
+                ValidateOnlyResolver,
+                ValidateOnlyEmbeddingProvider,
+                clustering.profile_version,
+                request.to_embedding_spec(),
+                request.block_size_target,
+            )?;
+    }
+
+    if stage == ExecutionStage::ClusteringAndBlockAssembly {
+        let Some(mutable_ref_store) = mutable_ref_store.as_ref() else {
+            return Err(RuntimeError::MissingReplayJournalHead {
+                path: "<unresolved mutable ref>".into(),
+            });
+        };
+        let refs = load_mutable_ref_store(mutable_ref_store)?;
+        if refs.replay_journal_head_block_id.is_none() {
+            return Err(RuntimeError::MissingReplayJournalHead {
+                path: mutable_ref_store_label(mutable_ref_store),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 async fn run_request_with_progress<F>(
@@ -4566,6 +4664,50 @@ mod tests {
 
         assert!(!summary.block_ids.is_empty());
         server.join();
+    }
+
+    #[tokio::test]
+    async fn validate_only_reports_published_profile_block_size_conflict() {
+        let temp = tempdir().unwrap();
+        let request_path = temp.path().join("request.json");
+        fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&json!({
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": {
+                        "base_url": "http://127.0.0.1:8080",
+                        "model": "all-MiniLM-L6-v2",
+                        "request_timeout_secs": 5,
+                        "max_retries": 0,
+                        "retry_delay_ms": 1
+                    }
+                },
+                "embedding_spec": {
+                    "dims": 384,
+                    "encoding": "f32le"
+                },
+                "block_size_target": 65536,
+                "stage": "clustering-and-block-assembly",
+                "profile_version": "0.6.0",
+                "ref_name": "test-branch"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let error = validate_request_file_with_overrides(
+            &request_path,
+            None,
+            ClusteringConfigOverrides::default(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("requires cluster_count 64"));
+        assert!(error.contains("block size target 65536"));
     }
 
     #[test]

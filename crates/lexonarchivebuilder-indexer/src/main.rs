@@ -23,7 +23,8 @@ use lexonarchivebuilder_indexer::search::{
 };
 use lexonarchivebuilder_indexer::tree_tools::parse_block_hash;
 use lexonarchivebuilder_indexer::{
-    ClusteringConfigOverrides, ExecutionStage, run_request_file_with_outputs, write_summary_file,
+    ClusteringConfigOverrides, ExecutionStage, run_request_file_with_outputs,
+    validate_request_file_with_overrides, write_summary_file,
 };
 
 const DEFAULT_LOCAL_MODEL: &str = "all-MiniLM-L6-v2";
@@ -48,6 +49,8 @@ enum Command {
         summary_out: Option<PathBuf>,
         #[arg(long)]
         stage: Option<ExecutionStage>,
+        #[arg(long)]
+        validate_only: bool,
         #[command(flatten)]
         clustering: ClusteringConfigOverrides,
     },
@@ -162,18 +165,30 @@ async fn main() -> anyhow::Result<()> {
             request,
             summary_out,
             stage,
+            validate_only,
             clustering,
         } => {
-            let summary =
-                run_request_file_with_outputs(&request, stage, clustering, summary_out.as_deref())
+            if validate_only {
+                validate_request_file_with_overrides(&request, stage, clustering)
                     .await
-                    .with_context(|| format!("failed to run request {}", request.display()))?;
-            let rendered =
-                serde_json::to_string_pretty(&summary).context("failed to render batch summary")?;
-            if let Some(output_path) = summary_out.as_ref() {
-                write_summary_file(output_path, &summary)?;
+                    .with_context(|| format!("failed to validate request {}", request.display()))?;
+                println!("Validation OK");
+            } else {
+                let summary = run_request_file_with_outputs(
+                    &request,
+                    stage,
+                    clustering,
+                    summary_out.as_deref(),
+                )
+                .await
+                .with_context(|| format!("failed to run request {}", request.display()))?;
+                let rendered = serde_json::to_string_pretty(&summary)
+                    .context("failed to render batch summary")?;
+                if let Some(output_path) = summary_out.as_ref() {
+                    write_summary_file(output_path, &summary)?;
+                }
+                println!("{rendered}");
             }
-            println!("{rendered}");
         }
         Command::Quality {
             root_id,
@@ -333,6 +348,23 @@ mod tests {
         .to_string();
 
         assert!(error.contains("--clustering-algorithm"));
+    }
+
+    #[test]
+    fn run_command_parses_validate_only_flag() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "run",
+            "--request",
+            "request.json",
+            "--validate-only",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Run { validate_only, .. } => assert!(validate_only),
+            _ => panic!("expected run command"),
+        }
     }
 
     #[test]
