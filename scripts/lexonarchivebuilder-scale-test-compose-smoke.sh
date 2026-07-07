@@ -38,7 +38,7 @@ SUMMARY_PATH="${RUN_DIR}/summary.json"
 [[ -f "$SUMMARY_PATH" ]] || { printf 'error: summary not generated: %s\n' "$SUMMARY_PATH" >&2; exit 1; }
 
 grep -q '"root_id"' "$SUMMARY_PATH" || { printf 'error: summary missing root_id\n' >&2; exit 1; }
-grep -q "\"ref_name\": \"${RUN_NAME}\"" "$REQUEST_PATH" || { printf 'error: request missing run-scoped ref_name\n' >&2; exit 1; }
+grep -Fq "\"ref_name\": \"${RUN_NAME}\"" "$REQUEST_PATH" || { printf 'error: request missing run-scoped ref_name\n' >&2; exit 1; }
 MAILBOX_ITEM_COUNT="$(grep -c '"kind": "mailbox"' "$REQUEST_PATH")"
 if [[ "$MAILBOX_ITEM_COUNT" -lt 2 ]]; then
   printf 'error: expected at least 2 mailbox items in generated request, found %s\n' "$MAILBOX_ITEM_COUNT" >&2
