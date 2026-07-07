@@ -283,6 +283,7 @@ fi
   printf '    "encoding": "f32le"\n'
   printf '  },\n'
   printf '  "block_size_target": 65536,\n'
+  printf '  "ref_name": "%s",\n' "$(json_escape "$RUN_NAME")"
   printf '  "items": [\n'
 
   for index in "${!MAILBOX_PATHS[@]}"; do
