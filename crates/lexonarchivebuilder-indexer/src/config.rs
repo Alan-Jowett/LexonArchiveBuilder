@@ -50,25 +50,38 @@ pub struct ClusteringConfigOverrides {
         value_parser = parse_published_profile_version
     )]
     pub profile_version: Option<PublishedProfileVersion>,
+    #[arg(long, value_name = "COUNT")]
+    pub local_testing_cluster_count: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ConfiguredClustering {
     pub profile_version: PublishedProfileVersion,
+    pub local_testing_cluster_count: Option<u32>,
 }
 
 impl ClusteringConfigOverrides {
     pub fn validate(&self) -> Result<(), ConfigError> {
+        if matches!(self.local_testing_cluster_count, Some(0)) {
+            return Err(ConfigError::InvalidLocalTestingClusterCount);
+        }
         Ok(())
     }
 
     pub(crate) fn to_configured_clustering(
         &self,
         request_profile_version: PublishedProfileVersion,
+        environment: &EnvironmentConfig,
     ) -> Result<ConfiguredClustering, ConfigError> {
         self.validate()?;
+        if self.local_testing_cluster_count.is_some()
+            && matches!(environment, EnvironmentConfig::Production { .. })
+        {
+            return Err(ConfigError::LocalTestingClusterCountRequiresLocalEnvironment);
+        }
         Ok(ConfiguredClustering {
             profile_version: self.profile_version.unwrap_or(request_profile_version),
+            local_testing_cluster_count: self.local_testing_cluster_count,
         })
     }
 }
@@ -209,6 +222,12 @@ pub enum ConfigError {
     MissingProductionMemoryCacheMaxResidentBlocks,
     #[error("production block_store.memory_cache_max_resident_blocks must be at least 1")]
     InvalidProductionMemoryCacheMaxResidentBlocks,
+    #[error("local testing cluster_count override must be at least 1")]
+    InvalidLocalTestingClusterCount,
+    #[error(
+        "local testing cluster_count override is only supported for local and local-overlay environments"
+    )]
+    LocalTestingClusterCountRequiresLocalEnvironment,
 }
 
 impl BatchRequest {
@@ -1100,16 +1119,43 @@ mod tests {
     #[test]
     fn clustering_defaults_to_published_profile_v0_1_0() {
         let clustering = ClusteringConfigOverrides::default()
-            .to_configured_clustering(default_profile_version())
+            .to_configured_clustering(
+                default_profile_version(),
+                &EnvironmentConfig::Local {
+                    block_store_root: Path::new("blocks").to_path_buf(),
+                    embedding: LocalEmbeddingConfig {
+                        base_url: "http://127.0.0.1:8080".into(),
+                        model: "all-MiniLM-L6-v2".into(),
+                        api_key_env: None,
+                        request_timeout_secs: 30,
+                        max_retries: 5,
+                        retry_delay_ms: 1_000,
+                    },
+                },
+            )
             .unwrap();
 
         assert_eq!(clustering.profile_version, PUBLISHED_PROFILE_V0_1_0);
+        assert_eq!(clustering.local_testing_cluster_count, None);
     }
 
     #[test]
     fn clustering_override_uses_request_profile_when_cli_omits_selector() {
         let clustering = ClusteringConfigOverrides::default()
-            .to_configured_clustering(PublishedProfileVersion::new(0, 5, 0))
+            .to_configured_clustering(
+                PublishedProfileVersion::new(0, 5, 0),
+                &EnvironmentConfig::Local {
+                    block_store_root: Path::new("blocks").to_path_buf(),
+                    embedding: LocalEmbeddingConfig {
+                        base_url: "http://127.0.0.1:8080".into(),
+                        model: "all-MiniLM-L6-v2".into(),
+                        api_key_env: None,
+                        request_timeout_secs: 30,
+                        max_retries: 5,
+                        retry_delay_ms: 1_000,
+                    },
+                },
+            )
             .unwrap();
 
         assert_eq!(
@@ -1122,14 +1168,112 @@ mod tests {
     fn clustering_override_replaces_request_profile_when_cli_selects_profile() {
         let clustering = ClusteringConfigOverrides {
             profile_version: Some(PublishedProfileVersion::new(0, 5, 0)),
+            local_testing_cluster_count: None,
         }
-        .to_configured_clustering(default_profile_version())
+        .to_configured_clustering(
+            default_profile_version(),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: "http://127.0.0.1:8080".into(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 30,
+                    max_retries: 5,
+                    retry_delay_ms: 1_000,
+                },
+            },
+        )
         .unwrap();
 
         assert_eq!(
             clustering.profile_version,
             PublishedProfileVersion::new(0, 5, 0)
         );
+    }
+
+    #[test]
+    fn clustering_override_preserves_local_testing_cluster_count_for_local_environment() {
+        let clustering = ClusteringConfigOverrides {
+            profile_version: None,
+            local_testing_cluster_count: Some(32),
+        }
+        .to_configured_clustering(
+            default_profile_version(),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: "http://127.0.0.1:8080".into(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 30,
+                    max_retries: 5,
+                    retry_delay_ms: 1_000,
+                },
+            },
+        )
+        .unwrap();
+
+        assert_eq!(clustering.local_testing_cluster_count, Some(32));
+    }
+
+    #[test]
+    fn clustering_override_rejects_zero_local_testing_cluster_count() {
+        let error = ClusteringConfigOverrides {
+            profile_version: None,
+            local_testing_cluster_count: Some(0),
+        }
+        .to_configured_clustering(
+            default_profile_version(),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: "http://127.0.0.1:8080".into(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 30,
+                    max_retries: 5,
+                    retry_delay_ms: 1_000,
+                },
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigError::InvalidLocalTestingClusterCount
+        ));
+    }
+
+    #[test]
+    fn clustering_override_rejects_local_testing_cluster_count_for_production() {
+        let error = ClusteringConfigOverrides {
+            profile_version: None,
+            local_testing_cluster_count: Some(32),
+        }
+        .to_configured_clustering(
+            default_profile_version(),
+            &EnvironmentConfig::Production {
+                block_store: ProductionBlockStoreConfig {
+                    container_sas_url: "https://example.test/container?sig=test".into(),
+                    prefix: None,
+                    filesystem_cache_root: Some(Path::new("cache").to_path_buf()),
+                    memory_cache_max_resident_blocks: Some(1),
+                },
+                embedding: ProductionEmbeddingConfig {
+                    endpoint: "https://example.test".into(),
+                    deployment: "text-embedding".into(),
+                    api_version: "2024-02-01".into(),
+                    api_key_env: Some("AZURE_OPENAI_API_KEY".into()),
+                },
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigError::LocalTestingClusterCountRequiresLocalEnvironment
+        ));
     }
 
     #[test]

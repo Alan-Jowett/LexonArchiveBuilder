@@ -17,7 +17,8 @@ query access-cost reporting, rooted
 CLI search over stored trees, replay-stable fingerprinting, temporary
 upstream `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, 0.6.x published-profile
-evaluation, local testing sweep automation, upstream embedding-readback
+evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
+experiment automation, upstream embedding-readback
 API adoption, LAB-owned replay-journaled split-stage recovery, and
 layer-parallel block-construction evolution, and v2 custom-block adoption for
 repository-owned non-search artifacts in
@@ -34,7 +35,8 @@ published-profile API adoption, caller-selectable published-profile
 configuration with default `0.1.0`, latest published-profile and telemetry
 compatibility, temporary upstream `main` tracking for rapid profile
 validation, upstream wgpu-acceleration revision compatibility, 0.6.x
-published-profile evaluation, local testing sweep automation, upstream
+published-profile evaluation, local testing sweep automation, v0.7.0
+fixed-budget ladder experiment automation, upstream
 embedding-readback API adoption, upstream regression assessment,
 embedding-phase batch-progress observability,
 replay-submission observability, streaming-status observability,
@@ -272,6 +274,19 @@ silently overriding the published profile.
 
 **Traces to:** RQ-INDEXER-003H, DSG-LFI-001H, DSG-LFI-010
 
+### VAL-LFI-002M1
+
+Inspect the approved `0.7.0` fixed-budget ladder specification against the
+published-profile clustering-cardinality boundary.
+
+**Pass condition:** the specification preserves the normal rule that ordinary
+clustering-enabled runs reject retired low-level clustering controls, while
+also defining one scoped local/testing-only ladder mechanism that can realize
+the approved rung table without redefining the general batch contract, request
+schema, production behavior, or MCP-facing behavior.
+
+**Traces to:** RQ-INDEXER-003H, RQ-INDEXER-003J1, DSG-LFI-001H, DSG-LFI-007F1, DSG-LFI-010
+
 ### VAL-LFI-002N
 
 Inspect the latest LexonGraph upgrade boundary against the repository-required
@@ -308,6 +323,21 @@ baseline comparison in the same local/testing-only automation surface rather
 than changing the batch request contract or MCP behavior.
 
 **Traces to:** RQ-INDEXER-003J, DSG-LFI-001I, DSG-LFI-007F
+
+### VAL-LFI-002N2
+
+Run the approved repository-local `0.7.0` fixed-budget ladder automation
+against a representative local/testing corpus.
+
+**Pass condition:** the runnable ladder reuses the approved batch and
+rooted-quality operator surfaces, preserves the fixed budget `1024` across the
+default rung set `4x256`, `8x128`, `16x64`, `32x32`, and `64x16`, emits
+per-rung build and rooted-quality artifacts plus a comparable summary table,
+and includes preflight validation plus deterministic rung ordering in the same
+local/testing-only automation surface rather than defining a new production or
+MCP-visible entrypoint.
+
+**Traces to:** RQ-INDEXER-003J1, DSG-LFI-001H, DSG-LFI-001I, DSG-LFI-007F, DSG-LFI-007F1
 
 ### VAL-LFI-002O
 

@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, and v2 custom-block adoption for repository-owned non-search artifacts
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, and v2 custom-block adoption for repository-owned non-search artifacts
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, and v2 custom-block adoption for repository-owned non-search artifacts
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, and v2 custom-block adoption for repository-owned non-search artifacts
 
 ## USER-REQUEST
 
@@ -184,6 +184,12 @@
 - **UR-171 [KNOWN]:** Per-query rooted-quality access reporting should break those block-touch and byte-read figures down per layer and summarize them into overall per-query totals.
 - **UR-172 [KNOWN]:** The rooted quality tool should report an estimated query time in RTT units assuming a congestion window of 64 KiB.
 - **UR-173 [KNOWN]:** The estimated RTT cost for a query should be computed by dividing each layer's bytes read by the 64 KiB congestion window, rounding each layer up to the next whole RTT, and summing those per-layer RTT counts into a total for the query.
+- **UR-174 [KNOWN]:** Build a repository-local test script and execution plan for a published-profile `0.7.0` ladder experiment that operators can execute without redesigning the existing local/testing workflow.
+- **UR-175 [KNOWN]:** The `0.7.0` ladder should vary beam width and clustering cardinality together while keeping `beam_width * cluster_count` constant across all rungs.
+- **UR-176 [KNOWN]:** The first runnable ladder should default to a fixed budget of `1024`, anchored on the prior successful baseline of traversal width `16` and clustering cardinality `64`.
+- **UR-177 [KNOWN]:** The first runnable ladder should default to the five-rung set `4x256`, `8x128`, `16x64`, `32x32`, and `64x16`.
+- **UR-178 [KNOWN]:** The ladder automation should emit per-rung run artifacts, per-rung rooted-quality artifacts, a comparable summary table, and an operator-facing execution plan that includes preflight validation and rung ordering.
+- **UR-179 [INFERRED]:** Because the current published-profile run surface treats clustering cardinality as profile-owned, the ladder may require a scoped repository-local local/testing mechanism to select rung-specific clustering cardinality for experiment execution without redefining the production or MCP-facing clustering contract.
 
 ## Change Manifest
 
@@ -273,6 +279,7 @@
 | CM-INDEXER-082 | Add | Require replay-audit entries to carry enough detail to reconstruct what inputs were processed, what repository-owned action ran, and which durable block outputs or equivalent artifacts were produced | UR-161, UR-166, UR-167 |
 | CM-INDEXER-083 | Add | Publish the latest immutable final root through a repository-owned mutable reference mechanism so current-root discovery no longer depends on request-local output capture alone | UR-168 |
 | CM-INDEXER-084 | Revise | Extend rooted quality reporting with query-workload access statistics and advisory RTT-cost estimates derived from per-layer bytes touched through the existing rooted recall path | UR-169, UR-170, UR-171, UR-172, UR-173 |
+| CM-INDEXER-085 | Revise | Extend repository-local sweep automation with a runnable published-profile `0.7.0` fixed-budget ladder experiment plus execution plan, while carving out a local/testing-only clustering-cardinality selection exception for the approved ladder | UR-56, UR-57, UR-58, UR-174, UR-175, UR-176, UR-177, UR-178, UR-179 |
 
 ## Before / After
 
@@ -696,6 +703,11 @@
 - **Before [KNOWN]:** The rooted quality requirements did not require any repository-owned estimate of rooted-query transport cost, so operators could compare recall quality without any companion RTT-style read-amplification signal.
 - **After [KNOWN]:** The rooted quality requirements now require an advisory per-query RTT estimate computed from per-layer bytes read under a fixed 64 KiB congestion-window assumption, with each layer rounded up independently and then summed into one total per query.
 
+### BA-INDEXER-085
+
+- **Before [KNOWN]:** The repository-local testing automation covered version-series profile sweeps such as the `0.6.x` run, but it did not define a fixed-budget ladder experiment for one published profile or any exception to the current profile-owned clustering-cardinality rule.
+- **After [KNOWN]:** The requirements now extend the local/testing automation contract to include a runnable published-profile `0.7.0` ladder with fixed `beam_width * cluster_count` budget, an approved default five-rung set around the `16x64` baseline, comparable per-rung artifacts plus summary output, and a scoped local/testing-only mechanism for rung-specific clustering-cardinality selection.
+
 ## Requirements
 
 ### Functional Requirements
@@ -1014,10 +1026,15 @@ repository-local `cluster_count` overrides.
 - **Override rule [KNOWN]:** Callers SHALL NOT supply repository-local
   `cluster_count` overrides while clustering-enabled execution is governed by a
   selected published profile version.
+- **Local-testing ladder exception [KNOWN]:** The approved repository-local
+  `0.7.0` fixed-budget ladder may select rung-specific clustering cardinality as
+  part of local/testing operator automation, but that exception is limited to
+  the approved ladder surface and does not broaden the normal batch contract.
 - **Delegation boundary [KNOWN]:** Any future variation in clustering cardinality
   for this surface must come from an approved published profile version rather
-  than from repository-local remapping of profile internals.
-- **Traceability:** UR-56, UR-57, UR-58, UR-121, UR-123, UR-124, UR-139
+  than from repository-local remapping of profile internals, except for the
+  scoped local/testing ladder aid approved in this increment.
+- **Traceability:** UR-56, UR-57, UR-58, UR-121, UR-123, UR-124, UR-139, UR-174, UR-175, UR-179
 
 #### RQ-INDEXER-003I - Upstream feature-regression containment
 
@@ -1067,13 +1084,14 @@ experiment set without changing repository code for each tested profile.
 - **Local-only boundary [KNOWN]:** This automation is for local/testing operator
   evaluation and does not define a production runtime entrypoint, request
   schema, or deployment contract.
-- **Current experiment target [KNOWN]:** The active named experiment target is
-  the upstream `0.6.x` published-profile series, and the automation SHALL allow
-  operators to run the approved evaluation flow across that series.
+- **Current experiment target [KNOWN]:** The automation SHALL support approved
+  experiment targets on the same repository-local surface, including the earlier
+  upstream `0.6.x` published-profile series and the approved `0.7.0`
+  fixed-budget ladder defined in `RQ-INDEXER-003J1`.
 - **Comparison rule [INFERRED]:** The automation should continue to emit
-  per-profile artifacts and comparable summary output so `0.6.x` results can be
-  compared against earlier baselines such as `0.5.x` when those profiles are
-  included in the run.
+  per-target artifacts and comparable summary output so version-series sweeps
+  remain comparable to earlier baselines such as `0.5.x` when included, and
+  ladder runs remain comparable across their approved rung set.
 - **Contract-preservation rule [INFERRED]:** The automation SHALL drive the
   existing batch and rooted-quality tool surfaces instead of introducing a
   testing-only indexing API or changing MCP search semantics.
@@ -1081,7 +1099,38 @@ experiment set without changing repository code for each tested profile.
   as new published profiles land, but the automation surface should remain
   version-series-agnostic so future profile series do not require a new
   repository contract shape solely to update hard-coded experiment labels.
-- **Traceability:** UR-12, UR-84, UR-85, UR-139, UR-140, UR-145, UR-146, UR-147, UR-148
+- **Traceability:** UR-12, UR-84, UR-85, UR-139, UR-140, UR-145, UR-146, UR-147, UR-148, UR-174
+
+#### RQ-INDEXER-003J1 - Local fixed-budget ladder experiment automation
+
+LexonArchiveBuilder SHALL provide a repository-local runnable operator
+automation surface, evolving the same local/testing evaluation path currently
+used by `test.ps1`, that can execute an approved fixed-budget ladder for
+published profile `0.7.0` without changing production or MCP-facing contracts.
+
+- **Ladder rule [KNOWN]:** Each rung SHALL pair one beam width (the rooted
+  quality traversal width used for the evaluation) with one clustering
+  cardinality such that `beam_width * cluster_count` remains constant across the
+  ladder.
+- **Default budget [KNOWN]:** The first runnable ladder SHALL default to budget
+  `1024`, anchored on traversal width `16` and clustering cardinality `64`.
+- **Default rung set [KNOWN]:** The first runnable ladder SHALL default to the
+  five-rung sequence `4x256`, `8x128`, `16x64`, `32x32`, and `64x16`.
+- **Artifact rule [KNOWN]:** The automation SHALL emit per-rung build artifacts,
+  per-rung rooted-quality artifacts, and a comparable machine-readable summary
+  table that preserves rung identity plus the selected beam width and clustering
+  cardinality.
+- **Execution-plan rule [KNOWN]:** The same operator aid SHALL define an
+  executable plan covering preflight validation, rung ordering, artifact
+  locations, and post-run comparison steps for the approved ladder.
+- **Local-only boundary [KNOWN]:** This ladder automation is a local/testing aid
+  only and SHALL NOT redefine the production runtime contract, request schema,
+  or MCP-visible search and retrieval behavior.
+- **Scoped-selection boundary [INFERRED]:** Any rung-specific clustering
+  cardinality selection introduced for this ladder must remain scoped to the
+  repository-local experiment surface and SHALL NOT become a general low-level
+  clustering-control family for ordinary batch runs.
+- **Traceability:** UR-12, UR-84, UR-85, UR-139, UR-147, UR-148, UR-174, UR-175, UR-176, UR-177, UR-178, UR-179
 
 #### RQ-INDEXER-004 - Content resolution integration
 
@@ -1612,6 +1661,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - Requiring higher-layer parent or node block concurrency in the current increment before the upstream delegated indexing surface exposes a compatible implementation seam
 - Introducing a repository-local per-run clustering manifest or a repository-local block-classification scheme outside the upstream LexonGraph block-iteration contract
 - Defining repository-local clustering profiles, clustering modes, clustering algorithms, or option semantics beyond the approved upstream published profile contract used in this increment
+- Broadening the scoped local/testing-only ladder cardinality selector into a general-purpose production or MCP-visible clustering-tuning surface
 - Requiring detailed clustering-input inventories for successful clustering runs in this increment
 - Requiring the block-tree quality assessment tool to expose an MCP-visible interface in this increment
 - Reinterpreting advisory embedding-space quality heuristics as new LexonGraph-owned block-validity rules in this increment
@@ -1631,11 +1681,11 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Architecture remains extensible to future content types | Preserved | Collection-oriented input still covers both mailbox and document collections, and stage selection is defined in generic pipeline terms rather than mailbox-specific behavior |
 | Idempotence and recoverability stay aligned with underlying immutable block semantics | Preserved with clarified scope | Requirements extend hash-addressed identity expectations to normalized email artifacts and require clustering-only reruns over the same clustering-eligible block-store snapshot to remain semantically stable under unchanged upstream semantics |
 | Local development remains self-contained and batch-oriented | Preserved | Docker Compose is constrained to compose local dependencies around the batch container rather than changing the runtime model |
-| Local published-profile evaluation remains outside production and serving contracts | Preserved with new local/testing aid | Requirements constrain the `0.6.x` profile sweep to repository-local operator automation that reuses existing batch and quality boundaries rather than adding a production entrypoint or MCP-visible test surface |
+| Local published-profile evaluation remains outside production and serving contracts | Preserved with expanded local/testing aid | Requirements constrain both the earlier `0.6.x` sweep and the new `0.7.0` fixed-budget ladder to repository-local operator automation that reuses existing batch and quality boundaries rather than adding a production entrypoint or MCP-visible test surface |
 | Long-running batches remain observable without adding a control plane | Preserved with clarified scope | Progress reporting remains on the existing batch-runtime log surface and now explicitly includes the long-running embedding or leaf-materialization gap between mailbox expansion and downstream streaming-status visibility plus clustering-only replay submission progress, the handoff into upstream planning-pass waiting, and failure-only clustering diagnostics on the runtime log plus a request-adjacent artifact |
 | Caller-visible indexing and MCP contracts remain stable across the upstream API migration | Preserved with approved contract change | The stage surface and MCP retrieval semantics remain stable while clustering-enabled indexing adopts a profile-version selector plus defaulted published-profile contract in place of the retired low-level planning controls |
 | Clustering configuration remains explicit and replayable | Preserved with revised contract | Requirements now treat the selected published profile version as the replay-relevant clustering input rather than a repository-local mode, algorithm, and option tuple |
-| Clustering-size behavior remains deterministic under the selected profile | Preserved with revised ownership | Requirements now assign clustering cardinality to whichever published profile version is selected rather than to repository-local auto-sizing or caller overrides |
+| Clustering-size behavior remains deterministic under the selected profile | Preserved with scoped local/testing exception | Normal batch behavior still assigns clustering cardinality to the selected published profile version, while the approved `0.7.0` ladder adds one repository-local deterministic rung table for local/testing evaluation only |
 | Clustering-only replay does not require whole-store rediscovery | Revised with authoritative immutable audit artifact | Requirements now require a shared-BlockStore immutable replay-audit journal as the sole repository-owned replay authority and remove whole-store scan fallback |
 | Repository-owned progress artifacts stay aligned with immutable storage principles | Preserved with stronger alignment | Requirements now move replay and audit state onto immutable hash-addressed blocks plus a mutable head reference, matching the repository's broader storage model instead of retaining a special append-only file journal |
 | Required repository capabilities remain distinguishable from upstream regressions during the latest upgrade | Preserved with clarified scope | The requirements now force the upgrade to classify missing capabilities explicitly instead of silently narrowing split-stage replay, published-profile adoption, progress projection, or MCP-facing behavior |
@@ -1668,6 +1718,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - **Q-INDEXER-072 [UNKNOWN]:** Should the first `0.6.x` evaluation sweep run only the `0.6.x` series, or should the runnable `test.ps1` preserve an in-band `0.5.x` comparison baseline in the same invocation?
 - **Q-INDEXER-074 [UNKNOWN]:** Should a future increment make the rooted-query RTT-cost model configurable for different assumed congestion windows or transport regimes, or is the fixed 64 KiB model sufficient for the repository-owned diagnostic surface?
 - **Q-INDEXER-075 [UNKNOWN]:** If future block-store implementations add stronger client-side caching or prefetch semantics, should rooted-query access accounting remain a logical uncached traversal measure, or should a later increment add a second cache-aware metric family?
+- **Q-INDEXER-076 [UNKNOWN]:** After the first `0.7.0` ladder lands with default budget `1024`, should future ladders keep one repository-approved default rung table or expose budget-and-rung selection as an operator-editable input on the same local/testing automation surface?
 
 ## Coverage Notes
 
@@ -1760,6 +1811,11 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   - user request in this session: "adding a new diagnostic TNN-Recall (1, 5 and 10 key versions). TNN‑Recall Query Source Requirements 1. Corpus‑Based Evaluation (Required) The system SHALL support True Nearest Neighbor Recall evaluation using randomly sampled embeddings from the corpus. This mode SHALL be the default and SHALL be used for all aggregate recall metrics. - Sampling MUST be uniform over the embedding set. - Sampling MUST be reproducible given a seed. - Sample size MUST be configurable. - This mode SHALL be used for Mean Recall, StdDev Recall, and Recall Histograms. 2. User‑Query Evaluation (Optional) The system MAY support TNN‑Recall evaluation using user‑supplied query embeddings. This mode SHALL be treated as a diagnostic tool only and SHALL NOT contribute to aggregate recall metrics. - The system SHALL compute Recall@k for the user query. - The system SHALL report the exact neighbors and approximate neighbors for comparison. - The system SHALL label this result as “diagnostic recall.” 3. Separation of Modes The system SHALL clearly distinguish between: - Corpus‑based recall (statistical quality metric) - User‑query recall (debugging aid) Corpus‑based recall SHALL be the only mode used for automated quality evaluation."
   - user request in this session: "we need to improve the quality tool. I want it to report: stats on blocks touched per level and total, per query it should include number of blocks and size of blocks read it should also give an \"estimated\" query time (in rtt), it assumes a cwnd of 64k, with query time as: per layer data per layer / cwnd (rounded up) summarized into a total per query?"
   - user clarification in this session selecting: "Reachable embeddings under the supplied root (Recommended)"
+  - user request in this session: "we now need to design a ladder experiment that tries a combination of beam width and cluster size, using v0.7.0. profile, with the constraint that beam width * cluster size remains constant"
+  - user request in this session: "Use the skill tool to invoke the \"evolve\" skill, then follow the skill's instructions to help with: build this as a test script/plan we can execute."
+  - user clarification in this session: "it's not block_size_target that determines block size, but embeddings per cluster. I think it was 64 in the last run?"
+  - user clarification in this session selecting: "Yes, use 1024 as the default ladder budget (Recommended)"
+  - user clarification in this session selecting: "Yes, use that 5-rung default ladder (Recommended)"
   - user request in this session: "LexonGraph crate has been updated and now has a simpler higher level API that groups options into a versioned profile. Please switch to this API and use the v0.1.0 profile"
   - user clarification in this session selecting: "Replace the external control surface with profile-based v0.1.0 (Recommended)"
   - user request in this session: "LexonGraph has switched to exposing a versioned indexing profile. Currently we hard-code to v0.1.0 (I think). Make this an option we can test different profiles. Can we also pin to main of LexonGraph for now with an explicit note that this is so we can quickly test new profiles?"

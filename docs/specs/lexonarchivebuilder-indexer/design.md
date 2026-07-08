@@ -17,7 +17,7 @@ rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI se
 replay-stable fingerprinting, temporary upstream `main` tracking for
 rapid profile validation, upstream wgpu-acceleration revision
 compatibility, 0.6.x published-profile evaluation, local testing sweep
-automation, upstream embedding-readback API adoption, LAB-owned
+automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, LAB-owned
 replay-journaled split-stage recovery, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
 non-search artifacts in
@@ -36,6 +36,7 @@ latest published-profile and telemetry compatibility, temporary upstream
 `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, upstream regression assessment,
 0.6.x published-profile evaluation, local testing sweep automation,
+v0.7.0 fixed-budget ladder experiment automation,
 upstream embedding-readback API adoption, embedding-phase
 batch-progress observability,
 replay-submission observability, streaming-status observability,
@@ -412,8 +413,16 @@ auto-sizing or override merging for clustering-enabled execution in this
 increment. Any future variation in those values must come from approval of a
 different published profile version rather than ad hoc repository-local tuning.
 
+The one approved exception is the repository-local `0.7.0` fixed-budget ladder
+automation surface. That operator aid may realize one deterministic rung table
+that pairs a selected beam width with a selected clustering cardinality for
+local/testing experiment execution only. This exception remains outside the
+ordinary batch contract: it does not redefine `BatchRequest`, does not expose a
+general low-level clustering-tuning family, and does not alter production or
+MCP-facing behavior.
+
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003H,
-RQ-INDEXER-008, RQ-INDEXER-010A
+RQ-INDEXER-003J1, RQ-INDEXER-008, RQ-INDEXER-010A
 
 ### DSG-LFI-001I `Latest-upstream compatibility and regression boundary`
 
@@ -1328,8 +1337,8 @@ automation.
 ### DSG-LFI-007F `Local published-profile sweep automation surface`
 
 LexonArchiveBuilder preserves one repository-local operator automation surface,
-currently the runnable root `test.ps1` script, for evaluating the active
-published-profile experiment set in the local/testing environment.
+currently the runnable root `test.ps1` script, for evaluating approved
+published-profile experiments in the local/testing environment.
 
 That surface is intentionally outside the batch request schema and production
 deployment contract. It composes the already-approved `run` and rooted-quality
@@ -1338,16 +1347,45 @@ CLI boundaries rather than defining a testing-only indexing API.
 In this increment, the automation surface:
 
 - carries an operator-editable published-profile list whose active named target
-  is the upstream `0.6.x` series
+  may be the upstream `0.6.x` series for version-sweep evaluation
+- may instead execute the approved published-profile `0.7.0` fixed-budget
+  ladder by driving the same `run` plus rooted-quality workflow over one
+  repository-approved rung table
 - may include prior comparison baselines such as `0.5.x` in the same sweep
   without changing the omitted-selector default or widening the runtime
   contract
 - emits per-profile run artifacts, per-profile rooted-quality artifacts, and a
-  comparable summary output suitable for side-by-side evaluation
+  comparable summary output suitable for side-by-side evaluation, with ladder
+  runs preserving rung identity plus the selected beam width and clustering
+  cardinality in the emitted artifacts
 - remains version-series-agnostic so later published-profile series can be
   substituted without reshaping the repository contract
 
-**Traces to:** RQ-INDEXER-003J
+**Traces to:** RQ-INDEXER-003J, RQ-INDEXER-003J1
+
+### DSG-LFI-007F1 `Local fixed-budget ladder execution plan`
+
+The approved `0.7.0` ladder experiment is realized as an execution plan layered
+onto the same local/testing automation surface rather than as a second operator
+entrypoint.
+
+That execution plan:
+
+1. defines one fixed ladder budget of `1024`, anchored on the prior successful
+   `16x64` baseline
+2. defines the default rung sequence `4x256`, `8x128`, `16x64`, `32x32`, and
+   `64x16`
+3. runs preflight validation for each rung before long-running execution
+4. executes rungs in deterministic order while preserving one artifact family
+   per rung for build output, rooted-quality output, and comparable summaries
+5. leaves post-hoc comparison and operator interpretation on repository-local
+   artifacts rather than on a new serving or telemetry surface
+
+Because the approved ladder is a repository-local experiment aid, its rung table
+is repository-owned and deterministic rather than an open-ended low-level
+clustering-control API.
+
+**Traces to:** RQ-INDEXER-003J1
 
 ### DSG-LFI-008 `Local and production parity boundary`
 

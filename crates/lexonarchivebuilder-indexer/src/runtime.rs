@@ -690,7 +690,20 @@ where
 fn resolved_published_profile(
     clustering: &ConfiguredClustering,
 ) -> Result<PublishedIndexingProfile, StreamingIndexerError> {
-    published_indexing_profile(clustering.profile_version)
+    let mut profile = published_indexing_profile(clustering.profile_version)?;
+    if let Some(cluster_count) = clustering.local_testing_cluster_count {
+        #[allow(unreachable_patterns)]
+        match &mut profile.planning_strategy {
+            PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => {
+                settings.cluster_count = cluster_count;
+            }
+            PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => {
+                settings.cluster_count = cluster_count;
+            }
+            _ => {}
+        }
+    }
+    Ok(profile)
 }
 
 fn clustering_failure_input(item: &IndexItem<ContentRef>) -> ClusteringFailureInput {
@@ -1431,7 +1444,8 @@ fn validate_request_with_overrides(
     clustering_overrides: ClusteringConfigOverrides,
 ) -> Result<(), RuntimeError> {
     request.validate()?;
-    let clustering = clustering_overrides.to_configured_clustering(request.profile_version)?;
+    let clustering = clustering_overrides
+        .to_configured_clustering(request.profile_version, &request.environment)?;
     let stage = request.stage;
     let _block_store = ConfiguredBlockStore::from_environment(request_dir, &request.environment)?;
     let mutable_ref_store = request
@@ -1439,11 +1453,12 @@ fn validate_request_with_overrides(
         .resolve_mutable_ref_store(request_dir, &request.ref_name);
 
     if stage.includes_clustering() {
+        let profile = resolved_published_profile(&clustering)?;
         let _: StreamingIndexingRun<ContentRef, _, _, _, _> =
-            StreamingIndexingRun::with_published_profile(
+            StreamingIndexingRun::with_resolved_published_profile(
                 ValidateOnlyResolver,
                 ValidateOnlyEmbeddingProvider,
-                clustering.profile_version,
+                profile,
                 request.to_embedding_spec(),
                 request.block_size_target,
             )?;
@@ -1478,7 +1493,8 @@ where
 {
     let progress: ProgressReporter = Arc::new(progress);
     request.validate()?;
-    let clustering = clustering_overrides.to_configured_clustering(request.profile_version)?;
+    let clustering = clustering_overrides
+        .to_configured_clustering(request.profile_version, &request.environment)?;
     let stage = request.stage;
     let block_store = ConfiguredBlockStore::from_environment(request_dir, &request.environment)?;
     let mutable_ref_store = request
@@ -2746,10 +2762,11 @@ where
     let diagnostics_resolver = resolver.clone();
     let diagnostics_embedding_provider = embedding_provider.clone();
 
-    let mut indexer = StreamingIndexingRun::with_published_profile(
+    let resolved_profile = resolved_published_profile(&config.clustering)?;
+    let mut indexer = StreamingIndexingRun::with_resolved_published_profile(
         resolver,
         embedding_provider,
-        config.clustering.profile_version,
+        resolved_profile,
         embedding_spec.clone(),
         config.block_size_target,
     )?;
@@ -3544,7 +3561,7 @@ mod tests {
 
     use ciborium::value::Value;
     use lexongraph_block::Content;
-    use lexongraph_streaming_indexer::PUBLISHED_PROFILE_V0_1_0;
+    use lexongraph_streaming_indexer::{PUBLISHED_PROFILE_V0_1_0, PublishedProfileVersion};
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -4674,6 +4691,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_testing_cluster_override_runs_published_profile_end_to_end() {
+        let temp = tempdir().unwrap();
+        for index in 0..12 {
+            fs::write(
+                temp.path().join(format!("doc-{index}.txt")),
+                format!("document {index}\n"),
+            )
+            .unwrap();
+        }
+
+        let server = spawn_distinct_embedding_server(12);
+        let request_path = temp.path().join("request.json");
+        fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&json!({
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": {
+                        "base_url": server.base_url,
+                        "model": "all-MiniLM-L6-v2",
+                        "request_timeout_secs": 5,
+                        "max_retries": 0,
+                        "retry_delay_ms": 1
+                    }
+                },
+                "embedding_spec": {
+                    "dims": 2,
+                    "encoding": "f32le"
+                },
+                "profile_version": "0.7.0",
+                "ref_name": "test-branch",
+                "items": (0..12)
+                    .map(|index| json!({ "kind": "document", "path": format!("doc-{index}.txt") }))
+                    .collect::<Vec<_>>()
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let summary = run_request_file_with_overrides(
+            &request_path,
+            None,
+            ClusteringConfigOverrides {
+                profile_version: None,
+                local_testing_cluster_count: Some(32),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!summary.block_ids.is_empty());
+        server.join();
+    }
+
+    #[tokio::test]
     async fn validate_only_reports_published_profile_block_size_conflict() {
         let temp = tempdir().unwrap();
         let request_path = temp.path().join("request.json");
@@ -5085,7 +5158,10 @@ mod tests {
     #[test]
     fn effective_clustering_diagnostics_uses_published_profile_metadata() {
         let clustering = ClusteringConfigOverrides::default()
-            .to_configured_clustering(lexongraph_streaming_indexer::PUBLISHED_PROFILE_V0_1_0)
+            .to_configured_clustering(
+                lexongraph_streaming_indexer::PUBLISHED_PROFILE_V0_1_0,
+                &local_test_environment(String::new()),
+            )
             .expect("published profile config");
         let diagnostics =
             effective_clustering_diagnostics(&clustering).expect("published profile diagnostics");
@@ -5101,6 +5177,24 @@ mod tests {
         assert_eq!(diagnostics.summary_policy_id, "exact-centroid");
         assert_eq!(diagnostics.cluster_count, Some(157));
         assert_eq!(diagnostics.random_seed, Some(11));
+    }
+
+    #[test]
+    fn effective_clustering_diagnostics_reflects_local_testing_cluster_override() {
+        let clustering = ClusteringConfigOverrides {
+            profile_version: Some(PublishedProfileVersion::new(0, 7, 0)),
+            local_testing_cluster_count: Some(32),
+        }
+        .to_configured_clustering(
+            PublishedProfileVersion::new(0, 7, 0),
+            &local_test_environment(String::new()),
+        )
+        .expect("published profile config");
+        let diagnostics =
+            effective_clustering_diagnostics(&clustering).expect("published profile diagnostics");
+
+        assert_eq!(diagnostics.profile_version, "0.7.0");
+        assert_eq!(diagnostics.cluster_count, Some(32));
     }
 
     #[test]

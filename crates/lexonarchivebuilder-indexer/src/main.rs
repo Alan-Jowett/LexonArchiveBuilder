@@ -335,6 +335,26 @@ mod tests {
     }
 
     #[test]
+    fn run_command_parses_local_testing_cluster_count_override() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "run",
+            "--request",
+            "request.json",
+            "--local-testing-cluster-count",
+            "32",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Run { clustering, .. } => {
+                assert_eq!(clustering.local_testing_cluster_count, Some(32));
+            }
+            _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
     fn run_command_rejects_retired_low_level_clustering_flags() {
         let error = Cli::try_parse_from([
             "lexonarchivebuilder-indexer",
