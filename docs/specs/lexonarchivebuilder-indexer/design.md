@@ -1451,6 +1451,16 @@ counts, skipped-already-present counts, and failures. That result contract is
 about transfer outcomes only; it does not implicitly publish mutable references
 or redefine any upstream block-store backend semantics.
 
+Because rooted block copy can spend a long time traversing reachable block
+graphs or waiting on destination persistence without any intermediate final
+artifact to inspect, the same CLI surface also emits basic in-flight liveness on
+its normal operator-visible output stream before final completion. That default
+liveness remains bounded to the short-lived CLI invocation, does not require a
+separate progress API or daemon, and is intentionally lighter-weight than any
+future opt-in verbose diagnostic mode. The design leaves the exact cadence and
+message schema to implementation so long as ordinary operators can tell that
+rooted traversal or transfer work is still advancing.
+
 **Traces to:** RQ-INDEXER-005B, RQ-INDEXER-009
 
 ### DSG-LFI-008 `Local and production parity boundary`
@@ -1591,7 +1601,8 @@ LexonArchiveBuilder-owned verification artifacts validate:
   required output surfaces
 - correct rooted block copy over the shared `BlockStore` boundary, including
   reachable-only traversal, identity-preserving transfer, safe skip-on-present
-  behavior, failure reporting, and preservation of mutable-reference exclusion
+  behavior, failure reporting, default in-flight liveness on the normal CLI
+  surface, and preservation of mutable-reference exclusion
 - correct application and defaulting of the administrator-defined concurrency
   budget
 - preservation of stable batch contracts across environments

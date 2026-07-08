@@ -202,6 +202,8 @@
 - **UR-189 [KNOWN]:** The repository should add a `production-v2` block-store profile that keeps the current production-oriented targeting shape but uses the alternate Azure-backed LexonGraph block-store implementation rather than the existing Azure Blob-backed overlay path.
 - **UR-190 [INFERRED]:** The new `production-v2` profile should be exposed consistently across indexer-owned block-store-consuming tools rather than being introduced for the rooted copy command alone, so repository operator workflows keep one shared storage-profile vocabulary.
 - **UR-191 [INFERRED]:** The existing `production` overlay profile remains an approved mode; `production-v2` is additive and should preserve the current CLI-only copy scope, MCP separation, and content-type-neutral `BlockStore` abstraction boundary.
+- **UR-192 [KNOWN]:** The rooted block-copy CLI should emit default user-visible liveness or progress output during long-running copy operations so operators can distinguish active traversal or transfer work from a hung invocation.
+- **UR-193 [KNOWN]:** Basic rooted-copy liveness should be available without an opt-in verbosity flag; any future verbose mode may add detail, but the default CLI contract must already show that work is continuing.
 
 ## Change Manifest
 
@@ -293,6 +295,7 @@
 | CM-INDEXER-084 | Revise | Extend rooted quality reporting with query-workload access statistics and advisory RTT-cost estimates derived from per-layer bytes touched through the existing rooted recall path | UR-169, UR-170, UR-171, UR-172, UR-173 |
 | CM-INDEXER-085 | Revise | Extend repository-local sweep automation with a runnable published-profile `0.7.0` fixed-budget ladder experiment plus execution plan, while carving out a local/testing-only clustering-cardinality selection exception for the approved ladder | UR-56, UR-57, UR-58, UR-174, UR-175, UR-176, UR-177, UR-178, UR-179 |
 | CM-INDEXER-086 | Add | Introduce a CLI-only rooted block-copy operator tool that layers on top of existing LexonGraph block stores and copies immutable blocks reachable from caller-selected roots between approved block-store targets without changing indexing or MCP contracts | UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188, UR-189, UR-190, UR-191 |
+| CM-INDEXER-087 | Revise | Require the rooted block-copy CLI to emit default long-running liveness or progress visibility on its normal operator-facing output surface rather than staying silent until final summary | UR-180, UR-181, UR-186, UR-192, UR-193 |
 
 ## Before / After
 
@@ -730,6 +733,11 @@
 
 - **Before [KNOWN]:** The requirements treated the non-local operator-facing block-store target as one fixed production overlay profile, so direct Azure-backed writes could not be added without violating the repository-wide shared tool-targeting contract.
 - **After [KNOWN]:** The requirements now allow an additive `production-v2` profile alongside the existing production overlay profile so indexer-owned tools can target either the established cache-backed Azure path or the alternate direct Azure-backed LexonGraph store implementation through one shared profile vocabulary.
+
+### BA-INDEXER-088
+
+- **Before [KNOWN]:** The rooted block-copy requirements defined final summary and artifact output, but they did not require any default in-flight liveness signal while a large rooted traversal or transfer was still running.
+- **After [KNOWN]:** The requirements now require the rooted block-copy CLI to emit basic default liveness or progress on its normal output surface during long-running copy work so operators can distinguish active traversal or transfer from a hung invocation without opting into a verbose flag.
 
 ## Requirements
 
@@ -1287,6 +1295,10 @@ to another configured block store.
 - **Output requirement [KNOWN]:** The tool SHALL emit both a human-readable
   summary and a machine-readable artifact that reports requested roots, copied
   block counts, skipped-already-present counts, and copy failures.
+- **Liveness requirement [KNOWN]:** During long-running rooted traversals or
+  block transfer work, the tool SHALL emit basic default operator-visible
+  liveness or progress on its normal CLI output surface before final completion
+  so a large copy does not appear hung while work is still advancing.
 - **Mutable-reference exclusion [KNOWN]:** This increment copies immutable block
   content only; repository-owned mutable references such as current-root or
   replay-journal-head publication remain out of scope unless a later approved
@@ -1298,7 +1310,7 @@ to another configured block store.
 - **Surface boundary [KNOWN]:** The tool is additive to existing indexing,
   quality, search, and MCP surfaces and SHALL NOT become an indexing stage, a
   `BatchRequest` feature, or an MCP-visible API in this increment.
-- **Traceability:** UR-153, UR-154, UR-155, UR-156, UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188, UR-189, UR-190, UR-191
+- **Traceability:** UR-153, UR-154, UR-155, UR-156, UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188, UR-189, UR-190, UR-191, UR-192, UR-193
 
 #### RQ-INDEXER-006 - Embedding provider integration
 
@@ -1758,6 +1770,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Long-running batches remain observable without adding a control plane | Preserved with clarified scope | Progress reporting remains on the existing batch-runtime log surface and now explicitly includes the long-running embedding or leaf-materialization gap between mailbox expansion and downstream streaming-status visibility plus clustering-only replay submission progress, the handoff into upstream planning-pass waiting, and failure-only clustering diagnostics on the runtime log plus a request-adjacent artifact |
 | Caller-visible indexing and MCP contracts remain stable across the upstream API migration | Preserved with approved contract change | The stage surface and MCP retrieval semantics remain stable while clustering-enabled indexing adopts a profile-version selector plus defaulted published-profile contract in place of the retired low-level planning controls |
 | Immutable block identity remains the transfer contract across storage targets | Preserved with expanded operator tooling | The rooted copy tool is constrained to copy hash-addressed immutable blocks through the shared `BlockStore` boundary without redefining block payload semantics, mutable-reference publication, or MCP behavior |
+| Long-running operator tools remain observable without adding a control plane | Preserved with expanded scope | Requirements now extend the existing no-silent-gap observability principle to the rooted block-copy CLI, requiring default operator-visible liveness on the normal CLI surface during long-running rooted traversal or transfer work rather than only at final summary time |
 | Clustering configuration remains explicit and replayable | Preserved with revised contract | Requirements now treat the selected published profile version as the replay-relevant clustering input rather than a repository-local mode, algorithm, and option tuple |
 | Clustering-size behavior remains deterministic under the selected profile | Preserved with scoped local/testing exception | Normal batch behavior still assigns clustering cardinality to the selected published profile version, while the approved `0.7.0` ladder adds one repository-local deterministic rung table for local/testing evaluation only |
 | Clustering-only replay does not require whole-store rediscovery | Revised with authoritative immutable audit artifact | Requirements now require a shared-BlockStore immutable replay-audit journal as the sole repository-owned replay authority and remove whole-store scan fallback |
@@ -1794,10 +1807,13 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - **Q-INDEXER-075 [UNKNOWN]:** If future block-store implementations add stronger client-side caching or prefetch semantics, should rooted-query access accounting remain a logical uncached traversal measure, or should a later increment add a second cache-aware metric family?
 - **Q-INDEXER-076 [UNKNOWN]:** After the first `0.7.0` ladder lands with default budget `1024`, should future ladders keep one repository-approved default rung table or expose budget-and-rung selection as an operator-editable input on the same local/testing automation surface?
 - **Q-INDEXER-077 [UNKNOWN]:** Should a future block-copy increment also move repository-owned mutable references such as current-root and replay-journal-head publication, or should that remain a separate explicit operator workflow even after immutable rooted-block copying exists?
+- **Q-INDEXER-078 [UNKNOWN]:** If a later increment adds `--verbose` or equivalent richer diagnostics to rooted block copy, what additional per-block or per-phase detail would be useful without overwhelming ordinary operator workflows?
 
 ## Coverage Notes
 
 - **Covered sources [KNOWN]:**
+  - user request in this session: "can we ammend the tool to print some indication that it is working, maybe a --verbose mode or somethign?"
+  - user clarification in this session selecting: "Always show basic progress/liveness (Recommended)"
   - user request in this session: "clean up the dead spec/code that is unrelated to the new profile version based path. It has left over stuff from the previous path where we tried to define it at this layer."
   - user request in this session: "the upstream LexonGraph API has evolved to allow either divisive or aggregation based clustering. We need to expose this as an option at this layer as well"
   - user clarification in this session: "I think it is important to both. Aggregate should be the default with an option to try out divisive (but I suspect that won't be interesting)"

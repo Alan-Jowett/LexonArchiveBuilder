@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonArchiveBuilder contributors
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -30,6 +32,7 @@ use lexonarchivebuilder_indexer::{
     ClusteringConfigOverrides, ExecutionStage, run_request_file_with_outputs,
     validate_request_file_with_overrides, write_summary_file,
 };
+use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 
 const DEFAULT_LOCAL_MODEL: &str = "all-MiniLM-L6-v2";
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
@@ -37,6 +40,7 @@ const DEFAULT_MAX_RETRIES: u32 = 5;
 const DEFAULT_RETRY_DELAY_MS: u64 = 1_000;
 const STRUCTURAL_FINDINGS_EXIT_CODE: i32 = 2;
 const COPY_FAILURES_EXIT_CODE: i32 = 3;
+const COPY_LIVENESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "LexonArchiveBuilder batch indexer MVP")]
@@ -288,6 +292,36 @@ fn configured_block_store_from_environment(
         .context("failed to configure block store")
 }
 
+async fn await_with_copy_liveness<Fut, F, T>(
+    operation: Fut,
+    heartbeat_interval: Duration,
+    mut heartbeat_message: F,
+) -> T
+where
+    Fut: Future<Output = T>,
+    F: FnMut(Duration) -> String,
+{
+    let start = std::time::Instant::now();
+    let mut heartbeat = interval_at(TokioInstant::now() + heartbeat_interval, heartbeat_interval);
+    heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    tokio::pin!(operation);
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut operation => return result,
+            _ = heartbeat.tick() => eprintln!("{}", heartbeat_message(start.elapsed())),
+        }
+    }
+}
+
+fn format_copy_liveness_message(root_count: usize, elapsed: Duration) -> String {
+    format!(
+        "Rooted block copy still running after {}s for {} requested root(s)...",
+        elapsed.as_secs(),
+        root_count
+    )
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -404,7 +438,12 @@ async fn main() -> anyhow::Result<()> {
             let destination_store = configured_block_store_from_environment(
                 &destination_block_store.to_environment_config(),
             )?;
-            let report = copy_rooted_blocks(&source_store, &destination_store, &root_ids).await;
+            let report = await_with_copy_liveness(
+                copy_rooted_blocks(&source_store, &destination_store, &root_ids),
+                COPY_LIVENESS_HEARTBEAT_INTERVAL,
+                |elapsed| format_copy_liveness_message(root_ids.len(), elapsed),
+            )
+            .await;
             let output_path = json_out.unwrap_or_else(|| default_copy_report_path(&root_ids));
             write_copy_report(&output_path, &report)?;
             println!("{}", render_copy_report_summary(&report));
@@ -443,7 +482,10 @@ fn normalize_embedding_base_url(endpoint: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use super::*;
+    use tokio::time::sleep;
 
     #[test]
     fn run_command_parses_stage_override() {
@@ -914,5 +956,51 @@ mod tests {
             normalize_embedding_base_url("http://localhost:8080"),
             "http://localhost:8080"
         );
+    }
+
+    #[tokio::test]
+    async fn copy_liveness_heartbeat_emits_for_slow_operations() {
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&messages);
+
+        let output = await_with_copy_liveness(
+            async {
+                sleep(Duration::from_millis(25)).await;
+                7usize
+            },
+            Duration::from_millis(5),
+            move |elapsed| {
+                let message = format_copy_liveness_message(2, elapsed);
+                captured.lock().unwrap().push(message.clone());
+                message
+            },
+        )
+        .await;
+
+        assert_eq!(output, 7);
+        let messages = messages.lock().unwrap();
+        assert!(!messages.is_empty());
+        assert!(messages[0].contains("still running"));
+        assert!(messages[0].contains("2 requested root(s)"));
+    }
+
+    #[tokio::test]
+    async fn copy_liveness_heartbeat_stays_quiet_for_fast_operations() {
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&messages);
+
+        let output = await_with_copy_liveness(
+            async { 11usize },
+            Duration::from_millis(20),
+            move |elapsed| {
+                let message = format_copy_liveness_message(1, elapsed);
+                captured.lock().unwrap().push(message.clone());
+                message
+            },
+        )
+        .await;
+
+        assert_eq!(output, 11);
+        assert!(messages.lock().unwrap().is_empty());
     }
 }

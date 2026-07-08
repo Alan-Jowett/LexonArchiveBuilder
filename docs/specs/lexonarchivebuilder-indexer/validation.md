@@ -651,9 +651,11 @@ transfer path, skips blocks that are already present at the destination while
 continuing the rooted transfer successfully, reports requested-root,
 copied-block, skipped-already-present, and failed-block outcomes on both
 human-readable and machine-readable output surfaces with enough detail to
-identify the failing block identity or equivalent rooted transfer step, and
-leaves mutable references such as current-root and replay-journal-head
-unchanged.
+identify the failing block identity or equivalent rooted transfer step, emits
+basic default in-flight liveness or progress on the normal CLI output surface
+before final completion when the rooted copy runs long enough that silence
+would otherwise resemble a hang, and leaves mutable references such as
+current-root and replay-journal-head unchanged.
 
 **Traces to:** RQ-INDEXER-005B, DSG-LFI-005D, DSG-LFI-007G
 
@@ -871,7 +873,9 @@ caller-selected roots plus their reachable immutable blocks, and keeps mutable
 reference copying plus whole-store replication out of scope for this increment.
 The same package must also keep `production-v2` as an additive approved
 block-store profile within the shared repository targeting contract rather than
-as a copy-only storage exception.
+as a copy-only storage exception, while requiring default rooted-copy liveness
+on the normal CLI surface rather than making ordinary operators opt into a
+verbose-only signal to see that long-running transfer work is still active.
 
 **Traces to:** RQ-INDEXER-005B, RQ-INDEXER-009, RQ-INDEXER-010A, DSG-LFI-005D,
 DSG-LFI-007G, DSG-LFI-009, DSG-LFI-011
