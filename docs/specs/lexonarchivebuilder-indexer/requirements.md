@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, and v2 custom-block adoption for repository-owned non-search artifacts
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics and rooted TNN-recall diagnostics, rooted CLI search over stored trees, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, and v2 custom-block adoption for repository-owned non-search artifacts
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, and v2 custom-block adoption for repository-owned non-search artifacts
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, and v2 custom-block adoption for repository-owned non-search artifacts
 
 ## USER-REQUEST
 
@@ -179,6 +179,11 @@
 - **UR-166 [INFERRED]:** The replay-audit journal should document repository-owned embedding and indexing progress at a content-type-agnostic orchestration boundary without redefining LexonGraph-owned block identity, embedding semantics, or MCP-visible search behavior.
 - **UR-167 [KNOWN]:** Each replay-audit entry should be detailed enough to audit what work was performed, including the relevant input identities, the action or step kind, and the generated block identities or equivalent durable outputs.
 - **UR-168 [KNOWN]:** When indexing produces a new final root block, LexonArchiveBuilder should publish that current root through a repository-owned mutable reference mechanism so later invocations and operators can discover the latest root without depending on request-local output capture.
+- **UR-169 [KNOWN]:** The rooted quality tool should report statistics on blocks touched, broken down by block level and as overall totals, for the query workload it executes.
+- **UR-170 [KNOWN]:** For each query executed by the rooted quality tool, the report should include the number of blocks touched and the total size of blocks read.
+- **UR-171 [KNOWN]:** Per-query rooted-quality access reporting should break those block-touch and byte-read figures down per layer and summarize them into overall per-query totals.
+- **UR-172 [KNOWN]:** The rooted quality tool should report an estimated query time in RTT units assuming a congestion window of 64 KiB.
+- **UR-173 [KNOWN]:** The estimated RTT cost for a query should be computed by dividing each layer's bytes read by the 64 KiB congestion window, rounding each layer up to the next whole RTT, and summing those per-layer RTT counts into a total for the query.
 
 ## Change Manifest
 
@@ -267,6 +272,7 @@
 | CM-INDEXER-081 | Revise | Preserve split-stage recoverability and deterministic replay while removing whole-store scan fallback and treating the immutable replay-audit journal as the sole repository-owned replay authority | UR-8, UR-161, UR-163, UR-166 |
 | CM-INDEXER-082 | Add | Require replay-audit entries to carry enough detail to reconstruct what inputs were processed, what repository-owned action ran, and which durable block outputs or equivalent artifacts were produced | UR-161, UR-166, UR-167 |
 | CM-INDEXER-083 | Add | Publish the latest immutable final root through a repository-owned mutable reference mechanism so current-root discovery no longer depends on request-local output capture alone | UR-168 |
+| CM-INDEXER-084 | Revise | Extend rooted quality reporting with query-workload access statistics and advisory RTT-cost estimates derived from per-layer bytes touched through the existing rooted recall path | UR-169, UR-170, UR-171, UR-172, UR-173 |
 
 ## Before / After
 
@@ -679,6 +685,16 @@
 
 - **Before [KNOWN]:** The requirements preserved `BatchSummary` final-root reporting for successful materialization, but they did not define a repository-owned mutable discovery surface for the current published root itself.
 - **After [KNOWN]:** The requirements now require successful final-root materialization to publish the latest immutable root through a repository-owned mutable reference mechanism so current-root discovery is durable and no longer depends only on request-local output capture.
+
+### BA-INDEXER-083
+
+- **Before [KNOWN]:** The rooted quality requirements reported structure, embedding-space quality metrics, and rooted TNN-recall, but they did not require any visibility into how many stored blocks the query workload touched or how many serialized bytes those queries read by layer or in total.
+- **After [KNOWN]:** The rooted quality requirements now require the query workload to report block-touch counts and serialized bytes read both per level and as overall totals, including per-query breakdowns plus aggregate totals for the executed query set.
+
+### BA-INDEXER-084
+
+- **Before [KNOWN]:** The rooted quality requirements did not require any repository-owned estimate of rooted-query transport cost, so operators could compare recall quality without any companion RTT-style read-amplification signal.
+- **After [KNOWN]:** The rooted quality requirements now require an advisory per-query RTT estimate computed from per-layer bytes read under a fixed 64 KiB congestion-window assumption, with each layer rounded up independently and then summed into one total per query.
 
 ## Requirements
 
@@ -1362,6 +1378,15 @@ TNN-recall diagnostics for the reachable tree.
 - **TNN-recall extensibility [KNOWN]:** The assessment must support rooted
   TNN-recall diagnostics over the embedding corpus reachable from the supplied
   root without redefining the repository's search-serving surfaces.
+- **Query-workload access accounting [KNOWN]:** The assessment must report, for
+  the rooted query workload it executes, how many unique stored block
+  identities are touched and how many serialized block bytes are read, both
+  broken down by block level and summarized as overall totals.
+- **Query-workload boundary [INFERRED]:** This access accounting applies to
+  rooted queries executed by the quality tool itself, including corpus-based
+  TNN-recall queries and any optional user-query diagnostic recall queries that
+  are enabled for the invocation, rather than to unrelated MCP searches or
+  index-construction-time I/O.
 - **Embedding-readback boundary [KNOWN]:** When the assessment needs numerical
   embedding values from stored branch blocks, especially for evolving branch
   encodings such as EBCP, it SHALL obtain those values through the upstream
@@ -1378,7 +1403,7 @@ TNN-recall diagnostics for the reachable tree.
 - **Boundary [INFERRED]:** This requirement adds post-index assessment only; it
   does not redefine LexonGraph block validity semantics, change indexing-time
   construction behavior, or alter MCP search-serving behavior.
-- **Traceability:** UR-80, UR-81, UR-82, UR-83, UR-84, UR-85, UR-86, UR-87, UR-101, UR-102, UR-111, UR-112
+- **Traceability:** UR-80, UR-81, UR-82, UR-83, UR-84, UR-85, UR-86, UR-87, UR-101, UR-102, UR-111, UR-112, UR-169
 
 #### RQ-INDEXER-008D1 - Corpus-based rooted TNN-recall
 
@@ -1446,6 +1471,50 @@ machine-readable report for the rooted quality tool.
   tool and does not alter the existing MCP search contract or the separate
   rooted CLI text-search tool.
 - **Traceability:** UR-102, UR-106, UR-107, UR-110, UR-111
+
+#### RQ-INDEXER-008D4 - Rooted-query access accounting
+
+LexonArchiveBuilder SHALL report rooted-query access statistics for each query
+the rooted quality tool executes and for the overall executed query set.
+
+- **Per-query outputs [KNOWN]:** For each rooted query, the report SHALL include
+  the total count of unique block identities touched, the total serialized bytes
+  read, and the same two measures broken down by block level.
+- **Aggregate outputs [KNOWN]:** The report SHALL also include the same
+  block-touch and serialized-byte-read measures aggregated across the full
+  executed query set, while preserving the distinction between corpus-based and
+  optional user-query diagnostic recall modes when both are present.
+- **Byte-count rule [INFERRED]:** Serialized-byte reporting is based on the
+  encoded block size read through the shared `BlockStore` boundary for the
+  touched block identities, not on a repository-local reinterpretation of block
+  payload structure.
+- **Accounting boundary [INFERRED]:** This accounting models the logical rooted
+  query traversal performed by the quality tool and does not require reporting
+  cache-hit effects, retry behavior, or unrelated block-store reads outside the
+  query path.
+- **Surface boundary [INFERRED]:** This requirement extends only the CLI rooted
+  quality tool's reporting contract and does not alter MCP search-serving
+  behavior or the separate rooted CLI text-search surface.
+- **Traceability:** UR-169, UR-170, UR-171
+
+#### RQ-INDEXER-008D5 - Advisory RTT-cost estimate for rooted queries
+
+LexonArchiveBuilder SHALL report an advisory RTT-style transport-cost estimate
+for each rooted query executed by the quality tool.
+
+- **Fixed model [KNOWN]:** For this increment, the estimate SHALL assume a
+  congestion window of 64 KiB.
+- **Per-layer formula [KNOWN]:** For one rooted query, the RTT contribution for
+  a block level SHALL be `ceil(bytes_read_at_that_level / 65536)`.
+- **Per-query total [KNOWN]:** The total RTT estimate for one rooted query SHALL
+  be the sum of those rounded-up per-level RTT contributions.
+- **Aggregate reporting [INFERRED]:** When the report includes aggregate query
+  statistics over a query set, it SHOULD also include the corresponding rolled-
+  up RTT-cost totals or summaries derived from the per-query RTT estimates.
+- **Advisory boundary [KNOWN]:** This estimate is a transport-style diagnostic
+  expressed in RTT units only; it SHALL NOT be presented as a wall-clock latency
+  prediction or as a substitute for measured end-to-end runtime.
+- **Traceability:** UR-170, UR-171, UR-172, UR-173
 
 #### RQ-INDEXER-008E - Rooted CLI search over stored trees
 
@@ -1573,6 +1642,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Latest upstream telemetry remains subordinate to the existing runtime progress surface | Preserved with clarified scope | Requirements now constrain richer live telemetry and heartbeat events to the same repository-owned log stream rather than a new telemetry interface |
 | Operator-visible progress counts remain understandable across upstream telemetry changes | Preserved with clarified scope | Requirements now distinguish invocation-total delegated-item counts from stage-local or layer-local telemetry counts so upstream count-shape changes do not create misleading logs |
 | Post-index quality assessment remains subordinate to existing storage and serving boundaries | Preserved with clarified scope | The new assessment is constrained to a CLI-only operator tool that reads through the shared `BlockStore` boundary and does not alter MCP-facing behavior |
+| Rooted-quality access-cost reporting remains advisory and repository-local | Preserved with clarified scope | Query access statistics and RTT estimates are constrained to CLI quality diagnostics over the existing rooted `BlockStore` boundary and do not redefine MCP search latency, transport, or serving contracts |
 | Stored embedding format awareness remains upstream-owned | Preserved with revised ownership | Requirements now place supported stored-embedding encodings and reconstruction semantics behind the upstream LexonGraph readback API instead of a repository-local decoder table |
 | Aggregate recall evaluation remains rooted-corpus-based and reproducible | Preserved with clarified scope | TNN-Recall is constrained to uniform seeded sampling over the rooted reachable embedding set for aggregate metrics, while user-query recall remains diagnostic-only |
 | Operator CLI search remains additive to MCP search-serving behavior | Preserved with clarified scope | The new rooted CLI search tool is additive, uses the approved rooted-tree boundary plus `lexongraph-search`, and does not replace the MCP surface |
@@ -1596,6 +1666,8 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - **Q-INDEXER-071 [UNKNOWN]:** What size-oriented threshold or equivalent entry budget should trigger publication of the next immutable replay-audit journal block?
 - **Q-INDEXER-073 [UNKNOWN]:** Should current-root publication and replay-journal head publication share one already approved repository-wide reference-store artifact family, or must this increment define separate concrete mutable-reference artifacts under the same design class?
 - **Q-INDEXER-072 [UNKNOWN]:** Should the first `0.6.x` evaluation sweep run only the `0.6.x` series, or should the runnable `test.ps1` preserve an in-band `0.5.x` comparison baseline in the same invocation?
+- **Q-INDEXER-074 [UNKNOWN]:** Should a future increment make the rooted-query RTT-cost model configurable for different assumed congestion windows or transport regimes, or is the fixed 64 KiB model sufficient for the repository-owned diagnostic surface?
+- **Q-INDEXER-075 [UNKNOWN]:** If future block-store implementations add stronger client-side caching or prefetch semantics, should rooted-query access accounting remain a logical uncached traversal measure, or should a later increment add a second cache-aware metric family?
 
 ## Coverage Notes
 
@@ -1686,6 +1758,7 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   - user request in this session: "ok, can we pull latest lexongraph again? It has new telemtry"
   - user clarification in this session selecting: "Project the new upstream telemetry onto the existing runtime progress/log surface (Recommended)"
   - user request in this session: "adding a new diagnostic TNN-Recall (1, 5 and 10 key versions). TNN‑Recall Query Source Requirements 1. Corpus‑Based Evaluation (Required) The system SHALL support True Nearest Neighbor Recall evaluation using randomly sampled embeddings from the corpus. This mode SHALL be the default and SHALL be used for all aggregate recall metrics. - Sampling MUST be uniform over the embedding set. - Sampling MUST be reproducible given a seed. - Sample size MUST be configurable. - This mode SHALL be used for Mean Recall, StdDev Recall, and Recall Histograms. 2. User‑Query Evaluation (Optional) The system MAY support TNN‑Recall evaluation using user‑supplied query embeddings. This mode SHALL be treated as a diagnostic tool only and SHALL NOT contribute to aggregate recall metrics. - The system SHALL compute Recall@k for the user query. - The system SHALL report the exact neighbors and approximate neighbors for comparison. - The system SHALL label this result as “diagnostic recall.” 3. Separation of Modes The system SHALL clearly distinguish between: - Corpus‑based recall (statistical quality metric) - User‑query recall (debugging aid) Corpus‑based recall SHALL be the only mode used for automated quality evaluation."
+  - user request in this session: "we need to improve the quality tool. I want it to report: stats on blocks touched per level and total, per query it should include number of blocks and size of blocks read it should also give an \"estimated\" query time (in rtt), it assumes a cwnd of 64k, with query time as: per layer data per layer / cwnd (rounded up) summarized into a total per query?"
   - user clarification in this session selecting: "Reachable embeddings under the supplied root (Recommended)"
   - user request in this session: "LexonGraph crate has been updated and now has a simpler higher level API that groups options into a versioned profile. Please switch to this API and use the v0.1.0 profile"
   - user clarification in this session selecting: "Replace the external control surface with profile-based v0.1.0 (Recommended)"

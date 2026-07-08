@@ -13,6 +13,7 @@ published-profile version selection, latest published-profile and telemetry
 compatibility, upstream regression assessment, replay-submission and
 streaming-status observability, clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
+query access-cost reporting, rooted
 CLI search over stored trees, replay-stable fingerprinting, temporary
 upstream `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, 0.6.x published-profile
@@ -38,7 +39,8 @@ embedding-readback API adoption, upstream regression assessment,
 embedding-phase batch-progress observability,
 replay-submission observability, streaming-status observability,
 telemetry-count-semantics clarity, clustering-failure diagnostics, rooted
-block-tree quality assessment with rooted TNN-recall diagnostics, rooted CLI
+block-tree quality assessment with rooted TNN-recall diagnostics, rooted
+query access-cost reporting, rooted CLI
 search over stored trees, replay-stable fingerprinting, LAB-owned replay-journaled
 split-stage recovery, and leaf-layer parallel block scheduling in the
 local/testing profile.
@@ -527,9 +529,13 @@ size and configurable traversal width, derives mean recall, recall standard
 deviation, and recall histograms from that corpus-based mode only, records the
 selected traversal width in the emitted recall evidence, and obtains any
 numerical embedding values needed for those calculations through the upstream
-LexonGraph embedding readback API rather than a repository-local decoder.
+LexonGraph embedding readback API rather than a repository-local decoder. The
+same run also reports rooted-query access statistics for the executed corpus
+query set, including unique touched-block counts and serialized bytes read both
+per level and as overall totals, plus advisory RTT-cost estimates derived from
+the required per-level `ceil(level_bytes / 65536)` model.
 
-**Traces to:** RQ-INDEXER-005, RQ-INDEXER-008D, RQ-INDEXER-008D1, DSG-LFI-002D, DSG-LFI-002D1, DSG-LFI-002F, DSG-LFI-005B
+**Traces to:** RQ-INDEXER-005, RQ-INDEXER-008D, RQ-INDEXER-008D1, RQ-INDEXER-008D4, RQ-INDEXER-008D5, DSG-LFI-002D, DSG-LFI-002D1, DSG-LFI-002D3, DSG-LFI-002F, DSG-LFI-005B
 
 ### VAL-LFI-005B1
 
@@ -540,11 +546,13 @@ embeddings.
 **Pass condition:** when this optional mode is implemented, the report labels
 the result as `diagnostic recall`, computes Recall@1, Recall@5, and Recall@10
 for each supplied query, emits exact and approximate neighbors for comparison,
-excludes those results from aggregate recall statistics and histograms, and
-uses the upstream LexonGraph embedding readback API for any rooted stored
-embedding reconstruction needed by the comparison.
+excludes those results from aggregate recall statistics and histograms, reports
+the per-query touched-block counts, serialized bytes read, and advisory RTT
+estimate for each diagnostic query, and uses the upstream LexonGraph embedding
+readback API for any rooted stored embedding reconstruction needed by the
+comparison.
 
-**Traces to:** RQ-INDEXER-008D2, RQ-INDEXER-008D3, DSG-LFI-002D2, DSG-LFI-002F, DSG-LFI-007D
+**Traces to:** RQ-INDEXER-008D2, RQ-INDEXER-008D3, RQ-INDEXER-008D4, RQ-INDEXER-008D5, DSG-LFI-002D2, DSG-LFI-002D3, DSG-LFI-002F, DSG-LFI-007D
 
 ### VAL-LFI-005B2
 
@@ -559,6 +567,22 @@ runs across widths without ambiguity while continuing to source any rooted
 stored embedding reconstruction through the upstream LexonGraph readback API.
 
 **Traces to:** RQ-INDEXER-008D1, DSG-LFI-002D1, DSG-LFI-002F, DSG-LFI-007D
+
+### VAL-LFI-005B3
+
+Run the rooted block-tree quality tool against a representative stored tree and
+query workload whose approximate-neighbor path touches more than one block level
+and whose touched block sizes are independently knowable from the shared block
+store.
+
+**Pass condition:** for each executed rooted query, the report identifies the
+unique touched-block count, serialized bytes read, and per-level breakdowns for
+those two measures; the same report includes aggregate totals across the
+executed query set; and the advisory RTT estimate for each query equals the sum
+of the per-level `ceil(level_bytes / 65536)` contributions under the fixed 64
+KiB congestion-window model.
+
+**Traces to:** RQ-INDEXER-008D4, RQ-INDEXER-008D5, DSG-LFI-002D3, DSG-LFI-005B, DSG-LFI-007D
 
 ### VAL-LFI-005C
 

@@ -5,13 +5,16 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use half::f16;
 use lexongraph_block::{
     Block, BlockHash, BranchBlock, BranchEntry, EbcpDescriptor, EmbeddingSpec, LeafBlock,
-    LeafEntry, parse_branch_ebcp_descriptor, reconstruct_logical_branch_embedding_f32,
+    LeafEntry, ValidatedBlock, deserialize_block, parse_branch_ebcp_descriptor,
+    reconstruct_logical_branch_embedding_f32,
 };
-use lexongraph_block_store::{BlockStore, BlockStoreError};
+use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
 use lexongraph_search::{
     DefaultCandidateScorer, DefaultEmbeddingCompatibility, EncodedTargetEmbedding, Searcher,
 };
@@ -31,6 +34,7 @@ const DEFAULT_TNN_RECALL_SEED: u64 = 0;
 const REQUIRED_RECALL_AT: [usize; 3] = [1, 5, 10];
 const POWER_ITERATION_STEPS: usize = 8;
 const EPSILON: f32 = 1.0e-6;
+const RTT_CWND_BYTES: usize = 65_536;
 
 #[derive(Debug, Error)]
 pub enum TreeQualityError {
@@ -218,6 +222,32 @@ pub struct TnnRecallAtMetrics {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct QueryAccessLevelMetrics {
+    pub level: u64,
+    pub touched_block_count: usize,
+    pub bytes_read: usize,
+    pub estimated_rtts: usize,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct QueryAccessMetrics {
+    pub query_id: String,
+    pub touched_block_count: usize,
+    pub bytes_read: usize,
+    pub estimated_rtts: usize,
+    pub levels: Vec<QueryAccessLevelMetrics>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct QueryAccessSummary {
+    pub query_count: usize,
+    pub touched_block_count: usize,
+    pub bytes_read: usize,
+    pub estimated_rtts: usize,
+    pub levels: Vec<QueryAccessLevelMetrics>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct CorpusTnnRecallReport {
     pub query_source: String,
     pub corpus_size: usize,
@@ -226,6 +256,8 @@ pub struct CorpusTnnRecallReport {
     pub seed: u64,
     pub traversal_width: usize,
     pub recall_at: Vec<TnnRecallAtMetrics>,
+    pub access_summary: QueryAccessSummary,
+    pub query_accesses: Vec<QueryAccessMetrics>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -258,6 +290,12 @@ struct BlockComputedMetrics {
     spread: SpreadMetrics,
     pca_first_component_variance_fraction: f32,
     quantile_occupancy: QuantileOccupancyMetrics,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct QueryTouchedBlock {
+    level: u64,
+    bytes_read: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -305,6 +343,70 @@ impl TraversalState {
     fn push_finding(&mut self, finding: TreeQualityFinding) {
         self.structural_finding_count += 1;
         self.findings.push(finding);
+    }
+}
+
+struct CountingBlockStore<'a> {
+    inner: &'a dyn BlockStore,
+    touched_blocks: Mutex<HashMap<BlockHash, QueryTouchedBlock>>,
+}
+
+impl<'a> CountingBlockStore<'a> {
+    fn new(inner: &'a dyn BlockStore) -> Self {
+        Self {
+            inner,
+            touched_blocks: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn snapshot(&self) -> HashMap<BlockHash, QueryTouchedBlock> {
+        self.touched_blocks
+            .lock()
+            .expect("counting block store mutex poisoned")
+            .clone()
+    }
+}
+
+#[async_trait]
+impl BlockStore for CountingBlockStore<'_> {
+    async fn put_block_bytes(
+        &self,
+        block_id: &BlockHash,
+        block_bytes: &[u8],
+    ) -> Result<(), BlockStoreError> {
+        self.inner.put_block_bytes(block_id, block_bytes).await
+    }
+
+    async fn get_block_bytes(
+        &self,
+        block_id: &BlockHash,
+    ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+        self.inner.get_block_bytes(block_id).await
+    }
+
+    async fn get(&self, block_id: &BlockHash) -> Result<Option<ValidatedBlock>, BlockStoreError> {
+        let Some(bytes) = self.inner.get_block_bytes(block_id).await? else {
+            return Ok(None);
+        };
+        let validated =
+            deserialize_block(&bytes, block_id).map_err(BlockStoreError::DecodeFailure)?;
+        let level = match &validated.block {
+            Block::Branch(branch) => branch.level,
+            Block::Leaf(leaf) => leaf.level,
+        };
+        self.touched_blocks
+            .lock()
+            .expect("counting block store mutex poisoned")
+            .entry(*block_id)
+            .or_insert(QueryTouchedBlock {
+                level,
+                bytes_read: bytes.len(),
+            });
+        Ok(Some(validated))
+    }
+
+    fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+        self.inner.iter_block_ids()
     }
 }
 
@@ -489,6 +591,37 @@ pub fn render_report_summary(report: &TreeQualityReport) -> String {
             "- TNN Recall@{}: mean {:.6} stdev {:.6}, histogram [{}]",
             recall_at.k, recall_at.mean_recall, recall_at.stdev_recall, histogram
         ));
+    }
+
+    lines.push(format!(
+        "Corpus query access [{}]: queries {}, blocks {}, bytes {}, estimated RTTs {}",
+        report.corpus_tnn_recall.query_source,
+        report.corpus_tnn_recall.access_summary.query_count,
+        report.corpus_tnn_recall.access_summary.touched_block_count,
+        report.corpus_tnn_recall.access_summary.bytes_read,
+        report.corpus_tnn_recall.access_summary.estimated_rtts
+    ));
+    for level in &report.corpus_tnn_recall.access_summary.levels {
+        lines.push(format!(
+            "- access level {}: blocks {}, bytes {}, estimated RTTs {}",
+            level.level, level.touched_block_count, level.bytes_read, level.estimated_rtts
+        ));
+    }
+    lines.push("Per-query corpus access:".into());
+    for query_access in &report.corpus_tnn_recall.query_accesses {
+        lines.push(format!(
+            "- {}: blocks {}, bytes {}, estimated RTTs {}",
+            query_access.query_id,
+            query_access.touched_block_count,
+            query_access.bytes_read,
+            query_access.estimated_rtts
+        ));
+        for level in &query_access.levels {
+            lines.push(format!(
+                "  - level {}: blocks {}, bytes {}, estimated RTTs {}",
+                level.level, level.touched_block_count, level.bytes_read, level.estimated_rtts
+            ));
+        }
     }
 
     for layer in &report.layers {
@@ -880,10 +1013,11 @@ fn build_corpus_tnn_recall_report(
         .into_iter()
         .map(|k| (k, Vec::<usize>::new()))
         .collect::<BTreeMap<_, _>>();
+    let mut query_accesses = Vec::with_capacity(sampled_queries.len());
 
     for query in sampled_queries {
         let exact_neighbors = exact_neighbors(&state.corpus_entries, query, max_k)?;
-        let approximate_neighbors = approximate_neighbors(
+        let (approximate_neighbors, query_access) = approximate_neighbors(
             root_id,
             root_query_embedding_spec,
             query,
@@ -892,6 +1026,7 @@ fn build_corpus_tnn_recall_report(
             store,
             &searcher,
         )?;
+        query_accesses.push(query_access);
         for &k in &REQUIRED_RECALL_AT {
             let denominator = exact_neighbors.len().min(k);
             let approximate_ids = approximate_neighbors
@@ -923,6 +1058,8 @@ fn build_corpus_tnn_recall_report(
                 tnn_recall_metrics(k, k.min(corpus_size.saturating_sub(1)), &counts)
             })
             .collect(),
+        access_summary: summarize_query_accesses(&query_accesses),
+        query_accesses,
     })
 }
 
@@ -949,6 +1086,14 @@ fn zeroed_corpus_tnn_recall_report(
                 histogram: Vec::new(),
             })
             .collect(),
+        access_summary: QueryAccessSummary {
+            query_count: 0,
+            touched_block_count: 0,
+            bytes_read: 0,
+            estimated_rtts: 0,
+            levels: Vec::new(),
+        },
+        query_accesses: Vec::new(),
     }
 }
 
@@ -1060,9 +1205,18 @@ fn approximate_neighbors(
     traversal_width: usize,
     store: &dyn BlockStore,
     searcher: &Searcher<DefaultEmbeddingCompatibility, DefaultCandidateScorer>,
-) -> Result<Vec<CorpusLeafEntry>, TreeQualityError> {
+) -> Result<(Vec<CorpusLeafEntry>, QueryAccessMetrics), TreeQualityError> {
     if max_k == 0 {
-        return Ok(Vec::new());
+        return Ok((
+            Vec::new(),
+            QueryAccessMetrics {
+                query_id: query.neighbor_id.clone(),
+                touched_block_count: 0,
+                bytes_read: 0,
+                estimated_rtts: 0,
+                levels: Vec::new(),
+            },
+        ));
     }
     let target = EncodedTargetEmbedding::new(
         encode_embedding_values(
@@ -1072,6 +1226,8 @@ fn approximate_neighbors(
         )?,
         root_query_embedding_spec.clone(),
     );
+    let counting_store = Arc::new(CountingBlockStore::new(store));
+    let search_store = Arc::clone(&counting_store);
     let result = crate::block_store::block_on_future_factory(move || async move {
         search_with_partial_retry(
             searcher,
@@ -1079,12 +1235,12 @@ fn approximate_neighbors(
             &target,
             traversal_width,
             max_k.saturating_add(1),
-            store,
+            search_store.as_ref(),
         )
         .await
     })
     .map_err(TreeQualityError::from_search_error)?;
-    result
+    let neighbors = result
         .leaves
         .into_iter()
         .map(|leaf| {
@@ -1099,7 +1255,84 @@ fn approximate_neighbors(
             Err(_) => true,
         })
         .take(max_k)
+        .collect::<Result<Vec<_>, _>>()?;
+    let query_access = build_query_access_metrics(&query.neighbor_id, &counting_store.snapshot());
+    Ok((neighbors, query_access))
+}
+
+fn build_query_access_metrics(
+    query_id: &str,
+    touched_blocks: &HashMap<BlockHash, QueryTouchedBlock>,
+) -> QueryAccessMetrics {
+    let levels = build_level_access_metrics(touched_blocks.values().copied());
+    QueryAccessMetrics {
+        query_id: query_id.to_string(),
+        touched_block_count: touched_blocks.len(),
+        bytes_read: touched_blocks.values().map(|touch| touch.bytes_read).sum(),
+        estimated_rtts: levels.iter().map(|level| level.estimated_rtts).sum(),
+        levels,
+    }
+}
+
+fn summarize_query_accesses(query_accesses: &[QueryAccessMetrics]) -> QueryAccessSummary {
+    let mut by_level = BTreeMap::<u64, (usize, usize)>::new();
+    for query_access in query_accesses {
+        for level in &query_access.levels {
+            let entry = by_level.entry(level.level).or_default();
+            entry.0 += level.touched_block_count;
+            entry.1 += level.bytes_read;
+        }
+    }
+    let levels = by_level
+        .into_iter()
+        .map(
+            |(level, (touched_block_count, bytes_read))| QueryAccessLevelMetrics {
+                level,
+                touched_block_count,
+                bytes_read,
+                estimated_rtts: estimate_rtts(bytes_read),
+            },
+        )
+        .collect::<Vec<_>>();
+    QueryAccessSummary {
+        query_count: query_accesses.len(),
+        touched_block_count: query_accesses
+            .iter()
+            .map(|query| query.touched_block_count)
+            .sum(),
+        bytes_read: query_accesses.iter().map(|query| query.bytes_read).sum(),
+        estimated_rtts: query_accesses
+            .iter()
+            .map(|query| query.estimated_rtts)
+            .sum(),
+        levels,
+    }
+}
+
+fn build_level_access_metrics(
+    touched_blocks: impl IntoIterator<Item = QueryTouchedBlock>,
+) -> Vec<QueryAccessLevelMetrics> {
+    let mut by_level = BTreeMap::<u64, (usize, usize)>::new();
+    for touch in touched_blocks {
+        let entry = by_level.entry(touch.level).or_default();
+        entry.0 += 1;
+        entry.1 += touch.bytes_read;
+    }
+    by_level
+        .into_iter()
+        .map(
+            |(level, (touched_block_count, bytes_read))| QueryAccessLevelMetrics {
+                level,
+                touched_block_count,
+                bytes_read,
+                estimated_rtts: estimate_rtts(bytes_read),
+            },
+        )
         .collect()
+}
+
+fn estimate_rtts(bytes_read: usize) -> usize {
+    bytes_read.div_ceil(RTT_CWND_BYTES)
 }
 
 fn collect_corpus_entries(
@@ -1759,6 +1992,8 @@ mod tests {
         assert!(rendered.contains("Layer statistics:"));
         assert!(rendered.contains("Corpus TNN-recall [corpus-based]:"));
         assert!(rendered.contains("TNN Recall@1:"));
+        assert!(rendered.contains("Corpus query access [corpus-based]:"));
+        assert!(rendered.contains("Per-query corpus access:"));
         assert!(rendered.contains("Per-parent split effectiveness:"));
         assert!(rendered.contains("Per-block statistics:"));
         assert!(rendered.contains("quantile occupancies ["));
@@ -1801,6 +2036,48 @@ mod tests {
             assert_eq!(metric.histogram[0].matched_neighbor_count, 1);
             assert_eq!(metric.histogram[0].recall, 1.0);
         }
+        assert_eq!(report.corpus_tnn_recall.access_summary.query_count, 2);
+        assert_eq!(report.corpus_tnn_recall.query_accesses.len(), 2);
+        let mut total_blocks = 0usize;
+        let mut total_bytes = 0usize;
+        let mut total_rtts = 0usize;
+        for query_access in &report.corpus_tnn_recall.query_accesses {
+            let level_blocks: usize = query_access
+                .levels
+                .iter()
+                .map(|level| level.touched_block_count)
+                .sum();
+            let level_bytes: usize = query_access
+                .levels
+                .iter()
+                .map(|level| level.bytes_read)
+                .sum();
+            let level_rtts: usize = query_access
+                .levels
+                .iter()
+                .map(|level| level.estimated_rtts)
+                .sum();
+            assert_eq!(query_access.touched_block_count, level_blocks);
+            assert_eq!(query_access.bytes_read, level_bytes);
+            assert_eq!(query_access.estimated_rtts, level_rtts);
+            assert!(query_access.levels.iter().any(|level| level.level == 1));
+            assert!(query_access.levels.iter().any(|level| level.level == 0));
+            total_blocks += query_access.touched_block_count;
+            total_bytes += query_access.bytes_read;
+            total_rtts += query_access.estimated_rtts;
+        }
+        assert_eq!(
+            report.corpus_tnn_recall.access_summary.touched_block_count,
+            total_blocks
+        );
+        assert_eq!(
+            report.corpus_tnn_recall.access_summary.bytes_read,
+            total_bytes
+        );
+        assert_eq!(
+            report.corpus_tnn_recall.access_summary.estimated_rtts,
+            total_rtts
+        );
     }
 
     #[test]
@@ -1962,6 +2239,8 @@ mod tests {
         let rendered = fs::read_to_string(path).unwrap();
         assert!(rendered.contains("\"root_id\""));
         assert!(rendered.contains("\"corpus_tnn_recall\""));
+        assert!(rendered.contains("\"access_summary\""));
+        assert!(rendered.contains("\"query_accesses\""));
         assert!(rendered.contains("\"layers\""));
         assert!(rendered.contains("\"splits\""));
         assert!(rendered.contains("\"occupancies\""));

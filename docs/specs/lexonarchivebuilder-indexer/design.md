@@ -13,7 +13,7 @@ published-profile version selection, latest published-profile and
 telemetry compatibility, upstream regression assessment,
 replay-submission and streaming-status observability,
 clustering-failure diagnostics, rooted block-tree quality assessment with
-rooted TNN-recall diagnostics, rooted CLI search over stored trees,
+rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees,
 replay-stable fingerprinting, temporary upstream `main` tracking for
 rapid profile validation, upstream wgpu-acceleration revision
 compatibility, 0.6.x published-profile evaluation, local testing sweep
@@ -41,6 +41,7 @@ batch-progress observability,
 replay-submission observability, streaming-status observability,
 telemetry-count-semantics clarity, clustering-failure diagnostics,
 rooted block-tree quality assessment with rooted TNN-recall diagnostics,
+rooted query access-cost reporting,
 rooted CLI search over stored trees, replay-stable delegated item identity,
 LAB-owned replay-journaled split-stage recovery, and layer-parallel delegated
 block construction for the local/testing profile.
@@ -671,6 +672,12 @@ same metric outputs appear in the human-readable summary and JSON artifact with
 severity labeling that distinguishes hard structural failures from advisory
 quality statistics.
 
+The same rooted report family also carries rooted-query access-cost evidence for
+the query workload the quality tool executes. That evidence includes per-query
+and aggregate counts of unique touched blocks plus serialized bytes read, both
+broken down by block level and summarized as overall totals for the executed
+query set.
+
 The same rooted report family also carries rooted retrieval-quality evidence
 through TNN-recall. That evidence is mode-tagged so corpus-based quality
 evaluation remains distinguishable from optional user-query diagnostics in both
@@ -716,7 +723,7 @@ This flow is post-index analysis only. It does not change delegated index
 construction behavior, redefine LexonGraph validity rules, or introduce an
 MCP-visible diagnostics surface.
 
-**Traces to:** RQ-INDEXER-008D, RQ-INDEXER-008D3, RQ-INDEXER-009, RQ-INDEXER-010
+**Traces to:** RQ-INDEXER-008D, RQ-INDEXER-008D3, RQ-INDEXER-008D4, RQ-INDEXER-009, RQ-INDEXER-010
 
 ### DSG-LFI-002D1 `Rooted corpus TNN-recall flow`
 
@@ -743,7 +750,7 @@ rather than to the entire configured block store. The selected traversal width
 is carried in the emitted recall artifact so experiment results remain
 traceable.
 
-**Traces to:** RQ-INDEXER-008D1, RQ-INDEXER-008D3, RQ-INDEXER-010
+**Traces to:** RQ-INDEXER-008D1, RQ-INDEXER-008D3, RQ-INDEXER-008D4, RQ-INDEXER-008D5, RQ-INDEXER-010
 
 ### DSG-LFI-002D2 `User-query diagnostic recall mode`
 
@@ -762,7 +769,32 @@ boundaries as corpus-based recall, but it remains explicitly diagnostic:
 This keeps one-off debugging evidence available without letting ad hoc queries
 distort the repository-owned rooted-quality metric.
 
-**Traces to:** RQ-INDEXER-008D2, RQ-INDEXER-008D3
+**Traces to:** RQ-INDEXER-008D2, RQ-INDEXER-008D3, RQ-INDEXER-008D4, RQ-INDEXER-008D5
+
+### DSG-LFI-002D3 `Rooted-query access accounting and RTT-cost model`
+
+LexonArchiveBuilder realizes rooted-query access-cost reporting by attaching
+query-local traversal accounting to the same rooted retrieval path used for
+corpus-based TNN-recall and any optional user-query diagnostic recall.
+
+For each rooted query, the design records the set of unique block identities
+touched by the approximate-neighbor path, groups those touched blocks by block
+level, and derives per-level plus total serialized-byte counts from the encoded
+block sizes visible through the shared `BlockStore` boundary. The same
+accounting model then rolls those per-query measurements up into aggregate
+statistics for the executed query set while preserving recall-mode separation
+between corpus-based and optional diagnostic queries.
+
+The report also derives an advisory RTT-style transport-cost estimate for each
+query from that per-level byte accounting. For this increment the model is
+fixed: each level contributes `ceil(level_bytes / 65536)` RTTs, and the query's
+total RTT estimate is the sum of those rounded-up per-level contributions.
+
+This model is intentionally repository-owned and advisory-only. It expresses
+logical rooted-query read amplification in RTT units without claiming to predict
+cache-hit behavior, retry effects, CPU cost, or wall-clock latency.
+
+**Traces to:** RQ-INDEXER-008D4, RQ-INDEXER-008D5
 
 ### DSG-LFI-002E `Rooted CLI search flow`
 
@@ -1078,12 +1110,18 @@ statistics. The same rooted traversal also defines the exact embedding corpus
 used by rooted TNN-recall, so repository-owned aggregation stays rooted-
 snapshot-local rather than mixing data from unrelated stored trees.
 
+The same `BlockStore`-bounded rooted retrieval path is also the authority for
+rooted-query access accounting. Query access-cost reporting therefore reuses the
+same reachable block identities, block levels, and encoded block sizes visible
+through this boundary rather than inventing a parallel repository-local
+transport model.
+
 This design keeps assessment logic backend-neutral across local filesystem and
 the approved non-local overlay storage profile. It also prevents the repository from
 introducing a second storage-reader stack with different reachability or
 decoding semantics than the indexing path already uses.
 
-**Traces to:** RQ-INDEXER-005, RQ-INDEXER-008D, RQ-INDEXER-010
+**Traces to:** RQ-INDEXER-005, RQ-INDEXER-008D, RQ-INDEXER-008D4, RQ-INDEXER-008D5, RQ-INDEXER-010
 
 ### DSG-LFI-005C `Rooted search boundary through BlockStore`
 
@@ -1258,9 +1296,11 @@ automation or offline analysis. The operator surface does not expose the
 quantile-bin count in this increment; that remains a repository-defined default
 behind the quality-tool boundary. The same surface must clearly identify whether
 reported recall evidence came from rooted-corpus sampling or from optional
-diagnostic-query execution.
+diagnostic-query execution. It must also surface the rooted-query access
+statistics and advisory RTT-cost evidence tied to those query modes without
+adding a second operator surface or a transport-specific configuration API.
 
-**Traces to:** RQ-INDEXER-008D, RQ-INDEXER-008D1, RQ-INDEXER-008D2, RQ-INDEXER-008D3, RQ-INDEXER-009
+**Traces to:** RQ-INDEXER-008D, RQ-INDEXER-008D1, RQ-INDEXER-008D2, RQ-INDEXER-008D3, RQ-INDEXER-008D4, RQ-INDEXER-008D5, RQ-INDEXER-009
 
 ### DSG-LFI-007E `Rooted CLI search surface`
 
