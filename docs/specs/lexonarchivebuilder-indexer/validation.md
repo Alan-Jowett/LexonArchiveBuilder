@@ -808,6 +808,21 @@ failure signature without relying on the artifact.
 
 **Traces to:** RQ-INDEXER-008C, DSG-LFI-002C
 
+### VAL-LFI-007I
+
+Run one representative indexer command that exercises an underlying Azure SDK
+or HTTP-client path twice: once with `RUST_LOG` unset and once with a filter
+that enables the relevant SDK or transport components.
+
+**Pass condition:** with `RUST_LOG` unset, the command preserves the normal
+quiet default operator output apart from already-approved repository messages;
+with `RUST_LOG` set, the same process emits underlying SDK or transport
+diagnostics on the existing process output streams without requiring a new
+repository-specific CLI flag, command-specific switch, daemon, or MCP-visible
+diagnostics surface.
+
+**Traces to:** RQ-INDEXER-005C, DSG-LFI-002G
+
 ### VAL-LFI-008
 
 Inspect the repository's indexer specification package against MCP server
@@ -827,9 +842,12 @@ LexonGraph contracts.
 **Pass condition:** the package remains subordinate to
 `lexongraph-streaming-indexer`, `lexongraph-streaming-clustering`,
 `lexongraph-block-store`, and `lexongraph-embeddings-trait`, and does not
-redefine their public semantics.
+redefine their public semantics. If the package enables opt-in SDK diagnostics,
+it does so by initializing the standard Rust logging path around those
+dependencies rather than by redefining upstream SDK behavior or introducing a
+repository-owned parallel diagnostics protocol.
 
-**Traces to:** RQ-INDEXER-010A, DSG-LFI-001, DSG-LFI-011
+**Traces to:** RQ-INDEXER-005C, RQ-INDEXER-010A, DSG-LFI-001, DSG-LFI-002G, DSG-LFI-011
 
 ### VAL-LFI-009B
 

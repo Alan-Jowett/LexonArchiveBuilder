@@ -204,6 +204,8 @@
 - **UR-191 [INFERRED]:** The existing `production` overlay profile remains an approved mode; `production-v2` is additive and should preserve the current CLI-only copy scope, MCP separation, and content-type-neutral `BlockStore` abstraction boundary.
 - **UR-192 [KNOWN]:** The rooted block-copy CLI should emit default user-visible liveness or progress output during long-running copy operations so operators can distinguish active traversal or transfer work from a hung invocation.
 - **UR-193 [KNOWN]:** Basic rooted-copy liveness should be available without an opt-in verbosity flag; any future verbose mode may add detail, but the default CLI contract must already show that work is continuing.
+- **UR-194 [KNOWN]:** LexonArchiveBuilder operators need a supported way to turn on underlying Azure SDK and HTTP-client diagnostic logging when investigating storage or transport hangs in indexer-owned commands.
+- **UR-195 [KNOWN]:** That diagnostic logging should be enabled for the entire `lexonarchivebuilder-indexer` binary through the standard `RUST_LOG` environment-variable path rather than through a new repository-specific CLI flag, and it should remain opt-in rather than becoming default operator noise.
 
 ## Change Manifest
 
@@ -296,6 +298,7 @@
 | CM-INDEXER-085 | Revise | Extend repository-local sweep automation with a runnable published-profile `0.7.0` fixed-budget ladder experiment plus execution plan, while carving out a local/testing-only clustering-cardinality selection exception for the approved ladder | UR-56, UR-57, UR-58, UR-174, UR-175, UR-176, UR-177, UR-178, UR-179 |
 | CM-INDEXER-086 | Add | Introduce a CLI-only rooted block-copy operator tool that layers on top of existing LexonGraph block stores and copies immutable blocks reachable from caller-selected roots between approved block-store targets without changing indexing or MCP contracts | UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188, UR-189, UR-190, UR-191 |
 | CM-INDEXER-087 | Revise | Require the rooted block-copy CLI to emit default long-running liveness or progress visibility on its normal operator-facing output surface rather than staying silent until final summary | UR-180, UR-181, UR-186, UR-192, UR-193 |
+| CM-INDEXER-088 | Add | Enable opt-in Azure SDK and HTTP-client diagnostic logging for the entire indexer binary through standard `RUST_LOG` initialization on the existing process output surface rather than through a new repository-specific CLI flag | UR-33, UR-194, UR-195 |
 
 ## Before / After
 
@@ -738,6 +741,11 @@
 
 - **Before [KNOWN]:** The rooted block-copy requirements defined final summary and artifact output, but they did not require any default in-flight liveness signal while a large rooted traversal or transfer was still running.
 - **After [KNOWN]:** The requirements now require the rooted block-copy CLI to emit basic default liveness or progress on its normal output surface during long-running copy work so operators can distinguish active traversal or transfer from a hung invocation without opting into a verbose flag.
+
+### BA-INDEXER-089
+
+- **Before [KNOWN]:** The indexer binary did not define any supported repository-level way to activate underlying Azure SDK or HTTP-client diagnostics, so setting `RUST_LOG` alone was not a reliable debugging path for storage or transport hangs.
+- **After [KNOWN]:** The requirements now make `RUST_LOG` the approved opt-in diagnostic control for the entire `lexonarchivebuilder-indexer` binary, so repository operators can enable underlying SDK and HTTP-client logging without adding a new repository-specific CLI flag or making verbose diagnostics the default.
 
 ## Requirements
 
@@ -1312,6 +1320,26 @@ to another configured block store.
   `BatchRequest` feature, or an MCP-visible API in this increment.
 - **Traceability:** UR-153, UR-154, UR-155, UR-156, UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188, UR-189, UR-190, UR-191, UR-192, UR-193
 
+#### RQ-INDEXER-005C - Opt-in SDK diagnostic logging on existing CLI surfaces
+
+LexonArchiveBuilder SHALL support opt-in underlying SDK and HTTP-client
+diagnostic logging for the entire `lexonarchivebuilder-indexer` binary through
+the standard Rust environment-driven logging path.
+
+- **Activation contract [KNOWN]:** Operators SHALL be able to activate
+  repository-visible Azure SDK and HTTP-client diagnostics by setting
+  `RUST_LOG` or an equivalent standard Rust log-filter environment variable
+  recognized by the process, without requiring a repository-specific CLI flag.
+- **Scope [KNOWN]:** This activation contract SHALL apply across the indexer
+  binary rather than being limited to one subcommand such as rooted block copy.
+- **Opt-in boundary [KNOWN]:** Diagnostic logging SHALL remain disabled by
+  default so ordinary indexing, quality, search, and copy workflows do not gain
+  unsolicited SDK or transport noise.
+- **Surface boundary [INFERRED]:** The diagnostic output SHALL remain on the
+  existing short-lived process output streams rather than introducing a separate
+  daemon, control plane, or MCP-visible diagnostics surface.
+- **Traceability:** UR-33, UR-194, UR-195
+
 #### RQ-INDEXER-006 - Embedding provider integration
 
 LexonArchiveBuilder SHALL obtain embeddings through a provider that satisfies `lexongraph_embeddings_trait::EmbeddingProvider` and is reached through an OpenAI-compatible HTTP embedding interface.
@@ -1771,6 +1799,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Caller-visible indexing and MCP contracts remain stable across the upstream API migration | Preserved with approved contract change | The stage surface and MCP retrieval semantics remain stable while clustering-enabled indexing adopts a profile-version selector plus defaulted published-profile contract in place of the retired low-level planning controls |
 | Immutable block identity remains the transfer contract across storage targets | Preserved with expanded operator tooling | The rooted copy tool is constrained to copy hash-addressed immutable blocks through the shared `BlockStore` boundary without redefining block payload semantics, mutable-reference publication, or MCP behavior |
 | Long-running operator tools remain observable without adding a control plane | Preserved with expanded scope | Requirements now extend the existing no-silent-gap observability principle to the rooted block-copy CLI, requiring default operator-visible liveness on the normal CLI surface during long-running rooted traversal or transfer work rather than only at final summary time |
+| Operator diagnostics remain opt-in and stay on standard process output | Preserved with expanded diagnostic path | Requirements now approve `RUST_LOG`-controlled SDK and HTTP-client diagnostics for the entire indexer binary, but keep them disabled by default and constrained to the existing process output streams rather than introducing a new flag-specific or service-style observability channel |
 | Clustering configuration remains explicit and replayable | Preserved with revised contract | Requirements now treat the selected published profile version as the replay-relevant clustering input rather than a repository-local mode, algorithm, and option tuple |
 | Clustering-size behavior remains deterministic under the selected profile | Preserved with scoped local/testing exception | Normal batch behavior still assigns clustering cardinality to the selected published profile version, while the approved `0.7.0` ladder adds one repository-local deterministic rung table for local/testing evaluation only |
 | Clustering-only replay does not require whole-store rediscovery | Revised with authoritative immutable audit artifact | Requirements now require a shared-BlockStore immutable replay-audit journal as the sole repository-owned replay authority and remove whole-store scan fallback |
@@ -1808,10 +1837,15 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - **Q-INDEXER-076 [UNKNOWN]:** After the first `0.7.0` ladder lands with default budget `1024`, should future ladders keep one repository-approved default rung table or expose budget-and-rung selection as an operator-editable input on the same local/testing automation surface?
 - **Q-INDEXER-077 [UNKNOWN]:** Should a future block-copy increment also move repository-owned mutable references such as current-root and replay-journal-head publication, or should that remain a separate explicit operator workflow even after immutable rooted-block copying exists?
 - **Q-INDEXER-078 [UNKNOWN]:** If a later increment adds `--verbose` or equivalent richer diagnostics to rooted block copy, what additional per-block or per-phase detail would be useful without overwhelming ordinary operator workflows?
+- **Q-INDEXER-079 [UNKNOWN]:** Should a future increment add repository-documented recommended `RUST_LOG` filter presets for common debugging cases such as Azure Table transport, retry behavior, or HTTP wire visibility, or is raw operator-selected filtering sufficient?
 
 ## Coverage Notes
 
 - **Covered sources [KNOWN]:**
+  - user request in this session: "does lexongraph / azure sdk have any rust tracing we can enable to see why it's happening?"
+  - user request in this session: "ok, can we modify lexonarchivebuilder-indexer to make this work?"
+  - user clarification in this session selecting: "Respect `RUST_LOG` automatically with no new CLI flag (Recommended)"
+  - user clarification in this session selecting: "Enable it for the entire indexer binary (Recommended)"
   - user request in this session: "can we ammend the tool to print some indication that it is working, maybe a --verbose mode or somethign?"
   - user clarification in this session selecting: "Always show basic progress/liveness (Recommended)"
   - user request in this session: "clean up the dead spec/code that is unrelated to the new profile version based path. It has left over stuff from the previous path where we tried to define it at this layer."

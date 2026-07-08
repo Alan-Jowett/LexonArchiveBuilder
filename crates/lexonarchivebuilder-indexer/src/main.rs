@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonArchiveBuilder contributors
 
+use std::ffi::OsStr;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use env_logger::Env;
 use lexonarchivebuilder_indexer::block_copy::{
     copy_rooted_blocks, default_report_path as default_copy_report_path,
     render_report_summary as render_copy_report_summary, write_report as write_copy_report,
@@ -41,6 +43,7 @@ const DEFAULT_RETRY_DELAY_MS: u64 = 1_000;
 const STRUCTURAL_FINDINGS_EXIT_CODE: i32 = 2;
 const COPY_FAILURES_EXIT_CODE: i32 = 3;
 const COPY_LIVENESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+const RUST_LOG_ENV_VAR: &str = "RUST_LOG";
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "LexonArchiveBuilder batch indexer MVP")]
@@ -322,8 +325,23 @@ fn format_copy_liveness_message(root_count: usize, elapsed: Duration) -> String 
     )
 }
 
+fn rust_log_requested_with(value: Option<&OsStr>) -> bool {
+    value
+        .and_then(OsStr::to_str)
+        .is_some_and(|filter| !filter.trim().is_empty())
+}
+
+fn initialize_process_logging() {
+    if !rust_log_requested_with(std::env::var_os(RUST_LOG_ENV_VAR).as_deref()) {
+        return;
+    }
+
+    let _ = env_logger::Builder::from_env(Env::default()).try_init();
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    initialize_process_logging();
     let cli = Cli::parse();
 
     match cli.command {
@@ -1002,5 +1020,15 @@ mod tests {
 
         assert_eq!(output, 11);
         assert!(messages.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn rust_log_request_detects_non_empty_filter_values() {
+        assert!(!rust_log_requested_with(None));
+        assert!(!rust_log_requested_with(Some(OsStr::new(""))));
+        assert!(!rust_log_requested_with(Some(OsStr::new("   "))));
+        assert!(rust_log_requested_with(Some(OsStr::new(
+            "azure_core=debug,reqwest=trace"
+        ))));
     }
 }

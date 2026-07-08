@@ -858,6 +858,30 @@ tool to replicate format knowledge independently.
 
 **Traces to:** RQ-INDEXER-008D, RQ-INDEXER-008E, RQ-INDEXER-010
 
+### DSG-LFI-002G `Process-wide opt-in SDK diagnostic logging`
+
+LexonArchiveBuilder realizes opt-in Azure SDK and HTTP-client diagnostics by
+initializing one standard Rust logger for the entire
+`lexonarchivebuilder-indexer` process during startup.
+
+This design keeps diagnostic activation subordinate to the normal Rust logging
+environment contract rather than inventing a repository-specific flag. When
+`RUST_LOG` or an equivalent standard filter variable is unset, the process does
+not emit extra SDK or transport diagnostics. When it is set, repository-owned
+commands such as batch indexing, rooted quality, rooted search, and rooted copy
+allow underlying Azure SDK and HTTP-client components that already log through
+the Rust logging ecosystem to emit their diagnostics on the same short-lived
+process output streams.
+
+The logger initialization is process-wide rather than command-specific so the
+same diagnostic activation path works across the entire binary. It does not add
+a daemon, a second telemetry channel, or an MCP-visible diagnostics surface,
+and it does not require LexonArchiveBuilder to wrap every upstream SDK call in
+repository-specific tracing statements before operators can observe transport or
+retry activity.
+
+**Traces to:** RQ-INDEXER-005C
+
 ### DSG-LFI-003 `Collection item normalization`
 
 LexonArchiveBuilder models each batch element as an application-owned indexing item that
@@ -1599,6 +1623,9 @@ LexonArchiveBuilder-owned verification artifacts validate:
   query embedding generation through the approved endpoint family, subordinate
   use of `lexongraph-search`, rooted result scoping, and emission of both
   required output surfaces
+- correct opt-in SDK and HTTP-client diagnostic activation for the entire
+  indexer process through the standard Rust logging environment path, while
+  preserving quiet default runs
 - correct rooted block copy over the shared `BlockStore` boundary, including
   reachable-only traversal, identity-preserving transfer, safe skip-on-present
   behavior, failure reporting, default in-flight liveness on the normal CLI
@@ -1621,6 +1648,6 @@ RQ-INDEXER-005B, RQ-INDEXER-008D, RQ-INDEXER-008E,
 RQ-INDEXER-010A, RQ-INDEXER-010B, RQ-INDEXER-010, DSG-LFI-001A,
 DSG-LFI-001B, DSG-LFI-001C, DSG-LFI-001D, DSG-LFI-001E, DSG-LFI-001F,
 DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-001I, DSG-LFI-002A, DSG-LFI-002B,
-DSG-LFI-002C, DSG-LFI-002D, DSG-LFI-004G, DSG-LFI-005A, DSG-LFI-005B,
+DSG-LFI-002C, DSG-LFI-002D, DSG-LFI-002G, DSG-LFI-004G, DSG-LFI-005A, DSG-LFI-005B,
 DSG-LFI-005C, DSG-LFI-005D, DSG-LFI-006A, DSG-LFI-007A, DSG-LFI-007B,
 DSG-LFI-007C, DSG-LFI-007D, DSG-LFI-007E, DSG-LFI-007G
