@@ -299,6 +299,12 @@ struct QueryTouchedBlock {
 }
 
 #[derive(Clone, Debug)]
+struct QueryAccessCapture {
+    metrics: QueryAccessMetrics,
+    touched_blocks: HashMap<BlockHash, QueryTouchedBlock>,
+}
+
+#[derive(Clone, Debug)]
 struct CorpusLeafEntry {
     neighbor_id: String,
     leaf_block_id: BlockHash,
@@ -1059,7 +1065,10 @@ fn build_corpus_tnn_recall_report(
             })
             .collect(),
         access_summary: summarize_query_accesses(&query_accesses),
-        query_accesses,
+        query_accesses: query_accesses
+            .into_iter()
+            .map(|query_access| query_access.metrics)
+            .collect(),
     })
 }
 
@@ -1205,18 +1214,9 @@ fn approximate_neighbors(
     traversal_width: usize,
     store: &dyn BlockStore,
     searcher: &Searcher<DefaultEmbeddingCompatibility, DefaultCandidateScorer>,
-) -> Result<(Vec<CorpusLeafEntry>, QueryAccessMetrics), TreeQualityError> {
+) -> Result<(Vec<CorpusLeafEntry>, QueryAccessCapture), TreeQualityError> {
     if max_k == 0 {
-        return Ok((
-            Vec::new(),
-            QueryAccessMetrics {
-                query_id: query.neighbor_id.clone(),
-                touched_block_count: 0,
-                bytes_read: 0,
-                estimated_rtts: 0,
-                levels: Vec::new(),
-            },
-        ));
+        return Ok((Vec::new(), QueryAccessCapture::zeroed(&query.neighbor_id)));
     }
     let target = EncodedTargetEmbedding::new(
         encode_embedding_values(
@@ -1256,54 +1256,75 @@ fn approximate_neighbors(
         })
         .take(max_k)
         .collect::<Result<Vec<_>, _>>()?;
-    let query_access = build_query_access_metrics(&query.neighbor_id, &counting_store.snapshot());
+    let query_access = build_query_access_capture(&query.neighbor_id, counting_store.snapshot());
     Ok((neighbors, query_access))
 }
 
-fn build_query_access_metrics(
-    query_id: &str,
-    touched_blocks: &HashMap<BlockHash, QueryTouchedBlock>,
-) -> QueryAccessMetrics {
-    let levels = build_level_access_metrics(touched_blocks.values().copied());
-    QueryAccessMetrics {
-        query_id: query_id.to_string(),
-        touched_block_count: touched_blocks.len(),
-        bytes_read: touched_blocks.values().map(|touch| touch.bytes_read).sum(),
-        estimated_rtts: levels.iter().map(|level| level.estimated_rtts).sum(),
-        levels,
+impl QueryAccessCapture {
+    fn zeroed(query_id: &str) -> Self {
+        Self {
+            metrics: QueryAccessMetrics {
+                query_id: query_id.to_string(),
+                touched_block_count: 0,
+                bytes_read: 0,
+                estimated_rtts: 0,
+                levels: Vec::new(),
+            },
+            touched_blocks: HashMap::new(),
+        }
     }
 }
 
-fn summarize_query_accesses(query_accesses: &[QueryAccessMetrics]) -> QueryAccessSummary {
-    let mut by_level = BTreeMap::<u64, (usize, usize)>::new();
+fn build_query_access_capture(
+    query_id: &str,
+    touched_blocks: HashMap<BlockHash, QueryTouchedBlock>,
+) -> QueryAccessCapture {
+    let levels = build_level_access_metrics(touched_blocks.values().copied());
+    QueryAccessCapture {
+        metrics: QueryAccessMetrics {
+            query_id: query_id.to_string(),
+            touched_block_count: touched_blocks.len(),
+            bytes_read: touched_blocks.values().map(|touch| touch.bytes_read).sum(),
+            estimated_rtts: levels.iter().map(|level| level.estimated_rtts).sum(),
+            levels,
+        },
+        touched_blocks,
+    }
+}
+
+fn summarize_query_accesses(query_accesses: &[QueryAccessCapture]) -> QueryAccessSummary {
+    let mut touched_blocks = HashMap::<BlockHash, QueryTouchedBlock>::new();
+    let mut by_level = BTreeMap::<u64, HashMap<BlockHash, QueryTouchedBlock>>::new();
+    let mut estimated_rtts_by_level = BTreeMap::<u64, usize>::new();
     for query_access in query_accesses {
-        for level in &query_access.levels {
-            let entry = by_level.entry(level.level).or_default();
-            entry.0 += level.touched_block_count;
-            entry.1 += level.bytes_read;
+        for (&block_id, &touch) in &query_access.touched_blocks {
+            touched_blocks.entry(block_id).or_insert(touch);
+            by_level
+                .entry(touch.level)
+                .or_default()
+                .entry(block_id)
+                .or_insert(touch);
+        }
+        for level in &query_access.metrics.levels {
+            *estimated_rtts_by_level.entry(level.level).or_default() += level.estimated_rtts;
         }
     }
     let levels = by_level
         .into_iter()
-        .map(
-            |(level, (touched_block_count, bytes_read))| QueryAccessLevelMetrics {
-                level,
-                touched_block_count,
-                bytes_read,
-                estimated_rtts: estimate_rtts(bytes_read),
-            },
-        )
+        .map(|(level, touched_blocks)| QueryAccessLevelMetrics {
+            level,
+            touched_block_count: touched_blocks.len(),
+            bytes_read: touched_blocks.values().map(|touch| touch.bytes_read).sum(),
+            estimated_rtts: estimated_rtts_by_level.get(&level).copied().unwrap_or(0),
+        })
         .collect::<Vec<_>>();
     QueryAccessSummary {
         query_count: query_accesses.len(),
-        touched_block_count: query_accesses
-            .iter()
-            .map(|query| query.touched_block_count)
-            .sum(),
-        bytes_read: query_accesses.iter().map(|query| query.bytes_read).sum(),
+        touched_block_count: touched_blocks.len(),
+        bytes_read: touched_blocks.values().map(|touch| touch.bytes_read).sum(),
         estimated_rtts: query_accesses
             .iter()
-            .map(|query| query.estimated_rtts)
+            .map(|query| query.metrics.estimated_rtts)
             .sum(),
         levels,
     }
@@ -2066,18 +2087,115 @@ mod tests {
             total_bytes += query_access.bytes_read;
             total_rtts += query_access.estimated_rtts;
         }
+        let summary_level_blocks: usize = report
+            .corpus_tnn_recall
+            .access_summary
+            .levels
+            .iter()
+            .map(|level| level.touched_block_count)
+            .sum();
+        let summary_level_bytes: usize = report
+            .corpus_tnn_recall
+            .access_summary
+            .levels
+            .iter()
+            .map(|level| level.bytes_read)
+            .sum();
+        let summary_level_rtts: usize = report
+            .corpus_tnn_recall
+            .access_summary
+            .levels
+            .iter()
+            .map(|level| level.estimated_rtts)
+            .sum();
         assert_eq!(
             report.corpus_tnn_recall.access_summary.touched_block_count,
-            total_blocks
+            summary_level_blocks
         );
         assert_eq!(
             report.corpus_tnn_recall.access_summary.bytes_read,
-            total_bytes
+            summary_level_bytes
         );
         assert_eq!(
             report.corpus_tnn_recall.access_summary.estimated_rtts,
             total_rtts
         );
+        assert_eq!(
+            report.corpus_tnn_recall.access_summary.estimated_rtts,
+            summary_level_rtts
+        );
+        assert!(report.corpus_tnn_recall.access_summary.touched_block_count <= total_blocks);
+        assert!(report.corpus_tnn_recall.access_summary.bytes_read <= total_bytes);
+    }
+
+    #[test]
+    fn assessment_summarizes_query_accesses_as_unique_blocks_and_per_query_rtts() {
+        let query_accesses = vec![
+            build_query_access_capture(
+                "query-a",
+                HashMap::from([
+                    (
+                        BlockHash::from_bytes([1u8; BlockHash::LEN]),
+                        QueryTouchedBlock {
+                            level: 1,
+                            bytes_read: 64_000,
+                        },
+                    ),
+                    (
+                        BlockHash::from_bytes([2u8; BlockHash::LEN]),
+                        QueryTouchedBlock {
+                            level: 0,
+                            bytes_read: 1_000,
+                        },
+                    ),
+                ]),
+            ),
+            build_query_access_capture(
+                "query-b",
+                HashMap::from([
+                    (
+                        BlockHash::from_bytes([1u8; BlockHash::LEN]),
+                        QueryTouchedBlock {
+                            level: 1,
+                            bytes_read: 64_000,
+                        },
+                    ),
+                    (
+                        BlockHash::from_bytes([3u8; BlockHash::LEN]),
+                        QueryTouchedBlock {
+                            level: 0,
+                            bytes_read: 1_000,
+                        },
+                    ),
+                ]),
+            ),
+        ];
+
+        let summary = summarize_query_accesses(&query_accesses);
+
+        assert_eq!(summary.query_count, 2);
+        assert_eq!(summary.touched_block_count, 3);
+        assert_eq!(summary.bytes_read, 66_000);
+        assert_eq!(summary.estimated_rtts, 4);
+        assert_eq!(summary.levels.len(), 2);
+
+        let root_level = summary
+            .levels
+            .iter()
+            .find(|level| level.level == 1)
+            .unwrap();
+        assert_eq!(root_level.touched_block_count, 1);
+        assert_eq!(root_level.bytes_read, 64_000);
+        assert_eq!(root_level.estimated_rtts, 2);
+
+        let leaf_level = summary
+            .levels
+            .iter()
+            .find(|level| level.level == 0)
+            .unwrap();
+        assert_eq!(leaf_level.touched_block_count, 2);
+        assert_eq!(leaf_level.bytes_read, 2_000);
+        assert_eq!(leaf_level.estimated_rtts, 2);
     }
 
     #[test]
