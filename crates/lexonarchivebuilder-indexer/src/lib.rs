@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonArchiveBuilder contributors
 
+pub mod block_copy;
 pub mod block_store;
 pub mod config;
 pub mod embedding;

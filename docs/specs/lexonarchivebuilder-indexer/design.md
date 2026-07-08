@@ -17,7 +17,8 @@ rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI se
 replay-stable fingerprinting, temporary upstream `main` tracking for
 rapid profile validation, upstream wgpu-acceleration revision
 compatibility, 0.6.x published-profile evaluation, local testing sweep
-automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, LAB-owned
+automation, v0.7.0 fixed-budget ladder experiment automation, rooted
+block-store copy tooling, upstream embedding-readback API adoption, LAB-owned
 replay-journaled split-stage recovery, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
 non-search artifacts in
@@ -36,7 +37,7 @@ latest published-profile and telemetry compatibility, temporary upstream
 `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, upstream regression assessment,
 0.6.x published-profile evaluation, local testing sweep automation,
-v0.7.0 fixed-budget ladder experiment automation,
+v0.7.0 fixed-budget ladder experiment automation, rooted block-store copy tooling,
 upstream embedding-readback API adoption, embedding-phase
 batch-progress observability,
 replay-submission observability, streaming-status observability,
@@ -86,6 +87,8 @@ owned by LexonGraph and its subordinate crates.
   recall-report rendering for the rooted quality tool
 - CLI parsing, query embedding generation, search execution, and result
   rendering for the rooted CLI search tool
+- CLI parsing, rooted traversal, copy accounting, and machine-readable result
+  emission for the rooted block-copy operator tool
 - Docker Compose, container, and local test-environment artifacts that realize
   the approved MVP slice
 
@@ -123,6 +126,9 @@ The LexonArchiveBuilder indexer design is intended to be:
 - able to execute ad hoc rooted CLI search over stored trees without
   redefining MCP search-serving behavior or introducing a second search corpus
   model
+- able to copy rooted immutable block graphs between approved block-store
+  targets without redefining block identity, mutable-reference publication, or
+  MCP behavior
 - chunk-first for email retrieval while preserving full-message and source
   provenance artifacts
 
@@ -1149,6 +1155,34 @@ aligned with the same stored tree boundary used by rooted quality assessment.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-008E, RQ-INDEXER-010
 
+### DSG-LFI-005D `Rooted block-copy traversal through BlockStore`
+
+The rooted block-copy tool traverses immutable rooted block graphs through the
+same configured `BlockStore` abstraction family on both its source and
+destination sides.
+
+LexonArchiveBuilder reads each caller-selected root from the source boundary,
+discovers only the blocks reachable from those roots by following stored
+references, and writes raw block bytes to the destination boundary without
+re-encoding block payloads or introducing backend-specific transfer logic.
+
+Because the transfer contract is hash-addressed immutable block identity, the
+copy workflow treats destination preexistence as a normal condition: it may
+check whether a destination block identity is already present and skip that
+write while still counting the block as covered by the requested rooted copy.
+
+This design intentionally excludes repository-owned mutable references such as
+current-root and replay-journal-head publication. Those references remain
+separate operator concerns even when the immutable rooted block content has been
+copied successfully.
+
+The same rooted traversal keeps the copy contract content-type-neutral and
+backend-neutral across local filesystem and approved non-local overlay storage
+profiles, while preserving the upstream ownership of block bytes and identity
+semantics.
+
+**Traces to:** RQ-INDEXER-005B, RQ-INDEXER-010, RQ-INDEXER-010A
+
 ### DSG-LFI-006 `Embedding provider adapter boundary`
 
 LexonArchiveBuilder provides environment-selected implementations or adapters that
@@ -1387,6 +1421,31 @@ clustering-control API.
 
 **Traces to:** RQ-INDEXER-003J1
 
+### DSG-LFI-007G `Rooted block-copy CLI surface`
+
+LexonArchiveBuilder exposes the rooted block-copy capability through a
+dedicated CLI-only operator surface that accepts:
+
+- one source block-store target using the approved local-or-overlay contract
+- one destination block-store target using the same approved contract
+- one or more caller-supplied root block identifiers
+- one optional artifact destination when the default JSON output location is
+  insufficient
+
+The CLI surface is intentionally separate from the batch `run` request-file
+contract because the tool operates on already-persisted immutable block graphs
+rather than orchestrating a new indexing batch. The design does not require MCP
+exposure, request-file integration, elevation into a normal indexing stage, or
+definition of any repository-local block-store backend family.
+
+The operator surface renders one concise human-readable transfer summary and
+writes one machine-readable artifact reporting requested roots, copied block
+counts, skipped-already-present counts, and failures. That result contract is
+about transfer outcomes only; it does not implicitly publish mutable references
+or redefine any upstream block-store backend semantics.
+
+**Traces to:** RQ-INDEXER-005B, RQ-INDEXER-009
+
 ### DSG-LFI-008 `Local and production parity boundary`
 
 Local/testing and production environments differ only in adapter realization and
@@ -1394,7 +1453,8 @@ provider configuration, not in the container's batch contract, the staged email
 artifact model, content item shape, the stage-selection and concurrency-
 configuration surfaces, the clustering-selection and clustering-option CLI
 surface, the rooted block-tree quality CLI surface, or the delegated
-`lexongraph-streaming-indexer` orchestration contract. The same parity boundary
+rooted block-copy CLI surface, or the delegated `lexongraph-streaming-indexer`
+orchestration contract. The same parity boundary
 also covers the rooted CLI search surface's use of configured storage plus one
 operator-supplied embedding endpoint.
 
@@ -1428,6 +1488,10 @@ surface in this increment.
 The same separation applies to the rooted CLI search tool: it remains additive
 to MCP search and does not become the new definition of repository search
 semantics.
+
+The same separation applies to the rooted block-copy tool: it remains a CLI
+operator workflow over approved block-store targets and does not become an MCP
+mutation, replication, or storage-administration surface in this increment.
 
 **Traces to:** RQ-INDEXER-009
 
@@ -1514,6 +1578,9 @@ LexonArchiveBuilder-owned verification artifacts validate:
   query embedding generation through the approved endpoint family, subordinate
   use of `lexongraph-search`, rooted result scoping, and emission of both
   required output surfaces
+- correct rooted block copy over the shared `BlockStore` boundary, including
+  reachable-only traversal, identity-preserving transfer, safe skip-on-present
+  behavior, failure reporting, and preservation of mutable-reference exclusion
 - correct application and defaulting of the administrator-defined concurrency
   budget
 - preservation of stable batch contracts across environments
@@ -1528,10 +1595,10 @@ LexonArchiveBuilder consumes them correctly.
 **Traces to:** RQ-INDEXER-003A, RQ-INDEXER-003B, RQ-INDEXER-003C,
 RQ-INDEXER-003D, RQ-INDEXER-003E, RQ-INDEXER-003F, RQ-INDEXER-003G,
 RQ-INDEXER-004F, RQ-INDEXER-008A, RQ-INDEXER-008B, RQ-INDEXER-008C,
-RQ-INDEXER-008D, RQ-INDEXER-008E,
+RQ-INDEXER-005B, RQ-INDEXER-008D, RQ-INDEXER-008E,
 RQ-INDEXER-010A, RQ-INDEXER-010B, RQ-INDEXER-010, DSG-LFI-001A,
 DSG-LFI-001B, DSG-LFI-001C, DSG-LFI-001D, DSG-LFI-001E, DSG-LFI-001F,
 DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-001I, DSG-LFI-002A, DSG-LFI-002B,
 DSG-LFI-002C, DSG-LFI-002D, DSG-LFI-004G, DSG-LFI-005A, DSG-LFI-005B,
-DSG-LFI-005C, DSG-LFI-006A, DSG-LFI-007A, DSG-LFI-007B, DSG-LFI-007C,
-DSG-LFI-007D, DSG-LFI-007E
+DSG-LFI-005C, DSG-LFI-005D, DSG-LFI-006A, DSG-LFI-007A, DSG-LFI-007B,
+DSG-LFI-007C, DSG-LFI-007D, DSG-LFI-007E, DSG-LFI-007G

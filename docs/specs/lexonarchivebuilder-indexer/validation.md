@@ -14,7 +14,7 @@ compatibility, upstream regression assessment, replay-submission and
 streaming-status observability, clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted
-CLI search over stored trees, replay-stable fingerprinting, temporary
+CLI search over stored trees, rooted block-store copy tooling, replay-stable fingerprinting, temporary
 upstream `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, 0.6.x published-profile
 evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
@@ -43,7 +43,7 @@ replay-submission observability, streaming-status observability,
 telemetry-count-semantics clarity, clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted CLI
-search over stored trees, replay-stable fingerprinting, LAB-owned replay-journaled
+search over stored trees, rooted block-store copy tooling, replay-stable fingerprinting, LAB-owned replay-journaled
 split-stage recovery, and leaf-layer parallel block scheduling in the
 local/testing profile.
 
@@ -510,12 +510,13 @@ tool surfaces that traverse the shared `BlockStore` boundary.
 **Pass condition:** the non-local profile is specified as one fixed overlay
 composed of an in-memory cache, a local filesystem cache, and an Azure Blob
 backing store addressed by SAS URL; batch indexing, standalone clustering,
-rooted quality assessment, and rooted CLI search all reuse that same targeting
-contract; and no operator-facing tool introduces a plain Azure-only block-store
-mode outside the approved overlay shape.
+rooted quality assessment, rooted CLI search, and rooted block copy all reuse
+that same targeting contract; and no operator-facing tool introduces a plain
+Azure-only block-store mode outside the approved overlay shape.
 
-**Traces to:** RQ-INDEXER-005, RQ-INDEXER-007, DSG-LFI-005, DSG-LFI-005B,
-DSG-LFI-005C, DSG-LFI-007, DSG-LFI-008
+**Traces to:** RQ-INDEXER-005, RQ-INDEXER-005B, RQ-INDEXER-007, DSG-LFI-005,
+DSG-LFI-005B, DSG-LFI-005C, DSG-LFI-005D, DSG-LFI-007, DSG-LFI-007G,
+DSG-LFI-008
 
 ### VAL-LFI-005A2
 
@@ -628,6 +629,28 @@ human-readable and JSON output surfaces.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-008E, DSG-LFI-002E,
 DSG-LFI-005C, DSG-LFI-006A, DSG-LFI-007E
+
+### VAL-LFI-005D
+
+Run the rooted block-copy tool from one representative source store to one
+representative destination store using one or more caller-supplied root block
+identifiers, where the destination already contains at least one reachable
+block, the source rooted graph contains at least one unreachable block, and
+the invocation encounters at least one copy failure for a reachable block after
+the tool has already proven other reachable blocks can be copied or skipped.
+
+**Pass condition:** the tool traverses only the immutable blocks reachable from
+the caller-supplied roots in the source store, copies those blocks to the
+destination without re-encoding payload bytes or requiring a backend-specific
+transfer path, skips blocks that are already present at the destination while
+continuing the rooted transfer successfully, reports requested-root,
+copied-block, skipped-already-present, and failed-block outcomes on both
+human-readable and machine-readable output surfaces with enough detail to
+identify the failing block identity or equivalent rooted transfer step, and
+leaves mutable references such as current-root and replay-journal-head
+unchanged.
+
+**Traces to:** RQ-INDEXER-005B, DSG-LFI-005D, DSG-LFI-007G
 
 ### VAL-LFI-006
 
@@ -828,6 +851,20 @@ boundaries.
 
 **Traces to:** RQ-INDEXER-008E, RQ-INDEXER-009, RQ-INDEXER-010A, DSG-LFI-002E,
 DSG-LFI-005C, DSG-LFI-009, DSG-LFI-011
+
+### VAL-LFI-009D
+
+Inspect the specification package for the rooted block-copy increment against
+MCP, mutable-reference, and upstream block-store-boundary constraints.
+
+**Pass condition:** the package keeps rooted block copy on a CLI-only operator
+surface, reuses existing upstream block-store implementations rather than
+specifying a repository-local backend family, limits the increment to
+caller-selected roots plus their reachable immutable blocks, and keeps mutable
+reference copying plus whole-store replication out of scope for this increment.
+
+**Traces to:** RQ-INDEXER-005B, RQ-INDEXER-009, RQ-INDEXER-010A, DSG-LFI-005D,
+DSG-LFI-007G, DSG-LFI-009, DSG-LFI-011
 
 ### VAL-LFI-009A
 

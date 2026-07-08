@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, and v2 custom-block adoption for repository-owned non-search artifacts
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, and v2 custom-block adoption for repository-owned non-search artifacts
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, and v2 custom-block adoption for repository-owned non-search artifacts
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, and v2 custom-block adoption for repository-owned non-search artifacts
 
 ## USER-REQUEST
 
@@ -190,6 +190,15 @@
 - **UR-177 [KNOWN]:** The first runnable ladder should default to the five-rung set `4x256`, `8x128`, `16x64`, `32x32`, and `64x16`.
 - **UR-178 [KNOWN]:** The ladder automation should emit per-rung run artifacts, per-rung rooted-quality artifacts, a comparable summary table, and an operator-facing execution plan that includes preflight validation and rung ordering.
 - **UR-179 [INFERRED]:** Because the current published-profile run surface treats clustering cardinality as profile-owned, the ladder may require a scoped repository-local local/testing mechanism to select rung-specific clustering cardinality for experiment execution without redefining the production or MCP-facing clustering contract.
+- **UR-180 [KNOWN]:** LexonArchiveBuilder needs a tool that copies immutable blocks between two configured block stores, starting with the operator need to copy from a local filesystem-backed store into the Azure SDK-backed overlay block-store target.
+- **UR-181 [KNOWN]:** In this increment, the block-copy capability should be a CLI-only operator tool rather than an MCP-visible surface or a normal indexing-stage behavior.
+- **UR-182 [KNOWN]:** The first block-copy tool should copy only caller-selected root blocks and the immutable blocks reachable from those roots, rather than performing whole-store replication by default.
+- **UR-183 [INFERRED]:** The block-copy tool should reuse the same approved block-store target modes on both its source and destination sides, so operators can target local filesystem stores and overlay-backed Azure-oriented stores without inventing a separate storage contract for copying.
+- **UR-184 [INFERRED]:** Because blocks are immutable and hash-addressed, rerunning a copy into a destination that already contains some or all requested block identities should be safe and should not require repository-local block translation or content reinterpretation.
+- **UR-185 [INFERRED]:** The block-copy tool should traverse rooted block graphs and persist block bytes through the shared `BlockStore` abstraction boundary rather than re-encoding block payloads or depending on storage-backend-specific side channels.
+- **UR-186 [INFERRED]:** The block-copy tool should emit an operator-readable summary plus a machine-readable artifact describing requested roots, copied block counts, skipped-already-present counts, and any copy failures.
+- **UR-187 [INFERRED]:** This increment should copy immutable block content only; repository-owned mutable references such as current-root or replay-journal-head publication remain separate contracts unless a later increment explicitly expands the scope.
+- **UR-188 [KNOWN]:** LexonGraph already provides the relevant block-store implementations; this increment should add a repository-owned copy tool layer on top of those existing `BlockStore` implementations rather than introducing a new block-store backend family.
 
 ## Change Manifest
 
@@ -280,6 +289,7 @@
 | CM-INDEXER-083 | Add | Publish the latest immutable final root through a repository-owned mutable reference mechanism so current-root discovery no longer depends on request-local output capture alone | UR-168 |
 | CM-INDEXER-084 | Revise | Extend rooted quality reporting with query-workload access statistics and advisory RTT-cost estimates derived from per-layer bytes touched through the existing rooted recall path | UR-169, UR-170, UR-171, UR-172, UR-173 |
 | CM-INDEXER-085 | Revise | Extend repository-local sweep automation with a runnable published-profile `0.7.0` fixed-budget ladder experiment plus execution plan, while carving out a local/testing-only clustering-cardinality selection exception for the approved ladder | UR-56, UR-57, UR-58, UR-174, UR-175, UR-176, UR-177, UR-178, UR-179 |
+| CM-INDEXER-086 | Add | Introduce a CLI-only rooted block-copy operator tool that layers on top of existing LexonGraph block stores and copies immutable blocks reachable from caller-selected roots between approved block-store targets without changing indexing or MCP contracts | UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188 |
 
 ## Before / After
 
@@ -707,6 +717,11 @@
 
 - **Before [KNOWN]:** The repository-local testing automation covered version-series profile sweeps such as the `0.6.x` run, but it did not define a fixed-budget ladder experiment for one published profile or any exception to the current profile-owned clustering-cardinality rule.
 - **After [KNOWN]:** The requirements now extend the local/testing automation contract to include a runnable published-profile `0.7.0` ladder with fixed `beam_width * cluster_count` budget, an approved default five-rung set around the `16x64` baseline, comparable per-rung artifacts plus summary output, and a scoped local/testing-only mechanism for rung-specific clustering-cardinality selection.
+
+### BA-INDEXER-086
+
+- **Before [KNOWN]:** The requirements let operator tools read from or write to approved block-store targets, but they did not define any repository-owned tool for transferring immutable rooted block content from one configured store to another.
+- **After [KNOWN]:** The requirements now introduce a CLI-only rooted block-copy operator tool that reuses the approved source and destination block-store contracts, copies only caller-selected roots and their reachable immutable blocks, preserves hash-addressed identities, reports copy outcomes, and leaves mutable-reference publication outside this increment.
 
 ## Requirements
 
@@ -1229,6 +1244,50 @@ artifact blocks using LexonGraph v2 custom blocks.
 - **Contract stability [INFERRED]:** Operator-facing batch, CLI, and MCP semantics remain unchanged apart from the repository-owned artifact-format change.
 - **Traceability:** UR-157, UR-158, UR-159
 
+#### RQ-INDEXER-005B - Rooted block-store copy between approved targets
+
+LexonArchiveBuilder SHALL provide a CLI-only operator tool that copies
+caller-selected immutable rooted block graphs from one configured block store
+to another configured block store.
+
+- **Invocation scope [KNOWN]:** The tool SHALL accept one or more caller-supplied
+  root block identities and copy only those root blocks plus the immutable
+  blocks reachable from them, rather than performing whole-store replication by
+  default.
+- **Source and destination targeting [KNOWN]:** The tool SHALL reuse the same
+  approved block-store target modes on both source and destination sides:
+  direct local filesystem or the approved overlay block store composed of
+  memory cache + local filesystem cache + Azure Blob SAS-backed storage.
+- **Identity preservation [KNOWN]:** Copied blocks SHALL retain their existing
+  hash-addressed identities; the tool SHALL NOT reinterpret, rewrite, or
+  repository-locally translate delegated or repository-owned block payloads.
+- **Idempotence boundary [INFERRED]:** Re-running the same copy into a
+  destination that already contains some or all requested block identities
+  SHALL be treated as safe operator behavior rather than as a duplicate-write
+  error contract.
+- **Boundary [INFERRED]:** The tool SHALL traverse and persist blocks through
+  the shared `BlockStore` abstraction boundary rather than through a separate
+  storage-backend-specific transfer path.
+- **Implementation boundary [KNOWN]:** This increment SHALL layer on top of the
+  existing LexonGraph block-store implementations already adopted by the
+  repository rather than defining a new repository-owned block-store backend
+  family for copying.
+- **Output requirement [KNOWN]:** The tool SHALL emit both a human-readable
+  summary and a machine-readable artifact that reports requested roots, copied
+  block counts, skipped-already-present counts, and copy failures.
+- **Mutable-reference exclusion [KNOWN]:** This increment copies immutable block
+  content only; repository-owned mutable references such as current-root or
+  replay-journal-head publication remain out of scope unless a later approved
+  increment expands the contract explicitly.
+- **Content-type neutrality [INFERRED]:** The rooted copy contract SHALL remain
+  agnostic to mailbox, document, and future content types because it operates
+  on block identities and rooted reachability rather than content-model
+  semantics.
+- **Surface boundary [KNOWN]:** The tool is additive to existing indexing,
+  quality, search, and MCP surfaces and SHALL NOT become an indexing stage, a
+  `BatchRequest` feature, or an MCP-visible API in this increment.
+- **Traceability:** UR-153, UR-154, UR-155, UR-156, UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188
+
 #### RQ-INDEXER-006 - Embedding provider integration
 
 LexonArchiveBuilder SHALL obtain embeddings through a provider that satisfies `lexongraph_embeddings_trait::EmbeddingProvider` and is reached through an OpenAI-compatible HTTP embedding interface.
@@ -1668,6 +1727,8 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - Allowing user-query diagnostic recall to contribute to automated or aggregate rooted-quality metrics
 - Requiring the rooted CLI search tool to replace or redefine the existing MCP search surface in this increment
 - Defining a repository-local search algorithm or a second repository-local search corpus model instead of using `lexongraph-search` over the approved rooted-tree boundary
+- Performing whole-store block replication by default when the approved first increment is rooted-copy-only
+- Copying repository-owned mutable references such as current-root or replay-journal-head publication as part of the first immutable block-copy increment
 - Defining or maintaining a repository-local branch-embedding decoding matrix for evolving branch encodings when the upstream LexonGraph embedding readback API already owns the supported branch reconstruction semantics
 - Preserving mixed-format or pre-v2 v1 compatibility for repository-owned non-search artifact blocks after the approved v2 custom-block transition
 - Preserving the current append-only filesystem replay-journal segment layout or whole-store replay-discovery fallback after the immutable block-backed replay-audit journal is adopted
@@ -1684,6 +1745,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Local published-profile evaluation remains outside production and serving contracts | Preserved with expanded local/testing aid | Requirements constrain both the earlier `0.6.x` sweep and the new `0.7.0` fixed-budget ladder to repository-local operator automation that reuses existing batch and quality boundaries rather than adding a production entrypoint or MCP-visible test surface |
 | Long-running batches remain observable without adding a control plane | Preserved with clarified scope | Progress reporting remains on the existing batch-runtime log surface and now explicitly includes the long-running embedding or leaf-materialization gap between mailbox expansion and downstream streaming-status visibility plus clustering-only replay submission progress, the handoff into upstream planning-pass waiting, and failure-only clustering diagnostics on the runtime log plus a request-adjacent artifact |
 | Caller-visible indexing and MCP contracts remain stable across the upstream API migration | Preserved with approved contract change | The stage surface and MCP retrieval semantics remain stable while clustering-enabled indexing adopts a profile-version selector plus defaulted published-profile contract in place of the retired low-level planning controls |
+| Immutable block identity remains the transfer contract across storage targets | Preserved with expanded operator tooling | The rooted copy tool is constrained to copy hash-addressed immutable blocks through the shared `BlockStore` boundary without redefining block payload semantics, mutable-reference publication, or MCP behavior |
 | Clustering configuration remains explicit and replayable | Preserved with revised contract | Requirements now treat the selected published profile version as the replay-relevant clustering input rather than a repository-local mode, algorithm, and option tuple |
 | Clustering-size behavior remains deterministic under the selected profile | Preserved with scoped local/testing exception | Normal batch behavior still assigns clustering cardinality to the selected published profile version, while the approved `0.7.0` ladder adds one repository-local deterministic rung table for local/testing evaluation only |
 | Clustering-only replay does not require whole-store rediscovery | Revised with authoritative immutable audit artifact | Requirements now require a shared-BlockStore immutable replay-audit journal as the sole repository-owned replay authority and remove whole-store scan fallback |
@@ -1719,6 +1781,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - **Q-INDEXER-074 [UNKNOWN]:** Should a future increment make the rooted-query RTT-cost model configurable for different assumed congestion windows or transport regimes, or is the fixed 64 KiB model sufficient for the repository-owned diagnostic surface?
 - **Q-INDEXER-075 [UNKNOWN]:** If future block-store implementations add stronger client-side caching or prefetch semantics, should rooted-query access accounting remain a logical uncached traversal measure, or should a later increment add a second cache-aware metric family?
 - **Q-INDEXER-076 [UNKNOWN]:** After the first `0.7.0` ladder lands with default budget `1024`, should future ladders keep one repository-approved default rung table or expose budget-and-rung selection as an operator-editable input on the same local/testing automation surface?
+- **Q-INDEXER-077 [UNKNOWN]:** Should a future block-copy increment also move repository-owned mutable references such as current-root and replay-journal-head publication, or should that remain a separate explicit operator workflow even after immutable rooted-block copying exists?
 
 ## Coverage Notes
 
@@ -1746,6 +1809,10 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
   - user request in this session: "We need a tool that given a block store and root and measure the quality / correctness of the block tree. This would include heuristics like children always have lower level than parents. Distance from centroid of embeddings in parent is the same or bigger than distance from centroid if embeddings in child (i.e. children span a smaller part of the embedding space than their parents). It would also be useful to gain a quantifiable measure of the quality of how the space is divided up (i.e. the shape that each block represents in teh embedding space)."
   - user clarification in this session selecting: "CLI-only operator tool (Recommended)"
   - user clarification in this session selecting: "Human-readable summary plus machine-readable JSON artifact (Recommended)"
+  - user request in this session: "I need a tool to allow us to copy blocks between two block stores. i.e. from file system -> azure storage table sdk block store"
+  - user clarification in this session selecting: "CLI-only operator tool (Recommended)"
+  - user clarification in this session selecting: "Caller-selected root(s) and reachable blocks only (Recommended)"
+  - user clarification in this session: "just to clarify, lexongraph already has these block stores, this would just be a layer on top of that"
   - user request in this session: "yes, that warning is probably a false positive. Report as a count, but don't issue warnings. Can we instead compute mean distance from centroid for each block, then compute mean by layer and stdev by layer? i.e. a rough statistical measure of the where the blocks fit within the embedding space?"
   - user request in this session: "I think we need to refine what we are measuring as quality. It should include tree consistency (like we already have) but also:
 1. Intra‑Block Dispersion Statistics (Per Layer)
