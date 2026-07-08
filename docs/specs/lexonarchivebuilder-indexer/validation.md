@@ -453,8 +453,10 @@ share the same `BlockStore` abstraction family, and to the rooted block-tree
 quality tool when it reads stored trees through that same boundary.
 The same neutrality also applies to rooted CLI search over a caller-supplied
 tree when it reads through the same `BlockStore` boundary. The non-local
-boundary is the fixed overlay target of memory cache plus local filesystem
-cache plus Azure Blob SAS-backed storage rather than a plain Azure-only mode.
+boundary is the approved production profile set: the existing overlay target of
+memory cache plus local filesystem cache plus Azure Blob SAS-backed storage, or
+the additive `production-v2` direct Azure-backed target, rather than ad hoc
+plain Azure-only tool modes.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-007, DSG-LFI-005,
 DSG-LFI-006, DSG-LFI-007, DSG-LFI-008
@@ -504,15 +506,15 @@ requiring reads from the superseded custom filesystem layout.
 
 ### VAL-LFI-005A1
 
-Inspect the non-local tool-targeting profile for representative indexer-owned
+Inspect the non-local tool-targeting profiles for representative indexer-owned
 tool surfaces that traverse the shared `BlockStore` boundary.
 
-**Pass condition:** the non-local profile is specified as one fixed overlay
-composed of an in-memory cache, a local filesystem cache, and an Azure Blob
-backing store addressed by SAS URL; batch indexing, standalone clustering,
-rooted quality assessment, rooted CLI search, and rooted block copy all reuse
-that same targeting contract; and no operator-facing tool introduces a plain
-Azure-only block-store mode outside the approved overlay shape.
+**Pass condition:** the approved non-local profile set is specified as exactly
+the existing `production` overlay profile plus the additive `production-v2`
+direct Azure-backed profile; batch indexing, standalone clustering, rooted
+quality assessment, rooted CLI search, and rooted block copy all reuse that
+same targeting contract; and no operator-facing tool introduces a plain
+Azure-only block-store mode outside the approved repository-defined profile set.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-005B, RQ-INDEXER-007, DSG-LFI-005,
 DSG-LFI-005B, DSG-LFI-005C, DSG-LFI-005D, DSG-LFI-007, DSG-LFI-007G,
@@ -634,10 +636,13 @@ DSG-LFI-005C, DSG-LFI-006A, DSG-LFI-007E
 
 Run the rooted block-copy tool from one representative source store to one
 representative destination store using one or more caller-supplied root block
-identifiers, where the destination already contains at least one reachable
-block, the source rooted graph contains at least one unreachable block, and
-the invocation encounters at least one copy failure for a reachable block after
-the tool has already proven other reachable blocks can be copied or skipped.
+identifiers, where the selected source and destination profiles come from the
+approved shared target set and at least one exercised non-local side uses the
+approved `production-v2` profile, the destination already contains at least one
+reachable block, the source rooted graph contains at least one unreachable
+block, and the invocation encounters at least one copy failure for a reachable
+block after the tool has already proven other reachable blocks can be copied or
+skipped.
 
 **Pass condition:** the tool traverses only the immutable blocks reachable from
 the caller-supplied roots in the source store, copies those blocks to the
@@ -660,8 +665,10 @@ Inspect the preserved production environment profile boundary.
 behind the same `BlockStore` and `EmbeddingProvider` selection boundary as the
 local/testing profile, and no local-only assumptions leak into the core batch
 contract or content-model abstractions. The preserved non-local storage
-identifier family must describe the approved overlay target rather than a plain
-Azure-only target.
+identifier family must describe exactly the approved production profile set:
+the existing overlay-backed `production` target and the additive direct
+Azure-backed `production-v2` target, rather than one-off plain Azure-only
+tool modes.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-007, DSG-LFI-005,
 DSG-LFI-006, DSG-LFI-007
@@ -862,6 +869,9 @@ surface, reuses existing upstream block-store implementations rather than
 specifying a repository-local backend family, limits the increment to
 caller-selected roots plus their reachable immutable blocks, and keeps mutable
 reference copying plus whole-store replication out of scope for this increment.
+The same package must also keep `production-v2` as an additive approved
+block-store profile within the shared repository targeting contract rather than
+as a copy-only storage exception.
 
 **Traces to:** RQ-INDEXER-005B, RQ-INDEXER-009, RQ-INDEXER-010A, DSG-LFI-005D,
 DSG-LFI-007G, DSG-LFI-009, DSG-LFI-011

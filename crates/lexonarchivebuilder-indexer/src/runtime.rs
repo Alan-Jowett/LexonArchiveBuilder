@@ -9,7 +9,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
+use azure_data_tables::clients::TableServiceClientBuilder;
+use azure_data_tables::prelude::{Filter, TableClient, Top};
+use azure_storage::StorageCredentials;
 use ciborium::Value;
+use futures::StreamExt;
 use lexongraph_block::{
     Block, BlockError, BlockHash, DecodedBlock, EmbeddingSpec, LeafEntry, SerializedBlock,
     VERSION_1, VersionedBlock, build_leaf_block, deserialize_block, v2,
@@ -23,13 +27,14 @@ use lexongraph_streaming_indexer::{
     published_indexing_profile,
 };
 use reqwest::StatusCode;
+use reqwest::Url;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 
-use crate::block_store::{ConfiguredBlockStore, block_on_block_store_future};
+use crate::block_store::{ConfiguredBlockStore, block_on_block_store_future, block_on_future};
 #[cfg(test)]
 use crate::config::MUTABLE_REF_ROOT_DIR;
 use crate::config::{
@@ -57,6 +62,7 @@ const AZURE_BLOB_API_VERSION: &str = "2023-11-03";
 const MUTABLE_REF_STORE_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MUTABLE_REF_STORE_HTTP_RETRY_ATTEMPTS: usize = 3;
 const MUTABLE_REF_STORE_HTTP_RETRY_DELAY: Duration = Duration::from_millis(500);
+const MUTABLE_REF_TABLE_SCHEMA_VERSION: i32 = 1;
 #[cfg(test)]
 const TEST_REF_NAME: &str = "test-branch";
 
@@ -1884,7 +1890,150 @@ fn mutable_ref_store_label(location: &MutableRefStoreLocation) -> String {
     match location {
         MutableRefStoreLocation::LocalFile { path } => path.display().to_string(),
         MutableRefStoreLocation::AzureBlob { display_path, .. } => display_path.clone(),
+        MutableRefStoreLocation::AzureTable { display_path, .. } => display_path.clone(),
     }
+}
+
+#[derive(Clone, Debug)]
+struct MutableRefTableEndpoint {
+    account: String,
+    table_name: String,
+    sas_token: String,
+}
+
+impl MutableRefTableEndpoint {
+    fn parse(table_sas_url: &str) -> Result<Self, io::Error> {
+        let mut url = Url::parse(table_sas_url)
+            .map_err(|error| mutable_ref_store_io_error(error.to_string()))?;
+        url.set_fragment(None);
+        if url.query().is_none_or(str::is_empty) {
+            return Err(mutable_ref_store_io_error(
+                "Azure Table SAS URL must include SAS query parameters".into(),
+            ));
+        }
+        if !url
+            .query_pairs()
+            .any(|(key, value)| key == "sig" && !value.is_empty())
+        {
+            return Err(mutable_ref_store_io_error(
+                "Azure Table SAS URL must include a non-empty SAS signature parameter".into(),
+            ));
+        }
+
+        let host = url.host_str().ok_or_else(|| {
+            mutable_ref_store_io_error("Azure Table SAS URL must include a host".into())
+        })?;
+        let account = host
+            .split('.')
+            .next()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                mutable_ref_store_io_error(
+                    "Azure Table SAS URL must include an account host".into(),
+                )
+            })?
+            .to_string();
+
+        let path_segments = url
+            .path_segments()
+            .ok_or_else(|| {
+                mutable_ref_store_io_error("Azure Table SAS URL must be hierarchical".into())
+            })?
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>();
+        if path_segments.len() != 1 {
+            return Err(mutable_ref_store_io_error(format!(
+                "Azure Table SAS URL must address a table root, got path {}",
+                url.path()
+            )));
+        }
+
+        let table_name = path_segments[0].to_string();
+        if table_name.contains('(') || table_name.contains(')') {
+            return Err(mutable_ref_store_io_error(format!(
+                "Azure Table SAS URL must address a table root, got path {}",
+                url.path()
+            )));
+        }
+
+        Ok(Self {
+            account,
+            table_name,
+            sas_token: url.query().unwrap_or_default().to_string(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct MutableRefTableEntity {
+    #[serde(rename = "PartitionKey")]
+    partition_key: String,
+    #[serde(rename = "RowKey")]
+    row_key: String,
+    #[serde(rename = "SchemaVersion")]
+    schema_version: i32,
+    #[serde(rename = "RefPath")]
+    ref_path: String,
+    #[serde(rename = "StateJson")]
+    state_json: String,
+}
+
+fn mutable_ref_table_client(table_sas_url: &str) -> Result<TableClient, io::Error> {
+    let endpoint = MutableRefTableEndpoint::parse(table_sas_url)?;
+    let credentials = StorageCredentials::sas_token(&endpoint.sas_token)
+        .map_err(|error| mutable_ref_store_io_error(error.to_string()))?;
+    let table_service = TableServiceClientBuilder::new(endpoint.account, credentials).build();
+    Ok(table_service.table_client(endpoint.table_name))
+}
+
+fn read_mutable_ref_table_entity(
+    table_sas_url: &str,
+    partition_key: &str,
+    row_key: &str,
+) -> Result<Option<MutableRefTableEntity>, io::Error> {
+    let table_client = mutable_ref_table_client(table_sas_url)?;
+    let filter = Filter::new(format!(
+        "PartitionKey eq '{partition_key}' and RowKey eq '{row_key}'"
+    ));
+    let response = block_on_future(async move {
+        let mut stream = table_client
+            .query()
+            .filter(filter)
+            .top(Top::new(2))
+            .into_stream::<MutableRefTableEntity>();
+        match stream.next().await {
+            Some(result) => result,
+            None => Err(azure_core::Error::message(
+                azure_core::error::ErrorKind::Other,
+                "Azure Table query returned no response pages",
+            )),
+        }
+    })
+    .map_err(|error| mutable_ref_store_io_error(error.to_string()))?;
+
+    match response.entities.len() {
+        0 => Ok(None),
+        1 => Ok(response.entities.into_iter().next()),
+        count => Err(mutable_ref_store_io_error(format!(
+            "lookup for PartitionKey={partition_key} RowKey={row_key} returned {count} entities"
+        ))),
+    }
+}
+
+fn write_mutable_ref_table_entity(
+    table_sas_url: &str,
+    entity: &MutableRefTableEntity,
+) -> Result<(), io::Error> {
+    let table_client = mutable_ref_table_client(table_sas_url)?;
+    block_on_future(async move {
+        table_client
+            .partition_key_client(&entity.partition_key)
+            .entity_client(&entity.row_key)?
+            .insert_or_replace(entity)?
+            .await
+    })
+    .map(|_| ())
+    .map_err(|error| mutable_ref_store_io_error(error.to_string()))
 }
 
 fn mutable_ref_store_io_error(message: String) -> io::Error {
@@ -1976,6 +2125,31 @@ fn read_mutable_ref_store_bytes(
                 }),
             }
         }
+        MutableRefStoreLocation::AzureTable {
+            table_sas_url,
+            display_path,
+            partition_key,
+            row_key,
+        } => {
+            let Some(entity) = read_mutable_ref_table_entity(table_sas_url, partition_key, row_key)
+                .map_err(|source| RuntimeError::ReadMutableRefStore {
+                    path: display_path.clone(),
+                    source,
+                })?
+            else {
+                return Ok(None);
+            };
+            if entity.schema_version != MUTABLE_REF_TABLE_SCHEMA_VERSION {
+                return Err(RuntimeError::ReadMutableRefStore {
+                    path: display_path.clone(),
+                    source: mutable_ref_store_io_error(format!(
+                        "unsupported mutable ref table schema version {}",
+                        entity.schema_version
+                    )),
+                });
+            }
+            Ok(Some(entity.state_json.into_bytes()))
+        }
     }
 }
 
@@ -2063,6 +2237,32 @@ fn write_mutable_ref_store_bytes(
                 })
             }
         }
+        MutableRefStoreLocation::AzureTable {
+            table_sas_url,
+            display_path,
+            partition_key,
+            row_key,
+        } => {
+            let state_json = std::str::from_utf8(encoded).map_err(|error| {
+                RuntimeError::WriteMutableRefStore {
+                    path: display_path.clone(),
+                    source: mutable_ref_store_io_error(error.to_string()),
+                }
+            })?;
+            let entity = MutableRefTableEntity {
+                partition_key: partition_key.clone(),
+                row_key: row_key.clone(),
+                schema_version: MUTABLE_REF_TABLE_SCHEMA_VERSION,
+                ref_path: display_path.clone(),
+                state_json: state_json.to_string(),
+            };
+            write_mutable_ref_table_entity(table_sas_url, &entity).map_err(|source| {
+                RuntimeError::WriteMutableRefStore {
+                    path: display_path.clone(),
+                    source,
+                }
+            })
+        }
     }
 }
 
@@ -2078,6 +2278,16 @@ fn prepare_mutable_ref_store(location: &MutableRefStoreLocation) -> Result<(), R
             })
         }
         MutableRefStoreLocation::AzureBlob { .. } => Ok(()),
+        MutableRefStoreLocation::AzureTable {
+            table_sas_url,
+            display_path,
+            ..
+        } => mutable_ref_table_client(table_sas_url)
+            .map(|_| ())
+            .map_err(|source| RuntimeError::PrepareMutableRefStore {
+                path: display_path.clone(),
+                source,
+            }),
     }
 }
 

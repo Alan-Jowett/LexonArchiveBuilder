@@ -118,6 +118,7 @@ enum Command {
 enum BlockStoreProfile {
     Local,
     Production,
+    ProductionV2,
 }
 
 #[derive(Debug, Args)]
@@ -126,7 +127,13 @@ struct BlockStoreArgs {
     block_store_profile: BlockStoreProfile,
     #[arg(long, required_if_eq("block_store_profile", "local"))]
     block_store_root: Option<PathBuf>,
-    #[arg(long, required_if_eq("block_store_profile", "production"))]
+    #[arg(
+        long,
+        required_if_eq_any([
+            ("block_store_profile", "production"),
+            ("block_store_profile", "production-v2"),
+        ])
+    )]
     block_store_container_sas_url: Option<String>,
     #[arg(long, required_if_eq("block_store_profile", "production"))]
     block_store_filesystem_cache_root: Option<PathBuf>,
@@ -134,7 +141,7 @@ struct BlockStoreArgs {
     block_store_memory_cache_max_resident_blocks: Option<usize>,
     #[arg(
         long,
-        help = "Reserved for non-Azure block store backends. The production overlay uses Azure Blob backing storage and rejects non-empty prefixes."
+        help = "Reserved for non-Azure block store backends. The approved Azure-backed production profiles reject non-empty prefixes."
     )]
     block_store_prefix: Option<String>,
 }
@@ -158,7 +165,13 @@ struct SourceBlockStoreArgs {
     source_block_store_profile: BlockStoreProfile,
     #[arg(long, required_if_eq("source_block_store_profile", "local"))]
     source_block_store_root: Option<PathBuf>,
-    #[arg(long, required_if_eq("source_block_store_profile", "production"))]
+    #[arg(
+        long,
+        required_if_eq_any([
+            ("source_block_store_profile", "production"),
+            ("source_block_store_profile", "production-v2"),
+        ])
+    )]
     source_block_store_container_sas_url: Option<String>,
     #[arg(long, required_if_eq("source_block_store_profile", "production"))]
     source_block_store_filesystem_cache_root: Option<PathBuf>,
@@ -166,7 +179,7 @@ struct SourceBlockStoreArgs {
     source_block_store_memory_cache_max_resident_blocks: Option<usize>,
     #[arg(
         long,
-        help = "Reserved for non-Azure block store backends. The production overlay uses Azure Blob backing storage and rejects non-empty prefixes."
+        help = "Reserved for non-Azure block store backends. The approved Azure-backed production profiles reject non-empty prefixes."
     )]
     source_block_store_prefix: Option<String>,
 }
@@ -190,7 +203,13 @@ struct DestinationBlockStoreArgs {
     destination_block_store_profile: BlockStoreProfile,
     #[arg(long, required_if_eq("destination_block_store_profile", "local"))]
     destination_block_store_root: Option<PathBuf>,
-    #[arg(long, required_if_eq("destination_block_store_profile", "production"))]
+    #[arg(
+        long,
+        required_if_eq_any([
+            ("destination_block_store_profile", "production"),
+            ("destination_block_store_profile", "production-v2"),
+        ])
+    )]
     destination_block_store_container_sas_url: Option<String>,
     #[arg(long, required_if_eq("destination_block_store_profile", "production"))]
     destination_block_store_filesystem_cache_root: Option<PathBuf>,
@@ -198,7 +217,7 @@ struct DestinationBlockStoreArgs {
     destination_block_store_memory_cache_max_resident_blocks: Option<usize>,
     #[arg(
         long,
-        help = "Reserved for non-Azure block store backends. The production overlay uses Azure Blob backing storage and rejects non-empty prefixes."
+        help = "Reserved for non-Azure block store backends. The approved Azure-backed production profiles reject non-empty prefixes."
     )]
     destination_block_store_prefix: Option<String>,
 }
@@ -233,6 +252,21 @@ fn block_store_environment_config(
             block_store: ProductionBlockStoreConfig {
                 container_sas_url: block_store_container_sas_url
                     .expect("production container_sas_url is required by clap"),
+                filesystem_cache_root: block_store_filesystem_cache_root,
+                memory_cache_max_resident_blocks: block_store_memory_cache_max_resident_blocks,
+                prefix: block_store_prefix,
+            },
+            embedding: ProductionEmbeddingConfig {
+                endpoint: "https://unused.production.example".into(),
+                deployment: "unused".into(),
+                api_version: "2024-02-01".into(),
+                api_key_env: None,
+            },
+        },
+        BlockStoreProfile::ProductionV2 => EnvironmentConfig::ProductionV2 {
+            block_store: ProductionBlockStoreConfig {
+                container_sas_url: block_store_container_sas_url
+                    .expect("production-v2 container_sas_url is required by clap"),
                 filesystem_cache_root: block_store_filesystem_cache_root,
                 memory_cache_max_resident_blocks: block_store_memory_cache_max_resident_blocks,
                 prefix: block_store_prefix,
@@ -619,8 +653,51 @@ mod tests {
                         assert_eq!(block_store.memory_cache_max_resident_blocks, Some(64));
                         assert_eq!(block_store.prefix, None);
                     }
-                    EnvironmentConfig::Local { .. } | EnvironmentConfig::LocalOverlay { .. } => {
+                    EnvironmentConfig::Local { .. }
+                    | EnvironmentConfig::LocalOverlay { .. }
+                    | EnvironmentConfig::ProductionV2 { .. } => {
                         panic!("expected production environment")
+                    }
+                }
+            }
+            _ => panic!("expected quality command"),
+        }
+    }
+
+    #[test]
+    fn quality_command_parses_production_v2_args_without_overlay_cache_fields() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "quality",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--block-store-profile",
+            "production-v2",
+            "--block-store-container-sas-url",
+            "https://example.table.core.windows.net/archive-sync?sig=test",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Quality { block_store, .. } => {
+                assert_eq!(
+                    block_store.block_store_profile,
+                    BlockStoreProfile::ProductionV2
+                );
+                let environment = block_store.to_environment_config();
+                match environment {
+                    EnvironmentConfig::ProductionV2 { block_store, .. } => {
+                        assert_eq!(
+                            block_store.container_sas_url,
+                            "https://example.table.core.windows.net/archive-sync?sig=test"
+                        );
+                        assert_eq!(block_store.filesystem_cache_root, None);
+                        assert_eq!(block_store.memory_cache_max_resident_blocks, None);
+                    }
+                    EnvironmentConfig::Local { .. }
+                    | EnvironmentConfig::LocalOverlay { .. }
+                    | EnvironmentConfig::Production { .. } => {
+                        panic!("expected production-v2 environment")
                     }
                 }
             }
@@ -654,6 +731,51 @@ mod tests {
                 assert_eq!(top_k, 5);
                 assert_eq!(traversal_width, 3);
                 assert_eq!(embedding_model, DEFAULT_LOCAL_MODEL);
+            }
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn search_command_parses_production_v2_args_without_overlay_cache_fields() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "search",
+            "--query",
+            "hello",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--embedding-endpoint",
+            "http://localhost:8080",
+            "--block-store-profile",
+            "production-v2",
+            "--block-store-container-sas-url",
+            "https://example.table.core.windows.net/archive-sync?sig=test",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Search { block_store, .. } => {
+                assert_eq!(
+                    block_store.block_store_profile,
+                    BlockStoreProfile::ProductionV2
+                );
+                let environment = block_store.to_environment_config();
+                match environment {
+                    EnvironmentConfig::ProductionV2 { block_store, .. } => {
+                        assert_eq!(
+                            block_store.container_sas_url,
+                            "https://example.table.core.windows.net/archive-sync?sig=test"
+                        );
+                        assert_eq!(block_store.filesystem_cache_root, None);
+                        assert_eq!(block_store.memory_cache_max_resident_blocks, None);
+                    }
+                    EnvironmentConfig::Local { .. }
+                    | EnvironmentConfig::LocalOverlay { .. }
+                    | EnvironmentConfig::Production { .. } => {
+                        panic!("expected production-v2 environment")
+                    }
+                }
             }
             _ => panic!("expected search command"),
         }
@@ -725,6 +847,57 @@ mod tests {
 
         assert!(error.contains("--source-block-store-filesystem-cache-root"));
         assert!(error.contains("--source-block-store-memory-cache-max-resident-blocks"));
+    }
+
+    #[test]
+    fn copy_command_parses_production_v2_source_without_overlay_cache_fields() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--source-block-store-profile",
+            "production-v2",
+            "--source-block-store-container-sas-url",
+            "https://example.table.core.windows.net/archive-sync?sig=test",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Copy {
+                source_block_store,
+                destination_block_store,
+                ..
+            } => {
+                assert_eq!(
+                    source_block_store.source_block_store_profile,
+                    BlockStoreProfile::ProductionV2
+                );
+                assert_eq!(
+                    destination_block_store.destination_block_store_profile,
+                    BlockStoreProfile::Local
+                );
+                let environment = source_block_store.to_environment_config();
+                match environment {
+                    EnvironmentConfig::ProductionV2 { block_store, .. } => {
+                        assert_eq!(
+                            block_store.container_sas_url,
+                            "https://example.table.core.windows.net/archive-sync?sig=test"
+                        );
+                        assert_eq!(block_store.filesystem_cache_root, None);
+                        assert_eq!(block_store.memory_cache_max_resident_blocks, None);
+                    }
+                    EnvironmentConfig::Local { .. }
+                    | EnvironmentConfig::LocalOverlay { .. }
+                    | EnvironmentConfig::Production { .. } => {
+                        panic!("expected production-v2 environment")
+                    }
+                }
+            }
+            _ => panic!("expected copy command"),
+        }
     }
 
     #[test]

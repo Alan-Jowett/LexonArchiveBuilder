@@ -1037,9 +1037,12 @@ LexonArchiveBuilder provides concrete `lexongraph_block_store::BlockStore`
 implementations or adapters selected by environment.
 
 - local/testing selects a filesystem-backed block store
-- production-oriented operation selects a fixed overlay block store composed of
-  an in-memory cache layer, a local filesystem cache layer, and an Azure Blob
-  backing layer addressed by SAS URL
+- production-oriented operation selects either:
+  - the existing `production` overlay block store composed of an in-memory
+    cache layer, a local filesystem cache layer, and an Azure Blob backing
+    layer addressed by SAS URL
+  - the additive `production-v2` direct Azure-backed LexonGraph block-store
+    implementation
 
 The same environment-selected `BlockStore` abstraction family is reused for:
 
@@ -1051,16 +1054,17 @@ The rest of the LexonArchiveBuilder indexing flow consumes only the backend-neut
 `BlockStore` contract and does not depend on filesystem paths or Azure-specific
 blob layout details.
 
-The non-local target is intentionally fixed to this overlay shape rather than a
-caller-assembled arbitrary stack of storage adapters. This keeps tool-targeting
-semantics stable across batch indexing, standalone clustering, rooted quality
-assessment, rooted CLI search, and future indexer-owned operator tools that
-traverse the shared `BlockStore` boundary.
+The non-local target family is intentionally fixed to one approved
+repository-defined profile set rather than a caller-assembled arbitrary stack
+of storage adapters. This keeps tool-targeting semantics stable across batch
+indexing, standalone clustering, rooted quality assessment, rooted CLI search,
+and future indexer-owned operator tools that traverse the shared `BlockStore`
+boundary.
 
 For the approved increment, the local/testing block-store realization remains
-required and executable, and the production-oriented overlay target remains part
-of the same preserved adapter seam and configuration family rather than a
-tool-specific exception path.
+required and executable, and both approved production-oriented storage profiles
+remain part of the same preserved adapter seam and configuration family rather
+than tool-specific exception paths.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-007, RQ-INDEXER-010
 
@@ -1132,9 +1136,9 @@ through this boundary rather than inventing a parallel repository-local
 transport model.
 
 This design keeps assessment logic backend-neutral across local filesystem and
-the approved non-local overlay storage profile. It also prevents the repository from
-introducing a second storage-reader stack with different reachability or
-decoding semantics than the indexing path already uses.
+the approved non-local production storage profiles. It also prevents the
+repository from introducing a second storage-reader stack with different
+reachability or decoding semantics than the indexing path already uses.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-008D, RQ-INDEXER-008D4, RQ-INDEXER-008D5, RQ-INDEXER-010
 
@@ -1150,8 +1154,9 @@ reachable rooted tree is the authority for which stored leaf nodes may appear in
 search results for one invocation.
 
 This preserves backend-neutral search orchestration across local filesystem and
-the approved non-local overlay storage profile while keeping traversal semantics
-aligned with the same stored tree boundary used by rooted quality assessment.
+the approved non-local production storage profiles while keeping traversal
+semantics aligned with the same stored tree boundary used by rooted quality
+assessment.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-008E, RQ-INDEXER-010
 
@@ -1177,7 +1182,7 @@ separate operator concerns even when the immutable rooted block content has been
 copied successfully.
 
 The same rooted traversal keeps the copy contract content-type-neutral and
-backend-neutral across local filesystem and approved non-local overlay storage
+backend-neutral across local filesystem plus the approved non-local production
 profiles, while preserving the upstream ownership of block bytes and identity
 semantics.
 
@@ -1230,17 +1235,18 @@ environment profile:
 | Profile | Block storage | Embedding target |
 |---|---|---|
 | local/testing | local filesystem | local STAPI-compatible service |
-| production-oriented | overlay block store: memory cache + local filesystem cache + Azure Blob SAS-backed storage | Azure OpenAI |
+| production | overlay block store: memory cache + local filesystem cache + Azure Blob SAS-backed storage | Azure OpenAI |
+| production-v2 | direct Azure-backed LexonGraph block store | Azure OpenAI |
 
 This selection is configuration-driven and preserves one stable delegated
 indexing flow independent of environment across indexed blocks, normalized email
 artifacts, and mailbox provenance artifacts.
 
 For the approved MVP slice, the local/testing profile is the only profile that
-must execute end to end. The production-oriented overlay profile remains
-represented at this design layer so the same orchestration contract can govern
-both direct-local and overlay-backed tool targeting without introducing a plain
-Azure-only operator mode.
+must execute end to end. The production-oriented profiles remain represented at
+this design layer so the same orchestration contract can govern direct-local,
+overlay-backed, and approved direct-Azure-backed tool targeting without
+introducing ad hoc backend-specific operator modes.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-007
 
@@ -1278,8 +1284,9 @@ available host-visible CPU-count signal, provided the default remains bounded,
 documented, and never drops below one.
 
 This configuration surface remains environment-neutral: local/testing and the
-preserved production profile use the same request shape, stage-selection
-contract, and scheduler contract. Higher-layer parent construction remains
+preserved production-oriented profiles use the same request shape,
+stage-selection contract, and scheduler contract. Higher-layer parent
+construction remains
 serial at the LexonArchiveBuilder layer until the upstream streaming indexing
 API exposes a compatible concurrency seam.
 
@@ -1426,7 +1433,7 @@ clustering-control API.
 LexonArchiveBuilder exposes the rooted block-copy capability through a
 dedicated CLI-only operator surface that accepts:
 
-- one source block-store target using the approved local-or-overlay contract
+- one source block-store target using the approved shared profile contract
 - one destination block-store target using the same approved contract
 - one or more caller-supplied root block identifiers
 - one optional artifact destination when the default JSON output location is
@@ -1465,10 +1472,11 @@ configured `BlockStore` abstraction and the same upstream block-iteration
 contract across environments rather than introducing a local-only discovery
 mechanism.
 
-Within that parity boundary, every indexer-owned tool shares the same two-mode
-storage-targeting contract: direct local filesystem or the fixed non-local
-overlay of memory cache plus local filesystem cache plus Azure Blob SAS-backed
-storage. No indexer-owned tool defines a plain Azure-only targeting exception.
+Within that parity boundary, every indexer-owned tool shares the same approved
+storage-profile contract: direct local filesystem, the existing `production`
+overlay profile, or the additive `production-v2` direct Azure-backed profile.
+No indexer-owned tool defines an ad hoc plain Azure-only targeting exception
+outside that shared profile set.
 
 **Traces to:** RQ-INDEXER-007, RQ-INDEXER-010, RQ-INDEXER-003D,
 RQ-INDEXER-003E, RQ-INDEXER-003G
@@ -1562,6 +1570,9 @@ LexonArchiveBuilder-owned verification artifacts validate:
   embedding-provider adapters
 - correct interoperability of the local filesystem-backed block-store profile
   with LexonGraph-owned tooling expectations
+- correct exposure and use of the approved production-oriented block-store
+  profile set, including the existing `production` overlay profile and the
+  additive `production-v2` direct Azure-backed profile
 - correct mailbox retention, normalized email artifact derivation, and chained
   provenance
 - correct shaping of chunk-sized delegated email items

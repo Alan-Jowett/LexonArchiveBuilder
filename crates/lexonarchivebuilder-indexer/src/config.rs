@@ -75,7 +75,10 @@ impl ClusteringConfigOverrides {
     ) -> Result<ConfiguredClustering, ConfigError> {
         self.validate()?;
         if self.local_testing_cluster_count.is_some()
-            && matches!(environment, EnvironmentConfig::Production { .. })
+            && matches!(
+                environment,
+                EnvironmentConfig::Production { .. } | EnvironmentConfig::ProductionV2 { .. }
+            )
         {
             return Err(ConfigError::LocalTestingClusterCountRequiresLocalEnvironment);
         }
@@ -119,6 +122,10 @@ pub enum EnvironmentConfig {
         embedding: LocalEmbeddingConfig,
     },
     Production {
+        block_store: ProductionBlockStoreConfig,
+        embedding: ProductionEmbeddingConfig,
+    },
+    ProductionV2 {
         block_store: ProductionBlockStoreConfig,
         embedding: ProductionEmbeddingConfig,
     },
@@ -190,8 +197,19 @@ pub struct BatchSummary {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MutableRefStoreLocation {
-    LocalFile { path: PathBuf },
-    AzureBlob { url: String, display_path: String },
+    LocalFile {
+        path: PathBuf,
+    },
+    AzureBlob {
+        url: String,
+        display_path: String,
+    },
+    AzureTable {
+        table_sas_url: String,
+        display_path: String,
+        partition_key: String,
+        row_key: String,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -210,8 +228,20 @@ pub enum ConfigError {
     MissingLocalEmbeddingBaseUrl,
     #[error("production block_store.container_sas_url must not be empty")]
     MissingProductionContainerSasUrl,
+    #[error("production-v2 block_store.container_sas_url must not be empty")]
+    MissingProductionV2ContainerSasUrl,
     #[error("production block_store.prefix is not supported by the Azure Blob block store")]
     UnsupportedProductionBlockStorePrefix,
+    #[error("production-v2 block_store.prefix is not supported by the Azure Table block store")]
+    UnsupportedProductionV2BlockStorePrefix,
+    #[error(
+        "production-v2 block_store.filesystem_cache_root is not supported for the direct Azure Table block store"
+    )]
+    UnsupportedProductionV2FilesystemCacheRoot,
+    #[error(
+        "production-v2 block_store.memory_cache_max_resident_blocks is not supported for the direct Azure Table block store"
+    )]
+    UnsupportedProductionV2MemoryCacheMaxResidentBlocks,
     #[error(
         "production block_store.filesystem_cache_root is required for the production overlay block store"
     )]
@@ -272,13 +302,16 @@ impl EnvironmentConfig {
                 }
             }
             Self::LocalOverlay { block_store, .. } => {
-                block_store.validate()?;
+                block_store.validate_for_overlay()?;
                 if stage.includes_ingestion() {
                     self.local_embedding()?;
                 }
             }
             Self::Production { block_store, .. } => {
-                block_store.validate()?;
+                block_store.validate_for_overlay()?;
+            }
+            Self::ProductionV2 { block_store, .. } => {
+                block_store.validate_for_azure_table()?;
             }
         }
         Ok(())
@@ -314,6 +347,15 @@ impl EnvironmentConfig {
                     ),
                 })
             }
+            Self::ProductionV2 { block_store, .. } => Some(MutableRefStoreLocation::AzureTable {
+                table_sas_url: block_store.container_sas_url.clone(),
+                display_path: mutable_ref_store_table_display_path(
+                    &block_store.container_sas_url,
+                    &relative_path,
+                ),
+                partition_key: MUTABLE_REF_ROOT_DIR.into(),
+                row_key: mutable_ref_store_table_row_key(&relative_path),
+            }),
         }
     }
 
@@ -326,13 +368,13 @@ impl EnvironmentConfig {
                     Ok(Some(embedding.clone()))
                 }
             }
-            Self::Production { .. } => Ok(None),
+            Self::Production { .. } | Self::ProductionV2 { .. } => Ok(None),
         }
     }
 }
 
 impl ProductionBlockStoreConfig {
-    pub fn validate(&self) -> Result<(), ConfigError> {
+    pub fn validate_for_overlay(&self) -> Result<(), ConfigError> {
         if self.container_sas_url.trim().is_empty() {
             return Err(ConfigError::MissingProductionContainerSasUrl);
         }
@@ -361,6 +403,26 @@ impl ProductionBlockStoreConfig {
         }
         Ok(())
     }
+
+    pub fn validate_for_azure_table(&self) -> Result<(), ConfigError> {
+        if self.container_sas_url.trim().is_empty() {
+            return Err(ConfigError::MissingProductionV2ContainerSasUrl);
+        }
+        if self
+            .prefix
+            .as_deref()
+            .is_some_and(|prefix| !prefix.trim().is_empty())
+        {
+            return Err(ConfigError::UnsupportedProductionV2BlockStorePrefix);
+        }
+        if self.filesystem_cache_root.is_some() {
+            return Err(ConfigError::UnsupportedProductionV2FilesystemCacheRoot);
+        }
+        if self.memory_cache_max_resident_blocks.is_some() {
+            return Err(ConfigError::UnsupportedProductionV2MemoryCacheMaxResidentBlocks);
+        }
+        Ok(())
+    }
 }
 
 fn mutable_ref_store_blob_url(container_sas_url: &str, file_name: &str) -> String {
@@ -380,6 +442,23 @@ fn mutable_ref_store_blob_display_path(container_sas_url: &str, file_name: &str)
         .map_or(container_sas_url, |(base, _)| base)
         .trim_end_matches('/');
     format!("{base}/{file_name}")
+}
+
+fn mutable_ref_store_table_display_path(table_sas_url: &str, file_name: &str) -> String {
+    let base = table_sas_url
+        .split_once('?')
+        .map_or(table_sas_url, |(base, _)| base)
+        .trim_end_matches('/');
+    format!("{base}/{file_name}")
+}
+
+fn mutable_ref_store_table_row_key(path: &str) -> String {
+    let mut key = String::with_capacity(path.len() * 2);
+    for byte in path.as_bytes() {
+        use std::fmt::Write as _;
+        let _ = write!(&mut key, "{byte:02x}");
+    }
+    key
 }
 
 fn normalized_ref_name_segments(ref_name: &str) -> Result<Vec<String>, ConfigError> {
@@ -941,10 +1020,95 @@ mod tests {
                 );
                 assert_eq!(block_store.memory_cache_max_resident_blocks, Some(64));
             }
-            EnvironmentConfig::Local { .. } | EnvironmentConfig::LocalOverlay { .. } => {
+            EnvironmentConfig::Local { .. }
+            | EnvironmentConfig::LocalOverlay { .. }
+            | EnvironmentConfig::ProductionV2 { .. } => {
                 panic!("expected production environment")
             }
         }
+    }
+
+    #[test]
+    fn production_v2_request_accepts_direct_table_config() {
+        let request: BatchRequest = serde_json::from_value(json!({
+            "environment": {
+                "kind": "production-v2",
+                "block_store": {
+                    "container_sas_url": "https://example.table.core.windows.net/archive-sync?sig=test"
+                },
+                "embedding": {
+                    "endpoint": "https://example.openai.azure.com",
+                    "deployment": "embeddings"
+                }
+            },
+            "embedding_spec": {
+                "dims": 384,
+                "encoding": "f32le"
+            },
+            "profile_version": "0.5.0",
+            "ref_name": "test-branch",
+            "items": [{
+                "kind": "document",
+                "path": "docs/sample.txt"
+            }]
+        }))
+        .unwrap();
+
+        assert!(request.validate().is_ok());
+        match request.environment {
+            EnvironmentConfig::ProductionV2 { block_store, .. } => {
+                assert_eq!(
+                    block_store.container_sas_url,
+                    "https://example.table.core.windows.net/archive-sync?sig=test"
+                );
+                assert_eq!(block_store.filesystem_cache_root, None);
+                assert_eq!(block_store.memory_cache_max_resident_blocks, None);
+            }
+            EnvironmentConfig::Local { .. }
+            | EnvironmentConfig::LocalOverlay { .. }
+            | EnvironmentConfig::Production { .. } => {
+                panic!("expected production-v2 environment")
+            }
+        }
+    }
+
+    #[test]
+    fn production_v2_request_rejects_non_empty_prefix() {
+        let request = BatchRequest {
+            environment: EnvironmentConfig::ProductionV2 {
+                block_store: ProductionBlockStoreConfig {
+                    container_sas_url:
+                        "https://example.table.core.windows.net/archive-sync?sig=test".into(),
+                    prefix: Some("archive-sync".into()),
+                    filesystem_cache_root: None,
+                    memory_cache_max_resident_blocks: None,
+                },
+                embedding: ProductionEmbeddingConfig {
+                    endpoint: "https://example.openai.azure.com".into(),
+                    deployment: "embeddings".into(),
+                    api_version: default_azure_api_version(),
+                    api_key_env: None,
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 384,
+                encoding: "f32le".into(),
+            },
+            block_size_target: default_block_size_target(),
+            stage: ExecutionStage::FullPipeline,
+            profile_version: default_profile_version(),
+            max_concurrency: None,
+            ref_name: "test-branch".into(),
+            items: vec![BatchItemConfig::Document {
+                path: PathBuf::from("docs").join("sample.txt"),
+                metadata: BTreeMap::new(),
+            }],
+        };
+
+        assert!(matches!(
+            request.validate(),
+            Err(ConfigError::UnsupportedProductionV2BlockStorePrefix)
+        ));
     }
 
     #[test]
@@ -987,7 +1151,9 @@ mod tests {
                 assert_eq!(block_store.memory_cache_max_resident_blocks, Some(64));
                 assert_eq!(embedding.base_url, "http://localhost:8080");
             }
-            EnvironmentConfig::Local { .. } | EnvironmentConfig::Production { .. } => {
+            EnvironmentConfig::Local { .. }
+            | EnvironmentConfig::Production { .. }
+            | EnvironmentConfig::ProductionV2 { .. } => {
                 panic!("expected local-overlay environment")
             }
         }
@@ -1019,6 +1185,37 @@ mod tests {
                         .into(),
                 display_path:
                     "https://example.blob.core.windows.net/archive-sync/refs/feature/test".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn production_v2_resolve_mutable_ref_store_uses_ref_named_table_entity() {
+        let environment = EnvironmentConfig::ProductionV2 {
+            block_store: ProductionBlockStoreConfig {
+                container_sas_url: "https://example.table.core.windows.net/archive-sync?sig=test"
+                    .into(),
+                prefix: None,
+                filesystem_cache_root: None,
+                memory_cache_max_resident_blocks: None,
+            },
+            embedding: ProductionEmbeddingConfig {
+                endpoint: "https://example.openai.azure.com".into(),
+                deployment: "embeddings".into(),
+                api_version: default_azure_api_version(),
+                api_key_env: None,
+            },
+        };
+
+        assert_eq!(
+            environment.resolve_mutable_ref_store(Path::new("request-root"), "feature/test"),
+            Some(MutableRefStoreLocation::AzureTable {
+                table_sas_url: "https://example.table.core.windows.net/archive-sync?sig=test"
+                    .into(),
+                display_path:
+                    "https://example.table.core.windows.net/archive-sync/refs/feature/test".into(),
+                partition_key: "refs".into(),
+                row_key: "726566732f666561747572652f74657374".into(),
             })
         );
     }
@@ -1113,6 +1310,45 @@ mod tests {
         assert!(matches!(
             request.validate(),
             Err(ConfigError::MissingProductionMemoryCacheMaxResidentBlocks)
+        ));
+    }
+
+    #[test]
+    fn production_v2_request_rejects_overlay_cache_fields() {
+        let request = BatchRequest {
+            environment: EnvironmentConfig::ProductionV2 {
+                block_store: ProductionBlockStoreConfig {
+                    container_sas_url:
+                        "https://example.table.core.windows.net/archive-sync?sig=test".into(),
+                    prefix: None,
+                    filesystem_cache_root: Some("cache".into()),
+                    memory_cache_max_resident_blocks: Some(64),
+                },
+                embedding: ProductionEmbeddingConfig {
+                    endpoint: "https://example.openai.azure.com".into(),
+                    deployment: "embeddings".into(),
+                    api_version: default_azure_api_version(),
+                    api_key_env: None,
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 384,
+                encoding: "f32le".into(),
+            },
+            block_size_target: default_block_size_target(),
+            stage: ExecutionStage::FullPipeline,
+            profile_version: default_profile_version(),
+            max_concurrency: None,
+            ref_name: "test-branch".into(),
+            items: vec![BatchItemConfig::Document {
+                path: PathBuf::from("docs").join("sample.txt"),
+                metadata: BTreeMap::new(),
+            }],
+        };
+
+        assert!(matches!(
+            request.validate(),
+            Err(ConfigError::UnsupportedProductionV2FilesystemCacheRoot)
         ));
     }
 
