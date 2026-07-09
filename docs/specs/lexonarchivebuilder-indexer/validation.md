@@ -653,11 +653,18 @@ requested-root, copied-block, skipped-already-present, and failed-block
 outcomes on both human-readable and machine-readable output surfaces. In the
 opt-in blind-write mode it skips destination existence reads, attempts writes
 directly, and reports attempted-write plus failure-oriented outcomes without
-claiming exact skipped-already-present classification. Both modes must emit
-basic default in-flight liveness or progress on the normal CLI output surface
-before final completion when the rooted copy runs long enough that silence
-would otherwise resemble a hang, and both leave mutable references such as
-current-root and replay-journal-head unchanged.
+claiming exact skipped-already-present classification. Both modes must support
+one operator-selectable bounded destination-write concurrency limit with first
+approved default `64`, and the same limit must allow multiple destination
+writes to remain in flight whenever a block has already been classified for
+publication. That bounded write pipeline must not cause unreachable blocks to be
+written, must not require a backend-specific transfer path, and must not change
+the truthfulness of the approved mode-specific reporting contract merely because
+write completions arrive out of order. Both modes must emit basic default
+in-flight liveness or progress on the normal CLI output surface before final
+completion when the rooted copy runs long enough that silence would otherwise
+resemble a hang, and both leave mutable references such as current-root and
+replay-journal-head unchanged.
 
 **Traces to:** RQ-INDEXER-005B, DSG-LFI-005D, DSG-LFI-007G
 
@@ -899,6 +906,11 @@ verbose-only signal to see that long-running transfer work is still active. The
 same package must also preserve read-before-write classification as the default
 rooted-copy behavior while allowing an explicit opt-in blind-write mode that
 avoids destination reads and accepts reduced copied-versus-skipped accounting.
+The same package must also keep bounded asynchronous destination-write
+concurrency behind one operator-selectable CLI limit with first approved
+default `64`, and apply that bounded write path to both rooted-copy modes only
+after the repository has determined that a destination write is actually
+required.
 
 **Traces to:** RQ-INDEXER-005B, RQ-INDEXER-009, RQ-INDEXER-010A, DSG-LFI-005D,
 DSG-LFI-007G, DSG-LFI-009, DSG-LFI-011

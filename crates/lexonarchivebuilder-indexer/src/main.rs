@@ -10,8 +10,8 @@ use anyhow::Context;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use env_logger::Env;
 use lexonarchivebuilder_indexer::block_copy::{
-    CopyDestinationMode, copy_rooted_blocks_with_mode,
-    default_report_path as default_copy_report_path,
+    CopyDestinationMode, DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+    copy_rooted_blocks_with_mode_and_limit, default_report_path as default_copy_report_path,
     render_report_summary as render_copy_report_summary, write_report as write_copy_report,
 };
 use lexonarchivebuilder_indexer::block_store::ConfiguredBlockStore;
@@ -118,6 +118,14 @@ enum Command {
             help = "Skip destination existence reads and attempt destination writes directly."
         )]
         blind_write: bool,
+        #[arg(
+            long,
+            default_value_t = DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            value_parser = parse_positive_usize,
+            value_name = "COUNT",
+            help = "Maximum destination block writes to keep in flight concurrently."
+        )]
+        max_in_flight_destination_writes: usize,
         #[arg(long)]
         json_out: Option<PathBuf>,
         #[command(flatten)]
@@ -449,6 +457,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Copy {
             root_ids,
             blind_write,
+            max_in_flight_destination_writes,
             json_out,
             source_block_store,
             destination_block_store,
@@ -464,7 +473,7 @@ async fn main() -> anyhow::Result<()> {
                 &destination_block_store.to_environment_config(),
             )?;
             let report = await_with_copy_liveness(
-                copy_rooted_blocks_with_mode(
+                copy_rooted_blocks_with_mode_and_limit(
                     &source_store,
                     &destination_store,
                     &root_ids,
@@ -473,6 +482,7 @@ async fn main() -> anyhow::Result<()> {
                     } else {
                         CopyDestinationMode::ReadBeforeWrite
                     },
+                    max_in_flight_destination_writes,
                 ),
                 COPY_LIVENESS_HEARTBEAT_INTERVAL,
                 |elapsed| format_copy_liveness_message(root_ids.len(), elapsed),
@@ -512,6 +522,16 @@ fn normalize_embedding_base_url(endpoint: &str) -> String {
         .strip_suffix("/v1/embeddings")
         .unwrap_or(trimmed)
         .to_string()
+}
+
+fn parse_positive_usize(value: &str) -> Result<usize, String> {
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| format!("invalid positive integer: {value}"))?;
+    if parsed == 0 {
+        return Err("value must be greater than zero".into());
+    }
+    Ok(parsed)
 }
 
 #[cfg(test)]
@@ -997,6 +1017,77 @@ mod tests {
             Command::Copy { blind_write, .. } => assert!(blind_write),
             _ => panic!("expected copy command"),
         }
+    }
+
+    #[test]
+    fn copy_command_defaults_max_in_flight_destination_writes() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--source-block-store-root",
+            "source-blocks",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Copy {
+                max_in_flight_destination_writes,
+                ..
+            } => assert_eq!(
+                max_in_flight_destination_writes,
+                DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES
+            ),
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn copy_command_parses_max_in_flight_destination_writes_override() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--max-in-flight-destination-writes",
+            "17",
+            "--source-block-store-root",
+            "source-blocks",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Copy {
+                max_in_flight_destination_writes,
+                ..
+            } => assert_eq!(max_in_flight_destination_writes, 17),
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn copy_command_rejects_zero_max_in_flight_destination_writes() {
+        let error = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--max-in-flight-destination-writes",
+            "0",
+            "--source-block-store-root",
+            "source-blocks",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap_err();
+
+        let rendered = error.to_string();
+        assert!(rendered.contains("--max-in-flight-destination-writes"));
     }
 
     #[test]

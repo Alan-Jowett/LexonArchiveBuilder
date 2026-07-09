@@ -3,12 +3,15 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::fs;
+use std::future::Future;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 use ciborium::Value;
+use futures::stream::{FuturesUnordered, StreamExt};
 use lexongraph_block::{BlockHash, DecodedBlock, deserialize_versioned_block, v2};
-use lexongraph_block_store::BlockStore;
+use lexongraph_block_store::{BlockStore, BlockStoreError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -18,6 +21,8 @@ use crate::custom_blocks::{
 };
 use crate::mailbox::{NORMALIZED_EMAIL_ARTIFACT_BLOCK_TYPE, NORMALIZED_EMAIL_MEDIA_TYPE};
 use crate::tree_tools::parse_block_hash;
+
+pub const DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -74,11 +79,12 @@ pub async fn copy_rooted_blocks(
     destination: &dyn BlockStore,
     root_ids: &[BlockHash],
 ) -> RootedBlockCopyReport {
-    copy_rooted_blocks_with_mode(
+    copy_rooted_blocks_with_mode_and_limit(
         source,
         destination,
         root_ids,
         CopyDestinationMode::ReadBeforeWrite,
+        DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
     )
     .await
 }
@@ -89,6 +95,23 @@ pub async fn copy_rooted_blocks_with_mode(
     root_ids: &[BlockHash],
     destination_mode: CopyDestinationMode,
 ) -> RootedBlockCopyReport {
+    copy_rooted_blocks_with_mode_and_limit(
+        source,
+        destination,
+        root_ids,
+        destination_mode,
+        DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+    )
+    .await
+}
+
+pub async fn copy_rooted_blocks_with_mode_and_limit(
+    source: &dyn BlockStore,
+    destination: &dyn BlockStore,
+    root_ids: &[BlockHash],
+    destination_mode: CopyDestinationMode,
+    max_in_flight_destination_writes: usize,
+) -> RootedBlockCopyReport {
     let requested_root_ids = root_ids.iter().map(ToString::to_string).collect::<Vec<_>>();
     let mut queue = root_ids
         .iter()
@@ -96,10 +119,12 @@ pub async fn copy_rooted_blocks_with_mode(
         .map(|root_id| (root_id, root_id))
         .collect::<VecDeque<_>>();
     let mut visited = HashSet::new();
+    let effective_write_limit = max_in_flight_destination_writes.max(1);
     let mut copied_block_count = 0usize;
     let mut skipped_already_present_block_count = 0usize;
     let mut attempted_write_block_count = 0usize;
     let mut failures = Vec::new();
+    let mut pending_writes = FuturesUnordered::<PendingDestinationWrite<'_>>::new();
 
     while let Some((request_root_id, block_id)) = queue.pop_front() {
         if !visited.insert(block_id) {
@@ -118,46 +143,61 @@ pub async fn copy_rooted_blocks_with_mode(
         };
 
         match destination_mode {
-            CopyDestinationMode::ReadBeforeWrite => match destination
-                .get_block_bytes(&block_id)
-                .await
-            {
-                Ok(Some(_)) => {
-                    skipped_already_present_block_count += 1;
-                }
-                Ok(None) => {
-                    if let Err(error) = destination.put_block_bytes(&block_id, &block_bytes).await {
-                        failures.push(CopyFailure {
-                            root_id: request_root_id.to_string(),
-                            block_id: block_id.to_string(),
-                            operation: CopyFailureOperation::WriteDestinationBlock,
-                            message: error.to_string(),
-                        });
-                    } else {
-                        copied_block_count += 1;
+            CopyDestinationMode::ReadBeforeWrite => {
+                match destination.get_block_bytes(&block_id).await {
+                    Ok(Some(_)) => {
+                        skipped_already_present_block_count += 1;
                     }
-                }
-                Err(error) => failures.push(CopyFailure {
-                    root_id: request_root_id.to_string(),
-                    block_id: block_id.to_string(),
-                    operation: CopyFailureOperation::CheckDestinationBlock,
-                    message: error.to_string(),
-                }),
-            },
-            CopyDestinationMode::BlindWrite => {
-                attempted_write_block_count += 1;
-                if let Err(error) = destination.put_block_bytes(&block_id, &block_bytes).await {
-                    failures.push(CopyFailure {
+                    Ok(None) => {
+                        wait_for_write_capacity(
+                            &mut pending_writes,
+                            effective_write_limit,
+                            &mut copied_block_count,
+                            &mut failures,
+                        )
+                        .await;
+                        enqueue_destination_write(
+                            &mut pending_writes,
+                            destination,
+                            request_root_id,
+                            block_id,
+                            block_bytes,
+                            true,
+                        );
+                    }
+                    Err(error) => failures.push(CopyFailure {
                         root_id: request_root_id.to_string(),
                         block_id: block_id.to_string(),
-                        operation: CopyFailureOperation::WriteDestinationBlock,
+                        operation: CopyFailureOperation::CheckDestinationBlock,
                         message: error.to_string(),
-                    });
+                    }),
                 }
+            }
+            CopyDestinationMode::BlindWrite => {
+                attempted_write_block_count += 1;
+                wait_for_write_capacity(
+                    &mut pending_writes,
+                    effective_write_limit,
+                    &mut copied_block_count,
+                    &mut failures,
+                )
+                .await;
+                enqueue_destination_write(
+                    &mut pending_writes,
+                    destination,
+                    request_root_id,
+                    block_id,
+                    block_bytes,
+                    false,
+                );
             }
         }
 
         enqueue_children(request_root_id, &child_ids, &mut queue);
+    }
+
+    while let Some(completion) = pending_writes.next().await {
+        record_write_completion(completion, &mut copied_block_count, &mut failures);
     }
 
     RootedBlockCopyReport {
@@ -174,6 +214,69 @@ pub async fn copy_rooted_blocks_with_mode(
             .then_some(attempted_write_block_count),
         failed_block_count: failures.len(),
         failures,
+    }
+}
+
+type PendingDestinationWrite<'a> = Pin<Box<dyn Future<Output = DestinationWriteCompletion> + 'a>>;
+
+struct DestinationWriteCompletion {
+    request_root_id: BlockHash,
+    block_id: BlockHash,
+    count_as_copied: bool,
+    result: Result<(), BlockStoreError>,
+}
+
+fn enqueue_destination_write<'a>(
+    pending_writes: &mut FuturesUnordered<PendingDestinationWrite<'a>>,
+    destination: &'a dyn BlockStore,
+    request_root_id: BlockHash,
+    block_id: BlockHash,
+    block_bytes: Vec<u8>,
+    count_as_copied: bool,
+) {
+    pending_writes.push(Box::pin(async move {
+        let result = destination.put_block_bytes(&block_id, &block_bytes).await;
+        DestinationWriteCompletion {
+            request_root_id,
+            block_id,
+            count_as_copied,
+            result,
+        }
+    }));
+}
+
+async fn wait_for_write_capacity(
+    pending_writes: &mut FuturesUnordered<PendingDestinationWrite<'_>>,
+    effective_write_limit: usize,
+    copied_block_count: &mut usize,
+    failures: &mut Vec<CopyFailure>,
+) {
+    while pending_writes.len() >= effective_write_limit {
+        let completion = pending_writes
+            .next()
+            .await
+            .expect("pending destination writes should complete");
+        record_write_completion(completion, copied_block_count, failures);
+    }
+}
+
+fn record_write_completion(
+    completion: DestinationWriteCompletion,
+    copied_block_count: &mut usize,
+    failures: &mut Vec<CopyFailure>,
+) {
+    match completion.result {
+        Ok(()) => {
+            if completion.count_as_copied {
+                *copied_block_count += 1;
+            }
+        }
+        Err(error) => failures.push(CopyFailure {
+            root_id: completion.request_root_id.to_string(),
+            block_id: completion.block_id.to_string(),
+            operation: CopyFailureOperation::WriteDestinationBlock,
+            message: error.to_string(),
+        }),
     }
 }
 
@@ -537,6 +640,8 @@ mod tests {
     use std::collections::HashSet;
     use std::fmt;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::Duration;
 
     use async_trait::async_trait;
     use ciborium::Value;
@@ -953,6 +1058,47 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn rooted_block_copy_honors_bounded_in_flight_destination_writes() {
+        let source = Arc::new(MemoryBlockStore::new(16).unwrap());
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let gamma = source.put(&leaf_block("gamma")).await.unwrap();
+        let root = source
+            .put(&branch_block(&[alpha, beta, gamma]))
+            .await
+            .unwrap();
+        let destination = Arc::new(BlockingPutStore::new(32, 2));
+
+        let observer_destination = Arc::clone(&destination);
+        let copy_future = async {
+            copy_rooted_blocks_with_mode_and_limit(
+                source.as_ref(),
+                destination.as_ref(),
+                &[root],
+                CopyDestinationMode::ReadBeforeWrite,
+                2,
+            )
+            .await
+        };
+        let observer = async move {
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                observer_destination.wait_until_max_observed(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(observer_destination.max_in_flight(), 2);
+            observer_destination.release_writes();
+        };
+
+        let (report, ()) = tokio::join!(copy_future, observer);
+
+        assert_eq!(report.copied_block_count, Some(4));
+        assert_eq!(report.skipped_already_present_block_count, Some(0));
+        assert_eq!(report.failed_block_count, 0);
+    }
+
     struct FailingPutStore {
         inner: Arc<MemoryBlockStore>,
         blocked_puts: HashSet<BlockHash>,
@@ -960,6 +1106,48 @@ mod tests {
 
     struct RejectingReadStore {
         inner: Arc<MemoryBlockStore>,
+    }
+
+    struct BlockingPutStore {
+        inner: Arc<MemoryBlockStore>,
+        active_writes: AtomicUsize,
+        max_in_flight: AtomicUsize,
+        target_max_in_flight: usize,
+        observed_target: AtomicBool,
+        observed_target_notify: tokio::sync::Notify,
+        release_writes_flag: AtomicBool,
+        release_writes_notify: tokio::sync::Notify,
+    }
+
+    impl BlockingPutStore {
+        fn new(capacity: usize, target_max_in_flight: usize) -> Self {
+            Self {
+                inner: Arc::new(MemoryBlockStore::new(capacity).unwrap()),
+                active_writes: AtomicUsize::new(0),
+                max_in_flight: AtomicUsize::new(0),
+                target_max_in_flight,
+                observed_target: AtomicBool::new(false),
+                observed_target_notify: tokio::sync::Notify::new(),
+                release_writes_flag: AtomicBool::new(false),
+                release_writes_notify: tokio::sync::Notify::new(),
+            }
+        }
+
+        async fn wait_until_max_observed(&self) {
+            if self.observed_target.load(Ordering::SeqCst) {
+                return;
+            }
+            self.observed_target_notify.notified().await;
+        }
+
+        fn release_writes(&self) {
+            self.release_writes_flag.store(true, Ordering::SeqCst);
+            self.release_writes_notify.notify_waiters();
+        }
+
+        fn max_in_flight(&self) -> usize {
+            self.max_in_flight.load(Ordering::SeqCst)
+        }
     }
 
     #[async_trait]
@@ -1006,6 +1194,40 @@ mod tests {
             Err(BlockStoreError::BackendFailure(
                 TestStoreError("destination read should not be used").to_string(),
             ))
+        }
+
+        fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+            self.inner.iter_block_ids()
+        }
+    }
+
+    #[async_trait]
+    impl BlockStore for BlockingPutStore {
+        async fn put_block_bytes(
+            &self,
+            block_id: &BlockHash,
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            let active = self.active_writes.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_in_flight.fetch_max(active, Ordering::SeqCst);
+            if active >= self.target_max_in_flight
+                && !self.observed_target.swap(true, Ordering::SeqCst)
+            {
+                self.observed_target_notify.notify_waiters();
+            }
+            while !self.release_writes_flag.load(Ordering::SeqCst) {
+                self.release_writes_notify.notified().await;
+            }
+            let result = self.inner.put_block_bytes(block_id, block_bytes).await;
+            self.active_writes.fetch_sub(1, Ordering::SeqCst);
+            result
+        }
+
+        async fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            self.inner.get_block_bytes(block_id).await
         }
 
         fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {

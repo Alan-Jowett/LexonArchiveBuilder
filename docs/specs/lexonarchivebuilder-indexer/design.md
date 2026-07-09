@@ -1487,6 +1487,23 @@ the same rooted immutable graph and still treats duplicate publication as safe,
 but it accepts weaker outcome classification in exchange for avoiding
 destination presence checks entirely.
 
+When rooted traversal determines that destination publication is required, the
+same CLI surface may keep multiple destination writes in flight
+asynchronously instead of waiting for each destination write to complete before
+issuing the next one. That write pipeline remains bounded by one operator-
+selectable CLI concurrency limit, with first approved default `64`, so the
+design improves high-latency backend throughput without redefining the shared
+`BlockStore` contract or inventing a backend-specific transfer path.
+
+The bounded write pipeline applies to both rooted-copy modes. In the default
+read-before-write mode, a block becomes eligible for the asynchronous write
+queue only after the destination has already been classified as missing. In the
+opt-in blind-write mode, the same bounded queue accepts the direct write
+attempts without any preceding destination existence read. Because write
+completions may arrive out of traversal order, the design constrains reporting
+to remain mode-truthful and rooted-reachability-preserving rather than tying
+summary semantics to serialized write completion order.
+
 Because rooted block copy can spend a long time traversing reachable block
 graphs or waiting on destination persistence without any intermediate final
 artifact to inspect, the same CLI surface also emits basic in-flight liveness on
@@ -1641,9 +1658,10 @@ LexonArchiveBuilder-owned verification artifacts validate:
 - correct rooted block copy over the shared `BlockStore` boundary, including
   reachable-only traversal, identity-preserving transfer, the default
   read-before-write classification path, the opt-in blind-write path with
-  reduced copied-versus-skipped accounting, failure reporting, default
-  in-flight liveness on the normal CLI surface, and preservation of
-  mutable-reference exclusion
+  reduced copied-versus-skipped accounting, bounded asynchronous destination-
+  write concurrency with one operator-selectable limit defaulting to `64`,
+  failure reporting, default in-flight liveness on the normal CLI surface, and
+  preservation of mutable-reference exclusion
 - correct application and defaulting of the administrator-defined concurrency
   budget
 - preservation of stable batch contracts across environments
