@@ -230,11 +230,11 @@ pub enum ConfigError {
     InvalidRefName,
     #[error("local embedding base_url must not be empty")]
     MissingLocalEmbeddingBaseUrl,
-    #[error("production block_store.container_sas_url must not be empty")]
+    #[error("overlay block_store.container_sas_url must not be empty")]
     MissingProductionContainerSasUrl,
     #[error("production-v2 block_store.container_sas_url must not be empty")]
     MissingProductionV2ContainerSasUrl,
-    #[error("production block_store.prefix is not supported by the Azure Blob block store")]
+    #[error("overlay block_store.prefix is not supported by the Azure Blob block store")]
     UnsupportedProductionBlockStorePrefix,
     #[error("production-v2 block_store.prefix is not supported by the Azure Table block store")]
     UnsupportedProductionV2BlockStorePrefix,
@@ -247,14 +247,14 @@ pub enum ConfigError {
     )]
     UnsupportedProductionV2MemoryCacheMaxResidentBlocks,
     #[error(
-        "production block_store.filesystem_cache_root is required for the production overlay block store"
+        "overlay block_store.filesystem_cache_root is required for the overlay-backed block store"
     )]
     MissingProductionFilesystemCacheRoot,
     #[error(
-        "production block_store.memory_cache_max_resident_blocks is required for the production overlay block store"
+        "overlay block_store.memory_cache_max_resident_blocks is required for the overlay-backed block store"
     )]
     MissingProductionMemoryCacheMaxResidentBlocks,
-    #[error("production block_store.memory_cache_max_resident_blocks must be at least 1")]
+    #[error("overlay block_store.memory_cache_max_resident_blocks must be at least 1")]
     InvalidProductionMemoryCacheMaxResidentBlocks,
     #[error("local testing cluster_count override must be at least 1")]
     InvalidLocalTestingClusterCount,
@@ -1161,6 +1161,38 @@ mod tests {
                 panic!("expected local-overlay environment")
             }
         }
+    }
+
+    #[test]
+    fn local_overlay_request_reports_overlay_neutral_cache_error_text() {
+        let request: BatchRequest = serde_json::from_value(json!({
+            "environment": {
+                "kind": "local-overlay",
+                "block_store": {
+                    "container_sas_url": "https://example.blob.core.windows.net/archive-sync?sig=test"
+                },
+                "embedding": {
+                    "base_url": "http://localhost:8080"
+                }
+            },
+            "embedding_spec": {
+                "dims": 384,
+                "encoding": "f32le"
+            },
+            "stage": "ingestion-and-embedding",
+            "ref_name": "test-branch",
+            "items": [{
+                "kind": "document",
+                "path": "docs/sample.txt"
+            }]
+        }))
+        .unwrap();
+
+        let error = request.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "overlay block_store.filesystem_cache_root is required for the overlay-backed block store"
+        );
     }
 
     #[test]

@@ -162,7 +162,7 @@ function Write-V070LadderPlan {
         rungs = @($parsedRungs)
     }
 
-    $plan | ConvertTo-Json -Depth 6 | Set-Content -Path $planPath
+    $plan | ConvertTo-Json -Depth 6 | Set-Content -Path $planPath -Encoding utf8
 
     Write-Host '=== V0.7.0 FIXED-BUDGET LADDER PLAN ==='
     Write-Host ("Profile: {0}" -f $Profile)
