@@ -32,6 +32,7 @@ use crate::tree_tools::{
 const DEFAULT_QUANTILE_BIN_COUNT: usize = 4;
 const DEFAULT_TNN_RECALL_SAMPLE_SIZE: usize = 100;
 const DEFAULT_TNN_RECALL_SEED: u64 = 0;
+const FAST_RANDOM_WALK_QUERY_SOURCE: &str = "random-walk-sampled";
 const REQUIRED_RECALL_AT: [usize; 3] = [1, 5, 10];
 const POWER_ITERATION_STEPS: usize = 8;
 const EPSILON: f32 = 1.0e-6;
@@ -195,6 +196,7 @@ pub struct TnnRecallConfig {
     pub sample_size: usize,
     pub seed: u64,
     pub traversal_width: usize,
+    pub fast_random_walk: bool,
 }
 
 impl Default for TnnRecallConfig {
@@ -203,6 +205,7 @@ impl Default for TnnRecallConfig {
             sample_size: DEFAULT_TNN_RECALL_SAMPLE_SIZE,
             seed: DEFAULT_TNN_RECALL_SEED,
             traversal_width: default_search_traversal_width(),
+            fast_random_walk: false,
         }
     }
 }
@@ -444,6 +447,17 @@ pub fn assess_rooted_tree_with_config(
             root_id: root_id.to_string(),
         });
     };
+    let root_query_embedding_spec =
+        comparison_embedding_spec_for_block(Some(*root_id), &root.block)?;
+    if tnn_recall.fast_random_walk {
+        return assess_random_walk_queries(
+            root_id,
+            &root.block,
+            &root_query_embedding_spec,
+            store,
+            tnn_recall,
+        );
+    }
 
     let mut state = TraversalState {
         blocks: Vec::new(),
@@ -481,7 +495,7 @@ pub fn assess_rooted_tree_with_config(
     let splits = build_split_metrics(&state);
     let corpus_tnn_recall = build_corpus_tnn_recall_report(
         root_id,
-        &comparison_embedding_spec_for_block(Some(*root_id), &root.block)?,
+        &root_query_embedding_spec,
         &state,
         store,
         tnn_recall,
@@ -532,6 +546,57 @@ pub fn assess_rooted_tree_with_config(
     })
 }
 
+fn assess_random_walk_queries(
+    root_id: &BlockHash,
+    root_block: &Block,
+    root_query_embedding_spec: &EmbeddingSpec,
+    store: &dyn BlockStore,
+    config: TnnRecallConfig,
+) -> Result<TreeQualityReport, TreeQualityError> {
+    let sampled_queries = sample_random_walk_queries(*root_id, root_block, store, config)?;
+    let query_accesses = build_random_walk_query_accesses(
+        root_id,
+        root_query_embedding_spec,
+        &sampled_queries,
+        store,
+        config.traversal_width,
+    )?;
+    let effective_sample_size = sampled_queries.len();
+    Ok(TreeQualityReport {
+        root_id: root_id.to_string(),
+        summary: TreeQualitySummary {
+            block_count: 0,
+            branch_count: 0,
+            leaf_count: 0,
+            edge_count: 0,
+            max_depth: 0,
+            structural_finding_count: 0,
+            child_dispersion_inversion_count: 0,
+            parent_split_count: 0,
+            mean_block_mean_centroid_distance: 0.0,
+            max_block_max_centroid_distance: 0.0,
+        },
+        corpus_tnn_recall: CorpusTnnRecallReport {
+            query_source: FAST_RANDOM_WALK_QUERY_SOURCE.into(),
+            corpus_size: 0,
+            requested_sample_size: config.sample_size,
+            effective_sample_size,
+            seed: config.seed,
+            traversal_width: config.traversal_width,
+            recall_at: Vec::new(),
+            access_summary: summarize_query_accesses(&query_accesses),
+            query_accesses: query_accesses
+                .into_iter()
+                .map(|query_access| query_access.metrics)
+                .collect(),
+        },
+        findings: Vec::new(),
+        layers: Vec::new(),
+        splits: Vec::new(),
+        blocks: Vec::new(),
+    })
+}
+
 pub fn default_report_path(root_id: &BlockHash) -> PathBuf {
     PathBuf::from(format!(
         "block-tree-quality-{}.json",
@@ -556,35 +621,51 @@ pub fn write_report(path: &Path, report: &TreeQualityReport) -> Result<(), TreeQ
 }
 
 pub fn render_report_summary(report: &TreeQualityReport) -> String {
-    let mut lines = vec![
-        format!("Block-tree quality report for {}", report.root_id),
-        format!(
-            "Blocks: {} total ({} branch, {} leaf), {} edge(s), max depth {}, structural finding(s) {}, child-dispersion inversion(s) {}, parent split(s) {}",
-            report.summary.block_count,
-            report.summary.branch_count,
-            report.summary.leaf_count,
-            report.summary.edge_count,
-            report.summary.max_depth,
-            report.summary.structural_finding_count,
-            report.summary.child_dispersion_inversion_count,
-            report.summary.parent_split_count
-        ),
-        format!(
-            "Aggregate spread: mean block mean-centroid-distance {:.6}, max block max-centroid-distance {:.6}",
-            report.summary.mean_block_mean_centroid_distance,
-            report.summary.max_block_max_centroid_distance
-        ),
-        format!(
-            "Corpus TNN-recall [{}]: corpus {}, sample {}/{}, seed {}, traversal width {}",
+    let fast_random_walk = report.corpus_tnn_recall.query_source == FAST_RANDOM_WALK_QUERY_SOURCE;
+    let mut lines = vec![format!("Block-tree quality report for {}", report.root_id)];
+    if fast_random_walk {
+        lines.push(
+            "Fast random-walk mode: skipped full-tree structural analysis and exact recall baseline."
+                .into(),
+        );
+        lines.push(format!(
+            "Corpus TNN-recall [{}]: corpus size unknown, sample {}/{}, seed {}, traversal width {}",
             report.corpus_tnn_recall.query_source,
-            report.corpus_tnn_recall.corpus_size,
             report.corpus_tnn_recall.effective_sample_size,
             report.corpus_tnn_recall.requested_sample_size,
             report.corpus_tnn_recall.seed,
             report.corpus_tnn_recall.traversal_width
-        ),
-        "Layer statistics:".into(),
-    ];
+        ));
+    } else {
+        lines.extend([
+            format!(
+                "Blocks: {} total ({} branch, {} leaf), {} edge(s), max depth {}, structural finding(s) {}, child-dispersion inversion(s) {}, parent split(s) {}",
+                report.summary.block_count,
+                report.summary.branch_count,
+                report.summary.leaf_count,
+                report.summary.edge_count,
+                report.summary.max_depth,
+                report.summary.structural_finding_count,
+                report.summary.child_dispersion_inversion_count,
+                report.summary.parent_split_count
+            ),
+            format!(
+                "Aggregate spread: mean block mean-centroid-distance {:.6}, max block max-centroid-distance {:.6}",
+                report.summary.mean_block_mean_centroid_distance,
+                report.summary.max_block_max_centroid_distance
+            ),
+            format!(
+                "Corpus TNN-recall [{}]: corpus {}, sample {}/{}, seed {}, traversal width {}",
+                report.corpus_tnn_recall.query_source,
+                report.corpus_tnn_recall.corpus_size,
+                report.corpus_tnn_recall.effective_sample_size,
+                report.corpus_tnn_recall.requested_sample_size,
+                report.corpus_tnn_recall.seed,
+                report.corpus_tnn_recall.traversal_width
+            ),
+            "Layer statistics:".into(),
+        ]);
+    }
 
     for recall_at in &report.corpus_tnn_recall.recall_at {
         let histogram = recall_at
@@ -602,6 +683,9 @@ pub fn render_report_summary(report: &TreeQualityReport) -> String {
             "- TNN Recall@{}: mean {:.6} stdev {:.6}, histogram [{}]",
             recall_at.k, recall_at.mean_recall, recall_at.stdev_recall, histogram
         ));
+    }
+    if fast_random_walk {
+        lines.push("TNN recall metrics skipped in fast random-walk mode.".into());
     }
 
     lines.push(format!(
@@ -639,56 +723,58 @@ pub fn render_report_summary(report: &TreeQualityReport) -> String {
         }
     }
 
-    for layer in &report.layers {
-        lines.push(format!(
-            "- level {}: blocks {}, intra-block mean {:.6} stdev {:.6}, sibling-centroid mean {:.6} stdev {:.6}, pca-axis mean {:.6} stdev {:.6}, quantile-var mean {:.6} stdev {:.6}, empty-bin blocks {}, overfull-bin blocks {}",
-            layer.level,
-            layer.block_count,
-            layer.mean_intra_block_dispersion,
-            layer.stdev_intra_block_dispersion,
-            layer.mean_sibling_centroid_distance,
-            layer.stdev_sibling_centroid_distance,
-            layer.mean_pca_axis_strength,
-            layer.stdev_pca_axis_strength,
-            layer.mean_quantile_occupancy_variance,
-            layer.stdev_quantile_occupancy_variance,
-            layer.blocks_with_empty_bins,
-            layer.blocks_with_overfull_bins
-        ));
-    }
+    if !fast_random_walk {
+        for layer in &report.layers {
+            lines.push(format!(
+                "- level {}: blocks {}, intra-block mean {:.6} stdev {:.6}, sibling-centroid mean {:.6} stdev {:.6}, pca-axis mean {:.6} stdev {:.6}, quantile-var mean {:.6} stdev {:.6}, empty-bin blocks {}, overfull-bin blocks {}",
+                layer.level,
+                layer.block_count,
+                layer.mean_intra_block_dispersion,
+                layer.stdev_intra_block_dispersion,
+                layer.mean_sibling_centroid_distance,
+                layer.stdev_sibling_centroid_distance,
+                layer.mean_pca_axis_strength,
+                layer.stdev_pca_axis_strength,
+                layer.mean_quantile_occupancy_variance,
+                layer.stdev_quantile_occupancy_variance,
+                layer.blocks_with_empty_bins,
+                layer.blocks_with_overfull_bins
+            ));
+        }
 
-    lines.push("Per-parent split effectiveness:".into());
-    for split in &report.splits {
-        lines.push(format!(
-            "- {} [level {} children {}] exceed-parent {} ({:.2}%), mean increase {:.6}, max increase {:.6}",
-            split.parent_block_id,
-            split.parent_level,
-            split.child_count,
-            split.child_dispersion_exceeds_parent_count,
-            split.child_dispersion_exceeds_parent_percentage,
-            split.mean_dispersion_increase_for_exceeding_children,
-            split.max_dispersion_increase_for_exceeding_children
-        ));
-    }
+        lines.push("Per-parent split effectiveness:".into());
+        for split in &report.splits {
+            lines.push(format!(
+                "- {} [level {} children {}] exceed-parent {} ({:.2}%), mean increase {:.6}, max increase {:.6}",
+                split.parent_block_id,
+                split.parent_level,
+                split.child_count,
+                split.child_dispersion_exceeds_parent_count,
+                split.child_dispersion_exceeds_parent_percentage,
+                split.mean_dispersion_increase_for_exceeding_children,
+                split.max_dispersion_increase_for_exceeding_children
+            ));
+        }
 
-    lines.push("Per-block statistics:".into());
-    for block in &report.blocks {
-        lines.push(format!(
-            "- {} [{} level {} depth {} entries {} parent {}] mean {:.6}, max {:.6}, pca-axis {:.6}, quantile occupancies {:?}, quantile-var {:.6}, empty bins {}, overfull bins {}",
-            block.block_id,
-            block.kind,
-            block.level,
-            block.reachable_depth,
-            block.entry_count,
-            block.parent_block_id.as_deref().unwrap_or("<root>"),
-            block.spread.mean_centroid_distance,
-            block.spread.max_centroid_distance,
-            block.pca_first_component_variance_fraction,
-            block.quantile_occupancy.occupancies,
-            block.quantile_occupancy.occupancy_variance,
-            block.quantile_occupancy.empty_bin_count,
-            block.quantile_occupancy.overfull_bin_count
-        ));
+        lines.push("Per-block statistics:".into());
+        for block in &report.blocks {
+            lines.push(format!(
+                "- {} [{} level {} depth {} entries {} parent {}] mean {:.6}, max {:.6}, pca-axis {:.6}, quantile occupancies {:?}, quantile-var {:.6}, empty bins {}, overfull bins {}",
+                block.block_id,
+                block.kind,
+                block.level,
+                block.reachable_depth,
+                block.entry_count,
+                block.parent_block_id.as_deref().unwrap_or("<root>"),
+                block.spread.mean_centroid_distance,
+                block.spread.max_centroid_distance,
+                block.pca_first_component_variance_fraction,
+                block.quantile_occupancy.occupancies,
+                block.quantile_occupancy.occupancy_variance,
+                block.quantile_occupancy.empty_bin_count,
+                block.quantile_occupancy.overfull_bin_count
+            ));
+        }
     }
 
     if !report.findings.is_empty() {
@@ -1184,6 +1270,142 @@ fn sample_key(neighbor_id: &str, seed: u64) -> [u8; 32] {
     digest.update(seed.to_le_bytes());
     digest.update(neighbor_id.as_bytes());
     digest.finalize().into()
+}
+
+fn sample_random_walk_queries(
+    root_id: BlockHash,
+    root_block: &Block,
+    store: &dyn BlockStore,
+    config: TnnRecallConfig,
+) -> Result<Vec<CorpusLeafEntry>, TreeQualityError> {
+    let mut samples = Vec::new();
+    let mut seen_neighbor_ids = HashSet::<String>::new();
+    let max_attempts = config
+        .sample_size
+        .saturating_mul(32)
+        .max(config.sample_size);
+    for walk_index in 0..max_attempts {
+        if samples.len() >= config.sample_size {
+            break;
+        }
+        let Some(sample) =
+            random_walk_query(root_id, root_block, store, config.seed, walk_index as u64)?
+        else {
+            continue;
+        };
+        if seen_neighbor_ids.insert(sample.neighbor_id.clone()) {
+            samples.push(sample);
+        }
+    }
+    Ok(samples)
+}
+
+fn random_walk_query(
+    root_id: BlockHash,
+    root_block: &Block,
+    store: &dyn BlockStore,
+    seed: u64,
+    walk_index: u64,
+) -> Result<Option<CorpusLeafEntry>, TreeQualityError> {
+    let mut current_id = root_id;
+    let mut current_block = root_block.clone();
+    let mut depth = 0usize;
+    loop {
+        match current_block {
+            Block::Leaf(ref leaf) => {
+                if leaf.entries.is_empty() {
+                    return Ok(None);
+                }
+                let entry_index = deterministic_choice_index(
+                    seed,
+                    walk_index,
+                    depth,
+                    &current_id,
+                    leaf.entries.len(),
+                    b"leaf-entry",
+                );
+                let entry = &leaf.entries[entry_index];
+                return match corpus_entry_from_leaf_result(current_id, entry, &leaf.embedding_spec)
+                {
+                    Ok(entry) => Ok(Some(entry)),
+                    Err(TreeQualityError::ZeroMagnitudeEmbedding { .. }) => Ok(None),
+                    Err(other) => Err(other),
+                };
+            }
+            Block::Branch(ref branch) => {
+                if branch.entries.is_empty() {
+                    return Ok(None);
+                }
+                let child_index = deterministic_choice_index(
+                    seed,
+                    walk_index,
+                    depth,
+                    &current_id,
+                    branch.entries.len(),
+                    b"branch-child",
+                );
+                let child_id = branch.entries[child_index].child;
+                let Some(validated_child) = block_on_block_store_future(store.get(&child_id))?
+                else {
+                    return Err(TreeQualityError::Search {
+                        message: format!(
+                            "fast random-walk query sampling hit missing child block {} from parent {}",
+                            child_id, current_id
+                        ),
+                    });
+                };
+                current_id = validated_child.hash;
+                current_block = validated_child.block;
+                depth += 1;
+            }
+        }
+    }
+}
+
+fn deterministic_choice_index(
+    seed: u64,
+    walk_index: u64,
+    depth: usize,
+    block_id: &BlockHash,
+    len: usize,
+    salt: &[u8],
+) -> usize {
+    debug_assert!(len > 0);
+    let mut digest = Sha256::new();
+    digest.update(seed.to_le_bytes());
+    digest.update(walk_index.to_le_bytes());
+    digest.update((depth as u64).to_le_bytes());
+    digest.update(block_id.as_bytes());
+    digest.update(salt);
+    let digest = digest.finalize();
+    let bytes: [u8; 8] = digest[..8].try_into().expect("sha256 prefix must fit");
+    (u64::from_le_bytes(bytes) % len as u64) as usize
+}
+
+fn build_random_walk_query_accesses(
+    root_id: &BlockHash,
+    root_query_embedding_spec: &EmbeddingSpec,
+    sampled_queries: &[CorpusLeafEntry],
+    store: &dyn BlockStore,
+    traversal_width: usize,
+) -> Result<Vec<QueryAccessCapture>, TreeQualityError> {
+    let searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
+    let max_k = REQUIRED_RECALL_AT.iter().copied().max().unwrap_or(1);
+    sampled_queries
+        .iter()
+        .map(|query| {
+            approximate_neighbors(
+                root_id,
+                root_query_embedding_spec,
+                query,
+                max_k,
+                traversal_width,
+                store,
+                &searcher,
+            )
+            .map(|(_, query_access)| query_access)
+        })
+        .collect()
 }
 
 fn exact_neighbors<'a>(
@@ -2087,6 +2309,7 @@ mod tests {
                 sample_size: 2,
                 seed: 7,
                 traversal_width: 7,
+                fast_random_walk: false,
             },
         )
         .unwrap();
@@ -2203,6 +2426,52 @@ mod tests {
     }
 
     #[test]
+    fn assessment_fast_random_walk_skips_full_tree_metrics() {
+        let dir = tempdir().unwrap();
+        let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
+
+        let alpha = put_block(&store, &named_leaf_block("alpha", &[1.0, 0.0]));
+        let beta = put_block(&store, &named_leaf_block("beta", &[0.0, 1.0]));
+        let root = put_block(
+            &store,
+            &branch_block(1, vec![([1.0, 0.0], alpha), ([0.0, 1.0], beta)]),
+        );
+
+        let report = assess_rooted_tree_with_config(
+            &root,
+            &store,
+            TnnRecallConfig {
+                sample_size: 2,
+                seed: 7,
+                traversal_width: 7,
+                fast_random_walk: true,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.corpus_tnn_recall.query_source,
+            FAST_RANDOM_WALK_QUERY_SOURCE
+        );
+        assert_eq!(report.corpus_tnn_recall.corpus_size, 0);
+        assert_eq!(report.corpus_tnn_recall.effective_sample_size, 2);
+        assert!(report.corpus_tnn_recall.recall_at.is_empty());
+        assert_eq!(report.corpus_tnn_recall.access_summary.query_count, 2);
+        assert!(report.layers.is_empty());
+        assert!(report.splits.is_empty());
+        assert!(report.blocks.is_empty());
+        assert!(report.findings.is_empty());
+
+        let rendered = render_report_summary(&report);
+        assert!(rendered.contains("Fast random-walk mode: skipped full-tree structural analysis"));
+        assert!(rendered.contains("TNN recall metrics skipped in fast random-walk mode."));
+        assert!(rendered.contains("Corpus query access [random-walk-sampled]:"));
+        assert!(!rendered.contains("Layer statistics:"));
+        assert!(!rendered.contains("Per-parent split effectiveness:"));
+        assert!(!rendered.contains("Per-block statistics:"));
+    }
+
+    #[test]
     fn assessment_summarizes_query_accesses_as_unique_blocks_and_per_query_rtts() {
         let query_accesses = vec![
             build_query_access_capture(
@@ -2296,6 +2565,7 @@ mod tests {
                 sample_size: 2,
                 seed: 7,
                 traversal_width: 7,
+                fast_random_walk: false,
             },
         )
         .unwrap();
@@ -2330,6 +2600,7 @@ mod tests {
                 sample_size: 2,
                 seed: 7,
                 traversal_width: 3,
+                fast_random_walk: false,
             },
         )
         .unwrap();
@@ -2375,6 +2646,7 @@ mod tests {
                 sample_size: 3,
                 seed: 7,
                 traversal_width: 3,
+                fast_random_walk: false,
             },
         )
         .unwrap();
@@ -2405,6 +2677,7 @@ mod tests {
                 sample_size: 1,
                 seed: 0,
                 traversal_width: 0,
+                fast_random_walk: false,
             },
         )
         .unwrap_err();

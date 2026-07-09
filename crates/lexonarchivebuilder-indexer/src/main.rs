@@ -76,6 +76,11 @@ enum Command {
         tnn_recall_seed: u64,
         #[arg(long, default_value_t = default_search_traversal_width())]
         traversal_width: usize,
+        #[arg(
+            long,
+            help = "Skip full-tree quality traversal and instead sample query embeddings by deterministic random walks from the root."
+        )]
+        fast_random_walk: bool,
         #[arg(long)]
         json_out: Option<PathBuf>,
         #[command(flatten)]
@@ -393,6 +398,7 @@ async fn main() -> anyhow::Result<()> {
             tnn_recall_sample_size,
             tnn_recall_seed,
             traversal_width,
+            fast_random_walk,
             json_out,
             block_store,
         } => {
@@ -405,6 +411,7 @@ async fn main() -> anyhow::Result<()> {
                     sample_size: tnn_recall_sample_size,
                     seed: tnn_recall_seed,
                     traversal_width,
+                    fast_random_walk,
                 },
             )?;
             let output_path = json_out.unwrap_or_else(|| default_quality_report_path(&root_id));
@@ -663,6 +670,7 @@ mod tests {
                 tnn_recall_sample_size,
                 tnn_recall_seed,
                 traversal_width,
+                fast_random_walk,
                 block_store,
                 ..
             } => {
@@ -673,9 +681,33 @@ mod tests {
                 assert_eq!(tnn_recall_sample_size, 17);
                 assert_eq!(tnn_recall_seed, 9);
                 assert_eq!(traversal_width, 7);
+                assert!(!fast_random_walk);
                 assert_eq!(block_store.block_store_profile, BlockStoreProfile::Local);
                 assert_eq!(block_store.block_store_root, Some(PathBuf::from("blocks")));
             }
+            _ => panic!("expected quality command"),
+        }
+    }
+
+    #[test]
+    fn quality_command_parses_fast_random_walk_flag() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "quality",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--tnn-recall-sample-size",
+            "5",
+            "--fast-random-walk",
+            "--block-store-root",
+            "blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Quality {
+                fast_random_walk, ..
+            } => assert!(fast_random_walk),
             _ => panic!("expected quality command"),
         }
     }
