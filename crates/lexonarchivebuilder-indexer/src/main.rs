@@ -10,7 +10,8 @@ use anyhow::Context;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use env_logger::Env;
 use lexonarchivebuilder_indexer::block_copy::{
-    copy_rooted_blocks, default_report_path as default_copy_report_path,
+    CopyDestinationMode, copy_rooted_blocks_with_mode,
+    default_report_path as default_copy_report_path,
     render_report_summary as render_copy_report_summary, write_report as write_copy_report,
 };
 use lexonarchivebuilder_indexer::block_store::ConfiguredBlockStore;
@@ -112,6 +113,11 @@ enum Command {
     Copy {
         #[arg(long = "root-id", required = true, num_args = 1..)]
         root_ids: Vec<String>,
+        #[arg(
+            long,
+            help = "Skip destination existence reads and attempt destination writes directly."
+        )]
+        blind_write: bool,
         #[arg(long)]
         json_out: Option<PathBuf>,
         #[command(flatten)]
@@ -442,6 +448,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Copy {
             root_ids,
+            blind_write,
             json_out,
             source_block_store,
             destination_block_store,
@@ -457,7 +464,16 @@ async fn main() -> anyhow::Result<()> {
                 &destination_block_store.to_environment_config(),
             )?;
             let report = await_with_copy_liveness(
-                copy_rooted_blocks(&source_store, &destination_store, &root_ids),
+                copy_rooted_blocks_with_mode(
+                    &source_store,
+                    &destination_store,
+                    &root_ids,
+                    if blind_write {
+                        CopyDestinationMode::BlindWrite
+                    } else {
+                        CopyDestinationMode::ReadBeforeWrite
+                    },
+                ),
                 COPY_LIVENESS_HEARTBEAT_INTERVAL,
                 |elapsed| format_copy_liveness_message(root_ids.len(), elapsed),
             )
@@ -858,6 +874,7 @@ mod tests {
         match cli.command {
             Command::Copy {
                 root_ids,
+                blind_write,
                 source_block_store,
                 destination_block_store,
                 ..
@@ -883,6 +900,7 @@ mod tests {
                     destination_block_store.destination_block_store_root,
                     Some(PathBuf::from("destination-blocks"))
                 );
+                assert!(!blind_write);
             }
             _ => panic!("expected copy command"),
         }
@@ -956,6 +974,27 @@ mod tests {
                     }
                 }
             }
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn copy_command_parses_blind_write_flag() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--blind-write",
+            "--source-block-store-root",
+            "source-blocks",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Copy { blind_write, .. } => assert!(blind_write),
             _ => panic!("expected copy command"),
         }
     }

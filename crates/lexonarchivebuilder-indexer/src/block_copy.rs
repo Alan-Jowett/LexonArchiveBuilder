@@ -40,11 +40,23 @@ pub struct CopyFailure {
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct RootedBlockCopyReport {
+    pub destination_mode: CopyDestinationMode,
     pub requested_root_ids: Vec<String>,
-    pub copied_block_count: usize,
-    pub skipped_already_present_block_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copied_block_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped_already_present_block_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempted_write_block_count: Option<usize>,
     pub failed_block_count: usize,
     pub failures: Vec<CopyFailure>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CopyDestinationMode {
+    ReadBeforeWrite,
+    BlindWrite,
 }
 
 #[derive(Debug, Error)]
@@ -64,6 +76,21 @@ pub async fn copy_rooted_blocks(
     destination: &dyn BlockStore,
     root_ids: &[BlockHash],
 ) -> RootedBlockCopyReport {
+    copy_rooted_blocks_with_mode(
+        source,
+        destination,
+        root_ids,
+        CopyDestinationMode::ReadBeforeWrite,
+    )
+    .await
+}
+
+pub async fn copy_rooted_blocks_with_mode(
+    source: &dyn BlockStore,
+    destination: &dyn BlockStore,
+    root_ids: &[BlockHash],
+    destination_mode: CopyDestinationMode,
+) -> RootedBlockCopyReport {
     let requested_root_ids = root_ids.iter().map(ToString::to_string).collect::<Vec<_>>();
     let mut queue = root_ids
         .iter()
@@ -73,6 +100,7 @@ pub async fn copy_rooted_blocks(
     let mut visited = HashSet::new();
     let mut copied_block_count = 0usize;
     let mut skipped_already_present_block_count = 0usize;
+    let mut attempted_write_block_count = 0usize;
     let mut failures = Vec::new();
 
     while let Some((request_root_id, block_id)) = queue.pop_front() {
@@ -91,11 +119,35 @@ pub async fn copy_rooted_blocks(
             continue;
         };
 
-        match destination.get_block_bytes(&block_id).await {
-            Ok(Some(_)) => {
-                skipped_already_present_block_count += 1;
-            }
-            Ok(None) => {
+        match destination_mode {
+            CopyDestinationMode::ReadBeforeWrite => match destination
+                .get_block_bytes(&block_id)
+                .await
+            {
+                Ok(Some(_)) => {
+                    skipped_already_present_block_count += 1;
+                }
+                Ok(None) => {
+                    if let Err(error) = destination.put_block_bytes(&block_id, &block_bytes).await {
+                        failures.push(CopyFailure {
+                            root_id: request_root_id.to_string(),
+                            block_id: block_id.to_string(),
+                            operation: CopyFailureOperation::WriteDestinationBlock,
+                            message: error.to_string(),
+                        });
+                    } else {
+                        copied_block_count += 1;
+                    }
+                }
+                Err(error) => failures.push(CopyFailure {
+                    root_id: request_root_id.to_string(),
+                    block_id: block_id.to_string(),
+                    operation: CopyFailureOperation::CheckDestinationBlock,
+                    message: error.to_string(),
+                }),
+            },
+            CopyDestinationMode::BlindWrite => {
+                attempted_write_block_count += 1;
                 if let Err(error) = destination.put_block_bytes(&block_id, &block_bytes).await {
                     failures.push(CopyFailure {
                         root_id: request_root_id.to_string(),
@@ -103,25 +155,25 @@ pub async fn copy_rooted_blocks(
                         operation: CopyFailureOperation::WriteDestinationBlock,
                         message: error.to_string(),
                     });
-                } else {
-                    copied_block_count += 1;
                 }
             }
-            Err(error) => failures.push(CopyFailure {
-                root_id: request_root_id.to_string(),
-                block_id: block_id.to_string(),
-                operation: CopyFailureOperation::CheckDestinationBlock,
-                message: error.to_string(),
-            }),
         }
 
         enqueue_children(request_root_id, &child_ids, &mut queue);
     }
 
     RootedBlockCopyReport {
+        destination_mode,
         requested_root_ids,
-        copied_block_count,
-        skipped_already_present_block_count,
+        copied_block_count: matches!(destination_mode, CopyDestinationMode::ReadBeforeWrite)
+            .then_some(copied_block_count),
+        skipped_already_present_block_count: matches!(
+            destination_mode,
+            CopyDestinationMode::ReadBeforeWrite
+        )
+        .then_some(skipped_already_present_block_count),
+        attempted_write_block_count: matches!(destination_mode, CopyDestinationMode::BlindWrite)
+            .then_some(attempted_write_block_count),
         failed_block_count: failures.len(),
         failures,
     }
@@ -169,13 +221,26 @@ pub fn render_report_summary(report: &RootedBlockCopyReport) -> String {
             "Rooted block copy results for {} requested root(s)",
             report.requested_root_ids.len()
         ),
-        format!("Copied blocks: {}", report.copied_block_count),
         format!(
-            "Skipped already present: {}",
-            report.skipped_already_present_block_count
+            "Destination mode: {}",
+            match report.destination_mode {
+                CopyDestinationMode::ReadBeforeWrite => "read-before-write",
+                CopyDestinationMode::BlindWrite => "blind-write",
+            }
         ),
         format!("Failed blocks: {}", report.failed_block_count),
     ];
+    if let Some(copied_block_count) = report.copied_block_count {
+        lines.push(format!("Copied blocks: {copied_block_count}"));
+    }
+    if let Some(skipped_already_present_block_count) = report.skipped_already_present_block_count {
+        lines.push(format!(
+            "Skipped already present: {skipped_already_present_block_count}"
+        ));
+    }
+    if let Some(attempted_write_block_count) = report.attempted_write_block_count {
+        lines.push(format!("Attempted writes: {attempted_write_block_count}"));
+    }
     if !report.requested_root_ids.is_empty() {
         lines.push(format!("Roots: {}", report.requested_root_ids.join(", ")));
     }
@@ -520,8 +585,13 @@ mod tests {
 
         let report = copy_rooted_blocks(&source, &destination, &[root]).await;
 
-        assert_eq!(report.copied_block_count, 2);
-        assert_eq!(report.skipped_already_present_block_count, 1);
+        assert_eq!(
+            report.destination_mode,
+            CopyDestinationMode::ReadBeforeWrite
+        );
+        assert_eq!(report.copied_block_count, Some(2));
+        assert_eq!(report.skipped_already_present_block_count, Some(1));
+        assert_eq!(report.attempted_write_block_count, None);
         assert_eq!(report.failed_block_count, 0);
         assert!(report.failures.is_empty());
         assert!(destination.get_block_bytes(&root).await.unwrap().is_some());
@@ -554,8 +624,12 @@ mod tests {
 
         let report = copy_rooted_blocks(&source, &destination, &[root]).await;
 
-        assert_eq!(report.copied_block_count, 2);
-        assert_eq!(report.skipped_already_present_block_count, 0);
+        assert_eq!(
+            report.destination_mode,
+            CopyDestinationMode::ReadBeforeWrite
+        );
+        assert_eq!(report.copied_block_count, Some(2));
+        assert_eq!(report.skipped_already_present_block_count, Some(0));
         assert_eq!(report.failed_block_count, 1);
         assert_eq!(report.failures[0].block_id, bad_leaf.to_string());
         assert_eq!(
@@ -603,8 +677,8 @@ mod tests {
 
         let report = copy_rooted_blocks(&source, &destination, &[root]).await;
 
-        assert_eq!(report.copied_block_count, 1);
-        assert_eq!(report.skipped_already_present_block_count, 0);
+        assert_eq!(report.copied_block_count, Some(1));
+        assert_eq!(report.skipped_already_present_block_count, Some(0));
         assert_eq!(report.failed_block_count, 0);
         assert!(destination.get_block_bytes(&root).await.unwrap().is_some());
     }
@@ -625,7 +699,7 @@ mod tests {
 
         let report = copy_rooted_blocks(&source, &destination, &[head]).await;
 
-        assert_eq!(report.copied_block_count, 2);
+        assert_eq!(report.copied_block_count, Some(2));
         assert_eq!(report.failed_block_count, 0);
         assert!(destination.get_block_bytes(&head).await.unwrap().is_some());
         assert!(
@@ -667,7 +741,7 @@ mod tests {
 
         let report = copy_rooted_blocks(&source, &destination, &[normalized_email]).await;
 
-        assert_eq!(report.copied_block_count, 2);
+        assert_eq!(report.copied_block_count, Some(2));
         assert_eq!(report.failed_block_count, 0);
         assert!(
             destination
@@ -723,7 +797,7 @@ mod tests {
 
         let report = copy_rooted_blocks(&source, &destination, &[root]).await;
 
-        assert_eq!(report.copied_block_count, 4);
+        assert_eq!(report.copied_block_count, Some(4));
         assert_eq!(report.failed_block_count, 0);
         assert!(destination.get_block_bytes(&root).await.unwrap().is_some());
         assert!(destination.get_block_bytes(&leaf).await.unwrap().is_some());
@@ -760,9 +834,11 @@ mod tests {
     fn rooted_block_copy_writes_json_artifact() {
         let dir = tempdir().unwrap();
         let report = RootedBlockCopyReport {
+            destination_mode: CopyDestinationMode::ReadBeforeWrite,
             requested_root_ids: vec!["abc".into()],
-            copied_block_count: 2,
-            skipped_already_present_block_count: 1,
+            copied_block_count: Some(2),
+            skipped_already_present_block_count: Some(1),
+            attempted_write_block_count: None,
             failed_block_count: 1,
             failures: vec![CopyFailure {
                 root_id: "abc".into(),
@@ -782,9 +858,62 @@ mod tests {
         assert!(rendered.contains("\"write-destination-block\""));
     }
 
+    #[tokio::test]
+    async fn rooted_block_copy_blind_write_skips_destination_reads() {
+        let source = MemoryBlockStore::new(16).unwrap();
+        let destination_inner = Arc::new(MemoryBlockStore::new(16).unwrap());
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let root = source.put(&branch_block(&[alpha, beta])).await.unwrap();
+        let destination = RejectingReadStore {
+            inner: Arc::clone(&destination_inner),
+        };
+
+        let report = copy_rooted_blocks_with_mode(
+            &source,
+            &destination,
+            &[root],
+            CopyDestinationMode::BlindWrite,
+        )
+        .await;
+
+        assert_eq!(report.destination_mode, CopyDestinationMode::BlindWrite);
+        assert_eq!(report.copied_block_count, None);
+        assert_eq!(report.skipped_already_present_block_count, None);
+        assert_eq!(report.attempted_write_block_count, Some(3));
+        assert_eq!(report.failed_block_count, 0);
+        assert!(render_report_summary(&report).contains("Attempted writes: 3"));
+        assert!(!render_report_summary(&report).contains("Skipped already present:"));
+        assert!(
+            destination_inner
+                .get_block_bytes(&root)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            destination_inner
+                .get_block_bytes(&alpha)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            destination_inner
+                .get_block_bytes(&beta)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
     struct FailingPutStore {
         inner: Arc<MemoryBlockStore>,
         blocked_puts: HashSet<BlockHash>,
+    }
+
+    struct RejectingReadStore {
+        inner: Arc<MemoryBlockStore>,
     }
 
     #[async_trait]
@@ -807,6 +936,30 @@ mod tests {
             block_id: &BlockHash,
         ) -> Result<Option<Vec<u8>>, BlockStoreError> {
             self.inner.get_block_bytes(block_id).await
+        }
+
+        fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+            self.inner.iter_block_ids()
+        }
+    }
+
+    #[async_trait]
+    impl BlockStore for RejectingReadStore {
+        async fn put_block_bytes(
+            &self,
+            block_id: &BlockHash,
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            self.inner.put_block_bytes(block_id, block_bytes).await
+        }
+
+        async fn get_block_bytes(
+            &self,
+            _block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            Err(BlockStoreError::BackendFailure(
+                TestStoreError("destination read should not be used").to_string(),
+            ))
         }
 
         fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {

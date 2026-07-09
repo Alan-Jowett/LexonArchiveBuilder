@@ -645,16 +645,18 @@ block after the tool has already proven other reachable blocks can be copied or
 skipped.
 
 **Pass condition:** the tool traverses only the immutable blocks reachable from
-the caller-supplied roots in the source store, copies those blocks to the
+the caller-supplied roots in the source store and copies those blocks to the
 destination without re-encoding payload bytes or requiring a backend-specific
-transfer path, skips blocks that are already present at the destination while
-continuing the rooted transfer successfully, reports requested-root,
-copied-block, skipped-already-present, and failed-block outcomes on both
-human-readable and machine-readable output surfaces with enough detail to
-identify the failing block identity or equivalent rooted transfer step, emits
+transfer path. In the default mode it skips blocks that are already present at
+the destination while continuing the rooted transfer successfully and reports
+requested-root, copied-block, skipped-already-present, and failed-block
+outcomes on both human-readable and machine-readable output surfaces. In the
+opt-in blind-write mode it skips destination existence reads, attempts writes
+directly, and reports attempted-write plus failure-oriented outcomes without
+claiming exact skipped-already-present classification. Both modes must emit
 basic default in-flight liveness or progress on the normal CLI output surface
 before final completion when the rooted copy runs long enough that silence
-would otherwise resemble a hang, and leaves mutable references such as
+would otherwise resemble a hang, and both leave mutable references such as
 current-root and replay-journal-head unchanged.
 
 **Traces to:** RQ-INDEXER-005B, DSG-LFI-005D, DSG-LFI-007G
@@ -893,7 +895,10 @@ The same package must also keep `production-v2` as an additive approved
 block-store profile within the shared repository targeting contract rather than
 as a copy-only storage exception, while requiring default rooted-copy liveness
 on the normal CLI surface rather than making ordinary operators opt into a
-verbose-only signal to see that long-running transfer work is still active.
+verbose-only signal to see that long-running transfer work is still active. The
+same package must also preserve read-before-write classification as the default
+rooted-copy behavior while allowing an explicit opt-in blind-write mode that
+avoids destination reads and accepts reduced copied-versus-skipped accounting.
 
 **Traces to:** RQ-INDEXER-005B, RQ-INDEXER-009, RQ-INDEXER-010A, DSG-LFI-005D,
 DSG-LFI-007G, DSG-LFI-009, DSG-LFI-011

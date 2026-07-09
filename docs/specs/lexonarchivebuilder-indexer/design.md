@@ -1470,10 +1470,22 @@ exposure, request-file integration, elevation into a normal indexing stage, or
 definition of any repository-local block-store backend family.
 
 The operator surface renders one concise human-readable transfer summary and
-writes one machine-readable artifact reporting requested roots, copied block
-counts, skipped-already-present counts, and failures. That result contract is
-about transfer outcomes only; it does not implicitly publish mutable references
-or redefine any upstream block-store backend semantics.
+writes one machine-readable artifact reporting rooted transfer outcomes. In the
+default read-before-write mode that includes requested roots, copied block
+counts, skipped-already-present counts, and failures. In the opt-in blind-write
+mode the same surface skips destination existence reads and instead reports
+attempted-write plus failure-oriented outcomes without claiming exact
+copied-versus-skipped classification. That result contract is about transfer
+outcomes only; it does not implicitly publish mutable references or redefine any
+upstream block-store backend semantics.
+
+The design keeps the current read-before-write path as the default because it
+preserves the strongest destination-state accounting across backends. The
+blind-write path is an explicit operator-selected tradeoff for backends where
+destination reads hang or are disproportionately expensive: it still traverses
+the same rooted immutable graph and still treats duplicate publication as safe,
+but it accepts weaker outcome classification in exchange for avoiding
+destination presence checks entirely.
 
 Because rooted block copy can spend a long time traversing reachable block
 graphs or waiting on destination persistence without any intermediate final
@@ -1627,9 +1639,11 @@ LexonArchiveBuilder-owned verification artifacts validate:
   indexer process through the standard Rust logging environment path, while
   preserving quiet default runs
 - correct rooted block copy over the shared `BlockStore` boundary, including
-  reachable-only traversal, identity-preserving transfer, safe skip-on-present
-  behavior, failure reporting, default in-flight liveness on the normal CLI
-  surface, and preservation of mutable-reference exclusion
+  reachable-only traversal, identity-preserving transfer, the default
+  read-before-write classification path, the opt-in blind-write path with
+  reduced copied-versus-skipped accounting, failure reporting, default
+  in-flight liveness on the normal CLI surface, and preservation of
+  mutable-reference exclusion
 - correct application and defaulting of the administrator-defined concurrency
   budget
 - preservation of stable batch contracts across environments
