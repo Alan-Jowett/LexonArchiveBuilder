@@ -10,12 +10,18 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+azure_core = { version = "0.13", default-features = false, features = ["enable_reqwest_rustls"] }
+azure_data_tables = { version = "0.13", default-features = false, features = ["enable_reqwest_rustls"] }
+azure_storage = { version = "0.13", default-features = false, features = ["enable_reqwest_rustls"] }
 ciborium.workspace = true
 clap.workspace = true
+env_logger.workspace = true
+futures.workspace = true
 half.workspace = true
 lexongraph-block.workspace = true
 lexongraph-block-store.workspace = true
 lexongraph-block-store-azure-sdk.workspace = true
+lexongraph-block-store-azure-table.workspace = true
 lexongraph-block-store-fs.workspace = true
 lexongraph-block-store-memory.workspace = true
 lexongraph-block-store-overlay.workspace = true

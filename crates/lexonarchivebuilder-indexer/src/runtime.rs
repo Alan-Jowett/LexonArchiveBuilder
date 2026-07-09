@@ -9,7 +9,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
+use azure_data_tables::clients::TableServiceClientBuilder;
+use azure_data_tables::prelude::{Filter, TableClient, Top};
+use azure_storage::StorageCredentials;
 use ciborium::Value;
+use futures::StreamExt;
 use lexongraph_block::{
     Block, BlockError, BlockHash, DecodedBlock, EmbeddingSpec, LeafEntry, SerializedBlock,
     VERSION_1, VersionedBlock, build_leaf_block, deserialize_block, v2,
@@ -23,18 +27,24 @@ use lexongraph_streaming_indexer::{
     published_indexing_profile,
 };
 use reqwest::StatusCode;
+use reqwest::Url;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 
-use crate::block_store::{ConfiguredBlockStore, block_on_block_store_future};
+use crate::block_store::{
+    ConfiguredBlockStore, block_on_block_store_future, block_on_future_factory,
+};
 #[cfg(test)]
 use crate::config::MUTABLE_REF_ROOT_DIR;
 use crate::config::{
     BatchItemConfig, BatchRequest, BatchSummary, ClusteringConfigOverrides, ConfigError,
     ConfiguredClustering, ExecutionStage, MutableRefStoreLocation, metadata_to_text_map,
+};
+use crate::custom_blocks::{
+    REPLAY_JOURNAL_BLOCK_TYPE, REPLAY_JOURNAL_MEDIA_TYPE, custom_block_payload,
 };
 use crate::embedding::{ConfiguredEmbeddingProvider, ConfiguredEmbeddingProviderError};
 use crate::mailbox::{MailboxExpansionError, expand_mailbox_item_with_stats};
@@ -49,14 +59,13 @@ type ProgressReporter = Arc<dyn Fn(String) + Send + Sync + 'static>;
 pub const INGESTION_ONLY_ROOT_ID_PLACEHOLDER: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
 const PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
-const REPLAY_JOURNAL_BLOCK_TYPE: &str = "lexonarchivebuilder.replay-journal";
-const REPLAY_JOURNAL_MEDIA_TYPE: &str = "application/vnd.lexonarchivebuilder.replay-journal+cbor";
 const REPLAY_JOURNAL_SCHEMA_VERSION: u64 = 1;
 const REPLAY_JOURNAL_BLOCK_MAX_BYTES: usize = 64 * 1024 * 1024;
 const AZURE_BLOB_API_VERSION: &str = "2023-11-03";
 const MUTABLE_REF_STORE_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MUTABLE_REF_STORE_HTTP_RETRY_ATTEMPTS: usize = 3;
 const MUTABLE_REF_STORE_HTTP_RETRY_DELAY: Duration = Duration::from_millis(500);
+const MUTABLE_REF_TABLE_SCHEMA_VERSION: i32 = 1;
 #[cfg(test)]
 const TEST_REF_NAME: &str = "test-branch";
 
@@ -690,7 +699,18 @@ where
 fn resolved_published_profile(
     clustering: &ConfiguredClustering,
 ) -> Result<PublishedIndexingProfile, StreamingIndexerError> {
-    published_indexing_profile(clustering.profile_version)
+    let mut profile = published_indexing_profile(clustering.profile_version)?;
+    if let Some(cluster_count) = clustering.local_testing_cluster_count {
+        match &mut profile.planning_strategy {
+            PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => {
+                settings.cluster_count = cluster_count;
+            }
+            PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => {
+                settings.cluster_count = cluster_count;
+            }
+        }
+    }
+    Ok(profile)
 }
 
 fn clustering_failure_input(item: &IndexItem<ContentRef>) -> ClusteringFailureInput {
@@ -739,22 +759,18 @@ fn effective_clustering_diagnostics(
 }
 
 fn published_profile_cluster_count(profile: &PublishedIndexingProfile) -> Option<u32> {
-    #[allow(unreachable_patterns)]
     match &profile.planning_strategy {
         PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => {
             Some(settings.cluster_count)
         }
         PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => Some(settings.cluster_count),
-        _ => None,
     }
 }
 
 fn published_profile_random_seed(profile: &PublishedIndexingProfile) -> Option<u64> {
-    #[allow(unreachable_patterns)]
     match &profile.planning_strategy {
         PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => settings.random_seed,
         PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => settings.random_seed,
-        _ => None,
     }
 }
 
@@ -1431,7 +1447,8 @@ fn validate_request_with_overrides(
     clustering_overrides: ClusteringConfigOverrides,
 ) -> Result<(), RuntimeError> {
     request.validate()?;
-    let clustering = clustering_overrides.to_configured_clustering(request.profile_version)?;
+    let clustering = clustering_overrides
+        .to_configured_clustering(request.profile_version, &request.environment)?;
     let stage = request.stage;
     let _block_store = ConfiguredBlockStore::from_environment(request_dir, &request.environment)?;
     let mutable_ref_store = request
@@ -1439,11 +1456,12 @@ fn validate_request_with_overrides(
         .resolve_mutable_ref_store(request_dir, &request.ref_name);
 
     if stage.includes_clustering() {
+        let profile = resolved_published_profile(&clustering)?;
         let _: StreamingIndexingRun<ContentRef, _, _, _, _> =
-            StreamingIndexingRun::with_published_profile(
+            StreamingIndexingRun::with_resolved_published_profile(
                 ValidateOnlyResolver,
                 ValidateOnlyEmbeddingProvider,
-                clustering.profile_version,
+                profile,
                 request.to_embedding_spec(),
                 request.block_size_target,
             )?;
@@ -1478,7 +1496,8 @@ where
 {
     let progress: ProgressReporter = Arc::new(progress);
     request.validate()?;
-    let clustering = clustering_overrides.to_configured_clustering(request.profile_version)?;
+    let clustering = clustering_overrides
+        .to_configured_clustering(request.profile_version, &request.environment)?;
     let stage = request.stage;
     let block_store = ConfiguredBlockStore::from_environment(request_dir, &request.environment)?;
     let mutable_ref_store = request
@@ -1868,7 +1887,161 @@ fn mutable_ref_store_label(location: &MutableRefStoreLocation) -> String {
     match location {
         MutableRefStoreLocation::LocalFile { path } => path.display().to_string(),
         MutableRefStoreLocation::AzureBlob { display_path, .. } => display_path.clone(),
+        MutableRefStoreLocation::AzureTable { display_path, .. } => display_path.clone(),
     }
+}
+
+#[derive(Clone, Debug)]
+struct MutableRefTableEndpoint {
+    account: String,
+    table_name: String,
+    sas_token: String,
+}
+
+impl MutableRefTableEndpoint {
+    fn parse(table_sas_url: &str) -> Result<Self, io::Error> {
+        let mut url = Url::parse(table_sas_url)
+            .map_err(|error| mutable_ref_store_io_error(error.to_string()))?;
+        url.set_fragment(None);
+        if url.query().is_none_or(str::is_empty) {
+            return Err(mutable_ref_store_io_error(
+                "Azure Table SAS URL must include SAS query parameters".into(),
+            ));
+        }
+        if !url
+            .query_pairs()
+            .any(|(key, value)| key == "sig" && !value.is_empty())
+        {
+            return Err(mutable_ref_store_io_error(
+                "Azure Table SAS URL must include a non-empty SAS signature parameter".into(),
+            ));
+        }
+
+        let host = url.host_str().ok_or_else(|| {
+            mutable_ref_store_io_error("Azure Table SAS URL must include a host".into())
+        })?;
+        let account = host
+            .split('.')
+            .next()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                mutable_ref_store_io_error(
+                    "Azure Table SAS URL must include an account host".into(),
+                )
+            })?
+            .to_string();
+
+        let path_segments = url
+            .path_segments()
+            .ok_or_else(|| {
+                mutable_ref_store_io_error("Azure Table SAS URL must be hierarchical".into())
+            })?
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>();
+        if path_segments.len() != 1 {
+            return Err(mutable_ref_store_io_error(format!(
+                "Azure Table SAS URL must address a table root, got path {}",
+                url.path()
+            )));
+        }
+
+        let table_name = path_segments[0].to_string();
+        if table_name.contains('(') || table_name.contains(')') {
+            return Err(mutable_ref_store_io_error(format!(
+                "Azure Table SAS URL must address a table root, got path {}",
+                url.path()
+            )));
+        }
+
+        Ok(Self {
+            account,
+            table_name,
+            sas_token: url.query().unwrap_or_default().to_string(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct MutableRefTableEntity {
+    #[serde(rename = "PartitionKey")]
+    partition_key: String,
+    #[serde(rename = "RowKey")]
+    row_key: String,
+    #[serde(rename = "SchemaVersion")]
+    schema_version: i32,
+    #[serde(rename = "RefPath")]
+    ref_path: String,
+    #[serde(rename = "StateJson")]
+    state_json: String,
+}
+
+fn mutable_ref_table_client(table_sas_url: &str) -> Result<TableClient, io::Error> {
+    let endpoint = MutableRefTableEndpoint::parse(table_sas_url)?;
+    let credentials = StorageCredentials::sas_token(&endpoint.sas_token)
+        .map_err(|error| mutable_ref_store_io_error(error.to_string()))?;
+    let table_service = TableServiceClientBuilder::new(endpoint.account, credentials).build();
+    Ok(table_service.table_client(endpoint.table_name))
+}
+
+fn read_mutable_ref_table_entity(
+    table_sas_url: &str,
+    partition_key: &str,
+    row_key: &str,
+) -> Result<Option<MutableRefTableEntity>, io::Error> {
+    let table_client = mutable_ref_table_client(table_sas_url)?;
+    let filter = Filter::new(mutable_ref_table_lookup_filter(partition_key, row_key));
+    let response = block_on_future_factory(move || async move {
+        let mut stream = table_client
+            .query()
+            .filter(filter)
+            .top(Top::new(2))
+            .into_stream::<MutableRefTableEntity>();
+        match stream.next().await {
+            Some(result) => result,
+            None => Err(azure_core::Error::message(
+                azure_core::error::ErrorKind::Other,
+                "Azure Table query returned no response pages",
+            )),
+        }
+    })
+    .map_err(|error| mutable_ref_store_io_error(error.to_string()))?;
+
+    match response.entities.len() {
+        0 => Ok(None),
+        1 => Ok(response.entities.into_iter().next()),
+        count => Err(mutable_ref_store_io_error(format!(
+            "lookup for PartitionKey={partition_key} RowKey={row_key} returned {count} entities"
+        ))),
+    }
+}
+
+fn mutable_ref_table_lookup_filter(partition_key: &str, row_key: &str) -> String {
+    format!(
+        "PartitionKey eq '{}' and RowKey eq '{}'",
+        escape_odata_string_literal(partition_key),
+        escape_odata_string_literal(row_key)
+    )
+}
+
+fn escape_odata_string_literal(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+fn write_mutable_ref_table_entity(
+    table_sas_url: &str,
+    entity: &MutableRefTableEntity,
+) -> Result<(), io::Error> {
+    let table_client = mutable_ref_table_client(table_sas_url)?;
+    let entity = entity.clone();
+    block_on_future_factory(move || async move {
+        table_client
+            .partition_key_client(&entity.partition_key)
+            .entity_client(&entity.row_key)?
+            .insert_or_replace(entity)?
+            .await
+    })
+    .map(|_| ())
+    .map_err(|error| mutable_ref_store_io_error(error.to_string()))
 }
 
 fn mutable_ref_store_io_error(message: String) -> io::Error {
@@ -1960,6 +2133,31 @@ fn read_mutable_ref_store_bytes(
                 }),
             }
         }
+        MutableRefStoreLocation::AzureTable {
+            table_sas_url,
+            display_path,
+            partition_key,
+            row_key,
+        } => {
+            let Some(entity) = read_mutable_ref_table_entity(table_sas_url, partition_key, row_key)
+                .map_err(|source| RuntimeError::ReadMutableRefStore {
+                    path: display_path.clone(),
+                    source,
+                })?
+            else {
+                return Ok(None);
+            };
+            if entity.schema_version != MUTABLE_REF_TABLE_SCHEMA_VERSION {
+                return Err(RuntimeError::ReadMutableRefStore {
+                    path: display_path.clone(),
+                    source: mutable_ref_store_io_error(format!(
+                        "unsupported mutable ref table schema version {}",
+                        entity.schema_version
+                    )),
+                });
+            }
+            Ok(Some(entity.state_json.into_bytes()))
+        }
     }
 }
 
@@ -2047,6 +2245,32 @@ fn write_mutable_ref_store_bytes(
                 })
             }
         }
+        MutableRefStoreLocation::AzureTable {
+            table_sas_url,
+            display_path,
+            partition_key,
+            row_key,
+        } => {
+            let state_json = std::str::from_utf8(encoded).map_err(|error| {
+                RuntimeError::WriteMutableRefStore {
+                    path: display_path.clone(),
+                    source: mutable_ref_store_io_error(error.to_string()),
+                }
+            })?;
+            let entity = MutableRefTableEntity {
+                partition_key: partition_key.clone(),
+                row_key: row_key.clone(),
+                schema_version: MUTABLE_REF_TABLE_SCHEMA_VERSION,
+                ref_path: display_path.clone(),
+                state_json: state_json.to_string(),
+            };
+            write_mutable_ref_table_entity(table_sas_url, &entity).map_err(|source| {
+                RuntimeError::WriteMutableRefStore {
+                    path: display_path.clone(),
+                    source,
+                }
+            })
+        }
     }
 }
 
@@ -2062,6 +2286,16 @@ fn prepare_mutable_ref_store(location: &MutableRefStoreLocation) -> Result<(), R
             })
         }
         MutableRefStoreLocation::AzureBlob { .. } => Ok(()),
+        MutableRefStoreLocation::AzureTable {
+            table_sas_url,
+            display_path,
+            ..
+        } => mutable_ref_table_client(table_sas_url)
+            .map(|_| ())
+            .map_err(|source| RuntimeError::PrepareMutableRefStore {
+                path: display_path.clone(),
+                source,
+            }),
     }
 }
 
@@ -2391,7 +2625,12 @@ fn replay_journal_block_body_from_decoded(
             message: format!("unexpected journal block type name {}", custom.type_name),
         });
     }
-    let (media_type, body) = custom_block_payload(&custom.content, block_id)?;
+    let (media_type, body) = custom_block_payload(&custom.content).map_err(|message| {
+        RuntimeError::InvalidReplayJournalHead {
+            block_id: block_id.to_string(),
+            message,
+        }
+    })?;
     if media_type != REPLAY_JOURNAL_MEDIA_TYPE {
         return Err(RuntimeError::InvalidReplayJournalHead {
             block_id: block_id.to_string(),
@@ -2415,41 +2654,6 @@ fn replay_journal_block_body_from_decoded(
         });
     }
     Ok(decoded)
-}
-
-fn custom_block_payload(
-    content: &Value,
-    block_id: &str,
-) -> Result<(String, Vec<u8>), RuntimeError> {
-    let Value::Map(fields) = content else {
-        return Err(RuntimeError::InvalidReplayJournalHead {
-            block_id: block_id.to_string(),
-            message: "custom block content must be a CBOR map".into(),
-        });
-    };
-    let media_type = fields
-        .iter()
-        .find_map(|(key, value)| match (key, value) {
-            (Value::Text(name), Value::Text(media_type)) if name == "media_type" => {
-                Some(media_type.clone())
-            }
-            _ => None,
-        })
-        .ok_or_else(|| RuntimeError::InvalidReplayJournalHead {
-            block_id: block_id.to_string(),
-            message: "custom block content is missing media_type".into(),
-        })?;
-    let body = fields
-        .iter()
-        .find_map(|(key, value)| match (key, value) {
-            (Value::Text(name), Value::Bytes(body)) if name == "body" => Some(body.clone()),
-            _ => None,
-        })
-        .ok_or_else(|| RuntimeError::InvalidReplayJournalHead {
-            block_id: block_id.to_string(),
-            message: "custom block content is missing body".into(),
-        })?;
-    Ok((media_type, body))
 }
 
 fn typed_block_name(block: &v2::TypedBlock) -> &str {
@@ -2746,10 +2950,11 @@ where
     let diagnostics_resolver = resolver.clone();
     let diagnostics_embedding_provider = embedding_provider.clone();
 
-    let mut indexer = StreamingIndexingRun::with_published_profile(
+    let resolved_profile = resolved_published_profile(&config.clustering)?;
+    let mut indexer = StreamingIndexingRun::with_resolved_published_profile(
         resolver,
         embedding_provider,
-        config.clustering.profile_version,
+        resolved_profile,
         embedding_spec.clone(),
         config.block_size_target,
     )?;
@@ -3544,7 +3749,7 @@ mod tests {
 
     use ciborium::value::Value;
     use lexongraph_block::Content;
-    use lexongraph_streaming_indexer::PUBLISHED_PROFILE_V0_1_0;
+    use lexongraph_streaming_indexer::{PUBLISHED_PROFILE_V0_1_0, PublishedProfileVersion};
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -3564,6 +3769,14 @@ mod tests {
         block_id: &BlockHash,
     ) -> Option<lexongraph_block::ValidatedBlock> {
         crate::block_store::block_on_block_store_future(store.get(block_id)).unwrap()
+    }
+
+    #[test]
+    fn mutable_ref_table_lookup_filter_escapes_single_quotes() {
+        assert_eq!(
+            mutable_ref_table_lookup_filter("part'ition", "row'key"),
+            "PartitionKey eq 'part''ition' and RowKey eq 'row''key'"
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4674,6 +4887,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_testing_cluster_override_runs_published_profile_end_to_end() {
+        let temp = tempdir().unwrap();
+        for index in 0..12 {
+            fs::write(
+                temp.path().join(format!("doc-{index}.txt")),
+                format!("document {index}\n"),
+            )
+            .unwrap();
+        }
+
+        let server = spawn_distinct_embedding_server(12);
+        let request_path = temp.path().join("request.json");
+        fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&json!({
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": {
+                        "base_url": server.base_url,
+                        "model": "all-MiniLM-L6-v2",
+                        "request_timeout_secs": 5,
+                        "max_retries": 0,
+                        "retry_delay_ms": 1
+                    }
+                },
+                "embedding_spec": {
+                    "dims": 2,
+                    "encoding": "f32le"
+                },
+                "profile_version": "0.7.0",
+                "ref_name": "test-branch",
+                "items": (0..12)
+                    .map(|index| json!({ "kind": "document", "path": format!("doc-{index}.txt") }))
+                    .collect::<Vec<_>>()
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let summary = run_request_file_with_overrides(
+            &request_path,
+            None,
+            ClusteringConfigOverrides {
+                profile_version: None,
+                local_testing_cluster_count: Some(32),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!summary.block_ids.is_empty());
+        server.join();
+    }
+
+    #[tokio::test]
     async fn validate_only_reports_published_profile_block_size_conflict() {
         let temp = tempdir().unwrap();
         let request_path = temp.path().join("request.json");
@@ -5085,7 +5354,10 @@ mod tests {
     #[test]
     fn effective_clustering_diagnostics_uses_published_profile_metadata() {
         let clustering = ClusteringConfigOverrides::default()
-            .to_configured_clustering(lexongraph_streaming_indexer::PUBLISHED_PROFILE_V0_1_0)
+            .to_configured_clustering(
+                lexongraph_streaming_indexer::PUBLISHED_PROFILE_V0_1_0,
+                &local_test_environment(String::new()),
+            )
             .expect("published profile config");
         let diagnostics =
             effective_clustering_diagnostics(&clustering).expect("published profile diagnostics");
@@ -5101,6 +5373,24 @@ mod tests {
         assert_eq!(diagnostics.summary_policy_id, "exact-centroid");
         assert_eq!(diagnostics.cluster_count, Some(157));
         assert_eq!(diagnostics.random_seed, Some(11));
+    }
+
+    #[test]
+    fn effective_clustering_diagnostics_reflects_local_testing_cluster_override() {
+        let clustering = ClusteringConfigOverrides {
+            profile_version: Some(PublishedProfileVersion::new(0, 7, 0)),
+            local_testing_cluster_count: Some(32),
+        }
+        .to_configured_clustering(
+            PublishedProfileVersion::new(0, 7, 0),
+            &local_test_environment(String::new()),
+        )
+        .expect("published profile config");
+        let diagnostics =
+            effective_clustering_diagnostics(&clustering).expect("published profile diagnostics");
+
+        assert_eq!(diagnostics.profile_version, "0.7.0");
+        assert_eq!(diagnostics.cluster_count, Some(32));
     }
 
     #[test]

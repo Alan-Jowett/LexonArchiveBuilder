@@ -1,10 +1,19 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonArchiveBuilder contributors
 
+use std::ffi::OsStr;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use env_logger::Env;
+use lexonarchivebuilder_indexer::block_copy::{
+    CopyDestinationMode, DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+    copy_rooted_blocks_with_mode_and_limit, default_report_path as default_copy_report_path,
+    render_report_summary as render_copy_report_summary, write_report as write_copy_report,
+};
 use lexonarchivebuilder_indexer::block_store::ConfiguredBlockStore;
 use lexonarchivebuilder_indexer::config::{
     EnvironmentConfig, LocalEmbeddingConfig, ProductionBlockStoreConfig, ProductionEmbeddingConfig,
@@ -26,12 +35,16 @@ use lexonarchivebuilder_indexer::{
     ClusteringConfigOverrides, ExecutionStage, run_request_file_with_outputs,
     validate_request_file_with_overrides, write_summary_file,
 };
+use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 
 const DEFAULT_LOCAL_MODEL: &str = "all-MiniLM-L6-v2";
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_MAX_RETRIES: u32 = 5;
 const DEFAULT_RETRY_DELAY_MS: u64 = 1_000;
 const STRUCTURAL_FINDINGS_EXIT_CODE: i32 = 2;
+const COPY_FAILURES_EXIT_CODE: i32 = 3;
+const COPY_LIVENESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+const RUST_LOG_ENV_VAR: &str = "RUST_LOG";
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "LexonArchiveBuilder batch indexer MVP")]
@@ -97,12 +110,36 @@ enum Command {
         #[command(flatten)]
         block_store: BlockStoreArgs,
     },
+    Copy {
+        #[arg(long = "root-id", required = true, num_args = 1..)]
+        root_ids: Vec<String>,
+        #[arg(
+            long,
+            help = "Skip destination existence reads and attempt destination writes directly."
+        )]
+        blind_write: bool,
+        #[arg(
+            long,
+            default_value_t = DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            value_parser = parse_positive_usize,
+            value_name = "COUNT",
+            help = "Maximum destination block writes to keep in flight concurrently."
+        )]
+        max_in_flight_destination_writes: usize,
+        #[arg(long)]
+        json_out: Option<PathBuf>,
+        #[command(flatten)]
+        source_block_store: SourceBlockStoreArgs,
+        #[command(flatten)]
+        destination_block_store: DestinationBlockStoreArgs,
+    },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
 enum BlockStoreProfile {
     Local,
     Production,
+    ProductionV2,
 }
 
 #[derive(Debug, Args)]
@@ -111,7 +148,13 @@ struct BlockStoreArgs {
     block_store_profile: BlockStoreProfile,
     #[arg(long, required_if_eq("block_store_profile", "local"))]
     block_store_root: Option<PathBuf>,
-    #[arg(long, required_if_eq("block_store_profile", "production"))]
+    #[arg(
+        long,
+        required_if_eq_any([
+            ("block_store_profile", "production"),
+            ("block_store_profile", "production-v2"),
+        ])
+    )]
     block_store_container_sas_url: Option<String>,
     #[arg(long, required_if_eq("block_store_profile", "production"))]
     block_store_filesystem_cache_root: Option<PathBuf>,
@@ -119,45 +162,200 @@ struct BlockStoreArgs {
     block_store_memory_cache_max_resident_blocks: Option<usize>,
     #[arg(
         long,
-        help = "Reserved for non-Azure block store backends. The production overlay uses Azure Blob backing storage and rejects non-empty prefixes."
+        help = "Reserved for non-Azure block store backends. The approved Azure-backed production profiles reject non-empty prefixes."
     )]
     block_store_prefix: Option<String>,
 }
 
 impl BlockStoreArgs {
     fn to_environment_config(&self) -> EnvironmentConfig {
-        match self.block_store_profile {
-            BlockStoreProfile::Local => EnvironmentConfig::Local {
-                block_store_root: self
-                    .block_store_root
-                    .clone()
-                    .expect("local block_store_root is required by clap"),
-                embedding: unused_local_embedding(),
+        block_store_environment_config(
+            self.block_store_profile,
+            self.block_store_root.clone(),
+            self.block_store_container_sas_url.clone(),
+            self.block_store_filesystem_cache_root.clone(),
+            self.block_store_memory_cache_max_resident_blocks,
+            self.block_store_prefix.clone(),
+        )
+    }
+}
+
+#[derive(Debug, Args)]
+struct SourceBlockStoreArgs {
+    #[arg(long, value_enum, default_value_t = BlockStoreProfile::Local)]
+    source_block_store_profile: BlockStoreProfile,
+    #[arg(long, required_if_eq("source_block_store_profile", "local"))]
+    source_block_store_root: Option<PathBuf>,
+    #[arg(
+        long,
+        required_if_eq_any([
+            ("source_block_store_profile", "production"),
+            ("source_block_store_profile", "production-v2"),
+        ])
+    )]
+    source_block_store_container_sas_url: Option<String>,
+    #[arg(long, required_if_eq("source_block_store_profile", "production"))]
+    source_block_store_filesystem_cache_root: Option<PathBuf>,
+    #[arg(long, required_if_eq("source_block_store_profile", "production"))]
+    source_block_store_memory_cache_max_resident_blocks: Option<usize>,
+    #[arg(
+        long,
+        help = "Reserved for non-Azure block store backends. The approved Azure-backed production profiles reject non-empty prefixes."
+    )]
+    source_block_store_prefix: Option<String>,
+}
+
+impl SourceBlockStoreArgs {
+    fn to_environment_config(&self) -> EnvironmentConfig {
+        block_store_environment_config(
+            self.source_block_store_profile,
+            self.source_block_store_root.clone(),
+            self.source_block_store_container_sas_url.clone(),
+            self.source_block_store_filesystem_cache_root.clone(),
+            self.source_block_store_memory_cache_max_resident_blocks,
+            self.source_block_store_prefix.clone(),
+        )
+    }
+}
+
+#[derive(Debug, Args)]
+struct DestinationBlockStoreArgs {
+    #[arg(long, value_enum, default_value_t = BlockStoreProfile::Local)]
+    destination_block_store_profile: BlockStoreProfile,
+    #[arg(long, required_if_eq("destination_block_store_profile", "local"))]
+    destination_block_store_root: Option<PathBuf>,
+    #[arg(
+        long,
+        required_if_eq_any([
+            ("destination_block_store_profile", "production"),
+            ("destination_block_store_profile", "production-v2"),
+        ])
+    )]
+    destination_block_store_container_sas_url: Option<String>,
+    #[arg(long, required_if_eq("destination_block_store_profile", "production"))]
+    destination_block_store_filesystem_cache_root: Option<PathBuf>,
+    #[arg(long, required_if_eq("destination_block_store_profile", "production"))]
+    destination_block_store_memory_cache_max_resident_blocks: Option<usize>,
+    #[arg(
+        long,
+        help = "Reserved for non-Azure block store backends. The approved Azure-backed production profiles reject non-empty prefixes."
+    )]
+    destination_block_store_prefix: Option<String>,
+}
+
+impl DestinationBlockStoreArgs {
+    fn to_environment_config(&self) -> EnvironmentConfig {
+        block_store_environment_config(
+            self.destination_block_store_profile,
+            self.destination_block_store_root.clone(),
+            self.destination_block_store_container_sas_url.clone(),
+            self.destination_block_store_filesystem_cache_root.clone(),
+            self.destination_block_store_memory_cache_max_resident_blocks,
+            self.destination_block_store_prefix.clone(),
+        )
+    }
+}
+
+fn block_store_environment_config(
+    block_store_profile: BlockStoreProfile,
+    block_store_root: Option<PathBuf>,
+    block_store_container_sas_url: Option<String>,
+    block_store_filesystem_cache_root: Option<PathBuf>,
+    block_store_memory_cache_max_resident_blocks: Option<usize>,
+    block_store_prefix: Option<String>,
+) -> EnvironmentConfig {
+    match block_store_profile {
+        BlockStoreProfile::Local => EnvironmentConfig::Local {
+            block_store_root: block_store_root.expect("local block_store_root is required by clap"),
+            embedding: unused_local_embedding(),
+        },
+        BlockStoreProfile::Production => EnvironmentConfig::Production {
+            block_store: ProductionBlockStoreConfig {
+                container_sas_url: block_store_container_sas_url
+                    .expect("production container_sas_url is required by clap"),
+                filesystem_cache_root: block_store_filesystem_cache_root,
+                memory_cache_max_resident_blocks: block_store_memory_cache_max_resident_blocks,
+                prefix: block_store_prefix,
             },
-            BlockStoreProfile::Production => EnvironmentConfig::Production {
-                block_store: ProductionBlockStoreConfig {
-                    container_sas_url: self
-                        .block_store_container_sas_url
-                        .clone()
-                        .expect("production container_sas_url is required by clap"),
-                    filesystem_cache_root: self.block_store_filesystem_cache_root.clone(),
-                    memory_cache_max_resident_blocks: self
-                        .block_store_memory_cache_max_resident_blocks,
-                    prefix: self.block_store_prefix.clone(),
-                },
-                embedding: ProductionEmbeddingConfig {
-                    endpoint: "https://unused.production.example".into(),
-                    deployment: "unused".into(),
-                    api_version: "2024-02-01".into(),
-                    api_key_env: None,
-                },
+            embedding: ProductionEmbeddingConfig {
+                endpoint: "https://unused.production.example".into(),
+                deployment: "unused".into(),
+                api_version: "2024-02-01".into(),
+                api_key_env: None,
             },
+        },
+        BlockStoreProfile::ProductionV2 => EnvironmentConfig::ProductionV2 {
+            block_store: ProductionBlockStoreConfig {
+                container_sas_url: block_store_container_sas_url
+                    .expect("production-v2 container_sas_url is required by clap"),
+                filesystem_cache_root: block_store_filesystem_cache_root,
+                memory_cache_max_resident_blocks: block_store_memory_cache_max_resident_blocks,
+                prefix: block_store_prefix,
+            },
+            embedding: ProductionEmbeddingConfig {
+                endpoint: "https://unused.production.example".into(),
+                deployment: "unused".into(),
+                api_version: "2024-02-01".into(),
+                api_key_env: None,
+            },
+        },
+    }
+}
+
+fn configured_block_store_from_environment(
+    environment: &EnvironmentConfig,
+) -> anyhow::Result<ConfiguredBlockStore> {
+    ConfiguredBlockStore::from_environment(Path::new("."), environment)
+        .context("failed to configure block store")
+}
+
+async fn await_with_copy_liveness<Fut, F, T>(
+    operation: Fut,
+    heartbeat_interval: Duration,
+    mut heartbeat_message: F,
+) -> T
+where
+    Fut: Future<Output = T>,
+    F: FnMut(Duration) -> String,
+{
+    let start = std::time::Instant::now();
+    let mut heartbeat = interval_at(TokioInstant::now() + heartbeat_interval, heartbeat_interval);
+    heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    tokio::pin!(operation);
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut operation => return result,
+            _ = heartbeat.tick() => eprintln!("{}", heartbeat_message(start.elapsed())),
         }
     }
 }
 
+fn format_copy_liveness_message(root_count: usize, elapsed: Duration) -> String {
+    format!(
+        "Rooted block copy still running after {}s for {} requested root(s)...",
+        elapsed.as_secs(),
+        root_count
+    )
+}
+
+fn rust_log_requested_with(value: Option<&OsStr>) -> bool {
+    value
+        .and_then(OsStr::to_str)
+        .is_some_and(|filter| !filter.trim().is_empty())
+}
+
+fn initialize_process_logging() {
+    if !rust_log_requested_with(std::env::var_os(RUST_LOG_ENV_VAR).as_deref()) {
+        return;
+    }
+
+    let _ = env_logger::Builder::from_env(Env::default()).try_init();
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    initialize_process_logging();
     let cli = Cli::parse();
 
     match cli.command {
@@ -256,14 +454,55 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", render_search_report_summary(&report));
             println!("JSON report: {}", output_path.display());
         }
+        Command::Copy {
+            root_ids,
+            blind_write,
+            max_in_flight_destination_writes,
+            json_out,
+            source_block_store,
+            destination_block_store,
+        } => {
+            let root_ids = root_ids
+                .iter()
+                .map(|root_id| parse_block_hash(root_id))
+                .collect::<Result<Vec<_>, _>>()?;
+            let source_store = configured_block_store_from_environment(
+                &source_block_store.to_environment_config(),
+            )?;
+            let destination_store = configured_block_store_from_environment(
+                &destination_block_store.to_environment_config(),
+            )?;
+            let report = await_with_copy_liveness(
+                copy_rooted_blocks_with_mode_and_limit(
+                    &source_store,
+                    &destination_store,
+                    &root_ids,
+                    if blind_write {
+                        CopyDestinationMode::BlindWrite
+                    } else {
+                        CopyDestinationMode::ReadBeforeWrite
+                    },
+                    max_in_flight_destination_writes,
+                ),
+                COPY_LIVENESS_HEARTBEAT_INTERVAL,
+                |elapsed| format_copy_liveness_message(root_ids.len(), elapsed),
+            )
+            .await;
+            let output_path = json_out.unwrap_or_else(|| default_copy_report_path(&root_ids));
+            write_copy_report(&output_path, &report)?;
+            println!("{}", render_copy_report_summary(&report));
+            println!("JSON report: {}", output_path.display());
+            if report.failed_block_count > 0 {
+                std::process::exit(COPY_FAILURES_EXIT_CODE);
+            }
+        }
     }
 
     Ok(())
 }
 
 fn configured_block_store(args: &BlockStoreArgs) -> anyhow::Result<ConfiguredBlockStore> {
-    ConfiguredBlockStore::from_environment(Path::new("."), &args.to_environment_config())
-        .context("failed to configure block store")
+    configured_block_store_from_environment(&args.to_environment_config())
 }
 
 fn unused_local_embedding() -> LocalEmbeddingConfig {
@@ -285,9 +524,22 @@ fn normalize_embedding_base_url(endpoint: &str) -> String {
         .to_string()
 }
 
+fn parse_positive_usize(value: &str) -> Result<usize, String> {
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| format!("invalid positive integer: {value}"))?;
+    if parsed == 0 {
+        return Err("value must be greater than zero".into());
+    }
+    Ok(parsed)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use super::*;
+    use tokio::time::sleep;
 
     #[test]
     fn run_command_parses_stage_override() {
@@ -329,6 +581,26 @@ mod tests {
                         0, 5, 0
                     ))
                 );
+            }
+            _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn run_command_parses_local_testing_cluster_count_override() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "run",
+            "--request",
+            "request.json",
+            "--local-testing-cluster-count",
+            "32",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Run { clustering, .. } => {
+                assert_eq!(clustering.local_testing_cluster_count, Some(32));
             }
             _ => panic!("expected run command"),
         }
@@ -477,8 +749,51 @@ mod tests {
                         assert_eq!(block_store.memory_cache_max_resident_blocks, Some(64));
                         assert_eq!(block_store.prefix, None);
                     }
-                    EnvironmentConfig::Local { .. } | EnvironmentConfig::LocalOverlay { .. } => {
+                    EnvironmentConfig::Local { .. }
+                    | EnvironmentConfig::LocalOverlay { .. }
+                    | EnvironmentConfig::ProductionV2 { .. } => {
                         panic!("expected production environment")
+                    }
+                }
+            }
+            _ => panic!("expected quality command"),
+        }
+    }
+
+    #[test]
+    fn quality_command_parses_production_v2_args_without_overlay_cache_fields() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "quality",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--block-store-profile",
+            "production-v2",
+            "--block-store-container-sas-url",
+            "https://example.table.core.windows.net/archive-sync?sig=test",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Quality { block_store, .. } => {
+                assert_eq!(
+                    block_store.block_store_profile,
+                    BlockStoreProfile::ProductionV2
+                );
+                let environment = block_store.to_environment_config();
+                match environment {
+                    EnvironmentConfig::ProductionV2 { block_store, .. } => {
+                        assert_eq!(
+                            block_store.container_sas_url,
+                            "https://example.table.core.windows.net/archive-sync?sig=test"
+                        );
+                        assert_eq!(block_store.filesystem_cache_root, None);
+                        assert_eq!(block_store.memory_cache_max_resident_blocks, None);
+                    }
+                    EnvironmentConfig::Local { .. }
+                    | EnvironmentConfig::LocalOverlay { .. }
+                    | EnvironmentConfig::Production { .. } => {
+                        panic!("expected production-v2 environment")
                     }
                 }
             }
@@ -518,6 +833,264 @@ mod tests {
     }
 
     #[test]
+    fn search_command_parses_production_v2_args_without_overlay_cache_fields() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "search",
+            "--query",
+            "hello",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--embedding-endpoint",
+            "http://localhost:8080",
+            "--block-store-profile",
+            "production-v2",
+            "--block-store-container-sas-url",
+            "https://example.table.core.windows.net/archive-sync?sig=test",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Search { block_store, .. } => {
+                assert_eq!(
+                    block_store.block_store_profile,
+                    BlockStoreProfile::ProductionV2
+                );
+                let environment = block_store.to_environment_config();
+                match environment {
+                    EnvironmentConfig::ProductionV2 { block_store, .. } => {
+                        assert_eq!(
+                            block_store.container_sas_url,
+                            "https://example.table.core.windows.net/archive-sync?sig=test"
+                        );
+                        assert_eq!(block_store.filesystem_cache_root, None);
+                        assert_eq!(block_store.memory_cache_max_resident_blocks, None);
+                    }
+                    EnvironmentConfig::Local { .. }
+                    | EnvironmentConfig::LocalOverlay { .. }
+                    | EnvironmentConfig::Production { .. } => {
+                        panic!("expected production-v2 environment")
+                    }
+                }
+            }
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn copy_command_parses_required_args() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--source-block-store-root",
+            "source-blocks",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Copy {
+                root_ids,
+                blind_write,
+                source_block_store,
+                destination_block_store,
+                ..
+            } => {
+                assert_eq!(root_ids.len(), 1);
+                assert_eq!(
+                    root_ids[0],
+                    "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                );
+                assert_eq!(
+                    source_block_store.source_block_store_profile,
+                    BlockStoreProfile::Local
+                );
+                assert_eq!(
+                    source_block_store.source_block_store_root,
+                    Some(PathBuf::from("source-blocks"))
+                );
+                assert_eq!(
+                    destination_block_store.destination_block_store_profile,
+                    BlockStoreProfile::Local
+                );
+                assert_eq!(
+                    destination_block_store.destination_block_store_root,
+                    Some(PathBuf::from("destination-blocks"))
+                );
+                assert!(!blind_write);
+            }
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn copy_command_rejects_production_profile_without_overlay_args() {
+        let error = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--source-block-store-profile",
+            "production",
+            "--source-block-store-container-sas-url",
+            "https://example.blob.core.windows.net/archive-sync?sig=test",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("--source-block-store-filesystem-cache-root"));
+        assert!(error.contains("--source-block-store-memory-cache-max-resident-blocks"));
+    }
+
+    #[test]
+    fn copy_command_parses_production_v2_source_without_overlay_cache_fields() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--source-block-store-profile",
+            "production-v2",
+            "--source-block-store-container-sas-url",
+            "https://example.table.core.windows.net/archive-sync?sig=test",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Copy {
+                source_block_store,
+                destination_block_store,
+                ..
+            } => {
+                assert_eq!(
+                    source_block_store.source_block_store_profile,
+                    BlockStoreProfile::ProductionV2
+                );
+                assert_eq!(
+                    destination_block_store.destination_block_store_profile,
+                    BlockStoreProfile::Local
+                );
+                let environment = source_block_store.to_environment_config();
+                match environment {
+                    EnvironmentConfig::ProductionV2 { block_store, .. } => {
+                        assert_eq!(
+                            block_store.container_sas_url,
+                            "https://example.table.core.windows.net/archive-sync?sig=test"
+                        );
+                        assert_eq!(block_store.filesystem_cache_root, None);
+                        assert_eq!(block_store.memory_cache_max_resident_blocks, None);
+                    }
+                    EnvironmentConfig::Local { .. }
+                    | EnvironmentConfig::LocalOverlay { .. }
+                    | EnvironmentConfig::Production { .. } => {
+                        panic!("expected production-v2 environment")
+                    }
+                }
+            }
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn copy_command_parses_blind_write_flag() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--blind-write",
+            "--source-block-store-root",
+            "source-blocks",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Copy { blind_write, .. } => assert!(blind_write),
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn copy_command_defaults_max_in_flight_destination_writes() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--source-block-store-root",
+            "source-blocks",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Copy {
+                max_in_flight_destination_writes,
+                ..
+            } => assert_eq!(
+                max_in_flight_destination_writes,
+                DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES
+            ),
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn copy_command_parses_max_in_flight_destination_writes_override() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--max-in-flight-destination-writes",
+            "17",
+            "--source-block-store-root",
+            "source-blocks",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Copy {
+                max_in_flight_destination_writes,
+                ..
+            } => assert_eq!(max_in_flight_destination_writes, 17),
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn copy_command_rejects_zero_max_in_flight_destination_writes() {
+        let error = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--max-in-flight-destination-writes",
+            "0",
+            "--source-block-store-root",
+            "source-blocks",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap_err();
+
+        let rendered = error.to_string();
+        assert!(rendered.contains("--max-in-flight-destination-writes"));
+    }
+
+    #[test]
     fn normalize_embedding_base_url_accepts_full_embeddings_path() {
         assert_eq!(
             normalize_embedding_base_url("http://localhost:8080/v1/embeddings"),
@@ -531,5 +1104,61 @@ mod tests {
             normalize_embedding_base_url("http://localhost:8080"),
             "http://localhost:8080"
         );
+    }
+
+    #[tokio::test]
+    async fn copy_liveness_heartbeat_emits_for_slow_operations() {
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&messages);
+
+        let output = await_with_copy_liveness(
+            async {
+                sleep(Duration::from_millis(25)).await;
+                7usize
+            },
+            Duration::from_millis(5),
+            move |elapsed| {
+                let message = format_copy_liveness_message(2, elapsed);
+                captured.lock().unwrap().push(message.clone());
+                message
+            },
+        )
+        .await;
+
+        assert_eq!(output, 7);
+        let messages = messages.lock().unwrap();
+        assert!(!messages.is_empty());
+        assert!(messages[0].contains("still running"));
+        assert!(messages[0].contains("2 requested root(s)"));
+    }
+
+    #[tokio::test]
+    async fn copy_liveness_heartbeat_stays_quiet_for_fast_operations() {
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&messages);
+
+        let output = await_with_copy_liveness(
+            async { 11usize },
+            Duration::from_millis(20),
+            move |elapsed| {
+                let message = format_copy_liveness_message(1, elapsed);
+                captured.lock().unwrap().push(message.clone());
+                message
+            },
+        )
+        .await;
+
+        assert_eq!(output, 11);
+        assert!(messages.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn rust_log_request_detects_non_empty_filter_values() {
+        assert!(!rust_log_requested_with(None));
+        assert!(!rust_log_requested_with(Some(OsStr::new(""))));
+        assert!(!rust_log_requested_with(Some(OsStr::new("   "))));
+        assert!(rust_log_requested_with(Some(OsStr::new(
+            "azure_core=debug,reqwest=trace"
+        ))));
     }
 }

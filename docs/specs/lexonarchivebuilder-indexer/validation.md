@@ -14,10 +14,11 @@ compatibility, upstream regression assessment, replay-submission and
 streaming-status observability, clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted
-CLI search over stored trees, replay-stable fingerprinting, temporary
+CLI search over stored trees, rooted block-store copy tooling, replay-stable fingerprinting, temporary
 upstream `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, 0.6.x published-profile
-evaluation, local testing sweep automation, upstream embedding-readback
+evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
+experiment automation, upstream embedding-readback
 API adoption, LAB-owned replay-journaled split-stage recovery, and
 layer-parallel block-construction evolution, and v2 custom-block adoption for
 repository-owned non-search artifacts in
@@ -34,14 +35,15 @@ published-profile API adoption, caller-selectable published-profile
 configuration with default `0.1.0`, latest published-profile and telemetry
 compatibility, temporary upstream `main` tracking for rapid profile
 validation, upstream wgpu-acceleration revision compatibility, 0.6.x
-published-profile evaluation, local testing sweep automation, upstream
+published-profile evaluation, local testing sweep automation, v0.7.0
+fixed-budget ladder experiment automation, upstream
 embedding-readback API adoption, upstream regression assessment,
 embedding-phase batch-progress observability,
 replay-submission observability, streaming-status observability,
 telemetry-count-semantics clarity, clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted CLI
-search over stored trees, replay-stable fingerprinting, LAB-owned replay-journaled
+search over stored trees, rooted block-store copy tooling, replay-stable fingerprinting, LAB-owned replay-journaled
 split-stage recovery, and leaf-layer parallel block scheduling in the
 local/testing profile.
 
@@ -272,6 +274,19 @@ silently overriding the published profile.
 
 **Traces to:** RQ-INDEXER-003H, DSG-LFI-001H, DSG-LFI-010
 
+### VAL-LFI-002M1
+
+Inspect the approved `0.7.0` fixed-budget ladder specification against the
+published-profile clustering-cardinality boundary.
+
+**Pass condition:** the specification preserves the normal rule that ordinary
+clustering-enabled runs reject retired low-level clustering controls, while
+also defining one scoped local/testing-only ladder mechanism that can realize
+the approved rung table without redefining the general batch contract, request
+schema, production behavior, or MCP-facing behavior.
+
+**Traces to:** RQ-INDEXER-003H, RQ-INDEXER-003J1, DSG-LFI-001H, DSG-LFI-007F1, DSG-LFI-010
+
 ### VAL-LFI-002N
 
 Inspect the latest LexonGraph upgrade boundary against the repository-required
@@ -308,6 +323,21 @@ baseline comparison in the same local/testing-only automation surface rather
 than changing the batch request contract or MCP behavior.
 
 **Traces to:** RQ-INDEXER-003J, DSG-LFI-001I, DSG-LFI-007F
+
+### VAL-LFI-002N2
+
+Run the approved repository-local `0.7.0` fixed-budget ladder automation
+against a representative local/testing corpus.
+
+**Pass condition:** the runnable ladder reuses the approved batch and
+rooted-quality operator surfaces, preserves the fixed budget `1024` across the
+default rung set `4x256`, `8x128`, `16x64`, `32x32`, and `64x16`, emits
+per-rung build and rooted-quality artifacts plus a comparable summary table,
+and includes preflight validation plus deterministic rung ordering in the same
+local/testing-only automation surface rather than defining a new production or
+MCP-visible entrypoint.
+
+**Traces to:** RQ-INDEXER-003J1, DSG-LFI-001H, DSG-LFI-001I, DSG-LFI-007F, DSG-LFI-007F1
 
 ### VAL-LFI-002O
 
@@ -423,8 +453,10 @@ share the same `BlockStore` abstraction family, and to the rooted block-tree
 quality tool when it reads stored trees through that same boundary.
 The same neutrality also applies to rooted CLI search over a caller-supplied
 tree when it reads through the same `BlockStore` boundary. The non-local
-boundary is the fixed overlay target of memory cache plus local filesystem
-cache plus Azure Blob SAS-backed storage rather than a plain Azure-only mode.
+boundary is the approved production profile set: the existing overlay target of
+memory cache plus local filesystem cache plus Azure Blob SAS-backed storage, or
+the additive `production-v2` direct Azure-backed target, rather than ad hoc
+plain Azure-only tool modes.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-007, DSG-LFI-005,
 DSG-LFI-006, DSG-LFI-007, DSG-LFI-008
@@ -474,18 +506,19 @@ requiring reads from the superseded custom filesystem layout.
 
 ### VAL-LFI-005A1
 
-Inspect the non-local tool-targeting profile for representative indexer-owned
+Inspect the non-local tool-targeting profiles for representative indexer-owned
 tool surfaces that traverse the shared `BlockStore` boundary.
 
-**Pass condition:** the non-local profile is specified as one fixed overlay
-composed of an in-memory cache, a local filesystem cache, and an Azure Blob
-backing store addressed by SAS URL; batch indexing, standalone clustering,
-rooted quality assessment, and rooted CLI search all reuse that same targeting
-contract; and no operator-facing tool introduces a plain Azure-only block-store
-mode outside the approved overlay shape.
+**Pass condition:** the approved non-local profile set is specified as exactly
+the existing `production` overlay profile plus the additive `production-v2`
+direct Azure-backed profile; batch indexing, standalone clustering, rooted
+quality assessment, rooted CLI search, and rooted block copy all reuse that
+same targeting contract; and no operator-facing tool introduces a plain
+Azure-only block-store mode outside the approved repository-defined profile set.
 
-**Traces to:** RQ-INDEXER-005, RQ-INDEXER-007, DSG-LFI-005, DSG-LFI-005B,
-DSG-LFI-005C, DSG-LFI-007, DSG-LFI-008
+**Traces to:** RQ-INDEXER-005, RQ-INDEXER-005B, RQ-INDEXER-007, DSG-LFI-005,
+DSG-LFI-005B, DSG-LFI-005C, DSG-LFI-005D, DSG-LFI-007, DSG-LFI-007G,
+DSG-LFI-008
 
 ### VAL-LFI-005A2
 
@@ -599,6 +632,42 @@ human-readable and JSON output surfaces.
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-008E, DSG-LFI-002E,
 DSG-LFI-005C, DSG-LFI-006A, DSG-LFI-007E
 
+### VAL-LFI-005D
+
+Run the rooted block-copy tool from one representative source store to one
+representative destination store using one or more caller-supplied root block
+identifiers, where the selected source and destination profiles come from the
+approved shared target set and at least one exercised non-local side uses the
+approved `production-v2` profile, the destination already contains at least one
+reachable block, the source rooted graph contains at least one unreachable
+block, and the invocation encounters at least one copy failure for a reachable
+block after the tool has already proven other reachable blocks can be copied or
+skipped.
+
+**Pass condition:** the tool traverses only the immutable blocks reachable from
+the caller-supplied roots in the source store and copies those blocks to the
+destination without re-encoding payload bytes or requiring a backend-specific
+transfer path. In the default mode it skips blocks that are already present at
+the destination while continuing the rooted transfer successfully and reports
+requested-root, copied-block, skipped-already-present, and failed-block
+outcomes on both human-readable and machine-readable output surfaces. In the
+opt-in blind-write mode it skips destination existence reads, attempts writes
+directly, and reports attempted-write plus failure-oriented outcomes without
+claiming exact skipped-already-present classification. Both modes must support
+one operator-selectable bounded destination-write concurrency limit with first
+approved default `64`, and the same limit must allow multiple destination
+writes to remain in flight whenever a block has already been classified for
+publication. That bounded write pipeline must not cause unreachable blocks to be
+written, must not require a backend-specific transfer path, and must not change
+the truthfulness of the approved mode-specific reporting contract merely because
+write completions arrive out of order. Both modes must emit basic default
+in-flight liveness or progress on the normal CLI output surface before final
+completion when the rooted copy runs long enough that silence would otherwise
+resemble a hang, and both leave mutable references such as current-root and
+replay-journal-head unchanged.
+
+**Traces to:** RQ-INDEXER-005B, DSG-LFI-005D, DSG-LFI-007G
+
 ### VAL-LFI-006
 
 Inspect the preserved production environment profile boundary.
@@ -607,8 +676,10 @@ Inspect the preserved production environment profile boundary.
 behind the same `BlockStore` and `EmbeddingProvider` selection boundary as the
 local/testing profile, and no local-only assumptions leak into the core batch
 contract or content-model abstractions. The preserved non-local storage
-identifier family must describe the approved overlay target rather than a plain
-Azure-only target.
+identifier family must describe exactly the approved production profile set:
+the existing overlay-backed `production` target and the additive direct
+Azure-backed `production-v2` target, rather than one-off plain Azure-only
+tool modes.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-007, DSG-LFI-005,
 DSG-LFI-006, DSG-LFI-007
@@ -746,6 +817,21 @@ failure signature without relying on the artifact.
 
 **Traces to:** RQ-INDEXER-008C, DSG-LFI-002C
 
+### VAL-LFI-007I
+
+Run one representative indexer command that exercises an underlying Azure SDK
+or HTTP-client path twice: once with `RUST_LOG` unset and once with a filter
+that enables the relevant SDK or transport components.
+
+**Pass condition:** with `RUST_LOG` unset, the command preserves the normal
+quiet default operator output apart from already-approved repository messages;
+with `RUST_LOG` set, the same process emits underlying SDK or transport
+diagnostics on the existing process output streams without requiring a new
+repository-specific CLI flag, command-specific switch, daemon, or MCP-visible
+diagnostics surface.
+
+**Traces to:** RQ-INDEXER-005C, DSG-LFI-002G
+
 ### VAL-LFI-008
 
 Inspect the repository's indexer specification package against MCP server
@@ -765,9 +851,12 @@ LexonGraph contracts.
 **Pass condition:** the package remains subordinate to
 `lexongraph-streaming-indexer`, `lexongraph-streaming-clustering`,
 `lexongraph-block-store`, and `lexongraph-embeddings-trait`, and does not
-redefine their public semantics.
+redefine their public semantics. If the package enables opt-in SDK diagnostics,
+it does so by initializing the standard Rust logging path around those
+dependencies rather than by redefining upstream SDK behavior or introducing a
+repository-owned parallel diagnostics protocol.
 
-**Traces to:** RQ-INDEXER-010A, DSG-LFI-001, DSG-LFI-011
+**Traces to:** RQ-INDEXER-005C, RQ-INDEXER-010A, DSG-LFI-001, DSG-LFI-002G, DSG-LFI-011
 
 ### VAL-LFI-009B
 
@@ -798,6 +887,33 @@ boundaries.
 
 **Traces to:** RQ-INDEXER-008E, RQ-INDEXER-009, RQ-INDEXER-010A, DSG-LFI-002E,
 DSG-LFI-005C, DSG-LFI-009, DSG-LFI-011
+
+### VAL-LFI-009D
+
+Inspect the specification package for the rooted block-copy increment against
+MCP, mutable-reference, and upstream block-store-boundary constraints.
+
+**Pass condition:** the package keeps rooted block copy on a CLI-only operator
+surface, reuses existing upstream block-store implementations rather than
+specifying a repository-local backend family, limits the increment to
+caller-selected roots plus their reachable immutable blocks, and keeps mutable
+reference copying plus whole-store replication out of scope for this increment.
+The same package must also keep `production-v2` as an additive approved
+block-store profile within the shared repository targeting contract rather than
+as a copy-only storage exception, while requiring default rooted-copy liveness
+on the normal CLI surface rather than making ordinary operators opt into a
+verbose-only signal to see that long-running transfer work is still active. The
+same package must also preserve read-before-write classification as the default
+rooted-copy behavior while allowing an explicit opt-in blind-write mode that
+avoids destination reads and accepts reduced copied-versus-skipped accounting.
+The same package must also keep bounded asynchronous destination-write
+concurrency behind one operator-selectable CLI limit with first approved
+default `64`, and apply that bounded write path to both rooted-copy modes only
+after the repository has determined that a destination write is actually
+required.
+
+**Traces to:** RQ-INDEXER-005B, RQ-INDEXER-009, RQ-INDEXER-010A, DSG-LFI-005D,
+DSG-LFI-007G, DSG-LFI-009, DSG-LFI-011
 
 ### VAL-LFI-009A
 

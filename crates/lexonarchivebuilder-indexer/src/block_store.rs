@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
 use lexongraph_block_store_azure_sdk::AzureBlobBlockStore;
+use lexongraph_block_store_azure_table::AzureTableBlockStore;
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_block_store_memory::MemoryBlockStore;
 use lexongraph_block_store_overlay::{OverlayBlockStore, OverlayStoreLayer, PassiveLayer};
@@ -20,6 +21,7 @@ use crate::paths::resolve_path;
 pub enum ConfiguredBlockStore {
     Local(FilesystemBlockStore),
     Overlay(Arc<OverlayBlockStore>),
+    AzureTable(AzureTableBlockStore),
 }
 
 impl ConfiguredBlockStore {
@@ -34,17 +36,20 @@ impl ConfiguredBlockStore {
                 .map(Self::Local),
             EnvironmentConfig::LocalOverlay { block_store, .. }
             | EnvironmentConfig::Production { block_store, .. } => {
-                Self::production_store(request_dir, block_store)
+                Self::production_overlay_store(request_dir, block_store)
+            }
+            EnvironmentConfig::ProductionV2 { block_store, .. } => {
+                Self::production_v2_store(block_store)
             }
         }
     }
 
-    fn production_store(
+    fn production_overlay_store(
         request_dir: &Path,
         config: &ProductionBlockStoreConfig,
     ) -> Result<Self, BlockStoreError> {
         config
-            .validate()
+            .validate_for_overlay()
             .map_err(|error| BlockStoreError::BackendFailure(error.to_string()))?;
         let azure_backing_store = AzureBlobBlockStore::new(&config.container_sas_url)?;
         let memory_cache = MemoryBlockStore::new(
@@ -68,6 +73,13 @@ impl ConfiguredBlockStore {
         let overlay_store = OverlayBlockStore::new(layers)
             .map_err(|error| BlockStoreError::BackendFailure(error.to_string()))?;
         Ok(Self::Overlay(Arc::new(overlay_store)))
+    }
+
+    fn production_v2_store(config: &ProductionBlockStoreConfig) -> Result<Self, BlockStoreError> {
+        config
+            .validate_for_azure_table()
+            .map_err(|error| BlockStoreError::BackendFailure(error.to_string()))?;
+        AzureTableBlockStore::new(&config.container_sas_url).map(Self::AzureTable)
     }
 }
 
@@ -170,6 +182,7 @@ impl BlockStore for ConfiguredBlockStore {
         match self {
             Self::Local(store) => store.put_block_bytes(block_id, block_bytes).await,
             Self::Overlay(store) => store.put_block_bytes(block_id, block_bytes).await,
+            Self::AzureTable(store) => store.put_block_bytes(block_id, block_bytes).await,
         }
     }
 
@@ -180,6 +193,7 @@ impl BlockStore for ConfiguredBlockStore {
         match self {
             Self::Local(store) => store.get_block_bytes(block_id).await,
             Self::Overlay(store) => store.get_block_bytes(block_id).await,
+            Self::AzureTable(store) => store.get_block_bytes(block_id).await,
         }
     }
 
@@ -187,6 +201,7 @@ impl BlockStore for ConfiguredBlockStore {
         match self {
             Self::Local(store) => store.iter_block_ids(),
             Self::Overlay(store) => store.iter_block_ids(),
+            Self::AzureTable(store) => store.iter_block_ids(),
         }
     }
 }
@@ -247,7 +262,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("production block_store.prefix is not supported")
+                .contains("overlay block_store.prefix is not supported")
         );
     }
 
@@ -294,7 +309,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("production block_store.filesystem_cache_root is required")
+                .contains("overlay block_store.filesystem_cache_root is required")
         );
     }
 
@@ -321,6 +336,31 @@ mod tests {
         .unwrap();
 
         assert!(matches!(store, ConfiguredBlockStore::Overlay(_)));
+    }
+
+    #[test]
+    fn configured_production_v2_store_accepts_direct_table_config() {
+        let store = ConfiguredBlockStore::from_environment(
+            Path::new("."),
+            &EnvironmentConfig::ProductionV2 {
+                block_store: ProductionBlockStoreConfig {
+                    container_sas_url:
+                        "https://example.table.core.windows.net/archive-sync?sig=test".into(),
+                    prefix: None,
+                    filesystem_cache_root: None,
+                    memory_cache_max_resident_blocks: None,
+                },
+                embedding: ProductionEmbeddingConfig {
+                    endpoint: "https://unused.production.example".into(),
+                    deployment: "unused".into(),
+                    api_version: "2024-02-01".into(),
+                    api_key_env: None,
+                },
+            },
+        )
+        .unwrap();
+
+        assert!(matches!(store, ConfiguredBlockStore::AzureTable(_)));
     }
 
     #[test]

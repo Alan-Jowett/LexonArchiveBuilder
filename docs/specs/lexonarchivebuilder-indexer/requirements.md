@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, and v2 custom-block adoption for repository-owned non-search artifacts
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, and v2 custom-block adoption for repository-owned non-search artifacts
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, and v2 custom-block adoption for repository-owned non-search artifacts
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, and v2 custom-block adoption for repository-owned non-search artifacts
 
 ## USER-REQUEST
 
@@ -163,8 +163,8 @@
 - **UR-150 [INFERRED]:** Repository-owned tools that read stored embeddings for quality assessment, rooted search, or diagnostics should rely on the same upstream decode or reconstruction semantics as LexonGraph itself so new embedding encodings do not require duplicated repository-local decoder updates.
 - **UR-151 [INFERRED]:** This embedding-readback change should preserve existing CLI and MCP-visible behavior while moving embedding-format awareness behind the upstream LexonGraph API boundary.
 - **UR-152 [KNOWN]:** LexonArchiveBuilder should stop treating unsupported stored embedding encodings as a repository-local format table problem when LexonGraph already knows how to reconstruct those embeddings through its shared API.
-- **UR-153 [KNOWN]:** All indexer tools that read from or write to the configured block store must allow operators to target either a local filesystem block store or an overlay block store composed of an in-memory cache, a local filesystem cache, and an Azure Blob backing store addressed by SAS URL.
-- **UR-154 [KNOWN]:** For this increment, a plain Azure Blob block-store target without the required memory-plus-filesystem overlay is not an approved indexer tool-targeting mode.
+- **UR-153 [KNOWN]:** All indexer tools that read from or write to the configured block store must allow operators to target one shared approved profile set: a local filesystem block store, the existing production overlay block store composed of an in-memory cache plus a local filesystem cache plus Azure Blob SAS-backed storage, or a new `production-v2` direct Azure-backed store profile.
+- **UR-154 [KNOWN]:** Direct non-local operator targeting remains an approved mode only when it is expressed through one of the repository-defined production profiles; an ad hoc plain Azure Blob backend outside the existing `production` overlay profile or the new `production-v2` profile is not an approved indexer tool-targeting mode.
 - **UR-155 [INFERRED]:** The same block-store targeting contract should apply consistently across batch indexing, standalone clustering discovery, rooted quality assessment, rooted CLI search, and any other indexer-owned operator tool that traverses the shared `BlockStore` boundary.
 - **UR-156 [INFERRED]:** The new overlay-capable targeting contract must remain content-type-neutral and preserve the existing shared `BlockStore` abstraction family for indexed blocks, normalized email artifacts, and mailbox provenance artifacts.
 - **UR-157 [KNOWN]:** LexonGraph now has a v2 block format with custom-block support, and LexonArchiveBuilder should switch its repository-owned non-search artifact blocks from v1-style wrappers to v2 custom blocks.
@@ -184,6 +184,34 @@
 - **UR-171 [KNOWN]:** Per-query rooted-quality access reporting should break those block-touch and byte-read figures down per layer and summarize them into overall per-query totals.
 - **UR-172 [KNOWN]:** The rooted quality tool should report an estimated query time in RTT units assuming a congestion window of 64 KiB.
 - **UR-173 [KNOWN]:** The estimated RTT cost for a query should be computed by dividing each layer's bytes read by the 64 KiB congestion window, rounding each layer up to the next whole RTT, and summing those per-layer RTT counts into a total for the query.
+- **UR-174 [KNOWN]:** Build a repository-local test script and execution plan for a published-profile `0.7.0` ladder experiment that operators can execute without redesigning the existing local/testing workflow.
+- **UR-175 [KNOWN]:** The `0.7.0` ladder should vary beam width and clustering cardinality together while keeping `beam_width * cluster_count` constant across all rungs.
+- **UR-176 [KNOWN]:** The first runnable ladder should default to a fixed budget of `1024`, anchored on the prior successful baseline of traversal width `16` and clustering cardinality `64`.
+- **UR-177 [KNOWN]:** The first runnable ladder should default to the five-rung set `4x256`, `8x128`, `16x64`, `32x32`, and `64x16`.
+- **UR-178 [KNOWN]:** The ladder automation should emit per-rung run artifacts, per-rung rooted-quality artifacts, a comparable summary table, and an operator-facing execution plan that includes preflight validation and rung ordering.
+- **UR-179 [INFERRED]:** Because the current published-profile run surface treats clustering cardinality as profile-owned, the ladder may require a scoped repository-local local/testing mechanism to select rung-specific clustering cardinality for experiment execution without redefining the production or MCP-facing clustering contract.
+- **UR-180 [KNOWN]:** LexonArchiveBuilder needs a tool that copies immutable blocks between two configured block stores, starting with the operator need to copy from a local filesystem-backed store into the Azure SDK-backed overlay block-store target.
+- **UR-181 [KNOWN]:** In this increment, the block-copy capability should be a CLI-only operator tool rather than an MCP-visible surface or a normal indexing-stage behavior.
+- **UR-182 [KNOWN]:** The first block-copy tool should copy only caller-selected root blocks and the immutable blocks reachable from those roots, rather than performing whole-store replication by default.
+- **UR-183 [INFERRED]:** The block-copy tool should reuse the same approved block-store target modes on both its source and destination sides, so operators can target local filesystem stores and overlay-backed Azure-oriented stores without inventing a separate storage contract for copying.
+- **UR-184 [INFERRED]:** Because blocks are immutable and hash-addressed, rerunning a copy into a destination that already contains some or all requested block identities should be safe and should not require repository-local block translation or content reinterpretation.
+- **UR-185 [INFERRED]:** The block-copy tool should traverse rooted block graphs and persist block bytes through the shared `BlockStore` abstraction boundary rather than re-encoding block payloads or depending on storage-backend-specific side channels.
+- **UR-186 [INFERRED]:** The block-copy tool should emit an operator-readable summary plus a machine-readable artifact describing requested roots, copied block counts, skipped-already-present counts, and any copy failures.
+- **UR-187 [INFERRED]:** This increment should copy immutable block content only; repository-owned mutable references such as current-root or replay-journal-head publication remain separate contracts unless a later increment explicitly expands the scope.
+- **UR-188 [KNOWN]:** LexonGraph already provides the relevant block-store implementations; this increment should add a repository-owned copy tool layer on top of those existing `BlockStore` implementations rather than introducing a new block-store backend family.
+- **UR-189 [KNOWN]:** The repository should add a `production-v2` block-store profile that keeps the current production-oriented targeting shape but uses the alternate Azure-backed LexonGraph block-store implementation rather than the existing Azure Blob-backed overlay path.
+- **UR-190 [INFERRED]:** The new `production-v2` profile should be exposed consistently across indexer-owned block-store-consuming tools rather than being introduced for the rooted copy command alone, so repository operator workflows keep one shared storage-profile vocabulary.
+- **UR-191 [INFERRED]:** The existing `production` overlay profile remains an approved mode; `production-v2` is additive and should preserve the current CLI-only copy scope, MCP separation, and content-type-neutral `BlockStore` abstraction boundary.
+- **UR-192 [KNOWN]:** The rooted block-copy CLI should emit default user-visible liveness or progress output during long-running copy operations so operators can distinguish active traversal or transfer work from a hung invocation.
+- **UR-193 [KNOWN]:** Basic rooted-copy liveness should be available without an opt-in verbosity flag; any future verbose mode may add detail, but the default CLI contract must already show that work is continuing.
+- **UR-194 [KNOWN]:** LexonArchiveBuilder operators need a supported way to turn on underlying Azure SDK and HTTP-client diagnostic logging when investigating storage or transport hangs in indexer-owned commands.
+- **UR-195 [KNOWN]:** That diagnostic logging should be enabled for the entire `lexonarchivebuilder-indexer` binary through the standard `RUST_LOG` environment-variable path rather than through a new repository-specific CLI flag, and it should remain opt-in rather than becoming default operator noise.
+- **UR-196 [KNOWN]:** Rooted block copy needs an opt-in mode that skips destination existence reads and instead attempts destination writes directly, so operators can avoid backends where read-before-write presence checks hang or are disproportionately expensive.
+- **UR-197 [KNOWN]:** The current read-before-write rooted copy behavior should remain the default; the new blind-write behavior is an explicit operator-selected tradeoff that accepts reduced copy-versus-skip accounting in exchange for avoiding destination reads.
+- **UR-198 [KNOWN]:** Rooted block copy should pipeline destination writes asynchronously with multiple writes in flight so high-latency backends such as Azure do not serialize the entire copy through one write at a time.
+- **UR-199 [KNOWN]:** The bounded in-flight destination-write limit should be an operator-selectable CLI control rather than a fixed internal constant, and the first increment should default that limit to `64`.
+- **UR-200 [KNOWN]:** The bounded asynchronous destination-write policy should apply both to the default read-before-write mode when a block has been classified as missing and to the opt-in blind-write mode.
+- **UR-201 [INFERRED]:** Introducing bounded concurrent destination writes must preserve rooted reachability, immutable block identity, and truthful mode-specific reporting semantics even when destination write completions arrive out of traversal order.
 
 ## Change Manifest
 
@@ -263,7 +291,7 @@
 | CM-INDEXER-072 | Add | Require repository-local runnable sweep automation, currently `test.ps1`, for local/testing evaluation of the active published-profile experiment set without changing production or MCP-facing contracts | UR-147, UR-148 |
 | CM-INDEXER-073 | Revise | Move stored-embedding readback for repository-owned quality, search, and diagnostic consumers behind the new upstream LexonGraph embedding reconstruction API instead of repository-local decoding logic | UR-149, UR-150, UR-152 |
 | CM-INDEXER-074 | Add | Preserve existing CLI and MCP-visible contracts while making upstream LexonGraph the authority for supported stored embedding encodings and reconstruction semantics | UR-150, UR-151, UR-152 |
-| CM-INDEXER-075 | Revise | Replace the current local-versus-plain-Azure tool-targeting split with a repository-wide two-mode contract: direct local filesystem or a fixed overlay of memory cache plus local filesystem cache plus Azure Blob SAS-backed storage | UR-153, UR-154, UR-155, UR-156 |
+| CM-INDEXER-075 | Revise | Replace the current local-versus-plain-Azure tool-targeting split with a repository-wide approved profile set: direct local filesystem, the existing production overlay, or an additive `production-v2` direct Azure-backed store profile | UR-153, UR-154, UR-155, UR-156, UR-189, UR-190, UR-191 |
 | CM-INDEXER-076 | Revise | Adopt LexonGraph v2 custom blocks for repository-owned non-search artifacts while leaving delegated branch and leaf index blocks on the current upstream-owned contract | UR-157, UR-158, UR-159 |
 | CM-INDEXER-077 | Revise | Replace the current local-filesystem append-only replay journal with a shared BlockStore-backed immutable replay-audit journal that is authoritative for resume and clustering-only replay in all environments | UR-160, UR-162, UR-163, UR-166 |
 | CM-INDEXER-078 | Add | Require each immutable replay-audit journal block to link to its prior journal block by hash so replay history becomes a Merkle-linked audit chain | UR-160, UR-161, UR-166 |
@@ -273,6 +301,12 @@
 | CM-INDEXER-082 | Add | Require replay-audit entries to carry enough detail to reconstruct what inputs were processed, what repository-owned action ran, and which durable block outputs or equivalent artifacts were produced | UR-161, UR-166, UR-167 |
 | CM-INDEXER-083 | Add | Publish the latest immutable final root through a repository-owned mutable reference mechanism so current-root discovery no longer depends on request-local output capture alone | UR-168 |
 | CM-INDEXER-084 | Revise | Extend rooted quality reporting with query-workload access statistics and advisory RTT-cost estimates derived from per-layer bytes touched through the existing rooted recall path | UR-169, UR-170, UR-171, UR-172, UR-173 |
+| CM-INDEXER-085 | Revise | Extend repository-local sweep automation with a runnable published-profile `0.7.0` fixed-budget ladder experiment plus execution plan, while carving out a local/testing-only clustering-cardinality selection exception for the approved ladder | UR-56, UR-57, UR-58, UR-174, UR-175, UR-176, UR-177, UR-178, UR-179 |
+| CM-INDEXER-086 | Add | Introduce a CLI-only rooted block-copy operator tool that layers on top of existing LexonGraph block stores and copies immutable blocks reachable from caller-selected roots between approved block-store targets without changing indexing or MCP contracts | UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188, UR-189, UR-190, UR-191 |
+| CM-INDEXER-087 | Revise | Require the rooted block-copy CLI to emit default long-running liveness or progress visibility on its normal operator-facing output surface rather than staying silent until final summary | UR-180, UR-181, UR-186, UR-192, UR-193 |
+| CM-INDEXER-088 | Add | Enable opt-in Azure SDK and HTTP-client diagnostic logging for the entire indexer binary through standard `RUST_LOG` initialization on the existing process output surface rather than through a new repository-specific CLI flag | UR-33, UR-194, UR-195 |
+| CM-INDEXER-089 | Revise | Add an opt-in rooted copy blind-write mode that skips destination existence reads, keeps the current read-before-write behavior as the default, and relaxes exact copied-versus-skipped accounting in the blind-write path | UR-184, UR-186, UR-196, UR-197 |
+| CM-INDEXER-090 | Revise | Add bounded asynchronous destination-write concurrency to rooted copy, expose an operator-selectable in-flight write limit defaulting to `64`, and apply that limit to both the default and blind-write paths whenever a destination write is required | UR-180, UR-184, UR-186, UR-196, UR-198, UR-199, UR-200, UR-201 |
 
 ## Before / After
 
@@ -649,7 +683,7 @@
 ### BA-INDEXER-075
 
 - **Before [KNOWN]:** The requirements allowed indexer-owned tools to vary between a local filesystem block store and a plain Azure Blob production target, but they did not require a uniform overlay-capable targeting contract across every tool surface that uses the shared `BlockStore` boundary.
-- **After [KNOWN]:** The requirements now constrain all indexer-owned block-store-consuming tools to a consistent two-mode target model: direct local filesystem access or a fixed overlay block store composed of memory cache, local filesystem cache, and Azure Blob SAS-backed storage.
+- **After [KNOWN]:** The requirements now constrain all indexer-owned block-store-consuming tools to one consistent approved profile set: direct local filesystem access, the existing fixed overlay block store composed of memory cache plus local filesystem cache plus Azure Blob SAS-backed storage, or an additive `production-v2` direct Azure-backed store profile.
 
 ### BA-INDEXER-076
 
@@ -695,6 +729,41 @@
 
 - **Before [KNOWN]:** The rooted quality requirements did not require any repository-owned estimate of rooted-query transport cost, so operators could compare recall quality without any companion RTT-style read-amplification signal.
 - **After [KNOWN]:** The rooted quality requirements now require an advisory per-query RTT estimate computed from per-layer bytes read under a fixed 64 KiB congestion-window assumption, with each layer rounded up independently and then summed into one total per query.
+
+### BA-INDEXER-085
+
+- **Before [KNOWN]:** The repository-local testing automation covered version-series profile sweeps such as the `0.6.x` run, but it did not define a fixed-budget ladder experiment for one published profile or any exception to the current profile-owned clustering-cardinality rule.
+- **After [KNOWN]:** The requirements now extend the local/testing automation contract to include a runnable published-profile `0.7.0` ladder with fixed `beam_width * cluster_count` budget, an approved default five-rung set around the `16x64` baseline, comparable per-rung artifacts plus summary output, and a scoped local/testing-only mechanism for rung-specific clustering-cardinality selection.
+
+### BA-INDEXER-086
+
+- **Before [KNOWN]:** The requirements let operator tools read from or write to approved block-store targets, but they did not define any repository-owned tool for transferring immutable rooted block content from one configured store to another.
+- **After [KNOWN]:** The requirements now introduce a CLI-only rooted block-copy operator tool that reuses the approved source and destination block-store contracts, copies only caller-selected roots and their reachable immutable blocks, preserves hash-addressed identities, reports copy outcomes, and leaves mutable-reference publication outside this increment.
+
+### BA-INDEXER-087
+
+- **Before [KNOWN]:** The requirements treated the non-local operator-facing block-store target as one fixed production overlay profile, so direct Azure-backed writes could not be added without violating the repository-wide shared tool-targeting contract.
+- **After [KNOWN]:** The requirements now allow an additive `production-v2` profile alongside the existing production overlay profile so indexer-owned tools can target either the established cache-backed Azure path or the alternate direct Azure-backed LexonGraph store implementation through one shared profile vocabulary.
+
+### BA-INDEXER-088
+
+- **Before [KNOWN]:** The rooted block-copy requirements defined final summary and artifact output, but they did not require any default in-flight liveness signal while a large rooted traversal or transfer was still running.
+- **After [KNOWN]:** The requirements now require the rooted block-copy CLI to emit basic default liveness or progress on its normal output surface during long-running copy work so operators can distinguish active traversal or transfer from a hung invocation without opting into a verbose flag.
+
+### BA-INDEXER-089
+
+- **Before [KNOWN]:** The indexer binary did not define any supported repository-level way to activate underlying Azure SDK or HTTP-client diagnostics, so setting `RUST_LOG` alone was not a reliable debugging path for storage or transport hangs.
+- **After [KNOWN]:** The requirements now make `RUST_LOG` the approved opt-in diagnostic control for the entire `lexonarchivebuilder-indexer` binary, so repository operators can enable underlying SDK and HTTP-client logging without adding a new repository-specific CLI flag or making verbose diagnostics the default.
+
+### BA-INDEXER-090
+
+- **Before [KNOWN]:** Rooted copy always performed a destination existence read before attempting a write, and the result contract always required exact copied-versus-skipped accounting based on that pre-read behavior.
+- **After [KNOWN]:** The requirements now preserve the existing read-before-write behavior as the default while adding an explicit opt-in blind-write mode that skips destination reads, attempts writes directly, and accepts reduced copy-versus-skip accounting in exchange for avoiding destination existence checks.
+
+### BA-INDEXER-091
+
+- **Before [KNOWN]:** Rooted copy traversed and wrote blocks effectively one destination write at a time, so high-latency backends such as Azure could serialize the transfer path even after a block had already been classified for writing.
+- **After [KNOWN]:** The requirements now add bounded asynchronous destination-write concurrency, expose an operator-selectable in-flight write limit defaulting to `64`, and apply that bounded write pipeline to both rooted-copy modes whenever a destination write is actually needed, without changing rooted reachability or mode-specific reporting semantics.
 
 ## Requirements
 
@@ -1014,10 +1083,15 @@ repository-local `cluster_count` overrides.
 - **Override rule [KNOWN]:** Callers SHALL NOT supply repository-local
   `cluster_count` overrides while clustering-enabled execution is governed by a
   selected published profile version.
+- **Local-testing ladder exception [KNOWN]:** The approved repository-local
+  `0.7.0` fixed-budget ladder may select rung-specific clustering cardinality as
+  part of local/testing operator automation, but that exception is limited to
+  the approved ladder surface and does not broaden the normal batch contract.
 - **Delegation boundary [KNOWN]:** Any future variation in clustering cardinality
   for this surface must come from an approved published profile version rather
-  than from repository-local remapping of profile internals.
-- **Traceability:** UR-56, UR-57, UR-58, UR-121, UR-123, UR-124, UR-139
+  than from repository-local remapping of profile internals, except for the
+  scoped local/testing ladder aid approved in this increment.
+- **Traceability:** UR-56, UR-57, UR-58, UR-121, UR-123, UR-124, UR-139, UR-174, UR-175, UR-179
 
 #### RQ-INDEXER-003I - Upstream feature-regression containment
 
@@ -1067,13 +1141,14 @@ experiment set without changing repository code for each tested profile.
 - **Local-only boundary [KNOWN]:** This automation is for local/testing operator
   evaluation and does not define a production runtime entrypoint, request
   schema, or deployment contract.
-- **Current experiment target [KNOWN]:** The active named experiment target is
-  the upstream `0.6.x` published-profile series, and the automation SHALL allow
-  operators to run the approved evaluation flow across that series.
+- **Current experiment target [KNOWN]:** The automation SHALL support approved
+  experiment targets on the same repository-local surface, including the earlier
+  upstream `0.6.x` published-profile series and the approved `0.7.0`
+  fixed-budget ladder defined in `RQ-INDEXER-003J1`.
 - **Comparison rule [INFERRED]:** The automation should continue to emit
-  per-profile artifacts and comparable summary output so `0.6.x` results can be
-  compared against earlier baselines such as `0.5.x` when those profiles are
-  included in the run.
+  per-target artifacts and comparable summary output so version-series sweeps
+  remain comparable to earlier baselines such as `0.5.x` when included, and
+  ladder runs remain comparable across their approved rung set.
 - **Contract-preservation rule [INFERRED]:** The automation SHALL drive the
   existing batch and rooted-quality tool surfaces instead of introducing a
   testing-only indexing API or changing MCP search semantics.
@@ -1081,7 +1156,38 @@ experiment set without changing repository code for each tested profile.
   as new published profiles land, but the automation surface should remain
   version-series-agnostic so future profile series do not require a new
   repository contract shape solely to update hard-coded experiment labels.
-- **Traceability:** UR-12, UR-84, UR-85, UR-139, UR-140, UR-145, UR-146, UR-147, UR-148
+- **Traceability:** UR-12, UR-84, UR-85, UR-139, UR-140, UR-145, UR-146, UR-147, UR-148, UR-174
+
+#### RQ-INDEXER-003J1 - Local fixed-budget ladder experiment automation
+
+LexonArchiveBuilder SHALL provide a repository-local runnable operator
+automation surface, evolving the same local/testing evaluation path currently
+used by `test.ps1`, that can execute an approved fixed-budget ladder for
+published profile `0.7.0` without changing production or MCP-facing contracts.
+
+- **Ladder rule [KNOWN]:** Each rung SHALL pair one beam width (the rooted
+  quality traversal width used for the evaluation) with one clustering
+  cardinality such that `beam_width * cluster_count` remains constant across the
+  ladder.
+- **Default budget [KNOWN]:** The first runnable ladder SHALL default to budget
+  `1024`, anchored on traversal width `16` and clustering cardinality `64`.
+- **Default rung set [KNOWN]:** The first runnable ladder SHALL default to the
+  five-rung sequence `4x256`, `8x128`, `16x64`, `32x32`, and `64x16`.
+- **Artifact rule [KNOWN]:** The automation SHALL emit per-rung build artifacts,
+  per-rung rooted-quality artifacts, and a comparable machine-readable summary
+  table that preserves rung identity plus the selected beam width and clustering
+  cardinality.
+- **Execution-plan rule [KNOWN]:** The same operator aid SHALL define an
+  executable plan covering preflight validation, rung ordering, artifact
+  locations, and post-run comparison steps for the approved ladder.
+- **Local-only boundary [KNOWN]:** This ladder automation is a local/testing aid
+  only and SHALL NOT redefine the production runtime contract, request schema,
+  or MCP-visible search and retrieval behavior.
+- **Scoped-selection boundary [INFERRED]:** Any rung-specific clustering
+  cardinality selection introduced for this ladder must remain scoped to the
+  repository-local experiment surface and SHALL NOT become a general low-level
+  clustering-control family for ordinary batch runs.
+- **Traceability:** UR-12, UR-84, UR-85, UR-139, UR-147, UR-148, UR-174, UR-175, UR-176, UR-177, UR-178, UR-179
 
 #### RQ-INDEXER-004 - Content resolution integration
 
@@ -1156,18 +1262,20 @@ LexonArchiveBuilder SHALL provide a concrete implementation of `lexongraph_block
 - **Architectural target storage profiles [KNOWN]:**
   - local filesystem for local/testing operation
   - overlay block store for production-oriented operation, composed of memory cache + local filesystem cache + Azure Blob Storage backing addressed by SAS URL
-- **Approved tool-targeting modes [KNOWN]:** Every indexer-owned tool that reads from or writes to the shared `BlockStore` boundary SHALL support exactly these two target modes: direct local filesystem or the approved overlay block store.
-- **Disallowed mode [KNOWN]:** A plain Azure Blob block-store target without the required overlay layers is not an approved operator-facing mode in this increment.
-- **Current increment [KNOWN]:** The existing local/testing realization remains required, and this increment additionally requires the overlay target mode to be usable on the same repository-owned tool surfaces rather than being introduced tool-by-tool.
+  - additive `production-v2` direct Azure-backed store profile for production-oriented operation
+- **Approved tool-targeting modes [KNOWN]:** Every indexer-owned tool that reads from or writes to the shared `BlockStore` boundary SHALL support one approved shared profile vocabulary: direct local filesystem, the existing `production` overlay profile, and the additive `production-v2` direct Azure-backed profile.
+- **Disallowed mode [KNOWN]:** A direct non-local backend that is not expressed through one of the approved repository-defined production profiles is not an approved operator-facing mode in this increment.
+- **Current increment [KNOWN]:** The existing local/testing realization remains required, and this increment additionally requires both approved non-local target profiles to be usable on the same repository-owned tool surfaces rather than being introduced tool-by-tool.
 - **Local filesystem interoperability [KNOWN]:** The local/testing filesystem-backed realization SHALL use the LexonGraph-owned filesystem block-store contract, including its on-disk naming and layout scheme, so LexonGraph filesystem tooling such as `lexongraph-block-inspect` can operate on LexonArchiveBuilder-produced local stores.
 - **Local implementation target [KNOWN]:** The local/testing filesystem-backed realization SHALL use the upstream `lexongraph-block-store-fs` crate rather than a repository-local filesystem naming scheme.
 - **Migration boundary [KNOWN]:** This local filesystem interoperability correction may require a fresh or rebuilt local store; continued read compatibility with blocks written by the superseded custom local layout is not required in this increment.
 - **Overlay shape [KNOWN]:** The non-local target mode SHALL be a fixed ordered overlay containing an in-memory cache layer, a local filesystem cache layer, and an Azure Blob backing layer addressed through a SAS URL rather than a caller-selectable arbitrary stack of storage backends.
+- **Direct-profile addition [KNOWN]:** The additive `production-v2` profile SHALL target the alternate direct Azure-backed LexonGraph `BlockStore` implementation without introducing a repository-owned translation layer around block identities or payload bytes.
 - **Artifact reuse [KNOWN]:** The same environment-selected `BlockStore` abstraction family SHALL also be used for normalized email artifacts and mailbox provenance artifacts, provided indexing contracts and retrieval references remain explicit.
 - **Tool-surface consistency [INFERRED]:** Batch indexing, standalone clustering discovery, rooted quality assessment, rooted CLI search, and future indexer-owned operator tools SHALL share the same block-store target-selection contract instead of inventing per-tool storage mode variants.
 - **Assessment-tool implication [INFERRED]:** Post-index rooted block-tree quality assessment SHALL also read blocks through the same environment-selected `BlockStore` boundary rather than bypassing it with a repository-specific storage reader.
 - **Mailbox retention [KNOWN]:** Mailbox provenance artifacts SHALL be retained so the original source material remains available for re-normalization, re-chunking, and re-ingestion flows.
-- **Traceability:** UR-3, UR-6, UR-9, UR-12, UR-13, UR-18, UR-22, UR-25, UR-26, UR-27, UR-28, UR-80, UR-86, UR-153, UR-154, UR-155, UR-156
+- **Traceability:** UR-3, UR-6, UR-9, UR-12, UR-13, UR-18, UR-22, UR-25, UR-26, UR-27, UR-28, UR-80, UR-86, UR-153, UR-154, UR-155, UR-156, UR-189, UR-190, UR-191
 
 #### RQ-INDEXER-005A - LexonGraph v2 custom-block adoption for repository-owned artifacts
 
@@ -1179,6 +1287,102 @@ artifact blocks using LexonGraph v2 custom blocks.
 - **Upstream boundary [KNOWN]:** Delegated branch and leaf index blocks remain on the current upstream-owned contract for this increment; LexonArchiveBuilder does not introduce a repository-owned branch-or-leaf format translation layer around the delegated streaming indexer.
 - **Contract stability [INFERRED]:** Operator-facing batch, CLI, and MCP semantics remain unchanged apart from the repository-owned artifact-format change.
 - **Traceability:** UR-157, UR-158, UR-159
+
+#### RQ-INDEXER-005B - Rooted block-store copy between approved targets
+
+LexonArchiveBuilder SHALL provide a CLI-only operator tool that copies
+caller-selected immutable rooted block graphs from one configured block store
+to another configured block store.
+
+- **Invocation scope [KNOWN]:** The tool SHALL accept one or more caller-supplied
+  root block identities and copy only those root blocks plus the immutable
+  blocks reachable from them, rather than performing whole-store replication by
+  default.
+- **Source and destination targeting [KNOWN]:** The tool SHALL reuse the same
+  approved block-store target profiles on both source and destination sides:
+  direct local filesystem, the existing `production` overlay block store
+  composed of memory cache + local filesystem cache + Azure Blob
+  SAS-backed storage, or the additive `production-v2` direct Azure-backed
+  store profile.
+- **Identity preservation [KNOWN]:** Copied blocks SHALL retain their existing
+  hash-addressed identities; the tool SHALL NOT reinterpret, rewrite, or
+  repository-locally translate delegated or repository-owned block payloads.
+- **Idempotence boundary [INFERRED]:** Re-running the same copy into a
+  destination that already contains some or all requested block identities
+  SHALL be treated as safe operator behavior rather than as a duplicate-write
+  error contract.
+- **Mode boundary [KNOWN]:** The default rooted-copy mode SHALL preserve the
+  current destination read-before-write behavior, but the CLI SHALL also allow
+  an explicit operator-selected blind-write mode that skips destination
+  existence reads and attempts writes directly.
+- **Write-concurrency requirement [KNOWN]:** When the tool has determined that a
+  destination write must occur, it SHALL allow multiple destination writes to
+  remain in flight asynchronously instead of serializing the entire transfer
+  through one completed destination write at a time.
+- **Write-concurrency control [KNOWN]:** The CLI SHALL expose an operator-
+  selectable maximum in-flight destination-write limit, and the first
+  repository-approved default for that limit is `64`.
+- **Mode applicability [KNOWN]:** The bounded asynchronous destination-write
+  limit applies to the opt-in blind-write path and also to the default
+  read-before-write path for blocks that have already been classified as absent
+  and therefore require publication.
+- **Boundary [INFERRED]:** The tool SHALL traverse and persist blocks through
+  the shared `BlockStore` abstraction boundary rather than through a separate
+  storage-backend-specific transfer path.
+- **Implementation boundary [KNOWN]:** This increment SHALL layer on top of the
+  existing LexonGraph block-store implementations already adopted by the
+  repository rather than defining a new repository-owned block-store backend
+  family for copying.
+- **Output requirement [KNOWN]:** The tool SHALL emit both a human-readable
+  summary and a machine-readable artifact that reports requested roots, copied
+  block counts, skipped-already-present counts, and copy failures.
+- **Blind-write reporting boundary [KNOWN]:** In the opt-in blind-write mode,
+  the tool MAY relax exact copied-versus-skipped accounting and instead report
+  attempted-write and failure outcomes, because that mode is explicitly chosen
+  to avoid destination reads rather than to preserve pre-read destination-state
+  classification.
+- **Concurrent-reporting boundary [INFERRED]:** Bounded asynchronous destination
+  writes SHALL NOT weaken the truthfulness of the existing mode-specific report
+  contract; out-of-order write completion may change throughput, but it SHALL
+  NOT redefine rooted reachability, immutable identity, or the meaning of
+  copied, skipped, attempted, and failed outcomes on the approved reporting
+  surface.
+- **Liveness requirement [KNOWN]:** During long-running rooted traversals or
+  block transfer work, the tool SHALL emit basic default operator-visible
+  liveness or progress on its normal CLI output surface before final completion
+  so a large copy does not appear hung while work is still advancing.
+- **Mutable-reference exclusion [KNOWN]:** This increment copies immutable block
+  content only; repository-owned mutable references such as current-root or
+  replay-journal-head publication remain out of scope unless a later approved
+  increment expands the contract explicitly.
+- **Content-type neutrality [INFERRED]:** The rooted copy contract SHALL remain
+  agnostic to mailbox, document, and future content types because it operates
+  on block identities and rooted reachability rather than content-model
+  semantics.
+- **Surface boundary [KNOWN]:** The tool is additive to existing indexing,
+  quality, search, and MCP surfaces and SHALL NOT become an indexing stage, a
+  `BatchRequest` feature, or an MCP-visible API in this increment.
+- **Traceability:** UR-153, UR-154, UR-155, UR-156, UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188, UR-189, UR-190, UR-191, UR-192, UR-193, UR-196, UR-197
+
+#### RQ-INDEXER-005C - Opt-in SDK diagnostic logging on existing CLI surfaces
+
+LexonArchiveBuilder SHALL support opt-in underlying SDK and HTTP-client
+diagnostic logging for the entire `lexonarchivebuilder-indexer` binary through
+the standard Rust environment-driven logging path.
+
+- **Activation contract [KNOWN]:** Operators SHALL be able to activate
+  repository-visible Azure SDK and HTTP-client diagnostics by setting
+  `RUST_LOG` or an equivalent standard Rust log-filter environment variable
+  recognized by the process, without requiring a repository-specific CLI flag.
+- **Scope [KNOWN]:** This activation contract SHALL apply across the indexer
+  binary rather than being limited to one subcommand such as rooted block copy.
+- **Opt-in boundary [KNOWN]:** Diagnostic logging SHALL remain disabled by
+  default so ordinary indexing, quality, search, and copy workflows do not gain
+  unsolicited SDK or transport noise.
+- **Surface boundary [INFERRED]:** The diagnostic output SHALL remain on the
+  existing short-lived process output streams rather than introducing a separate
+  daemon, control plane, or MCP-visible diagnostics surface.
+- **Traceability:** UR-33, UR-194, UR-195
 
 #### RQ-INDEXER-006 - Embedding provider integration
 
@@ -1198,9 +1402,9 @@ LexonArchiveBuilder SHALL obtain embeddings through a provider that satisfies `l
 LexonArchiveBuilder SHALL select storage and embedding integrations according to environment without changing the delegated indexing contract or the batch input contract.
 
 - **Local/testing [KNOWN]:** local filesystem + local embedding service
-- **Production-oriented [KNOWN]:** overlay block store (memory cache + local filesystem cache + Azure Blob SAS-backed storage) + Azure OpenAI
-- **Constraint [KNOWN]:** Environment-specific adapter selection for every indexer-owned tool must expose the same two storage-targeting modes rather than allowing some tools to target local filesystem while others target a plain Azure Blob backend directly.
-- **Traceability:** UR-6, UR-7, UR-12, UR-13, UR-153, UR-154, UR-155, UR-156
+- **Production-oriented [KNOWN]:** either the existing production overlay block store (memory cache + local filesystem cache + Azure Blob SAS-backed storage) + Azure OpenAI, or the additive `production-v2` direct Azure-backed store profile + Azure OpenAI
+- **Constraint [KNOWN]:** Environment-specific adapter selection for every indexer-owned tool must expose the same approved storage-profile set rather than allowing some tools to invent one-off direct production backends outside the repository-defined `production` and `production-v2` profiles.
+- **Traceability:** UR-6, UR-7, UR-12, UR-13, UR-153, UR-154, UR-155, UR-156, UR-189, UR-190, UR-191
 
 #### RQ-INDEXER-008 - Idempotent reruns
 
@@ -1612,12 +1816,15 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - Requiring higher-layer parent or node block concurrency in the current increment before the upstream delegated indexing surface exposes a compatible implementation seam
 - Introducing a repository-local per-run clustering manifest or a repository-local block-classification scheme outside the upstream LexonGraph block-iteration contract
 - Defining repository-local clustering profiles, clustering modes, clustering algorithms, or option semantics beyond the approved upstream published profile contract used in this increment
+- Broadening the scoped local/testing-only ladder cardinality selector into a general-purpose production or MCP-visible clustering-tuning surface
 - Requiring detailed clustering-input inventories for successful clustering runs in this increment
 - Requiring the block-tree quality assessment tool to expose an MCP-visible interface in this increment
 - Reinterpreting advisory embedding-space quality heuristics as new LexonGraph-owned block-validity rules in this increment
 - Allowing user-query diagnostic recall to contribute to automated or aggregate rooted-quality metrics
 - Requiring the rooted CLI search tool to replace or redefine the existing MCP search surface in this increment
 - Defining a repository-local search algorithm or a second repository-local search corpus model instead of using `lexongraph-search` over the approved rooted-tree boundary
+- Performing whole-store block replication by default when the approved first increment is rooted-copy-only
+- Copying repository-owned mutable references such as current-root or replay-journal-head publication as part of the first immutable block-copy increment
 - Defining or maintaining a repository-local branch-embedding decoding matrix for evolving branch encodings when the upstream LexonGraph embedding readback API already owns the supported branch reconstruction semantics
 - Preserving mixed-format or pre-v2 v1 compatibility for repository-owned non-search artifact blocks after the approved v2 custom-block transition
 - Preserving the current append-only filesystem replay-journal segment layout or whole-store replay-discovery fallback after the immutable block-backed replay-audit journal is adopted
@@ -1627,15 +1834,19 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Invariant | Impact | Assessment |
 |---|---|---|
 | Indexing remains separate from search serving | Preserved | Requirements explicitly constrain scope to indexing-time orchestration and integrations |
-| Environment-specific storage and embedding behavior stays behind stable interfaces | Preserved with revised storage contract | Stage selection, block-store iteration, clustering-status reporting, and operator-tool traversal now share the same two-mode local-versus-overlay block-store contract instead of splitting between local filesystem and plain Azure Blob targeting |
+| Environment-specific storage and embedding behavior stays behind stable interfaces | Preserved with revised storage contract | Stage selection, block-store iteration, clustering-status reporting, and operator-tool traversal now share the same approved storage-profile contract: local filesystem, the existing production overlay, or additive `production-v2`, instead of splitting between local filesystem and ad hoc plain Azure targeting |
 | Architecture remains extensible to future content types | Preserved | Collection-oriented input still covers both mailbox and document collections, and stage selection is defined in generic pipeline terms rather than mailbox-specific behavior |
 | Idempotence and recoverability stay aligned with underlying immutable block semantics | Preserved with clarified scope | Requirements extend hash-addressed identity expectations to normalized email artifacts and require clustering-only reruns over the same clustering-eligible block-store snapshot to remain semantically stable under unchanged upstream semantics |
 | Local development remains self-contained and batch-oriented | Preserved | Docker Compose is constrained to compose local dependencies around the batch container rather than changing the runtime model |
-| Local published-profile evaluation remains outside production and serving contracts | Preserved with new local/testing aid | Requirements constrain the `0.6.x` profile sweep to repository-local operator automation that reuses existing batch and quality boundaries rather than adding a production entrypoint or MCP-visible test surface |
+| Local published-profile evaluation remains outside production and serving contracts | Preserved with expanded local/testing aid | Requirements constrain both the earlier `0.6.x` sweep and the new `0.7.0` fixed-budget ladder to repository-local operator automation that reuses existing batch and quality boundaries rather than adding a production entrypoint or MCP-visible test surface |
 | Long-running batches remain observable without adding a control plane | Preserved with clarified scope | Progress reporting remains on the existing batch-runtime log surface and now explicitly includes the long-running embedding or leaf-materialization gap between mailbox expansion and downstream streaming-status visibility plus clustering-only replay submission progress, the handoff into upstream planning-pass waiting, and failure-only clustering diagnostics on the runtime log plus a request-adjacent artifact |
 | Caller-visible indexing and MCP contracts remain stable across the upstream API migration | Preserved with approved contract change | The stage surface and MCP retrieval semantics remain stable while clustering-enabled indexing adopts a profile-version selector plus defaulted published-profile contract in place of the retired low-level planning controls |
+| Immutable block identity remains the transfer contract across storage targets | Preserved with expanded operator tooling | The rooted copy tool is constrained to copy hash-addressed immutable blocks through the shared `BlockStore` boundary without redefining block payload semantics, mutable-reference publication, or MCP behavior |
+| Long-running operator tools remain observable without adding a control plane | Preserved with expanded scope | Requirements now extend the existing no-silent-gap observability principle to the rooted block-copy CLI, requiring default operator-visible liveness on the normal CLI surface during long-running rooted traversal or transfer work rather than only at final summary time |
+| Operator diagnostics remain opt-in and stay on standard process output | Preserved with expanded diagnostic path | Requirements now approve `RUST_LOG`-controlled SDK and HTTP-client diagnostics for the entire indexer binary, but keep them disabled by default and constrained to the existing process output streams rather than introducing a new flag-specific or service-style observability channel |
+| Copy idempotence remains subordinate to immutable block semantics | Preserved with explicit operator-selected tradeoff | Requirements keep read-before-write classification as the default rooted-copy path, allow an opt-in blind-write mode that still treats duplicate publication as safe operator behavior, and now permit bounded asynchronous destination writes without changing rooted reachability or truthful mode-specific outcome semantics |
 | Clustering configuration remains explicit and replayable | Preserved with revised contract | Requirements now treat the selected published profile version as the replay-relevant clustering input rather than a repository-local mode, algorithm, and option tuple |
-| Clustering-size behavior remains deterministic under the selected profile | Preserved with revised ownership | Requirements now assign clustering cardinality to whichever published profile version is selected rather than to repository-local auto-sizing or caller overrides |
+| Clustering-size behavior remains deterministic under the selected profile | Preserved with scoped local/testing exception | Normal batch behavior still assigns clustering cardinality to the selected published profile version, while the approved `0.7.0` ladder adds one repository-local deterministic rung table for local/testing evaluation only |
 | Clustering-only replay does not require whole-store rediscovery | Revised with authoritative immutable audit artifact | Requirements now require a shared-BlockStore immutable replay-audit journal as the sole repository-owned replay authority and remove whole-store scan fallback |
 | Repository-owned progress artifacts stay aligned with immutable storage principles | Preserved with stronger alignment | Requirements now move replay and audit state onto immutable hash-addressed blocks plus a mutable head reference, matching the repository's broader storage model instead of retaining a special append-only file journal |
 | Required repository capabilities remain distinguishable from upstream regressions during the latest upgrade | Preserved with clarified scope | The requirements now force the upgrade to classify missing capabilities explicitly instead of silently narrowing split-stage replay, published-profile adoption, progress projection, or MCP-facing behavior |
@@ -1668,10 +1879,29 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - **Q-INDEXER-072 [UNKNOWN]:** Should the first `0.6.x` evaluation sweep run only the `0.6.x` series, or should the runnable `test.ps1` preserve an in-band `0.5.x` comparison baseline in the same invocation?
 - **Q-INDEXER-074 [UNKNOWN]:** Should a future increment make the rooted-query RTT-cost model configurable for different assumed congestion windows or transport regimes, or is the fixed 64 KiB model sufficient for the repository-owned diagnostic surface?
 - **Q-INDEXER-075 [UNKNOWN]:** If future block-store implementations add stronger client-side caching or prefetch semantics, should rooted-query access accounting remain a logical uncached traversal measure, or should a later increment add a second cache-aware metric family?
+- **Q-INDEXER-076 [UNKNOWN]:** After the first `0.7.0` ladder lands with default budget `1024`, should future ladders keep one repository-approved default rung table or expose budget-and-rung selection as an operator-editable input on the same local/testing automation surface?
+- **Q-INDEXER-077 [UNKNOWN]:** Should a future block-copy increment also move repository-owned mutable references such as current-root and replay-journal-head publication, or should that remain a separate explicit operator workflow even after immutable rooted-block copying exists?
+- **Q-INDEXER-078 [UNKNOWN]:** If a later increment adds `--verbose` or equivalent richer diagnostics to rooted block copy, what additional per-block or per-phase detail would be useful without overwhelming ordinary operator workflows?
+- **Q-INDEXER-079 [UNKNOWN]:** Should a future increment add repository-documented recommended `RUST_LOG` filter presets for common debugging cases such as Azure Table transport, retry behavior, or HTTP wire visibility, or is raw operator-selected filtering sufficient?
+- **Q-INDEXER-080 [UNKNOWN]:** Should a future rooted-copy increment expose backend-specific blind-write optimizations more granularly, or is one repository-wide opt-in mode sufficient as long as the default preserves exact copied-versus-skipped accounting?
+- **Q-INDEXER-081 [UNKNOWN]:** After the first bounded-write increment lands with default limit `64`, should a future increment keep one shared repository-wide destination-write default across block-store backends, or allow backend-specific recommended defaults while preserving the same CLI surface?
 
 ## Coverage Notes
 
 - **Covered sources [KNOWN]:**
+  - user request in this session: "why are we reading the target first? Just attempt a write."
+  - user request in this session: "add a mode that skips the read and the better stats (just copies everything)"
+  - user clarification in this session selecting: "Keep the current read-before-write behavior as default, and add an opt-in blind-write mode (Recommended)"
+  - user clarification in this session selecting: "Report only attempted writes and failures; drop exact skipped-already-present accounting in that mode (Recommended)"
+  - user request in this session: "can we modify the copy to be async and keep say 64 (or some number) of azure writes in flight?"
+  - user clarification in this session selecting: "Expose a CLI flag with default 64 (Recommended)"
+  - user clarification in this session selecting: "Apply to both modes when a destination write is needed (Recommended)"
+  - user request in this session: "does lexongraph / azure sdk have any rust tracing we can enable to see why it's happening?"
+  - user request in this session: "ok, can we modify lexonarchivebuilder-indexer to make this work?"
+  - user clarification in this session selecting: "Respect `RUST_LOG` automatically with no new CLI flag (Recommended)"
+  - user clarification in this session selecting: "Enable it for the entire indexer binary (Recommended)"
+  - user request in this session: "can we ammend the tool to print some indication that it is working, maybe a --verbose mode or somethign?"
+  - user clarification in this session selecting: "Always show basic progress/liveness (Recommended)"
   - user request in this session: "clean up the dead spec/code that is unrelated to the new profile version based path. It has left over stuff from the previous path where we tried to define it at this layer."
   - user request in this session: "the upstream LexonGraph API has evolved to allow either divisive or aggregation based clustering. We need to expose this as an option at this layer as well"
   - user clarification in this session: "I think it is important to both. Aggregate should be the default with an option to try out divisive (but I suspect that won't be interesting)"
@@ -1695,6 +1925,10 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
   - user request in this session: "We need a tool that given a block store and root and measure the quality / correctness of the block tree. This would include heuristics like children always have lower level than parents. Distance from centroid of embeddings in parent is the same or bigger than distance from centroid if embeddings in child (i.e. children span a smaller part of the embedding space than their parents). It would also be useful to gain a quantifiable measure of the quality of how the space is divided up (i.e. the shape that each block represents in teh embedding space)."
   - user clarification in this session selecting: "CLI-only operator tool (Recommended)"
   - user clarification in this session selecting: "Human-readable summary plus machine-readable JSON artifact (Recommended)"
+  - user request in this session: "I need a tool to allow us to copy blocks between two block stores. i.e. from file system -> azure storage table sdk block store"
+  - user clarification in this session selecting: "CLI-only operator tool (Recommended)"
+  - user clarification in this session selecting: "Caller-selected root(s) and reachable blocks only (Recommended)"
+  - user clarification in this session: "just to clarify, lexongraph already has these block stores, this would just be a layer on top of that"
   - user request in this session: "yes, that warning is probably a false positive. Report as a count, but don't issue warnings. Can we instead compute mean distance from centroid for each block, then compute mean by layer and stdev by layer? i.e. a rough statistical measure of the where the blocks fit within the embedding space?"
   - user request in this session: "I think we need to refine what we are measuring as quality. It should include tree consistency (like we already have) but also:
 1. Intra‑Block Dispersion Statistics (Per Layer)
@@ -1760,6 +1994,11 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   - user request in this session: "adding a new diagnostic TNN-Recall (1, 5 and 10 key versions). TNN‑Recall Query Source Requirements 1. Corpus‑Based Evaluation (Required) The system SHALL support True Nearest Neighbor Recall evaluation using randomly sampled embeddings from the corpus. This mode SHALL be the default and SHALL be used for all aggregate recall metrics. - Sampling MUST be uniform over the embedding set. - Sampling MUST be reproducible given a seed. - Sample size MUST be configurable. - This mode SHALL be used for Mean Recall, StdDev Recall, and Recall Histograms. 2. User‑Query Evaluation (Optional) The system MAY support TNN‑Recall evaluation using user‑supplied query embeddings. This mode SHALL be treated as a diagnostic tool only and SHALL NOT contribute to aggregate recall metrics. - The system SHALL compute Recall@k for the user query. - The system SHALL report the exact neighbors and approximate neighbors for comparison. - The system SHALL label this result as “diagnostic recall.” 3. Separation of Modes The system SHALL clearly distinguish between: - Corpus‑based recall (statistical quality metric) - User‑query recall (debugging aid) Corpus‑based recall SHALL be the only mode used for automated quality evaluation."
   - user request in this session: "we need to improve the quality tool. I want it to report: stats on blocks touched per level and total, per query it should include number of blocks and size of blocks read it should also give an \"estimated\" query time (in rtt), it assumes a cwnd of 64k, with query time as: per layer data per layer / cwnd (rounded up) summarized into a total per query?"
   - user clarification in this session selecting: "Reachable embeddings under the supplied root (Recommended)"
+  - user request in this session: "we now need to design a ladder experiment that tries a combination of beam width and cluster size, using v0.7.0. profile, with the constraint that beam width * cluster size remains constant"
+  - user request in this session: "Use the skill tool to invoke the \"evolve\" skill, then follow the skill's instructions to help with: build this as a test script/plan we can execute."
+  - user clarification in this session: "it's not block_size_target that determines block size, but embeddings per cluster. I think it was 64 in the last run?"
+  - user clarification in this session selecting: "Yes, use 1024 as the default ladder budget (Recommended)"
+  - user clarification in this session selecting: "Yes, use that 5-rung default ladder (Recommended)"
   - user request in this session: "LexonGraph crate has been updated and now has a simpler higher level API that groups options into a versioned profile. Please switch to this API and use the v0.1.0 profile"
   - user clarification in this session selecting: "Replace the external control surface with profile-based v0.1.0 (Recommended)"
   - user request in this session: "LexonGraph has switched to exposing a versioned indexing profile. Currently we hard-code to v0.1.0 (I think). Make this an option we can test different profiles. Can we also pin to main of LexonGraph for now with an explicit note that this is so we can quickly test new profiles?"

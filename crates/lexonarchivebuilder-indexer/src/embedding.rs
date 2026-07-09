@@ -76,7 +76,7 @@ impl ConfiguredEmbeddingProvider {
             | EnvironmentConfig::LocalOverlay { embedding, .. } => Ok(Self::Local(
                 LocalOpenAiEmbeddingProvider::from_config(embedding)?,
             )),
-            EnvironmentConfig::Production { .. } => {
+            EnvironmentConfig::Production { .. } | EnvironmentConfig::ProductionV2 { .. } => {
                 Ok(Self::AzureOpenAi(AzureOpenAiEmbeddingProviderStub))
             }
         }

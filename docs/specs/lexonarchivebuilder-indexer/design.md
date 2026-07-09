@@ -17,7 +17,8 @@ rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI se
 replay-stable fingerprinting, temporary upstream `main` tracking for
 rapid profile validation, upstream wgpu-acceleration revision
 compatibility, 0.6.x published-profile evaluation, local testing sweep
-automation, upstream embedding-readback API adoption, LAB-owned
+automation, v0.7.0 fixed-budget ladder experiment automation, rooted
+block-store copy tooling, upstream embedding-readback API adoption, LAB-owned
 replay-journaled split-stage recovery, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
 non-search artifacts in
@@ -36,6 +37,7 @@ latest published-profile and telemetry compatibility, temporary upstream
 `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, upstream regression assessment,
 0.6.x published-profile evaluation, local testing sweep automation,
+v0.7.0 fixed-budget ladder experiment automation, rooted block-store copy tooling,
 upstream embedding-readback API adoption, embedding-phase
 batch-progress observability,
 replay-submission observability, streaming-status observability,
@@ -85,6 +87,8 @@ owned by LexonGraph and its subordinate crates.
   recall-report rendering for the rooted quality tool
 - CLI parsing, query embedding generation, search execution, and result
   rendering for the rooted CLI search tool
+- CLI parsing, rooted traversal, copy accounting, and machine-readable result
+  emission for the rooted block-copy operator tool
 - Docker Compose, container, and local test-environment artifacts that realize
   the approved MVP slice
 
@@ -122,6 +126,9 @@ The LexonArchiveBuilder indexer design is intended to be:
 - able to execute ad hoc rooted CLI search over stored trees without
   redefining MCP search-serving behavior or introducing a second search corpus
   model
+- able to copy rooted immutable block graphs between approved block-store
+  targets without redefining block identity, mutable-reference publication, or
+  MCP behavior
 - chunk-first for email retrieval while preserving full-message and source
   provenance artifacts
 
@@ -412,8 +419,16 @@ auto-sizing or override merging for clustering-enabled execution in this
 increment. Any future variation in those values must come from approval of a
 different published profile version rather than ad hoc repository-local tuning.
 
+The one approved exception is the repository-local `0.7.0` fixed-budget ladder
+automation surface. That operator aid may realize one deterministic rung table
+that pairs a selected beam width with a selected clustering cardinality for
+local/testing experiment execution only. This exception remains outside the
+ordinary batch contract: it does not redefine `BatchRequest`, does not expose a
+general low-level clustering-tuning family, and does not alter production or
+MCP-facing behavior.
+
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003H,
-RQ-INDEXER-008, RQ-INDEXER-010A
+RQ-INDEXER-003J1, RQ-INDEXER-008, RQ-INDEXER-010A
 
 ### DSG-LFI-001I `Latest-upstream compatibility and regression boundary`
 
@@ -843,6 +858,30 @@ tool to replicate format knowledge independently.
 
 **Traces to:** RQ-INDEXER-008D, RQ-INDEXER-008E, RQ-INDEXER-010
 
+### DSG-LFI-002G `Process-wide opt-in SDK diagnostic logging`
+
+LexonArchiveBuilder realizes opt-in Azure SDK and HTTP-client diagnostics by
+initializing one standard Rust logger for the entire
+`lexonarchivebuilder-indexer` process during startup.
+
+This design keeps diagnostic activation subordinate to the normal Rust logging
+environment contract rather than inventing a repository-specific flag. When
+`RUST_LOG` or an equivalent standard filter variable is unset, the process does
+not emit extra SDK or transport diagnostics. When it is set, repository-owned
+commands such as batch indexing, rooted quality, rooted search, and rooted copy
+allow underlying Azure SDK and HTTP-client components that already log through
+the Rust logging ecosystem to emit their diagnostics on the same short-lived
+process output streams.
+
+The logger initialization is process-wide rather than command-specific so the
+same diagnostic activation path works across the entire binary. It does not add
+a daemon, a second telemetry channel, or an MCP-visible diagnostics surface,
+and it does not require LexonArchiveBuilder to wrap every upstream SDK call in
+repository-specific tracing statements before operators can observe transport or
+retry activity.
+
+**Traces to:** RQ-INDEXER-005C
+
 ### DSG-LFI-003 `Collection item normalization`
 
 LexonArchiveBuilder models each batch element as an application-owned indexing item that
@@ -1022,9 +1061,12 @@ LexonArchiveBuilder provides concrete `lexongraph_block_store::BlockStore`
 implementations or adapters selected by environment.
 
 - local/testing selects a filesystem-backed block store
-- production-oriented operation selects a fixed overlay block store composed of
-  an in-memory cache layer, a local filesystem cache layer, and an Azure Blob
-  backing layer addressed by SAS URL
+- production-oriented operation selects either:
+  - the existing `production` overlay block store composed of an in-memory
+    cache layer, a local filesystem cache layer, and an Azure Blob backing
+    layer addressed by SAS URL
+  - the additive `production-v2` direct Azure-backed LexonGraph block-store
+    implementation
 
 The same environment-selected `BlockStore` abstraction family is reused for:
 
@@ -1036,16 +1078,17 @@ The rest of the LexonArchiveBuilder indexing flow consumes only the backend-neut
 `BlockStore` contract and does not depend on filesystem paths or Azure-specific
 blob layout details.
 
-The non-local target is intentionally fixed to this overlay shape rather than a
-caller-assembled arbitrary stack of storage adapters. This keeps tool-targeting
-semantics stable across batch indexing, standalone clustering, rooted quality
-assessment, rooted CLI search, and future indexer-owned operator tools that
-traverse the shared `BlockStore` boundary.
+The non-local target family is intentionally fixed to one approved
+repository-defined profile set rather than a caller-assembled arbitrary stack
+of storage adapters. This keeps tool-targeting semantics stable across batch
+indexing, standalone clustering, rooted quality assessment, rooted CLI search,
+and future indexer-owned operator tools that traverse the shared `BlockStore`
+boundary.
 
 For the approved increment, the local/testing block-store realization remains
-required and executable, and the production-oriented overlay target remains part
-of the same preserved adapter seam and configuration family rather than a
-tool-specific exception path.
+required and executable, and both approved production-oriented storage profiles
+remain part of the same preserved adapter seam and configuration family rather
+than tool-specific exception paths.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-007, RQ-INDEXER-010
 
@@ -1117,9 +1160,9 @@ through this boundary rather than inventing a parallel repository-local
 transport model.
 
 This design keeps assessment logic backend-neutral across local filesystem and
-the approved non-local overlay storage profile. It also prevents the repository from
-introducing a second storage-reader stack with different reachability or
-decoding semantics than the indexing path already uses.
+the approved non-local production storage profiles. It also prevents the
+repository from introducing a second storage-reader stack with different
+reachability or decoding semantics than the indexing path already uses.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-008D, RQ-INDEXER-008D4, RQ-INDEXER-008D5, RQ-INDEXER-010
 
@@ -1135,10 +1178,39 @@ reachable rooted tree is the authority for which stored leaf nodes may appear in
 search results for one invocation.
 
 This preserves backend-neutral search orchestration across local filesystem and
-the approved non-local overlay storage profile while keeping traversal semantics
-aligned with the same stored tree boundary used by rooted quality assessment.
+the approved non-local production storage profiles while keeping traversal
+semantics aligned with the same stored tree boundary used by rooted quality
+assessment.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-008E, RQ-INDEXER-010
+
+### DSG-LFI-005D `Rooted block-copy traversal through BlockStore`
+
+The rooted block-copy tool traverses immutable rooted block graphs through the
+same configured `BlockStore` abstraction family on both its source and
+destination sides.
+
+LexonArchiveBuilder reads each caller-selected root from the source boundary,
+discovers only the blocks reachable from those roots by following stored
+references, and writes raw block bytes to the destination boundary without
+re-encoding block payloads or introducing backend-specific transfer logic.
+
+Because the transfer contract is hash-addressed immutable block identity, the
+copy workflow treats destination preexistence as a normal condition: it may
+check whether a destination block identity is already present and skip that
+write while still counting the block as covered by the requested rooted copy.
+
+This design intentionally excludes repository-owned mutable references such as
+current-root and replay-journal-head publication. Those references remain
+separate operator concerns even when the immutable rooted block content has been
+copied successfully.
+
+The same rooted traversal keeps the copy contract content-type-neutral and
+backend-neutral across local filesystem plus the approved non-local production
+profiles, while preserving the upstream ownership of block bytes and identity
+semantics.
+
+**Traces to:** RQ-INDEXER-005B, RQ-INDEXER-010, RQ-INDEXER-010A
 
 ### DSG-LFI-006 `Embedding provider adapter boundary`
 
@@ -1187,17 +1259,18 @@ environment profile:
 | Profile | Block storage | Embedding target |
 |---|---|---|
 | local/testing | local filesystem | local STAPI-compatible service |
-| production-oriented | overlay block store: memory cache + local filesystem cache + Azure Blob SAS-backed storage | Azure OpenAI |
+| production | overlay block store: memory cache + local filesystem cache + Azure Blob SAS-backed storage | Azure OpenAI |
+| production-v2 | direct Azure-backed LexonGraph block store | Azure OpenAI |
 
 This selection is configuration-driven and preserves one stable delegated
 indexing flow independent of environment across indexed blocks, normalized email
 artifacts, and mailbox provenance artifacts.
 
 For the approved MVP slice, the local/testing profile is the only profile that
-must execute end to end. The production-oriented overlay profile remains
-represented at this design layer so the same orchestration contract can govern
-both direct-local and overlay-backed tool targeting without introducing a plain
-Azure-only operator mode.
+must execute end to end. The production-oriented profiles remain represented at
+this design layer so the same orchestration contract can govern direct-local,
+overlay-backed, and approved direct-Azure-backed tool targeting without
+introducing ad hoc backend-specific operator modes.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-007
 
@@ -1235,8 +1308,9 @@ available host-visible CPU-count signal, provided the default remains bounded,
 documented, and never drops below one.
 
 This configuration surface remains environment-neutral: local/testing and the
-preserved production profile use the same request shape, stage-selection
-contract, and scheduler contract. Higher-layer parent construction remains
+preserved production-oriented profiles use the same request shape,
+stage-selection contract, and scheduler contract. Higher-layer parent
+construction remains
 serial at the LexonArchiveBuilder layer until the upstream streaming indexing
 API exposes a compatible concurrency seam.
 
@@ -1328,8 +1402,8 @@ automation.
 ### DSG-LFI-007F `Local published-profile sweep automation surface`
 
 LexonArchiveBuilder preserves one repository-local operator automation surface,
-currently the runnable root `test.ps1` script, for evaluating the active
-published-profile experiment set in the local/testing environment.
+currently the runnable root `test.ps1` script, for evaluating approved
+published-profile experiments in the local/testing environment.
 
 That surface is intentionally outside the batch request schema and production
 deployment contract. It composes the already-approved `run` and rooted-quality
@@ -1338,16 +1412,109 @@ CLI boundaries rather than defining a testing-only indexing API.
 In this increment, the automation surface:
 
 - carries an operator-editable published-profile list whose active named target
-  is the upstream `0.6.x` series
+  may be the upstream `0.6.x` series for version-sweep evaluation
+- may instead execute the approved published-profile `0.7.0` fixed-budget
+  ladder by driving the same `run` plus rooted-quality workflow over one
+  repository-approved rung table
 - may include prior comparison baselines such as `0.5.x` in the same sweep
   without changing the omitted-selector default or widening the runtime
   contract
 - emits per-profile run artifacts, per-profile rooted-quality artifacts, and a
-  comparable summary output suitable for side-by-side evaluation
+  comparable summary output suitable for side-by-side evaluation, with ladder
+  runs preserving rung identity plus the selected beam width and clustering
+  cardinality in the emitted artifacts
 - remains version-series-agnostic so later published-profile series can be
   substituted without reshaping the repository contract
 
-**Traces to:** RQ-INDEXER-003J
+**Traces to:** RQ-INDEXER-003J, RQ-INDEXER-003J1
+
+### DSG-LFI-007F1 `Local fixed-budget ladder execution plan`
+
+The approved `0.7.0` ladder experiment is realized as an execution plan layered
+onto the same local/testing automation surface rather than as a second operator
+entrypoint.
+
+That execution plan:
+
+1. defines one fixed ladder budget of `1024`, anchored on the prior successful
+   `16x64` baseline
+2. defines the default rung sequence `4x256`, `8x128`, `16x64`, `32x32`, and
+   `64x16`
+3. runs preflight validation for each rung before long-running execution
+4. executes rungs in deterministic order while preserving one artifact family
+   per rung for build output, rooted-quality output, and comparable summaries
+5. leaves post-hoc comparison and operator interpretation on repository-local
+   artifacts rather than on a new serving or telemetry surface
+
+Because the approved ladder is a repository-local experiment aid, its rung table
+is repository-owned and deterministic rather than an open-ended low-level
+clustering-control API.
+
+**Traces to:** RQ-INDEXER-003J1
+
+### DSG-LFI-007G `Rooted block-copy CLI surface`
+
+LexonArchiveBuilder exposes the rooted block-copy capability through a
+dedicated CLI-only operator surface that accepts:
+
+- one source block-store target using the approved shared profile contract
+- one destination block-store target using the same approved contract
+- one or more caller-supplied root block identifiers
+- one optional artifact destination when the default JSON output location is
+  insufficient
+
+The CLI surface is intentionally separate from the batch `run` request-file
+contract because the tool operates on already-persisted immutable block graphs
+rather than orchestrating a new indexing batch. The design does not require MCP
+exposure, request-file integration, elevation into a normal indexing stage, or
+definition of any repository-local block-store backend family.
+
+The operator surface renders one concise human-readable transfer summary and
+writes one machine-readable artifact reporting rooted transfer outcomes. In the
+default read-before-write mode that includes requested roots, copied block
+counts, skipped-already-present counts, and failures. In the opt-in blind-write
+mode the same surface skips destination existence reads and instead reports
+attempted-write plus failure-oriented outcomes without claiming exact
+copied-versus-skipped classification. That result contract is about transfer
+outcomes only; it does not implicitly publish mutable references or redefine any
+upstream block-store backend semantics.
+
+The design keeps the current read-before-write path as the default because it
+preserves the strongest destination-state accounting across backends. The
+blind-write path is an explicit operator-selected tradeoff for backends where
+destination reads hang or are disproportionately expensive: it still traverses
+the same rooted immutable graph and still treats duplicate publication as safe,
+but it accepts weaker outcome classification in exchange for avoiding
+destination presence checks entirely.
+
+When rooted traversal determines that destination publication is required, the
+same CLI surface may keep multiple destination writes in flight
+asynchronously instead of waiting for each destination write to complete before
+issuing the next one. That write pipeline remains bounded by one operator-
+selectable CLI concurrency limit, with first approved default `64`, so the
+design improves high-latency backend throughput without redefining the shared
+`BlockStore` contract or inventing a backend-specific transfer path.
+
+The bounded write pipeline applies to both rooted-copy modes. In the default
+read-before-write mode, a block becomes eligible for the asynchronous write
+queue only after the destination has already been classified as missing. In the
+opt-in blind-write mode, the same bounded queue accepts the direct write
+attempts without any preceding destination existence read. Because write
+completions may arrive out of traversal order, the design constrains reporting
+to remain mode-truthful and rooted-reachability-preserving rather than tying
+summary semantics to serialized write completion order.
+
+Because rooted block copy can spend a long time traversing reachable block
+graphs or waiting on destination persistence without any intermediate final
+artifact to inspect, the same CLI surface also emits basic in-flight liveness on
+its normal operator-visible output stream before final completion. That default
+liveness remains bounded to the short-lived CLI invocation, does not require a
+separate progress API or daemon, and is intentionally lighter-weight than any
+future opt-in verbose diagnostic mode. The design leaves the exact cadence and
+message schema to implementation so long as ordinary operators can tell that
+rooted traversal or transfer work is still advancing.
+
+**Traces to:** RQ-INDEXER-005B, RQ-INDEXER-009
 
 ### DSG-LFI-008 `Local and production parity boundary`
 
@@ -1356,7 +1523,8 @@ provider configuration, not in the container's batch contract, the staged email
 artifact model, content item shape, the stage-selection and concurrency-
 configuration surfaces, the clustering-selection and clustering-option CLI
 surface, the rooted block-tree quality CLI surface, or the delegated
-`lexongraph-streaming-indexer` orchestration contract. The same parity boundary
+rooted block-copy CLI surface, or the delegated `lexongraph-streaming-indexer`
+orchestration contract. The same parity boundary
 also covers the rooted CLI search surface's use of configured storage plus one
 operator-supplied embedding endpoint.
 
@@ -1367,10 +1535,11 @@ configured `BlockStore` abstraction and the same upstream block-iteration
 contract across environments rather than introducing a local-only discovery
 mechanism.
 
-Within that parity boundary, every indexer-owned tool shares the same two-mode
-storage-targeting contract: direct local filesystem or the fixed non-local
-overlay of memory cache plus local filesystem cache plus Azure Blob SAS-backed
-storage. No indexer-owned tool defines a plain Azure-only targeting exception.
+Within that parity boundary, every indexer-owned tool shares the same approved
+storage-profile contract: direct local filesystem, the existing `production`
+overlay profile, or the additive `production-v2` direct Azure-backed profile.
+No indexer-owned tool defines an ad hoc plain Azure-only targeting exception
+outside that shared profile set.
 
 **Traces to:** RQ-INDEXER-007, RQ-INDEXER-010, RQ-INDEXER-003D,
 RQ-INDEXER-003E, RQ-INDEXER-003G
@@ -1390,6 +1559,10 @@ surface in this increment.
 The same separation applies to the rooted CLI search tool: it remains additive
 to MCP search and does not become the new definition of repository search
 semantics.
+
+The same separation applies to the rooted block-copy tool: it remains a CLI
+operator workflow over approved block-store targets and does not become an MCP
+mutation, replication, or storage-administration surface in this increment.
 
 **Traces to:** RQ-INDEXER-009
 
@@ -1460,6 +1633,9 @@ LexonArchiveBuilder-owned verification artifacts validate:
   embedding-provider adapters
 - correct interoperability of the local filesystem-backed block-store profile
   with LexonGraph-owned tooling expectations
+- correct exposure and use of the approved production-oriented block-store
+  profile set, including the existing `production` overlay profile and the
+  additive `production-v2` direct Azure-backed profile
 - correct mailbox retention, normalized email artifact derivation, and chained
   provenance
 - correct shaping of chunk-sized delegated email items
@@ -1476,6 +1652,16 @@ LexonArchiveBuilder-owned verification artifacts validate:
   query embedding generation through the approved endpoint family, subordinate
   use of `lexongraph-search`, rooted result scoping, and emission of both
   required output surfaces
+- correct opt-in SDK and HTTP-client diagnostic activation for the entire
+  indexer process through the standard Rust logging environment path, while
+  preserving quiet default runs
+- correct rooted block copy over the shared `BlockStore` boundary, including
+  reachable-only traversal, identity-preserving transfer, the default
+  read-before-write classification path, the opt-in blind-write path with
+  reduced copied-versus-skipped accounting, bounded asynchronous destination-
+  write concurrency with one operator-selectable limit defaulting to `64`,
+  failure reporting, default in-flight liveness on the normal CLI surface, and
+  preservation of mutable-reference exclusion
 - correct application and defaulting of the administrator-defined concurrency
   budget
 - preservation of stable batch contracts across environments
@@ -1490,10 +1676,10 @@ LexonArchiveBuilder consumes them correctly.
 **Traces to:** RQ-INDEXER-003A, RQ-INDEXER-003B, RQ-INDEXER-003C,
 RQ-INDEXER-003D, RQ-INDEXER-003E, RQ-INDEXER-003F, RQ-INDEXER-003G,
 RQ-INDEXER-004F, RQ-INDEXER-008A, RQ-INDEXER-008B, RQ-INDEXER-008C,
-RQ-INDEXER-008D, RQ-INDEXER-008E,
+RQ-INDEXER-005B, RQ-INDEXER-008D, RQ-INDEXER-008E,
 RQ-INDEXER-010A, RQ-INDEXER-010B, RQ-INDEXER-010, DSG-LFI-001A,
 DSG-LFI-001B, DSG-LFI-001C, DSG-LFI-001D, DSG-LFI-001E, DSG-LFI-001F,
 DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-001I, DSG-LFI-002A, DSG-LFI-002B,
-DSG-LFI-002C, DSG-LFI-002D, DSG-LFI-004G, DSG-LFI-005A, DSG-LFI-005B,
-DSG-LFI-005C, DSG-LFI-006A, DSG-LFI-007A, DSG-LFI-007B, DSG-LFI-007C,
-DSG-LFI-007D, DSG-LFI-007E
+DSG-LFI-002C, DSG-LFI-002D, DSG-LFI-002G, DSG-LFI-004G, DSG-LFI-005A, DSG-LFI-005B,
+DSG-LFI-005C, DSG-LFI-005D, DSG-LFI-006A, DSG-LFI-007A, DSG-LFI-007B,
+DSG-LFI-007C, DSG-LFI-007D, DSG-LFI-007E, DSG-LFI-007G
