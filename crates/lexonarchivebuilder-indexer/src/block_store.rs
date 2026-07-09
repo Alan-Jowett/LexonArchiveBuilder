@@ -262,7 +262,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("production block_store.prefix is not supported")
+                .contains("overlay block_store.prefix is not supported")
         );
     }
 
@@ -309,7 +309,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("production block_store.filesystem_cache_root is required")
+                .contains("overlay block_store.filesystem_cache_root is required")
         );
     }
 
