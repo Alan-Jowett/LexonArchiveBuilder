@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use half::f16;
@@ -235,6 +236,7 @@ pub struct QueryAccessMetrics {
     pub touched_block_count: usize,
     pub bytes_read: usize,
     pub estimated_rtts: usize,
+    pub actual_query_elapsed_micros: u64,
     pub levels: Vec<QueryAccessLevelMetrics>,
 }
 
@@ -244,6 +246,9 @@ pub struct QueryAccessSummary {
     pub touched_block_count: usize,
     pub bytes_read: usize,
     pub estimated_rtts: usize,
+    pub total_query_elapsed_micros: u64,
+    pub mean_query_elapsed_micros: u64,
+    pub max_query_elapsed_micros: u64,
     pub levels: Vec<QueryAccessLevelMetrics>,
 }
 
@@ -600,12 +605,15 @@ pub fn render_report_summary(report: &TreeQualityReport) -> String {
     }
 
     lines.push(format!(
-        "Corpus query access [{}]: queries {}, blocks {}, bytes {}, estimated RTTs {}",
+        "Corpus query access [{}]: queries {}, blocks {}, bytes {}, estimated RTTs {}, actual query time total/mean/max {} / {} / {} ms",
         report.corpus_tnn_recall.query_source,
         report.corpus_tnn_recall.access_summary.query_count,
         report.corpus_tnn_recall.access_summary.touched_block_count,
         report.corpus_tnn_recall.access_summary.bytes_read,
-        report.corpus_tnn_recall.access_summary.estimated_rtts
+        report.corpus_tnn_recall.access_summary.estimated_rtts,
+        format_elapsed_millis(report.corpus_tnn_recall.access_summary.total_query_elapsed_micros),
+        format_elapsed_millis(report.corpus_tnn_recall.access_summary.mean_query_elapsed_micros),
+        format_elapsed_millis(report.corpus_tnn_recall.access_summary.max_query_elapsed_micros)
     ));
     for level in &report.corpus_tnn_recall.access_summary.levels {
         lines.push(format!(
@@ -616,11 +624,12 @@ pub fn render_report_summary(report: &TreeQualityReport) -> String {
     lines.push("Per-query corpus access:".into());
     for query_access in &report.corpus_tnn_recall.query_accesses {
         lines.push(format!(
-            "- {}: blocks {}, bytes {}, estimated RTTs {}",
+            "- {}: blocks {}, bytes {}, estimated RTTs {}, actual time {} ms",
             query_access.query_id,
             query_access.touched_block_count,
             query_access.bytes_read,
-            query_access.estimated_rtts
+            query_access.estimated_rtts,
+            format_elapsed_millis(query_access.actual_query_elapsed_micros)
         ));
         for level in &query_access.levels {
             lines.push(format!(
@@ -1100,6 +1109,9 @@ fn zeroed_corpus_tnn_recall_report(
             touched_block_count: 0,
             bytes_read: 0,
             estimated_rtts: 0,
+            total_query_elapsed_micros: 0,
+            mean_query_elapsed_micros: 0,
+            max_query_elapsed_micros: 0,
             levels: Vec::new(),
         },
         query_accesses: Vec::new(),
@@ -1228,6 +1240,7 @@ fn approximate_neighbors(
     );
     let counting_store = Arc::new(CountingBlockStore::new(store));
     let search_store = Arc::clone(&counting_store);
+    let started_at = Instant::now();
     let result = crate::block_store::block_on_future_factory(move || async move {
         search_with_partial_retry(
             searcher,
@@ -1240,6 +1253,7 @@ fn approximate_neighbors(
         .await
     })
     .map_err(TreeQualityError::from_search_error)?;
+    let elapsed = started_at.elapsed();
     let neighbors = result
         .leaves
         .into_iter()
@@ -1256,7 +1270,11 @@ fn approximate_neighbors(
         })
         .take(max_k)
         .collect::<Result<Vec<_>, _>>()?;
-    let query_access = build_query_access_capture(&query.neighbor_id, counting_store.snapshot());
+    let query_access = build_query_access_capture(
+        &query.neighbor_id,
+        counting_store.snapshot(),
+        duration_to_micros(elapsed),
+    );
     Ok((neighbors, query_access))
 }
 
@@ -1268,6 +1286,7 @@ impl QueryAccessCapture {
                 touched_block_count: 0,
                 bytes_read: 0,
                 estimated_rtts: 0,
+                actual_query_elapsed_micros: 0,
                 levels: Vec::new(),
             },
             touched_blocks: HashMap::new(),
@@ -1278,6 +1297,7 @@ impl QueryAccessCapture {
 fn build_query_access_capture(
     query_id: &str,
     touched_blocks: HashMap<BlockHash, QueryTouchedBlock>,
+    actual_query_elapsed_micros: u64,
 ) -> QueryAccessCapture {
     let levels = build_level_access_metrics(touched_blocks.values().copied());
     QueryAccessCapture {
@@ -1286,6 +1306,7 @@ fn build_query_access_capture(
             touched_block_count: touched_blocks.len(),
             bytes_read: touched_blocks.values().map(|touch| touch.bytes_read).sum(),
             estimated_rtts: levels.iter().map(|level| level.estimated_rtts).sum(),
+            actual_query_elapsed_micros,
             levels,
         },
         touched_blocks,
@@ -1326,8 +1347,34 @@ fn summarize_query_accesses(query_accesses: &[QueryAccessCapture]) -> QueryAcces
             .iter()
             .map(|query| query.metrics.estimated_rtts)
             .sum(),
+        total_query_elapsed_micros: query_accesses
+            .iter()
+            .map(|query| query.metrics.actual_query_elapsed_micros)
+            .sum(),
+        mean_query_elapsed_micros: if query_accesses.is_empty() {
+            0
+        } else {
+            query_accesses
+                .iter()
+                .map(|query| query.metrics.actual_query_elapsed_micros)
+                .sum::<u64>()
+                / query_accesses.len() as u64
+        },
+        max_query_elapsed_micros: query_accesses
+            .iter()
+            .map(|query| query.metrics.actual_query_elapsed_micros)
+            .max()
+            .unwrap_or(0),
         levels,
     }
+}
+
+fn duration_to_micros(duration: std::time::Duration) -> u64 {
+    duration.as_micros().try_into().unwrap_or(u64::MAX)
+}
+
+fn format_elapsed_millis(micros: u64) -> String {
+    format!("{:.3}", micros as f64 / 1_000.0)
 }
 
 fn build_level_access_metrics(
@@ -2014,6 +2061,7 @@ mod tests {
         assert!(rendered.contains("Corpus TNN-recall [corpus-based]:"));
         assert!(rendered.contains("TNN Recall@1:"));
         assert!(rendered.contains("Corpus query access [corpus-based]:"));
+        assert!(rendered.contains("actual query time total/mean/max"));
         assert!(rendered.contains("Per-query corpus access:"));
         assert!(rendered.contains("Per-parent split effectiveness:"));
         assert!(rendered.contains("Per-block statistics:"));
@@ -2062,6 +2110,7 @@ mod tests {
         let mut total_blocks = 0usize;
         let mut total_bytes = 0usize;
         let mut total_rtts = 0usize;
+        let mut total_elapsed_micros = 0u64;
         for query_access in &report.corpus_tnn_recall.query_accesses {
             let level_blocks: usize = query_access
                 .levels
@@ -2081,11 +2130,19 @@ mod tests {
             assert_eq!(query_access.touched_block_count, level_blocks);
             assert_eq!(query_access.bytes_read, level_bytes);
             assert_eq!(query_access.estimated_rtts, level_rtts);
+            assert!(
+                query_access.actual_query_elapsed_micros
+                    <= report
+                        .corpus_tnn_recall
+                        .access_summary
+                        .total_query_elapsed_micros
+            );
             assert!(query_access.levels.iter().any(|level| level.level == 1));
             assert!(query_access.levels.iter().any(|level| level.level == 0));
             total_blocks += query_access.touched_block_count;
             total_bytes += query_access.bytes_read;
             total_rtts += query_access.estimated_rtts;
+            total_elapsed_micros += query_access.actual_query_elapsed_micros;
         }
         let summary_level_blocks: usize = report
             .corpus_tnn_recall
@@ -2124,6 +2181,23 @@ mod tests {
             report.corpus_tnn_recall.access_summary.estimated_rtts,
             summary_level_rtts
         );
+        assert_eq!(
+            report
+                .corpus_tnn_recall
+                .access_summary
+                .total_query_elapsed_micros,
+            total_elapsed_micros
+        );
+        assert!(
+            report
+                .corpus_tnn_recall
+                .access_summary
+                .max_query_elapsed_micros
+                >= report
+                    .corpus_tnn_recall
+                    .access_summary
+                    .mean_query_elapsed_micros
+        );
         assert!(report.corpus_tnn_recall.access_summary.touched_block_count <= total_blocks);
         assert!(report.corpus_tnn_recall.access_summary.bytes_read <= total_bytes);
     }
@@ -2149,6 +2223,7 @@ mod tests {
                         },
                     ),
                 ]),
+                1_500,
             ),
             build_query_access_capture(
                 "query-b",
@@ -2168,6 +2243,7 @@ mod tests {
                         },
                     ),
                 ]),
+                2_500,
             ),
         ];
 
@@ -2177,6 +2253,9 @@ mod tests {
         assert_eq!(summary.touched_block_count, 3);
         assert_eq!(summary.bytes_read, 66_000);
         assert_eq!(summary.estimated_rtts, 4);
+        assert_eq!(summary.total_query_elapsed_micros, 4_000);
+        assert_eq!(summary.mean_query_elapsed_micros, 2_000);
+        assert_eq!(summary.max_query_elapsed_micros, 2_500);
         assert_eq!(summary.levels.len(), 2);
 
         let root_level = summary
