@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonArchiveBuilder contributors
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::future::Future;
 use std::io::Cursor;
@@ -23,6 +23,7 @@ use crate::mailbox::{NORMALIZED_EMAIL_ARTIFACT_BLOCK_TYPE, NORMALIZED_EMAIL_MEDI
 use crate::tree_tools::parse_block_hash;
 
 pub const DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES: usize = 64;
+const DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITE_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -112,6 +113,25 @@ pub async fn copy_rooted_blocks_with_mode_and_limit(
     destination_mode: CopyDestinationMode,
     max_in_flight_destination_writes: usize,
 ) -> RootedBlockCopyReport {
+    copy_rooted_blocks_with_mode_and_limits(
+        source,
+        destination,
+        root_ids,
+        destination_mode,
+        max_in_flight_destination_writes,
+        DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITE_BYTES,
+    )
+    .await
+}
+
+async fn copy_rooted_blocks_with_mode_and_limits(
+    source: &dyn BlockStore,
+    destination: &dyn BlockStore,
+    root_ids: &[BlockHash],
+    destination_mode: CopyDestinationMode,
+    max_in_flight_destination_writes: usize,
+    max_in_flight_destination_write_bytes: usize,
+) -> RootedBlockCopyReport {
     let requested_root_ids = root_ids.iter().map(ToString::to_string).collect::<Vec<_>>();
     let mut queue = root_ids
         .iter()
@@ -123,24 +143,21 @@ pub async fn copy_rooted_blocks_with_mode_and_limit(
     let mut copied_block_count = 0usize;
     let mut skipped_already_present_block_count = 0usize;
     let mut attempted_write_block_count = 0usize;
-    let mut failures = Vec::new();
+    let mut failures = CopyFailureTracker::default();
     let mut pending_writes = FuturesUnordered::<PendingDestinationWrite<'_>>::new();
+    let mut in_flight_destination_write_bytes = 0usize;
 
     while let Some((request_root_id, block_id)) = queue.pop_front() {
+        failures.note_block_root(request_root_id, block_id);
         if !visited.insert(block_id) {
             continue;
         }
 
-        let Some(block_bytes) =
-            read_source_block(source, request_root_id, block_id, &mut failures).await
-        else {
+        let Some(block_bytes) = read_source_block(source, block_id, &mut failures).await else {
             continue;
         };
-        let Some(child_ids) =
-            decode_source_block(request_root_id, block_id, &block_bytes, &mut failures)
-        else {
-            continue;
-        };
+        let child_ids = decode_source_block(block_id, &block_bytes, &mut failures);
+        failures.remember_children(block_id, &child_ids);
 
         match destination_mode {
             CopyDestinationMode::ReadBeforeWrite => {
@@ -149,9 +166,13 @@ pub async fn copy_rooted_blocks_with_mode_and_limit(
                         skipped_already_present_block_count += 1;
                     }
                     Ok(None) => {
+                        let block_bytes_len = block_bytes.len();
                         wait_for_write_capacity(
                             &mut pending_writes,
                             effective_write_limit,
+                            max_in_flight_destination_write_bytes,
+                            block_bytes_len,
+                            &mut in_flight_destination_write_bytes,
                             &mut copied_block_count,
                             &mut failures,
                         )
@@ -159,25 +180,28 @@ pub async fn copy_rooted_blocks_with_mode_and_limit(
                         enqueue_destination_write(
                             &mut pending_writes,
                             destination,
-                            request_root_id,
                             block_id,
                             block_bytes,
                             true,
                         );
+                        in_flight_destination_write_bytes += block_bytes_len;
                     }
-                    Err(error) => failures.push(CopyFailure {
-                        root_id: request_root_id.to_string(),
-                        block_id: block_id.to_string(),
-                        operation: CopyFailureOperation::CheckDestinationBlock,
-                        message: error.to_string(),
-                    }),
+                    Err(error) => failures.record(
+                        block_id,
+                        CopyFailureOperation::CheckDestinationBlock,
+                        error.to_string(),
+                    ),
                 }
             }
             CopyDestinationMode::BlindWrite => {
                 attempted_write_block_count += 1;
+                let block_bytes_len = block_bytes.len();
                 wait_for_write_capacity(
                     &mut pending_writes,
                     effective_write_limit,
+                    max_in_flight_destination_write_bytes,
+                    block_bytes_len,
+                    &mut in_flight_destination_write_bytes,
                     &mut copied_block_count,
                     &mut failures,
                 )
@@ -185,11 +209,11 @@ pub async fn copy_rooted_blocks_with_mode_and_limit(
                 enqueue_destination_write(
                     &mut pending_writes,
                     destination,
-                    request_root_id,
                     block_id,
                     block_bytes,
                     false,
                 );
+                in_flight_destination_write_bytes += block_bytes_len;
             }
         }
 
@@ -197,7 +221,12 @@ pub async fn copy_rooted_blocks_with_mode_and_limit(
     }
 
     while let Some(completion) = pending_writes.next().await {
-        record_write_completion(completion, &mut copied_block_count, &mut failures);
+        record_write_completion(
+            completion,
+            &mut in_flight_destination_write_bytes,
+            &mut copied_block_count,
+            &mut failures,
+        );
     }
 
     RootedBlockCopyReport {
@@ -212,16 +241,110 @@ pub async fn copy_rooted_blocks_with_mode_and_limit(
         .then_some(skipped_already_present_block_count),
         attempted_write_block_count: matches!(destination_mode, CopyDestinationMode::BlindWrite)
             .then_some(attempted_write_block_count),
-        failed_block_count: failures.len(),
-        failures,
+        failed_block_count: count_failed_blocks(failures.failures()),
+        failures: failures.into_failures(),
+    }
+}
+
+#[derive(Clone)]
+struct FailureTemplate {
+    operation: CopyFailureOperation,
+    message: String,
+}
+
+#[derive(Default)]
+struct CopyFailureTracker {
+    block_roots: HashMap<BlockHash, HashSet<BlockHash>>,
+    discovered_children: HashMap<BlockHash, Vec<BlockHash>>,
+    failure_templates: HashMap<BlockHash, Vec<FailureTemplate>>,
+    failures: Vec<CopyFailure>,
+}
+
+impl CopyFailureTracker {
+    fn note_block_root(&mut self, request_root_id: BlockHash, block_id: BlockHash) {
+        self.associate_root_with_known_subgraph(request_root_id, block_id);
+    }
+
+    fn remember_children(&mut self, block_id: BlockHash, child_ids: &[BlockHash]) {
+        self.discovered_children
+            .insert(block_id, child_ids.to_vec());
+        let Some(root_ids) = self.block_roots.get(&block_id).cloned() else {
+            return;
+        };
+        for root_id in root_ids {
+            for child_id in child_ids {
+                self.associate_root_with_known_subgraph(root_id, *child_id);
+            }
+        }
+    }
+
+    fn record(
+        &mut self,
+        block_id: BlockHash,
+        operation: CopyFailureOperation,
+        message: impl Into<String>,
+    ) {
+        let message = message.into();
+        self.failure_templates
+            .entry(block_id)
+            .or_default()
+            .push(FailureTemplate {
+                operation,
+                message: message.clone(),
+            });
+        if let Some(root_ids) = self.block_roots.get(&block_id) {
+            for root_id in root_ids {
+                self.failures.push(CopyFailure {
+                    root_id: root_id.to_string(),
+                    block_id: block_id.to_string(),
+                    operation,
+                    message: message.clone(),
+                });
+            }
+        }
+    }
+
+    fn failures(&self) -> &[CopyFailure] {
+        &self.failures
+    }
+
+    fn into_failures(self) -> Vec<CopyFailure> {
+        self.failures
+    }
+
+    fn associate_root_with_known_subgraph(
+        &mut self,
+        request_root_id: BlockHash,
+        block_id: BlockHash,
+    ) {
+        let mut queue = VecDeque::from([block_id]);
+        while let Some(current_block_id) = queue.pop_front() {
+            let associated_roots = self.block_roots.entry(current_block_id).or_default();
+            if !associated_roots.insert(request_root_id) {
+                continue;
+            }
+            if let Some(templates) = self.failure_templates.get(&current_block_id) {
+                for template in templates {
+                    self.failures.push(CopyFailure {
+                        root_id: request_root_id.to_string(),
+                        block_id: current_block_id.to_string(),
+                        operation: template.operation,
+                        message: template.message.clone(),
+                    });
+                }
+            }
+            if let Some(child_ids) = self.discovered_children.get(&current_block_id) {
+                queue.extend(child_ids.iter().copied());
+            }
+        }
     }
 }
 
 type PendingDestinationWrite<'a> = Pin<Box<dyn Future<Output = DestinationWriteCompletion> + 'a>>;
 
 struct DestinationWriteCompletion {
-    request_root_id: BlockHash,
     block_id: BlockHash,
+    block_bytes_len: usize,
     count_as_copied: bool,
     result: Result<(), BlockStoreError>,
 }
@@ -229,16 +352,16 @@ struct DestinationWriteCompletion {
 fn enqueue_destination_write<'a>(
     pending_writes: &mut FuturesUnordered<PendingDestinationWrite<'a>>,
     destination: &'a dyn BlockStore,
-    request_root_id: BlockHash,
     block_id: BlockHash,
     block_bytes: Vec<u8>,
     count_as_copied: bool,
 ) {
     pending_writes.push(Box::pin(async move {
+        let block_bytes_len = block_bytes.len();
         let result = destination.put_block_bytes(&block_id, &block_bytes).await;
         DestinationWriteCompletion {
-            request_root_id,
             block_id,
+            block_bytes_len,
             count_as_copied,
             result,
         }
@@ -248,36 +371,59 @@ fn enqueue_destination_write<'a>(
 async fn wait_for_write_capacity(
     pending_writes: &mut FuturesUnordered<PendingDestinationWrite<'_>>,
     effective_write_limit: usize,
+    max_in_flight_destination_write_bytes: usize,
+    next_write_bytes: usize,
+    in_flight_destination_write_bytes: &mut usize,
     copied_block_count: &mut usize,
-    failures: &mut Vec<CopyFailure>,
+    failures: &mut CopyFailureTracker,
 ) {
-    while pending_writes.len() >= effective_write_limit {
+    while pending_writes.len() >= effective_write_limit
+        || (!pending_writes.is_empty()
+            && max_in_flight_destination_write_bytes > 0
+            && in_flight_destination_write_bytes.saturating_add(next_write_bytes)
+                > max_in_flight_destination_write_bytes)
+    {
         let completion = pending_writes
             .next()
             .await
             .expect("pending destination writes should complete");
-        record_write_completion(completion, copied_block_count, failures);
+        record_write_completion(
+            completion,
+            in_flight_destination_write_bytes,
+            copied_block_count,
+            failures,
+        );
     }
 }
 
 fn record_write_completion(
     completion: DestinationWriteCompletion,
+    in_flight_destination_write_bytes: &mut usize,
     copied_block_count: &mut usize,
-    failures: &mut Vec<CopyFailure>,
+    failures: &mut CopyFailureTracker,
 ) {
+    *in_flight_destination_write_bytes =
+        in_flight_destination_write_bytes.saturating_sub(completion.block_bytes_len);
     match completion.result {
         Ok(()) => {
             if completion.count_as_copied {
                 *copied_block_count += 1;
             }
         }
-        Err(error) => failures.push(CopyFailure {
-            root_id: completion.request_root_id.to_string(),
-            block_id: completion.block_id.to_string(),
-            operation: CopyFailureOperation::WriteDestinationBlock,
-            message: error.to_string(),
-        }),
+        Err(error) => failures.record(
+            completion.block_id,
+            CopyFailureOperation::WriteDestinationBlock,
+            error.to_string(),
+        ),
     }
+}
+
+fn count_failed_blocks(failures: &[CopyFailure]) -> usize {
+    failures
+        .iter()
+        .map(|failure| failure.block_id.as_str())
+        .collect::<HashSet<_>>()
+        .len()
 }
 
 pub fn default_report_path(root_ids: &[BlockHash]) -> PathBuf {
@@ -367,111 +513,86 @@ pub fn render_report_summary(report: &RootedBlockCopyReport) -> String {
 
 async fn read_source_block(
     source: &dyn BlockStore,
-    request_root_id: BlockHash,
     block_id: BlockHash,
-    failures: &mut Vec<CopyFailure>,
+    failures: &mut CopyFailureTracker,
 ) -> Option<Vec<u8>> {
     match source.get_block_bytes(&block_id).await {
         Ok(Some(bytes)) => Some(bytes),
         Ok(None) => {
-            failures.push(CopyFailure {
-                root_id: request_root_id.to_string(),
-                block_id: block_id.to_string(),
-                operation: CopyFailureOperation::ReadSourceBlock,
-                message: "source block was not found".into(),
-            });
+            failures.record(
+                block_id,
+                CopyFailureOperation::ReadSourceBlock,
+                "source block was not found",
+            );
             None
         }
         Err(error) => {
-            failures.push(CopyFailure {
-                root_id: request_root_id.to_string(),
-                block_id: block_id.to_string(),
-                operation: CopyFailureOperation::ReadSourceBlock,
-                message: error.to_string(),
-            });
+            failures.record(
+                block_id,
+                CopyFailureOperation::ReadSourceBlock,
+                error.to_string(),
+            );
             None
         }
     }
 }
 
 fn decode_source_block(
-    request_root_id: BlockHash,
     block_id: BlockHash,
     block_bytes: &[u8],
-    failures: &mut Vec<CopyFailure>,
-) -> Option<Vec<BlockHash>> {
+    failures: &mut CopyFailureTracker,
+) -> Vec<BlockHash> {
     match deserialize_versioned_block(block_bytes, &block_id) {
         Ok(DecodedBlock::V1(validated)) => match validated.block {
-            lexongraph_block::Block::Branch(branch) => Some(
-                branch
-                    .entries
-                    .into_iter()
-                    .map(|entry| entry.child)
-                    .collect(),
-            ),
+            lexongraph_block::Block::Branch(branch) => branch
+                .entries
+                .into_iter()
+                .map(|entry| entry.child)
+                .collect(),
             lexongraph_block::Block::Leaf(leaf) => match leaf_entry_child_ids(&leaf.entries) {
-                Ok(child_ids) => Some(child_ids),
+                Ok(child_ids) => child_ids,
                 Err(message) => {
-                    failures.push(CopyFailure {
-                        root_id: request_root_id.to_string(),
-                        block_id: block_id.to_string(),
-                        operation: CopyFailureOperation::DecodeSourceBlock,
-                        message,
-                    });
-                    None
+                    failures.record(block_id, CopyFailureOperation::DecodeSourceBlock, message);
+                    Vec::new()
                 }
             },
         },
         Ok(DecodedBlock::V2(validated)) => match v2::into_typed_block(validated) {
-            Ok(v2::TypedBlock::Branch(branch)) => Some(
-                branch
-                    .entries
-                    .into_iter()
-                    .map(|entry| entry.child)
-                    .collect(),
-            ),
+            Ok(v2::TypedBlock::Branch(branch)) => branch
+                .entries
+                .into_iter()
+                .map(|entry| entry.child)
+                .collect(),
             Ok(v2::TypedBlock::Leaf(leaf)) => match leaf_entry_child_ids(&leaf.entries) {
-                Ok(child_ids) => Some(child_ids),
+                Ok(child_ids) => child_ids,
                 Err(message) => {
-                    failures.push(CopyFailure {
-                        root_id: request_root_id.to_string(),
-                        block_id: block_id.to_string(),
-                        operation: CopyFailureOperation::DecodeSourceBlock,
-                        message,
-                    });
-                    None
+                    failures.record(block_id, CopyFailureOperation::DecodeSourceBlock, message);
+                    Vec::new()
                 }
             },
             Ok(v2::TypedBlock::Custom(custom)) => match custom_block_child_ids(&custom) {
-                Ok(child_ids) => Some(child_ids),
+                Ok(child_ids) => child_ids,
                 Err(message) => {
-                    failures.push(CopyFailure {
-                        root_id: request_root_id.to_string(),
-                        block_id: block_id.to_string(),
-                        operation: CopyFailureOperation::DecodeSourceBlock,
-                        message,
-                    });
-                    None
+                    failures.record(block_id, CopyFailureOperation::DecodeSourceBlock, message);
+                    Vec::new()
                 }
             },
             Err(error) => {
-                failures.push(CopyFailure {
-                    root_id: request_root_id.to_string(),
-                    block_id: block_id.to_string(),
-                    operation: CopyFailureOperation::DecodeSourceBlock,
-                    message: error.to_string(),
-                });
-                None
+                failures.record(
+                    block_id,
+                    CopyFailureOperation::DecodeSourceBlock,
+                    error.to_string(),
+                );
+                Vec::new()
             }
         },
         Err(error) => {
-            failures.push(CopyFailure {
-                root_id: request_root_id.to_string(),
-                block_id: block_id.to_string(),
-                operation: CopyFailureOperation::DecodeSourceBlock,
-                message: error.to_string(),
-            });
-            None
+            failures.record(
+                block_id,
+                CopyFailureOperation::DecodeSourceBlock,
+                error.to_string(),
+            );
+            Vec::new()
         }
     }
 }
@@ -1099,6 +1220,94 @@ mod tests {
         assert_eq!(report.failed_block_count, 0);
     }
 
+    #[tokio::test]
+    async fn rooted_block_copy_honors_bounded_in_flight_destination_write_bytes() {
+        let source = Arc::new(MemoryBlockStore::new(16).unwrap());
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let root = source.put(&branch_block(&[alpha, beta])).await.unwrap();
+        let root_bytes = source.get_block_bytes(&root).await.unwrap().unwrap();
+        let alpha_bytes = source.get_block_bytes(&alpha).await.unwrap().unwrap();
+        let max_in_flight_destination_write_bytes = root_bytes.len() + alpha_bytes.len();
+        let destination = Arc::new(SlowByteTrackingPutStore::new(
+            32,
+            max_in_flight_destination_write_bytes,
+            Duration::from_millis(50),
+        ));
+
+        let report = copy_rooted_blocks_with_mode_and_limits(
+            source.as_ref(),
+            destination.as_ref(),
+            &[root],
+            CopyDestinationMode::ReadBeforeWrite,
+            8,
+            max_in_flight_destination_write_bytes,
+        )
+        .await;
+
+        assert_eq!(report.copied_block_count, Some(3));
+        assert_eq!(report.skipped_already_present_block_count, Some(0));
+        assert_eq!(report.failed_block_count, 0);
+        assert!(
+            destination.max_in_flight_bytes() <= max_in_flight_destination_write_bytes,
+            "observed {} in-flight bytes with cap {}",
+            destination.max_in_flight_bytes(),
+            max_in_flight_destination_write_bytes
+        );
+    }
+
+    #[tokio::test]
+    async fn rooted_block_copy_writes_decode_failures_and_reports_all_reaching_roots() {
+        let source = MemoryBlockStore::new(16).unwrap();
+        let destination = MemoryBlockStore::new(16).unwrap();
+
+        let shared_bad_leaf = source.put(&leaf_block("shared-bad")).await.unwrap();
+        source
+            .put_block_bytes(&shared_bad_leaf, b"not-a-valid-block")
+            .await
+            .unwrap();
+        let shared_branch = source.put(&branch_block(&[shared_bad_leaf])).await.unwrap();
+        let unique_a = source.put(&leaf_block("unique-a")).await.unwrap();
+        let unique_b = source.put(&leaf_block("unique-b")).await.unwrap();
+        let root_a = source
+            .put(&branch_block(&[shared_branch, unique_a]))
+            .await
+            .unwrap();
+        let root_b = source
+            .put(&branch_block(&[shared_branch, unique_b]))
+            .await
+            .unwrap();
+
+        let report = copy_rooted_blocks(&source, &destination, &[root_a, root_b]).await;
+
+        assert_eq!(report.failed_block_count, 1);
+        assert_eq!(report.failures.len(), 2);
+        assert_eq!(
+            report
+                .failures
+                .iter()
+                .filter(|failure| failure.block_id == shared_bad_leaf.to_string())
+                .count(),
+            2
+        );
+        assert_eq!(
+            report
+                .failures
+                .iter()
+                .map(|failure| failure.root_id.clone())
+                .collect::<HashSet<_>>(),
+            HashSet::from([root_a.to_string(), root_b.to_string()])
+        );
+        assert_eq!(
+            destination
+                .get_block_bytes(&shared_bad_leaf)
+                .await
+                .unwrap()
+                .unwrap(),
+            b"not-a-valid-block"
+        );
+    }
+
     struct FailingPutStore {
         inner: Arc<MemoryBlockStore>,
         blocked_puts: HashSet<BlockHash>,
@@ -1117,6 +1326,13 @@ mod tests {
         observed_target_notify: tokio::sync::Notify,
         release_writes_flag: AtomicBool,
         release_writes_notify: tokio::sync::Notify,
+    }
+
+    struct SlowByteTrackingPutStore {
+        inner: Arc<MemoryBlockStore>,
+        active_write_bytes: AtomicUsize,
+        max_in_flight_bytes: AtomicUsize,
+        write_delay: Duration,
     }
 
     impl BlockingPutStore {
@@ -1147,6 +1363,25 @@ mod tests {
 
         fn max_in_flight(&self) -> usize {
             self.max_in_flight.load(Ordering::SeqCst)
+        }
+    }
+
+    impl SlowByteTrackingPutStore {
+        fn new(
+            capacity: usize,
+            _max_in_flight_destination_write_bytes: usize,
+            write_delay: Duration,
+        ) -> Self {
+            Self {
+                inner: Arc::new(MemoryBlockStore::new(capacity).unwrap()),
+                active_write_bytes: AtomicUsize::new(0),
+                max_in_flight_bytes: AtomicUsize::new(0),
+                write_delay,
+            }
+        }
+
+        fn max_in_flight_bytes(&self) -> usize {
+            self.max_in_flight_bytes.load(Ordering::SeqCst)
         }
     }
 
@@ -1220,6 +1455,38 @@ mod tests {
             }
             let result = self.inner.put_block_bytes(block_id, block_bytes).await;
             self.active_writes.fetch_sub(1, Ordering::SeqCst);
+            result
+        }
+
+        async fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            self.inner.get_block_bytes(block_id).await
+        }
+
+        fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+            self.inner.iter_block_ids()
+        }
+    }
+
+    #[async_trait]
+    impl BlockStore for SlowByteTrackingPutStore {
+        async fn put_block_bytes(
+            &self,
+            block_id: &BlockHash,
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            let active_bytes = self
+                .active_write_bytes
+                .fetch_add(block_bytes.len(), Ordering::SeqCst)
+                + block_bytes.len();
+            self.max_in_flight_bytes
+                .fetch_max(active_bytes, Ordering::SeqCst);
+            tokio::time::sleep(self.write_delay).await;
+            let result = self.inner.put_block_bytes(block_id, block_bytes).await;
+            self.active_write_bytes
+                .fetch_sub(block_bytes.len(), Ordering::SeqCst);
             result
         }
 

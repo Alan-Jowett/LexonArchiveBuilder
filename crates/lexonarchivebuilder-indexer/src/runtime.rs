@@ -1989,9 +1989,7 @@ fn read_mutable_ref_table_entity(
     row_key: &str,
 ) -> Result<Option<MutableRefTableEntity>, io::Error> {
     let table_client = mutable_ref_table_client(table_sas_url)?;
-    let filter = Filter::new(format!(
-        "PartitionKey eq '{partition_key}' and RowKey eq '{row_key}'"
-    ));
+    let filter = Filter::new(mutable_ref_table_lookup_filter(partition_key, row_key));
     let response = block_on_future_factory(move || async move {
         let mut stream = table_client
             .query()
@@ -2015,6 +2013,18 @@ fn read_mutable_ref_table_entity(
             "lookup for PartitionKey={partition_key} RowKey={row_key} returned {count} entities"
         ))),
     }
+}
+
+fn mutable_ref_table_lookup_filter(partition_key: &str, row_key: &str) -> String {
+    format!(
+        "PartitionKey eq '{}' and RowKey eq '{}'",
+        escape_odata_string_literal(partition_key),
+        escape_odata_string_literal(row_key)
+    )
+}
+
+fn escape_odata_string_literal(value: &str) -> String {
+    value.replace('\'', "''")
 }
 
 fn write_mutable_ref_table_entity(
@@ -3759,6 +3769,14 @@ mod tests {
         block_id: &BlockHash,
     ) -> Option<lexongraph_block::ValidatedBlock> {
         crate::block_store::block_on_block_store_future(store.get(block_id)).unwrap()
+    }
+
+    #[test]
+    fn mutable_ref_table_lookup_filter_escapes_single_quotes() {
+        assert_eq!(
+            mutable_ref_table_lookup_filter("part'ition", "row'key"),
+            "PartitionKey eq 'part''ition' and RowKey eq 'row''key'"
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
