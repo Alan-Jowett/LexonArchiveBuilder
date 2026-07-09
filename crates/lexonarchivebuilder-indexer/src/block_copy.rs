@@ -13,13 +13,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::mailbox::NORMALIZED_EMAIL_ARTIFACT_BLOCK_TYPE;
+use crate::custom_blocks::{
+    REPLAY_JOURNAL_BLOCK_TYPE, REPLAY_JOURNAL_MEDIA_TYPE, custom_block_payload,
+};
+use crate::mailbox::{NORMALIZED_EMAIL_ARTIFACT_BLOCK_TYPE, NORMALIZED_EMAIL_MEDIA_TYPE};
 use crate::tree_tools::parse_block_hash;
-
-const REPLAY_JOURNAL_BLOCK_TYPE: &str = "lexonarchivebuilder.replay-journal";
-const REPLAY_JOURNAL_MEDIA_TYPE: &str = "application/vnd.lexonarchivebuilder.replay-journal+cbor";
-const NORMALIZED_EMAIL_MEDIA_TYPE: &str =
-    "application/vnd.lexonarchivebuilder.normalized-email+cbor";
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -209,6 +207,14 @@ pub fn write_report(
         serde_json::to_vec_pretty(report).map_err(|error| RootedBlockCopyError::Render {
             message: error.to_string(),
         })?;
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|source| RootedBlockCopyError::WriteArtifact {
+            path: path.display().to_string(),
+            source,
+        })?;
+    }
     fs::write(path, rendered).map_err(|source| RootedBlockCopyError::WriteArtifact {
         path: path.display().to_string(),
         source,
@@ -464,29 +470,6 @@ fn normalized_email_artifact_child_ids(custom: &v2::CustomBlock) -> Result<Vec<B
             "normalized email artifact body is missing mailbox_artifact_ref".to_string()
         })?;
     Ok(vec![parse_block_hash_text(&mailbox_artifact_ref)?])
-}
-
-fn custom_block_payload(content: &Value) -> Result<(String, Vec<u8>), String> {
-    let Value::Map(fields) = content else {
-        return Err("custom block content must be a CBOR map".into());
-    };
-    let media_type = fields
-        .iter()
-        .find_map(|(key, value)| match (key, value) {
-            (Value::Text(name), Value::Text(media_type)) if name == "media_type" => {
-                Some(media_type.clone())
-            }
-            _ => None,
-        })
-        .ok_or_else(|| "custom block content is missing media_type".to_string())?;
-    let body = fields
-        .iter()
-        .find_map(|(key, value)| match (key, value) {
-            (Value::Text(name), Value::Bytes(body)) if name == "body" => Some(body.clone()),
-            _ => None,
-        })
-        .ok_or_else(|| "custom block content is missing body".to_string())?;
-    Ok((media_type, body))
 }
 
 fn parse_block_hash_text(block_id: &str) -> Result<BlockHash, String> {
@@ -858,6 +841,25 @@ mod tests {
         assert!(rendered.contains("\"write-destination-block\""));
     }
 
+    #[test]
+    fn rooted_block_copy_write_report_creates_parent_directories() {
+        let dir = tempdir().unwrap();
+        let report = RootedBlockCopyReport {
+            destination_mode: CopyDestinationMode::ReadBeforeWrite,
+            requested_root_ids: vec!["abc".into()],
+            copied_block_count: Some(0),
+            skipped_already_present_block_count: Some(0),
+            attempted_write_block_count: None,
+            failed_block_count: 0,
+            failures: Vec::new(),
+        };
+
+        let path = dir.path().join("nested").join("rooted-copy.json");
+        write_report(&path, &report).unwrap();
+
+        assert!(path.exists());
+    }
+
     #[tokio::test]
     async fn rooted_block_copy_blind_write_skips_destination_reads() {
         let source = MemoryBlockStore::new(16).unwrap();
@@ -894,6 +896,50 @@ mod tests {
         assert!(
             destination_inner
                 .get_block_bytes(&alpha)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            destination_inner
+                .get_block_bytes(&beta)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn rooted_block_copy_blind_write_tolerates_preexisting_destination_blocks() {
+        let source = MemoryBlockStore::new(16).unwrap();
+        let destination_inner = Arc::new(MemoryBlockStore::new(16).unwrap());
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let root = source.put(&branch_block(&[alpha, beta])).await.unwrap();
+        let existing_alpha_bytes = source.get_block_bytes(&alpha).await.unwrap().unwrap();
+        destination_inner
+            .put_block_bytes(&alpha, &existing_alpha_bytes)
+            .await
+            .unwrap();
+        let destination = RejectingReadStore {
+            inner: Arc::clone(&destination_inner),
+        };
+
+        let report = copy_rooted_blocks_with_mode(
+            &source,
+            &destination,
+            &[root],
+            CopyDestinationMode::BlindWrite,
+        )
+        .await;
+
+        assert_eq!(report.destination_mode, CopyDestinationMode::BlindWrite);
+        assert_eq!(report.attempted_write_block_count, Some(3));
+        assert_eq!(report.failed_block_count, 0);
+        assert!(report.failures.is_empty());
+        assert!(
+            destination_inner
+                .get_block_bytes(&root)
                 .await
                 .unwrap()
                 .is_some()

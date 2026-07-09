@@ -47,15 +47,15 @@ function Parse-LadderRung {
 function Join-CommandLine {
     param([string[]]$Arguments)
 
-    (
-        $Arguments | ForEach-Object {
-        if ($_ -match '[\s"`]') {
-            '"' + ($_ -replace '"', '\"') + '"'
-        } else {
-            $_
-        }
-        }
-    ) -join ' '
+    if ($Arguments.Count -eq 0) {
+        return '&'
+    }
+
+    $quotedArguments = $Arguments | ForEach-Object {
+        "'" + ($_ -replace "'", "''") + "'"
+    }
+
+    '& ' + ($quotedArguments -join ' ')
 }
 
 function Get-V070LadderEntries {

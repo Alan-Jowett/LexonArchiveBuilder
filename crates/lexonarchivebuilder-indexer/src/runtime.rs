@@ -34,12 +34,17 @@ use thiserror::Error;
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 
-use crate::block_store::{ConfiguredBlockStore, block_on_block_store_future, block_on_future};
+use crate::block_store::{
+    ConfiguredBlockStore, block_on_block_store_future, block_on_future_factory,
+};
 #[cfg(test)]
 use crate::config::MUTABLE_REF_ROOT_DIR;
 use crate::config::{
     BatchItemConfig, BatchRequest, BatchSummary, ClusteringConfigOverrides, ConfigError,
     ConfiguredClustering, ExecutionStage, MutableRefStoreLocation, metadata_to_text_map,
+};
+use crate::custom_blocks::{
+    REPLAY_JOURNAL_BLOCK_TYPE, REPLAY_JOURNAL_MEDIA_TYPE, custom_block_payload,
 };
 use crate::embedding::{ConfiguredEmbeddingProvider, ConfiguredEmbeddingProviderError};
 use crate::mailbox::{MailboxExpansionError, expand_mailbox_item_with_stats};
@@ -54,8 +59,6 @@ type ProgressReporter = Arc<dyn Fn(String) + Send + Sync + 'static>;
 pub const INGESTION_ONLY_ROOT_ID_PLACEHOLDER: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
 const PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
-const REPLAY_JOURNAL_BLOCK_TYPE: &str = "lexonarchivebuilder.replay-journal";
-const REPLAY_JOURNAL_MEDIA_TYPE: &str = "application/vnd.lexonarchivebuilder.replay-journal+cbor";
 const REPLAY_JOURNAL_SCHEMA_VERSION: u64 = 1;
 const REPLAY_JOURNAL_BLOCK_MAX_BYTES: usize = 64 * 1024 * 1024;
 const AZURE_BLOB_API_VERSION: &str = "2023-11-03";
@@ -698,7 +701,6 @@ fn resolved_published_profile(
 ) -> Result<PublishedIndexingProfile, StreamingIndexerError> {
     let mut profile = published_indexing_profile(clustering.profile_version)?;
     if let Some(cluster_count) = clustering.local_testing_cluster_count {
-        #[allow(unreachable_patterns)]
         match &mut profile.planning_strategy {
             PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => {
                 settings.cluster_count = cluster_count;
@@ -706,7 +708,6 @@ fn resolved_published_profile(
             PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => {
                 settings.cluster_count = cluster_count;
             }
-            _ => {}
         }
     }
     Ok(profile)
@@ -758,22 +759,18 @@ fn effective_clustering_diagnostics(
 }
 
 fn published_profile_cluster_count(profile: &PublishedIndexingProfile) -> Option<u32> {
-    #[allow(unreachable_patterns)]
     match &profile.planning_strategy {
         PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => {
             Some(settings.cluster_count)
         }
         PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => Some(settings.cluster_count),
-        _ => None,
     }
 }
 
 fn published_profile_random_seed(profile: &PublishedIndexingProfile) -> Option<u64> {
-    #[allow(unreachable_patterns)]
     match &profile.planning_strategy {
         PublishedPlanningStrategy::SphericalKmeansGreedyPack(settings) => settings.random_seed,
         PublishedPlanningStrategy::DirectionalPcaDivisive(settings) => settings.random_seed,
-        _ => None,
     }
 }
 
@@ -1995,7 +1992,7 @@ fn read_mutable_ref_table_entity(
     let filter = Filter::new(format!(
         "PartitionKey eq '{partition_key}' and RowKey eq '{row_key}'"
     ));
-    let response = block_on_future(async move {
+    let response = block_on_future_factory(move || async move {
         let mut stream = table_client
             .query()
             .filter(filter)
@@ -2025,7 +2022,8 @@ fn write_mutable_ref_table_entity(
     entity: &MutableRefTableEntity,
 ) -> Result<(), io::Error> {
     let table_client = mutable_ref_table_client(table_sas_url)?;
-    block_on_future(async move {
+    let entity = entity.clone();
+    block_on_future_factory(move || async move {
         table_client
             .partition_key_client(&entity.partition_key)
             .entity_client(&entity.row_key)?
@@ -2617,7 +2615,12 @@ fn replay_journal_block_body_from_decoded(
             message: format!("unexpected journal block type name {}", custom.type_name),
         });
     }
-    let (media_type, body) = custom_block_payload(&custom.content, block_id)?;
+    let (media_type, body) = custom_block_payload(&custom.content).map_err(|message| {
+        RuntimeError::InvalidReplayJournalHead {
+            block_id: block_id.to_string(),
+            message,
+        }
+    })?;
     if media_type != REPLAY_JOURNAL_MEDIA_TYPE {
         return Err(RuntimeError::InvalidReplayJournalHead {
             block_id: block_id.to_string(),
@@ -2641,41 +2644,6 @@ fn replay_journal_block_body_from_decoded(
         });
     }
     Ok(decoded)
-}
-
-fn custom_block_payload(
-    content: &Value,
-    block_id: &str,
-) -> Result<(String, Vec<u8>), RuntimeError> {
-    let Value::Map(fields) = content else {
-        return Err(RuntimeError::InvalidReplayJournalHead {
-            block_id: block_id.to_string(),
-            message: "custom block content must be a CBOR map".into(),
-        });
-    };
-    let media_type = fields
-        .iter()
-        .find_map(|(key, value)| match (key, value) {
-            (Value::Text(name), Value::Text(media_type)) if name == "media_type" => {
-                Some(media_type.clone())
-            }
-            _ => None,
-        })
-        .ok_or_else(|| RuntimeError::InvalidReplayJournalHead {
-            block_id: block_id.to_string(),
-            message: "custom block content is missing media_type".into(),
-        })?;
-    let body = fields
-        .iter()
-        .find_map(|(key, value)| match (key, value) {
-            (Value::Text(name), Value::Bytes(body)) if name == "body" => Some(body.clone()),
-            _ => None,
-        })
-        .ok_or_else(|| RuntimeError::InvalidReplayJournalHead {
-            block_id: block_id.to_string(),
-            message: "custom block content is missing body".into(),
-        })?;
-    Ok((media_type, body))
 }
 
 fn typed_block_name(block: &v2::TypedBlock) -> &str {

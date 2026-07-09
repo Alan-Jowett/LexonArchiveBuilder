@@ -22,6 +22,7 @@ const ARTIFACT_MEDIA_TYPE_MAILBOX: &str = "application/mbox";
 const ARTIFACT_MEDIA_TYPE_NORMALIZED_EMAIL: &str =
     "application/vnd.lexonarchivebuilder.normalized-email+cbor";
 const MAILBOX_ARTIFACT_BLOCK_TYPE: &str = "lexonarchivebuilder/mailbox-artifact";
+pub(crate) const NORMALIZED_EMAIL_MEDIA_TYPE: &str = ARTIFACT_MEDIA_TYPE_NORMALIZED_EMAIL;
 pub(crate) const NORMALIZED_EMAIL_ARTIFACT_BLOCK_TYPE: &str =
     "lexonarchivebuilder/normalized-email-artifact";
 pub(crate) const CHUNK_MEDIA_TYPE: &str = "text/plain";

@@ -50,7 +50,11 @@ pub struct ClusteringConfigOverrides {
         value_parser = parse_published_profile_version
     )]
     pub profile_version: Option<PublishedProfileVersion>,
-    #[arg(long, value_name = "COUNT")]
+    #[arg(
+        long,
+        value_name = "COUNT",
+        help = "Override published cluster_count for local/local-overlay ladder testing"
+    )]
     pub local_testing_cluster_count: Option<u32>,
 }
 
