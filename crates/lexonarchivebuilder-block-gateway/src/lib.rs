@@ -22,10 +22,16 @@ use lexonarchivebuilder_indexer::tree_tools::parse_block_hash;
 use lexongraph_block_store::BlockStore;
 use lexongraph_block_store_azure_table_v2::AzureTableBlockStoreV2;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use tokio::sync::Semaphore;
 use tracing::{debug, error, info, warn};
 
 pub const CACHE_CONTROL_VALUE: &str = "public, max-age=31536000, immutable";
+pub const NO_STORE_CACHE_CONTROL_VALUE: &str = "no-store";
+const MAX_CONCURRENT_CONNECTION_TASKS: usize = 256;
+const MAX_CONCURRENT_REQUEST_TASKS_PER_CONNECTION: usize = 32;
 static CACHE_CONTROL_HEADER: HeaderValue = HeaderValue::from_static(CACHE_CONTROL_VALUE);
+static NO_STORE_CACHE_CONTROL_HEADER: HeaderValue =
+    HeaderValue::from_static(NO_STORE_CACHE_CONTROL_VALUE);
 static OCTET_STREAM_HEADER: HeaderValue = HeaderValue::from_static("application/octet-stream");
 static RUSTLS_PROVIDER: OnceLock<()> = OnceLock::new();
 
@@ -55,7 +61,7 @@ pub fn build_router(store: Arc<dyn BlockStore + Send + Sync>) -> Router {
 }
 
 pub async fn serve(config: GatewayConfig) -> anyhow::Result<()> {
-    install_rustls_provider();
+    install_rustls_provider()?;
 
     let store = Arc::new(
         AzureTableBlockStoreV2::new(&config.sas_url).with_context(|| {
@@ -76,9 +82,15 @@ pub async fn serve(config: GatewayConfig) -> anyhow::Result<()> {
         config.listen_addr
     );
 
+    let connection_task_slots = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTION_TASKS));
     while let Some(incoming) = endpoint.accept().await {
+        let connection_task_slot = Arc::clone(&connection_task_slots)
+            .acquire_owned()
+            .await
+            .map_err(|_| anyhow!("connection task semaphore unexpectedly closed"))?;
         let app = app.clone();
         tokio::spawn(async move {
+            let _connection_task_slot = connection_task_slot;
             if let Err(error) = handle_connection(incoming, app).await {
                 error!(?error, "HTTP/3 connection failed");
             }
@@ -88,12 +100,17 @@ pub async fn serve(config: GatewayConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn install_rustls_provider() {
-    let _ = RUSTLS_PROVIDER.get_or_init(|| {
-        if let Err(error) = rustls::crypto::aws_lc_rs::default_provider().install_default() {
-            warn!(?error, "failed to install rustls crypto provider");
+fn install_rustls_provider() -> anyhow::Result<()> {
+    if RUSTLS_PROVIDER.get().is_some() {
+        return Ok(());
+    }
+
+    match rustls::crypto::aws_lc_rs::default_provider().install_default() {
+        Ok(()) | Err(_) => {
+            let _ = RUSTLS_PROVIDER.set(());
+            Ok(())
         }
-    });
+    }
 }
 
 fn build_quic_server_config(
@@ -162,7 +179,7 @@ async fn get_block(
 ) -> Response<Body> {
     let Ok(block_hash) = parse_block_hash(&block_id) else {
         debug!(block_id, "rejecting malformed block ID as not found");
-        return StatusCode::NOT_FOUND.into_response();
+        return not_found_response();
     };
 
     match state.store.get_block_bytes(&block_hash).await {
@@ -179,13 +196,21 @@ async fn get_block(
         }
         Ok(None) => {
             debug!(block_id, "block not found");
-            StatusCode::NOT_FOUND.into_response()
+            not_found_response()
         }
         Err(error) => {
             warn!(block_id, ?error, "block lookup failed; projecting 404");
-            StatusCode::NOT_FOUND.into_response()
+            not_found_response()
         }
     }
+}
+
+fn not_found_response() -> Response<Body> {
+    let mut response = StatusCode::NOT_FOUND.into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, NO_STORE_CACHE_CONTROL_HEADER.clone());
+    response
 }
 
 async fn handle_connection(incoming: quinn::Incoming, app: Router) -> anyhow::Result<()> {
@@ -198,12 +223,18 @@ async fn handle_connection(incoming: quinn::Incoming, app: Router) -> anyhow::Re
         .await
         .context("failed to build HTTP/3 connection")?;
     tokio::pin!(h3_connection);
+    let request_task_slots = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUEST_TASKS_PER_CONNECTION));
 
     loop {
         match h3_connection.accept().await {
             Ok(Some(resolver)) => {
+                let request_task_slot = Arc::clone(&request_task_slots)
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| anyhow!("request task semaphore unexpectedly closed"))?;
                 let app = app.clone();
                 tokio::spawn(async move {
+                    let _request_task_slot = request_task_slot;
                     if let Err(error) = handle_request(resolver, app).await {
                         error!(?error, "HTTP/3 request failed");
                     }
@@ -333,6 +364,10 @@ mod tests {
             .expect("router request should succeed");
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.headers().get(CACHE_CONTROL),
+            Some(&NO_STORE_CACHE_CONTROL_HEADER)
+        );
     }
 
     #[tokio::test]
@@ -352,6 +387,10 @@ mod tests {
             .expect("router request should succeed");
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.headers().get(CACHE_CONTROL),
+            Some(&NO_STORE_CACHE_CONTROL_HEADER)
+        );
     }
 
     #[tokio::test]
@@ -374,5 +413,9 @@ mod tests {
             .expect("router request should succeed");
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.headers().get(CACHE_CONTROL),
+            Some(&NO_STORE_CACHE_CONTROL_HEADER)
+        );
     }
 }
