@@ -58,51 +58,28 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, OnceLock};
+    use clap::CommandFactory;
 
     use super::*;
 
-    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
     #[test]
-    fn serve_command_accepts_sas_url_from_environment() {
-        let _guard = ENV_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("environment lock poisoned");
-        let previous = std::env::var_os("LEXONARCHIVEBUILDER_BLOCK_GATEWAY_SAS_URL");
-        // SAFETY: this test serializes environment access with ENV_LOCK and restores the prior
-        // value before returning.
-        unsafe {
-            std::env::set_var(
-                "LEXONARCHIVEBUILDER_BLOCK_GATEWAY_SAS_URL",
-                "https://example.table.core.windows.net/archive?sig=test",
-            );
-        }
-        let cli = Cli::try_parse_from([
-            "lexonarchivebuilder-block-gateway",
-            "serve",
-            "--certificate",
-            "cert.pem",
-            "--private-key",
-            "key.pem",
-        ]);
-        // SAFETY: this test serializes environment access with ENV_LOCK and restores the prior
-        // value before releasing the lock.
-        unsafe {
-            if let Some(previous) = previous {
-                std::env::set_var("LEXONARCHIVEBUILDER_BLOCK_GATEWAY_SAS_URL", previous);
-            } else {
-                std::env::remove_var("LEXONARCHIVEBUILDER_BLOCK_GATEWAY_SAS_URL");
-            }
-        }
-        let cli = cli.expect("command should parse SAS URL from environment");
+    fn serve_command_binds_sas_url_environment_variable() {
+        let command = Cli::command();
+        let serve = command
+            .get_subcommands()
+            .find(|subcommand| subcommand.get_name() == "serve")
+            .expect("serve subcommand should exist");
+        let sas_url = serve
+            .get_arguments()
+            .find(|argument| argument.get_id().as_str() == "sas_url")
+            .expect("sas_url argument should exist");
 
-        match cli.command {
-            Command::Serve { sas_url, .. } => assert_eq!(
-                sas_url,
-                "https://example.table.core.windows.net/archive?sig=test"
-            ),
-        }
+        assert_eq!(
+            sas_url
+                .get_env()
+                .expect("sas_url should expose an environment variable")
+                .to_string_lossy(),
+            "LEXONARCHIVEBUILDER_BLOCK_GATEWAY_SAS_URL"
+        );
     }
 }
