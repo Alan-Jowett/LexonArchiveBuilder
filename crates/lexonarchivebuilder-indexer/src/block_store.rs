@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use lexonarchivebuilder_block_store_http3::Http3BlockStore;
 use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
 use lexongraph_block_store_azure_sdk::AzureBlobBlockStore;
@@ -19,12 +20,17 @@ use crate::paths::resolve_path;
 
 #[derive(Clone, Debug)]
 pub enum ConfiguredBlockStore {
+    GatewayHttp3(Http3BlockStore),
     Local(FilesystemBlockStore),
     Overlay(Arc<OverlayBlockStore>),
     AzureTable(AzureTableBlockStoreV2),
 }
 
 impl ConfiguredBlockStore {
+    pub fn gateway_http3_store(gateway_dns_name: &str) -> Result<Self, BlockStoreError> {
+        Http3BlockStore::new(gateway_dns_name).map(Self::GatewayHttp3)
+    }
+
     pub fn from_environment(
         request_dir: &Path,
         environment: &EnvironmentConfig,
@@ -180,6 +186,7 @@ impl BlockStore for ConfiguredBlockStore {
         block_bytes: &[u8],
     ) -> Result<(), BlockStoreError> {
         match self {
+            Self::GatewayHttp3(store) => store.put_block_bytes(block_id, block_bytes).await,
             Self::Local(store) => store.put_block_bytes(block_id, block_bytes).await,
             Self::Overlay(store) => store.put_block_bytes(block_id, block_bytes).await,
             Self::AzureTable(store) => store.put_block_bytes(block_id, block_bytes).await,
@@ -191,6 +198,7 @@ impl BlockStore for ConfiguredBlockStore {
         block_id: &BlockHash,
     ) -> Result<Option<Vec<u8>>, BlockStoreError> {
         match self {
+            Self::GatewayHttp3(store) => store.get_block_bytes(block_id).await,
             Self::Local(store) => store.get_block_bytes(block_id).await,
             Self::Overlay(store) => store.get_block_bytes(block_id).await,
             Self::AzureTable(store) => store.get_block_bytes(block_id).await,
@@ -199,6 +207,7 @@ impl BlockStore for ConfiguredBlockStore {
 
     fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
         match self {
+            Self::GatewayHttp3(store) => store.iter_block_ids(),
             Self::Local(store) => store.iter_block_ids(),
             Self::Overlay(store) => store.iter_block_ids(),
             Self::AzureTable(store) => store.iter_block_ids(),

@@ -1779,6 +1779,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "lexonarchivebuilder-block-store-http3"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "h3",
+ "h3-quinn",
+ "http 1.4.2",
+ "lexongraph-block",
+ "lexongraph-block-store",
+ "quinn",
+ "rustls 0.23.41",
+ "rustls-native-certs",
+ "tokio",
+]
+
+[[package]]
 name = "lexonarchivebuilder-indexer"
 version = "0.1.0"
 dependencies = [
@@ -1792,6 +1809,7 @@ dependencies = [
  "env_logger",
  "futures",
  "half",
+ "lexonarchivebuilder-block-store-http3",
  "lexongraph-block",
  "lexongraph-block-store",
  "lexongraph-block-store-azure-sdk",
