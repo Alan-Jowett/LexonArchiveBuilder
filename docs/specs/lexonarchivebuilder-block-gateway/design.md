@@ -102,6 +102,10 @@ the approved current surface.
 The gateway binds its Azure Storage Table dependency at process startup through
 one SAS URL configuration input.
 
+That input may be supplied through direct process arguments or equivalent
+startup environment configuration, but it is always bound before the gateway
+serves requests.
+
 The external HTTP caller never supplies backend credentials. This preserves one
 stable fetch contract across VM, container, and function-hosted realizations,
 because hosting-specific request adapters only need to invoke the same

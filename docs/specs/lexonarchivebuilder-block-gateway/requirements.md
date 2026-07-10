@@ -14,7 +14,7 @@
 - **UR-BGW-1 [KNOWN]:** Add a new separate spec package named `lexonarchivebuilder-block-gateway`.
 - **UR-BGW-2 [KNOWN]:** The new capability is a low-cost daemon that acts as a front-end to Azure Storage Table.
 - **UR-BGW-3 [KNOWN]:** The daemon must expose a REST-like endpoint at `/block/<block_id>`.
-- **UR-BGW-4 [KNOWN]:** The daemon must accept a SAS URL as a parameter.
+- **UR-BGW-4 [KNOWN]:** The daemon must accept a SAS URL as a startup configuration input.
 - **UR-BGW-5 [KNOWN]:** The SAS URL should be provided as process configuration at startup rather than per request.
 - **UR-BGW-6 [KNOWN]:** Under the covers, the daemon should use the LexonGraph Azure Storage Table v2 block-store API to fetch the block.
 - **UR-BGW-7 [KNOWN]:** The daemon must return the fetched block as `application/octet-stream`.
