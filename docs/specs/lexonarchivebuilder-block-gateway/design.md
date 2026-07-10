@@ -209,9 +209,10 @@ runtime wrapper is:
 3. a function-hosted process
 
 The hosting wrapper may differ in process lifecycle, startup trigger, and
-deployment packaging, but it does not change the route shape, startup-time SAS
-binding model, approved storage-profile set, delegated block-store dependency,
-success payload, cache semantics, or unsuccessful lookup contract.
+deployment packaging, but it does not change the route shape, startup-time
+storage-profile binding model, approved storage-profile set, delegated
+block-store dependency, success payload, cache semantics, or unsuccessful
+lookup contract.
 
 **Traces to:** RQ-BGW-002, RQ-BGW-009
 

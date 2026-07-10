@@ -255,8 +255,9 @@ The gateway SHALL remain block-oriented and content-type-neutral so future conte
   - `docs/specs/lexonarchivebuilder-indexer/requirements.md:166-167`
   - `docs/specs/lexonarchivebuilder-indexer/requirements.md:202-204`
   - `docs/specs/lexonarchivebuilder-indexer/design.md:1065-1068`
-  - `crates/lexonarchivebuilder-block-gateway/src/lib.rs:63-75`
-  - `crates/lexonarchivebuilder-block-gateway/src/main.rs:20-29`
+  - `crates/lexonarchivebuilder-block-gateway/src/lib.rs:42-58`
+  - `crates/lexonarchivebuilder-block-gateway/src/lib.rs:110-159`
+  - `crates/lexonarchivebuilder-block-gateway/src/main.rs:20-56`
   - `crates/lexonarchivebuilder-indexer/src/block_store.rs:21-25`
   - `crates/lexonarchivebuilder-indexer/src/block_store.rs:47-83`
   - `crates/lexonarchivebuilder-indexer/src/config.rs:118-136`
@@ -264,7 +265,7 @@ The gateway SHALL remain block-oriented and content-type-neutral so future conte
   - user request in this session: "update the gateway to optionally add a mode where it use an overaly block store instead of the raw azure storage table block store. Overlay should be memory cache + file system cache + azure table block store v2 (for data)"
 
 - **Sampled claim re-checks [KNOWN]:**
-  - `crates/lexonarchivebuilder-block-gateway/src/lib.rs:66-74` still initializes the gateway with a direct `AzureTableBlockStoreV2`, confirming the current gateway runtime is single-profile today.
+  - `crates/lexonarchivebuilder-block-gateway/src/lib.rs:42-58` and `:110-124` now define `GatewayStorageProfile` and select either the overlay-backed or direct Azure Table profile in `build_store`, confirming the gateway runtime is profile-driven rather than single-profile.
   - `crates/lexonarchivebuilder-indexer/src/block_store.rs:47-83` still shows existing repository prior art for both an overlay-backed store and a direct Azure Table v2 store under one `ConfiguredBlockStore` boundary.
   - `crates/lexonarchivebuilder-indexer/src/config.rs:380-429` still enforces distinct validation rules for overlay-backed versus direct Azure Table-backed production profiles, confirming the repository already distinguishes those profile shapes.
 

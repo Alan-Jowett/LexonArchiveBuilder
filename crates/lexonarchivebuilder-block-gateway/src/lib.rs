@@ -115,7 +115,7 @@ fn build_store(config: &GatewayConfig) -> anyhow::Result<Arc<dyn BlockStore + Se
         GatewayStorageProfile::ProductionV2 => {
             Arc::new(build_direct_azure_table_store(config).with_context(|| {
                 format!(
-                    "failed to initialize Azure Table block store from SAS URL configured for {}",
+                    "failed to initialize Azure Table block store from block_store_container_sas_url configured for {}",
                     config.listen_addr
                 )
             })?)
