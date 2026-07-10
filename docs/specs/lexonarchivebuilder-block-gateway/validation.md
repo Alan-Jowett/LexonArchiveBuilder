@@ -5,8 +5,8 @@
 
 ## Status
 
-Approved specification package with implemented HTTP/3 block-gateway slice for the block-gateway
-requirements and design in:
+Proposed validation patch for additive Azure Table overlay gateway mode in the
+block-gateway requirements and design:
 
 - `docs/specs/lexonarchivebuilder-block-gateway/requirements.md`
 - `docs/specs/lexonarchivebuilder-block-gateway/design.md`
@@ -17,10 +17,10 @@ These validation entries define the expected conformance surface for the
 LexonArchiveBuilder-owned `lexonarchivebuilder-block-gateway` boundary.
 
 This package validates the HTTP gateway contract, delegated Azure Table
-dependency binding, immutable-cache response behavior, hosting neutrality, and
-architectural non-interference. It does not redefine validation already owned
-by `lexonarchivebuilder-indexer`, `lexonarchivebuilder-mcp`, or the delegated
-LexonGraph block-store contract.
+dependency binding, approved storage-profile selection, immutable-cache response
+behavior, hosting neutrality, and architectural non-interference. It does not
+redefine validation already owned by `lexonarchivebuilder-indexer`,
+`lexonarchivebuilder-mcp`, or the delegated LexonGraph block-store contract.
 
 ## Validation Entries
 
@@ -49,22 +49,37 @@ increment.
 
 Inspect the storage-dependency configuration contract.
 
-**Pass condition:** the gateway binds the Azure Storage Table dependency from a
-startup-time SAS URL configuration input, and ordinary fetch requests do not
-carry backend SAS credentials.
+**Pass condition:** the gateway binds its Azure Table-backed storage dependency
+from startup-time configuration; the approved backend profile set is direct
+Azure Storage Table v2 plus the additive overlay-backed Azure Table profile;
+the direct profile binds a SAS URL; the overlay-backed profile binds Azure
+Table backing plus filesystem-cache and in-memory-cache settings; and ordinary
+fetch requests do not carry backend credentials or cache-selection inputs.
 
-**Traces to:** RQ-BGW-004, RQ-BGW-009, DSG-BGW-003
+**Traces to:** RQ-BGW-004, RQ-BGW-005A, RQ-BGW-005B, RQ-BGW-009, DSG-BGW-003
 
 ### VAL-BGW-004
 
 Inspect the delegated block-fetch path for a representative successful lookup.
 
 **Pass condition:** the gateway resolves the block through the delegated
-LexonGraph Azure Storage Table v2 block-store path already adopted by the
-repository's direct Azure seam, and it does not introduce repository-local
-table-entity decoding or payload translation.
+LexonGraph Azure Storage Table v2 block-store family through one approved
+gateway backend profile, and it does not introduce repository-local
+table-entity decoding, payload translation, or a caller-assembled arbitrary
+storage graph.
 
 **Traces to:** RQ-BGW-005, RQ-BGW-012, DSG-BGW-004
+
+### VAL-BGW-004A
+
+Inspect the approved overlay-backed gateway storage profile.
+
+**Pass condition:** the additive overlay-backed profile is specified as exactly
+an in-memory cache layer plus a local filesystem cache layer plus Azure Storage
+Table v2 backing data, and the gateway specification preserves the existing
+direct Azure Table v2 profile as an approved alternative.
+
+**Traces to:** RQ-BGW-005A, RQ-BGW-005B, DSG-BGW-004A
 
 ### VAL-BGW-005
 
@@ -93,9 +108,21 @@ Inspect the gateway contract across supported hosting forms.
 **Pass condition:** the gateway preserves one unchanged application contract
 across VM-hosted, containerized, and function-hosted realizations, with any
 hosting differences limited to lifecycle and packaging rather than route,
-startup SAS binding, delegated block-store selection, or response semantics.
+startup storage-profile binding, delegated block-store selection, or response
+semantics.
 
 **Traces to:** RQ-BGW-002, RQ-BGW-009, DSG-BGW-007
+
+### VAL-BGW-007A
+
+Inspect the externally visible fetch contract across the approved direct and
+overlay-backed gateway storage profiles.
+
+**Pass condition:** both approved profiles preserve the same `/block/<block_id>`
+route shape, block-identifier handling, successful payload bytes, content type,
+immutable-cache response semantics, and externally visible `404` normalization.
+
+**Traces to:** RQ-BGW-005C, RQ-BGW-006, RQ-BGW-007, RQ-BGW-008, DSG-BGW-004B
 
 ### VAL-BGW-008
 
