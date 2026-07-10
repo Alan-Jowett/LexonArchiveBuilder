@@ -5,8 +5,8 @@
 
 ## Status
 
-Proposed specification patch for additive Azure Table overlay gateway mode derived
-from `docs/specs/lexonarchivebuilder-block-gateway/requirements.md`.
+Approved specification package with implemented Azure Table overlay gateway mode
+derived from `docs/specs/lexonarchivebuilder-block-gateway/requirements.md`.
 
 ## Scope
 

@@ -5,8 +5,8 @@
 
 ## Document Status
 
-- **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Proposed requirements patch for additive Azure Table overlay gateway mode
+- **Phase:** Phase 8 - Create Deliverable
+- **Status:** Approved specification package with implemented Azure Table overlay gateway mode
 - **Scope:** `lexonarchivebuilder-block-gateway` retrieval-only boundary for serving immutable block bytes through a low-cost HTTP daemon deployable on a VM, in a container, or as a function, using either the direct LexonGraph Azure Storage Table v2 block-store implementation or an additive overlay composed of in-memory cache, local filesystem cache, and Azure Storage Table v2 backing data
 
 ## USER-REQUEST

@@ -5,8 +5,8 @@
 
 ## Status
 
-Proposed validation patch for additive Azure Table overlay gateway mode in the
-block-gateway requirements and design:
+Approved validation package for implemented Azure Table overlay gateway mode in
+the block-gateway requirements and design:
 
 - `docs/specs/lexonarchivebuilder-block-gateway/requirements.md`
 - `docs/specs/lexonarchivebuilder-block-gateway/design.md`
