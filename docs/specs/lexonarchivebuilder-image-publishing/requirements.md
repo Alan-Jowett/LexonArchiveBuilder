@@ -197,7 +197,7 @@ The image-publication workflow SHALL remain a packaging surface and SHALL NOT co
   - `crates/lexonarchivebuilder-indexer/Dockerfile:1-16`
   - `crates/lexonarchivebuilder-indexer/Dockerfile.scale-test:1-16`
   - `crates/lexonarchivebuilder-mcp/Dockerfile:1-16`
-  - `.github/workflows/publish-images.yml:1-73`
+  - `.github/workflows/publish-images.yml:1-75`
   - `docs/specs/lexonarchivebuilder-block-gateway/requirements.md:8-183`
   - `crates/lexonarchivebuilder-block-gateway/Cargo.toml:1-32`
   - `crates/lexonarchivebuilder-block-gateway/src/main.rs:1-57`
