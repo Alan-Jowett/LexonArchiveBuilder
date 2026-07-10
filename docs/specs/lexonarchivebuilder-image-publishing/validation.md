@@ -5,8 +5,8 @@
 
 ## Status
 
-Phase 2 validation patch for the approved repository-owned Docker image
-publication workflow in
+Approved specification package with implemented block-gateway image-publication
+increment for the repository-owned Docker image publication workflow in
 `docs/specs/lexonarchivebuilder-image-publishing/requirements.md` and
 `docs/specs/lexonarchivebuilder-image-publishing/design.md`.
 
@@ -32,8 +32,8 @@ workflow.
 Inspect the workflow definition and its build matrix.
 
 **Pass condition:** it builds and publishes the approved image set for
-`lexonarchivebuilder-indexer`, `lexonarchivebuilder-scale-test`, and
-`lexonarchivebuilder-mcp`.
+`lexonarchivebuilder-indexer`, `lexonarchivebuilder-scale-test`,
+`lexonarchivebuilder-mcp`, and `lexonarchivebuilder-block-gateway`.
 
 **Traces to:** RQ-IMG-002, RQ-IMG-003, DSG-IMG-003, DSG-IMG-008
 
@@ -55,6 +55,18 @@ its documented Linux Docker entrypoint, and the image does not rely on a source
 checkout merely to provide those in-image runtime assets.
 
 **Traces to:** RQ-IMG-004, RQ-IMG-007, DSG-IMG-006
+
+### VAL-IMG-004A
+
+Inspect the published `lexonarchivebuilder-block-gateway` image definition and
+run surface.
+
+**Pass condition:** the image packages the repository-owned gateway runtime
+surface needed to launch the containerized daemon, while leaving the SAS URL
+plus certificate/private-key material external to the image so operators must
+provide them at runtime rather than relying on image-baked credentials.
+
+**Traces to:** RQ-IMG-004A, DSG-IMG-006A
 
 ### VAL-IMG-005
 
