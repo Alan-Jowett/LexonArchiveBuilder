@@ -2,9 +2,8 @@
 // Copyright (c) 2026 LexonArchiveBuilder contributors
 
 use std::fmt;
-use std::future::poll_fn;
 use std::net::{Ipv6Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -21,6 +20,7 @@ use tokio::time::timeout;
 const ALPN_H3: &[u8] = b"h3";
 const DEFAULT_GATEWAY_PORT: u16 = 443;
 const DEFAULT_GATEWAY_TIMEOUT: Duration = Duration::from_secs(30);
+static RUSTLS_PROVIDER: OnceLock<()> = OnceLock::new();
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct GatewayResponse {
@@ -128,18 +128,45 @@ fn validate_dns_name(dns_name: &str) -> Result<String, BlockStoreError> {
     Ok(trimmed.to_string())
 }
 
-fn load_native_roots() -> RootCertStore {
+fn load_native_roots() -> Result<RootCertStore, String> {
     let mut roots = RootCertStore::empty();
     let certificate_result = rustls_native_certs::load_native_certs();
+    let parse_error_count = certificate_result.errors.len();
     for cert in certificate_result.certs {
         let _ = roots.add(cert);
     }
-    roots
+
+    if roots.is_empty() {
+        return Err(if parse_error_count == 0 {
+            "failed to load any native TLS root certificates".into()
+        } else {
+            format!(
+                "failed to load any native TLS root certificates; {} certificate parse errors occurred",
+                parse_error_count
+            )
+        });
+    }
+
+    Ok(roots)
+}
+
+fn install_rustls_provider() -> Result<(), String> {
+    if RUSTLS_PROVIDER.get().is_some() {
+        return Ok(());
+    }
+
+    match rustls::crypto::aws_lc_rs::default_provider().install_default() {
+        Ok(()) | Err(_) => {
+            let _ = RUSTLS_PROVIDER.set(());
+            Ok(())
+        }
+    }
 }
 
 fn build_client_config() -> Result<quinn::ClientConfig, String> {
+    install_rustls_provider()?;
     let mut tls_config = rustls::ClientConfig::builder()
-        .with_root_certificates(load_native_roots())
+        .with_root_certificates(load_native_roots()?)
         .with_no_client_auth();
     tls_config.alpn_protocols = vec![ALPN_H3.to_vec()];
     let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
@@ -209,21 +236,22 @@ impl Http3GatewayTransport {
     }
 
     async fn get_or_connect(&self, dns_name: &str) -> Result<Http3SendRequest, String> {
-        let mut state = self.state.lock().await;
-        if let Some(send_request) = state.send_request.clone() {
-            return Ok(send_request);
-        }
+        let resolved_address = {
+            let state = self.state.lock().await;
+            if let Some(send_request) = state.send_request.clone() {
+                return Ok(send_request);
+            }
+            state.resolved_address
+        };
 
-        let address = if let Some(address) = state.resolved_address {
+        let address = if let Some(address) = resolved_address {
             address
         } else {
-            let resolved = tokio::net::lookup_host((dns_name, DEFAULT_GATEWAY_PORT))
+            tokio::net::lookup_host((dns_name, DEFAULT_GATEWAY_PORT))
                 .await
                 .map_err(|error| format!("failed to resolve gateway host {dns_name}: {error}"))?
                 .next()
-                .ok_or_else(|| format!("gateway host {dns_name} did not resolve to an address"))?;
-            state.resolved_address = Some(resolved);
-            resolved
+                .ok_or_else(|| format!("gateway host {dns_name} did not resolve to an address"))?
         };
 
         let connection = self
@@ -239,16 +267,21 @@ impl Http3GatewayTransport {
             .map_err(|error| format!("failed to initialize HTTP/3 client: {error}"))?;
 
         tokio::spawn(async move {
-            let result = poll_fn(|cx| driver.poll_close(cx)).await;
-            let _ = map_connection_error(result);
+            let _ = map_connection_error(driver.wait_idle().await);
         });
 
+        let mut state = self.state.lock().await;
+        if let Some(existing_send_request) = state.send_request.clone() {
+            return Ok(existing_send_request);
+        }
+        state.resolved_address = Some(address);
         state.send_request = Some(send_request.clone());
         Ok(send_request)
     }
 
     async fn reset_connection(&self) {
         let mut state = self.state.lock().await;
+        state.resolved_address = None;
         state.send_request = None;
     }
 
@@ -426,6 +459,21 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("read-only"));
+    }
+
+    #[tokio::test]
+    async fn reset_connection_clears_cached_address() {
+        let transport = Http3GatewayTransport::new().unwrap();
+        {
+            let mut state = transport.state.lock().await;
+            state.resolved_address = Some((Ipv6Addr::LOCALHOST, DEFAULT_GATEWAY_PORT).into());
+        }
+
+        transport.reset_connection().await;
+
+        let state = transport.state.lock().await;
+        assert_eq!(state.resolved_address, None);
+        assert!(state.send_request.is_none());
     }
 
     #[test]
