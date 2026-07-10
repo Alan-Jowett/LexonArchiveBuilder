@@ -1060,6 +1060,10 @@ change the public LexonGraph contract.
 LexonArchiveBuilder provides concrete `lexongraph_block_store::BlockStore`
 implementations or adapters selected by environment.
 
+- read-only gateway fetch surfaces may additionally select the additive
+  `gateway-http3` profile, which derives HTTPS-over-QUIC access from a gateway
+  DNS host name and is approved only where read-only immutable block fetches are
+  sufficient
 - local/testing selects a filesystem-backed block store
 - production-oriented operation selects either:
   - the existing `production` overlay block store composed of an in-memory
@@ -1082,8 +1086,10 @@ The non-local target family is intentionally fixed to one approved
 repository-defined profile set rather than a caller-assembled arbitrary stack
 of storage adapters. This keeps tool-targeting semantics stable across batch
 indexing, standalone clustering, rooted quality assessment, rooted CLI search,
-and future indexer-owned operator tools that traverse the shared `BlockStore`
-boundary.
+rooted block copy, and future indexer-owned operator tools that traverse the
+shared `BlockStore` boundary, while still allowing read-only surfaces to adopt
+the additive `gateway-http3` profile without redefining writable profile
+semantics.
 
 For the approved increment, the local/testing block-store realization remains
 required and executable, and both approved production-oriented storage profiles
@@ -1211,6 +1217,25 @@ profiles, while preserving the upstream ownership of block bytes and identity
 semantics.
 
 **Traces to:** RQ-INDEXER-005B, RQ-INDEXER-010, RQ-INDEXER-010A
+
+### DSG-LFI-005E `Gateway-backed read-only profile applicability`
+
+The additive `gateway-http3` profile realizes read-only immutable block access
+through the separate `lexonarchivebuilder-block-store-http3` boundary.
+
+That profile derives one HTTPS-over-QUIC authority from a caller-supplied
+gateway DNS host name on port `443`, resolves immutable block fetches through
+`/block/<block_id>`, maps gateway `404` responses to missing-block results, and
+surfaces transport or other non-success responses as explicit backend failures.
+
+Because the profile is read-only, tool surfaces may adopt it only where rooted
+block fetches are sufficient. Rooted quality traversal, rooted CLI search
+traversal, and rooted block-copy source traversal are representative approved
+uses. Indexing-time writes, replay-journal publication, mutable current-root
+publication, rooted-copy destination writes, and any flow that depends on
+whole-store iteration remain on the existing writable profiles.
+
+**Traces to:** RQ-INDEXER-005, RQ-INDEXER-005B
 
 ### DSG-LFI-006 `Embedding provider adapter boundary`
 
@@ -1537,9 +1562,11 @@ mechanism.
 
 Within that parity boundary, every indexer-owned tool shares the same approved
 storage-profile contract: direct local filesystem, the existing `production`
-overlay profile, or the additive `production-v2` direct Azure-backed profile.
-No indexer-owned tool defines an ad hoc plain Azure-only targeting exception
-outside that shared profile set.
+overlay profile, the additive `production-v2` direct Azure-backed profile, and
+for surfaces that can operate through read-only immutable block fetches, the
+additive `gateway-http3` profile. No indexer-owned tool defines an ad hoc plain
+Azure-only targeting exception outside that shared profile set, and no
+write-bearing tool surface treats `gateway-http3` as a writable substitute.
 
 **Traces to:** RQ-INDEXER-007, RQ-INDEXER-010, RQ-INDEXER-003D,
 RQ-INDEXER-003E, RQ-INDEXER-003G
@@ -1634,8 +1661,10 @@ LexonArchiveBuilder-owned verification artifacts validate:
 - correct interoperability of the local filesystem-backed block-store profile
   with LexonGraph-owned tooling expectations
 - correct exposure and use of the approved production-oriented block-store
-  profile set, including the existing `production` overlay profile and the
-  additive `production-v2` direct Azure-backed profile
+  profile set, including the existing `production` overlay profile, the
+  additive `production-v2` direct Azure-backed profile, and the additive
+  `gateway-http3` read-only profile where read-only rooted block fetches are
+  sufficient
 - correct mailbox retention, normalized email artifact derivation, and chained
   provenance
 - correct shaping of chunk-sized delegated email items
@@ -1681,5 +1710,5 @@ RQ-INDEXER-010A, RQ-INDEXER-010B, RQ-INDEXER-010, DSG-LFI-001A,
 DSG-LFI-001B, DSG-LFI-001C, DSG-LFI-001D, DSG-LFI-001E, DSG-LFI-001F,
 DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-001I, DSG-LFI-002A, DSG-LFI-002B,
 DSG-LFI-002C, DSG-LFI-002D, DSG-LFI-002G, DSG-LFI-004G, DSG-LFI-005A, DSG-LFI-005B,
-DSG-LFI-005C, DSG-LFI-005D, DSG-LFI-006A, DSG-LFI-007A, DSG-LFI-007B,
+DSG-LFI-005C, DSG-LFI-005D, DSG-LFI-005E, DSG-LFI-006A, DSG-LFI-007A, DSG-LFI-007B,
 DSG-LFI-007C, DSG-LFI-007D, DSG-LFI-007E, DSG-LFI-007G

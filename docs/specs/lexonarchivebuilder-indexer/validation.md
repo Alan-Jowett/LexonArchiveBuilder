@@ -509,16 +509,18 @@ requiring reads from the superseded custom filesystem layout.
 Inspect the non-local tool-targeting profiles for representative indexer-owned
 tool surfaces that traverse the shared `BlockStore` boundary.
 
-**Pass condition:** the approved non-local profile set is specified as exactly
-the existing `production` overlay profile plus the additive `production-v2`
-direct Azure-backed profile; batch indexing, standalone clustering, rooted
-quality assessment, rooted CLI search, and rooted block copy all reuse that
-same targeting contract; and no operator-facing tool introduces a plain
-Azure-only block-store mode outside the approved repository-defined profile set.
+**Pass condition:** the approved non-local profile set is specified as the
+existing `production` overlay profile, the additive `production-v2` direct
+Azure-backed profile, and for read-only tool surfaces only the additive
+`gateway-http3` profile; batch indexing, standalone clustering, rooted quality
+assessment, rooted CLI search, and rooted block copy all reuse that same
+targeting contract with the documented read-only restriction for
+`gateway-http3`; and no operator-facing tool introduces a plain Azure-only
+block-store mode outside the approved repository-defined profile set.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-005B, RQ-INDEXER-007, DSG-LFI-005,
-DSG-LFI-005B, DSG-LFI-005C, DSG-LFI-005D, DSG-LFI-007, DSG-LFI-007G,
-DSG-LFI-008
+DSG-LFI-005B, DSG-LFI-005C, DSG-LFI-005D, DSG-LFI-005E, DSG-LFI-007,
+DSG-LFI-007G, DSG-LFI-008
 
 ### VAL-LFI-005A2
 
@@ -637,8 +639,9 @@ DSG-LFI-005C, DSG-LFI-006A, DSG-LFI-007E
 Run the rooted block-copy tool from one representative source store to one
 representative destination store using one or more caller-supplied root block
 identifiers, where the selected source and destination profiles come from the
-approved shared target set and at least one exercised non-local side uses the
-approved `production-v2` profile, the destination already contains at least one
+approved shared target set, at least one exercised non-local side uses either
+the approved `production-v2` profile or the approved read-only `gateway-http3`
+profile on the source side, the destination already contains at least one
 reachable block, the source rooted graph contains at least one unreachable
 block, and the invocation encounters at least one copy failure for a reachable
 block after the tool has already proven other reachable blocks can be copied or
@@ -664,9 +667,12 @@ write completions arrive out of order. Both modes must emit basic default
 in-flight liveness or progress on the normal CLI output surface before final
 completion when the rooted copy runs long enough that silence would otherwise
 resemble a hang, and both leave mutable references such as current-root and
-replay-journal-head unchanged.
+replay-journal-head unchanged. When the source profile is `gateway-http3`,
+gateway `404` responses count as missing-block source reads while transport,
+protocol, or other non-success responses remain explicit failures, and the
+destination side still uses one of the writable approved profiles.
 
-**Traces to:** RQ-INDEXER-005B, DSG-LFI-005D, DSG-LFI-007G
+**Traces to:** RQ-INDEXER-005B, DSG-LFI-005D, DSG-LFI-005E, DSG-LFI-007G
 
 ### VAL-LFI-006
 
@@ -677,9 +683,10 @@ behind the same `BlockStore` and `EmbeddingProvider` selection boundary as the
 local/testing profile, and no local-only assumptions leak into the core batch
 contract or content-model abstractions. The preserved non-local storage
 identifier family must describe exactly the approved production profile set:
-the existing overlay-backed `production` target and the additive direct
-Azure-backed `production-v2` target, rather than one-off plain Azure-only
-tool modes.
+the existing overlay-backed `production` target, the additive direct
+Azure-backed `production-v2` target, and for read-only surfaces the additive
+`gateway-http3` target, rather than one-off plain Azure-only tool modes or a
+write-bearing reinterpretation of the gateway-backed profile.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-007, DSG-LFI-005,
 DSG-LFI-006, DSG-LFI-007

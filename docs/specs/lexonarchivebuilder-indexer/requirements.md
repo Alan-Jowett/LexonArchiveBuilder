@@ -212,6 +212,28 @@
 - **UR-199 [KNOWN]:** The bounded in-flight destination-write limit should be an operator-selectable CLI control rather than a fixed internal constant, and the first increment should default that limit to `64`.
 - **UR-200 [KNOWN]:** The bounded asynchronous destination-write policy should apply both to the default read-before-write mode when a block has been classified as missing and to the opt-in blind-write mode.
 - **UR-201 [INFERRED]:** Introducing bounded concurrent destination writes must preserve rooted reachability, immutable block identity, and truthful mode-specific reporting semantics even when destination write completions arrive out of traversal order.
+- **UR-202 [KNOWN]:** Add a separate repository-owned
+  `lexonarchivebuilder-block-store-http3` crate and an approved gateway-backed
+  read-only block-store profile that fetches immutable blocks over HTTP/3 QUIC.
+- **UR-203 [KNOWN]:** The new gateway-backed profile should accept a gateway DNS
+  host name as its operator-facing network parameter and derive HTTPS over QUIC
+  on port `443` from that host name.
+- **UR-204 [KNOWN]:** This increment should wire the gateway-backed profile into
+  the approved indexer block-store profile vocabulary now rather than leaving it
+  as an unintegrated standalone crate.
+- **UR-205 [KNOWN]:** The gateway-backed profile should be read-only and limited
+  to block-fetching tool surfaces in this increment.
+- **UR-206 [KNOWN]:** Unsupported `BlockStore` operations such as writes and
+  whole-store iteration should fail explicitly for the gateway-backed profile.
+- **UR-207 [KNOWN]:** The gateway-backed profile should map HTTP `404` to a
+  missing-block result and treat transport, protocol, or other non-success
+  responses as explicit backend failures.
+- **UR-208 [KNOWN]:** Create a dedicated spec package for
+  `lexonarchivebuilder-block-store-http3` plus the necessary cross-references in
+  the indexer requirements.
+- **UR-209 [INFERRED]:** Because the gateway-backed profile is read-only,
+  write-bearing indexing, publication, and copy-destination flows must remain on
+  the existing writable profiles rather than silently degrading behavior.
 
 ## Change Manifest
 
@@ -307,6 +329,7 @@
 | CM-INDEXER-088 | Add | Enable opt-in Azure SDK and HTTP-client diagnostic logging for the entire indexer binary through standard `RUST_LOG` initialization on the existing process output surface rather than through a new repository-specific CLI flag | UR-33, UR-194, UR-195 |
 | CM-INDEXER-089 | Revise | Add an opt-in rooted copy blind-write mode that skips destination existence reads, keeps the current read-before-write behavior as the default, and relaxes exact copied-versus-skipped accounting in the blind-write path | UR-184, UR-186, UR-196, UR-197 |
 | CM-INDEXER-090 | Revise | Add bounded asynchronous destination-write concurrency to rooted copy, expose an operator-selectable in-flight write limit defaulting to `64`, and apply that limit to both the default and blind-write paths whenever a destination write is required | UR-180, UR-184, UR-186, UR-196, UR-198, UR-199, UR-200, UR-201 |
+| CM-INDEXER-091 | Revise | Expand the approved block-store profile vocabulary with an additive `gateway-http3` read-only profile for immutable block fetches, while preserving the existing writable profiles for write-bearing and whole-store-traversal flows | UR-202, UR-203, UR-204, UR-205, UR-206, UR-207, UR-208, UR-209 |
 
 ## Before / After
 
@@ -764,6 +787,17 @@
 
 - **Before [KNOWN]:** Rooted copy traversed and wrote blocks effectively one destination write at a time, so high-latency backends such as Azure could serialize the transfer path even after a block had already been classified for writing.
 - **After [KNOWN]:** The requirements now add bounded asynchronous destination-write concurrency, expose an operator-selectable in-flight write limit defaulting to `64`, and apply that bounded write pipeline to both rooted-copy modes whenever a destination write is actually needed, without changing rooted reachability or mode-specific reporting semantics.
+
+### BA-INDEXER-092
+
+- **Before [KNOWN]:** The approved repository block-store profile vocabulary
+  covered only writable local or Azure-backed profiles, so repository-owned
+  read-only fetch tooling had no approved gateway-backed HTTP/3 QUIC profile and
+  no explicit rule separating read-only gateway use from write-bearing flows.
+- **After [KNOWN]:** The requirements now add an additive `gateway-http3`
+  read-only profile for immutable block fetches by gateway DNS host name while
+  explicitly preserving the existing writable profiles for indexing,
+  publication, and copy-destination flows.
 
 ## Requirements
 
@@ -1260,22 +1294,41 @@ LexonArchiveBuilder SHALL provide a deterministic content fingerprint for every 
 LexonArchiveBuilder SHALL provide a concrete implementation of `lexongraph_block_store::BlockStore` used to persist blocks produced through the delegated indexing flow.
 
 - **Architectural target storage profiles [KNOWN]:**
+  - gateway-backed `gateway-http3` read-only immutable-block fetch profile addressed by DNS host name with implied HTTPS-over-QUIC authority on port `443`
   - local filesystem for local/testing operation
   - overlay block store for production-oriented operation, composed of memory cache + local filesystem cache + Azure Blob Storage backing addressed by SAS URL
   - additive `production-v2` direct Azure-backed store profile for production-oriented operation
-- **Approved tool-targeting modes [KNOWN]:** Every indexer-owned tool that reads from or writes to the shared `BlockStore` boundary SHALL support one approved shared profile vocabulary: direct local filesystem, the existing `production` overlay profile, and the additive `production-v2` direct Azure-backed profile.
-- **Disallowed mode [KNOWN]:** A direct non-local backend that is not expressed through one of the approved repository-defined production profiles is not an approved operator-facing mode in this increment.
+- **Approved tool-targeting modes [KNOWN]:** Every indexer-owned tool that reads
+  from or writes to the shared `BlockStore` boundary SHALL support one approved
+  shared profile vocabulary: direct local filesystem, the existing
+  `production` overlay profile, the additive `production-v2` direct
+  Azure-backed profile, and where the tool surface can operate correctly through
+  read-only immutable block fetches, the additive `gateway-http3` profile.
+- **Disallowed mode [KNOWN]:** A direct non-local backend that is not expressed
+  through one of the approved repository-defined profiles is not an approved
+  operator-facing mode in this increment.
 - **Current increment [KNOWN]:** The existing local/testing realization remains required, and this increment additionally requires both approved non-local target profiles to be usable on the same repository-owned tool surfaces rather than being introduced tool-by-tool.
+- **Gateway addressing [KNOWN]:** The additive `gateway-http3` profile accepts a
+  gateway DNS host name and derives HTTPS-over-QUIC authority from that host on
+  port `443` rather than accepting an arbitrary scheme or base URL in this
+  increment.
+- **Gateway applicability [KNOWN]:** The additive `gateway-http3` profile is
+  read-only and is approved only for tool surfaces that can operate correctly
+  without block writes or whole-store block-ID iteration.
 - **Local filesystem interoperability [KNOWN]:** The local/testing filesystem-backed realization SHALL use the LexonGraph-owned filesystem block-store contract, including its on-disk naming and layout scheme, so LexonGraph filesystem tooling such as `lexongraph-block-inspect` can operate on LexonArchiveBuilder-produced local stores.
 - **Local implementation target [KNOWN]:** The local/testing filesystem-backed realization SHALL use the upstream `lexongraph-block-store-fs` crate rather than a repository-local filesystem naming scheme.
 - **Migration boundary [KNOWN]:** This local filesystem interoperability correction may require a fresh or rebuilt local store; continued read compatibility with blocks written by the superseded custom local layout is not required in this increment.
 - **Overlay shape [KNOWN]:** The non-local target mode SHALL be a fixed ordered overlay containing an in-memory cache layer, a local filesystem cache layer, and an Azure Blob backing layer addressed through a SAS URL rather than a caller-selectable arbitrary stack of storage backends.
 - **Direct-profile addition [KNOWN]:** The additive `production-v2` profile SHALL target the alternate direct Azure-backed LexonGraph `BlockStore` implementation without introducing a repository-owned translation layer around block identities or payload bytes.
+- **Gateway-profile addition [KNOWN]:** The additive `gateway-http3` profile
+  SHALL fetch immutable block bytes through the gateway's `/block/<block_id>`
+  contract without introducing repository-owned translation of block identities
+  or payload bytes.
 - **Artifact reuse [KNOWN]:** The same environment-selected `BlockStore` abstraction family SHALL also be used for normalized email artifacts and mailbox provenance artifacts, provided indexing contracts and retrieval references remain explicit.
 - **Tool-surface consistency [INFERRED]:** Batch indexing, standalone clustering discovery, rooted quality assessment, rooted CLI search, and future indexer-owned operator tools SHALL share the same block-store target-selection contract instead of inventing per-tool storage mode variants.
 - **Assessment-tool implication [INFERRED]:** Post-index rooted block-tree quality assessment SHALL also read blocks through the same environment-selected `BlockStore` boundary rather than bypassing it with a repository-specific storage reader.
 - **Mailbox retention [KNOWN]:** Mailbox provenance artifacts SHALL be retained so the original source material remains available for re-normalization, re-chunking, and re-ingestion flows.
-- **Traceability:** UR-3, UR-6, UR-9, UR-12, UR-13, UR-18, UR-22, UR-25, UR-26, UR-27, UR-28, UR-80, UR-86, UR-153, UR-154, UR-155, UR-156, UR-189, UR-190, UR-191
+- **Traceability:** UR-3, UR-6, UR-9, UR-12, UR-13, UR-18, UR-22, UR-25, UR-26, UR-27, UR-28, UR-80, UR-86, UR-153, UR-154, UR-155, UR-156, UR-189, UR-190, UR-191, UR-202, UR-203, UR-204, UR-205, UR-206, UR-207, UR-209
 
 #### RQ-INDEXER-005A - LexonGraph v2 custom-block adoption for repository-owned artifacts
 
@@ -1303,7 +1356,8 @@ to another configured block store.
   direct local filesystem, the existing `production` overlay block store
   composed of memory cache + local filesystem cache + Azure Blob
   SAS-backed storage, or the additive `production-v2` direct Azure-backed
-  store profile.
+  store profile; the additive `gateway-http3` profile is additionally approved
+  on the source side only because it is read-only in this increment.
 - **Identity preservation [KNOWN]:** Copied blocks SHALL retain their existing
   hash-addressed identities; the tool SHALL NOT reinterpret, rewrite, or
   repository-locally translate delegated or repository-owned block payloads.
@@ -1333,6 +1387,10 @@ to another configured block store.
   existing LexonGraph block-store implementations already adopted by the
   repository rather than defining a new repository-owned block-store backend
   family for copying.
+- **Gateway-source boundary [KNOWN]:** When rooted copy uses the additive
+  `gateway-http3` source profile, missing blocks map from gateway `404`
+  responses and any transport, protocol, or other non-success responses remain
+  explicit failures rather than becoming synthetic skip outcomes.
 - **Output requirement [KNOWN]:** The tool SHALL emit both a human-readable
   summary and a machine-readable artifact that reports requested roots, copied
   block counts, skipped-already-present counts, and copy failures.
@@ -1362,7 +1420,7 @@ to another configured block store.
 - **Surface boundary [KNOWN]:** The tool is additive to existing indexing,
   quality, search, and MCP surfaces and SHALL NOT become an indexing stage, a
   `BatchRequest` feature, or an MCP-visible API in this increment.
-- **Traceability:** UR-153, UR-154, UR-155, UR-156, UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188, UR-189, UR-190, UR-191, UR-192, UR-193, UR-196, UR-197
+- **Traceability:** UR-153, UR-154, UR-155, UR-156, UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188, UR-189, UR-190, UR-191, UR-192, UR-193, UR-196, UR-197, UR-202, UR-205, UR-206, UR-207, UR-209
 
 #### RQ-INDEXER-005C - Opt-in SDK diagnostic logging on existing CLI surfaces
 
