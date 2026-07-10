@@ -15,4 +15,5 @@ COPY --from=builder /workspace/target/release/lexonarchivebuilder-block-gateway 
 
 EXPOSE 443/udp
 
-ENTRYPOINT ["lexonarchivebuilder-block-gateway", "serve", "--listen-addr", "0.0.0.0:443"]
+ENTRYPOINT ["lexonarchivebuilder-block-gateway"]
+CMD ["serve"]
