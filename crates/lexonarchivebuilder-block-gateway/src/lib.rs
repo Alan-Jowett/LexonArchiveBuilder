@@ -20,7 +20,7 @@ use bytes::Bytes;
 use h3_axum::{BoxError, is_graceful_h3_close, serve_h3_with_axum};
 use lexonarchivebuilder_indexer::tree_tools::parse_block_hash;
 use lexongraph_block_store::BlockStore;
-use lexongraph_block_store_azure_table::AzureTableBlockStore;
+use lexongraph_block_store_azure_table_v2::AzureTableBlockStoreV2;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tracing::{debug, error, info, warn};
 
@@ -57,7 +57,7 @@ pub fn build_router(store: Arc<dyn BlockStore + Send + Sync>) -> Router {
 pub async fn serve(config: GatewayConfig) -> anyhow::Result<()> {
     install_rustls_provider();
 
-    let store = Arc::new(AzureTableBlockStore::new(&config.sas_url).with_context(|| {
+    let store = Arc::new(AzureTableBlockStoreV2::new(&config.sas_url).with_context(|| {
         format!(
             "failed to initialize Azure Table block store from SAS URL configured for {}",
             config.listen_addr
