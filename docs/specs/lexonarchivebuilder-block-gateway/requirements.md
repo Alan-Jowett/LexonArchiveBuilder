@@ -211,7 +211,7 @@ The gateway SHALL remain block-oriented and content-type-neutral so future conte
   - `docs/specs/lexonarchivebuilder-indexer/design.md:1060-1079`
   - `crates/lexonarchivebuilder-indexer/src/block_store.rs:21-25`
   - `crates/lexonarchivebuilder-indexer/src/block_store.rs:78-83`
-  - user request in this session beginning `Use the skill tool to invoke the "evolve" skill`
+  - user request in this session describing a low-cost daemon front-end to Azure Storage Table with `/block/<block_id>` retrieval
   - user clarification in this session selecting `Yes — create a new separate spec package (Recommended)`
   - user clarification in this session selecting `Process configuration at startup (Recommended)`
   - user clarification in this session selecting `Yes — keep it as a separate daemon boundary (Recommended)`

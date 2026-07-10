@@ -88,7 +88,9 @@ pub async fn serve(config: GatewayConfig) -> anyhow::Result<()> {
 
 fn install_rustls_provider() {
     let _ = RUSTLS_PROVIDER.get_or_init(|| {
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        if let Err(error) = rustls::crypto::aws_lc_rs::default_provider().install_default() {
+            warn!(?error, "failed to install rustls crypto provider");
+        }
     });
 }
 
@@ -104,7 +106,6 @@ fn build_quic_server_config(
         .with_single_cert(certificates, private_key)
         .context("failed to build rustls server configuration")?;
     tls_config.alpn_protocols = vec![b"h3".to_vec()];
-    tls_config.max_early_data_size = u32::MAX;
 
     let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(
         quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)
