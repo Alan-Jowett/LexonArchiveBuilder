@@ -3,7 +3,9 @@
 
 use std::fmt;
 use std::future::poll_fn;
+use std::net::{Ipv6Addr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Buf;
@@ -13,9 +15,12 @@ use http::{Request, Uri};
 use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
 use rustls::RootCertStore;
+use tokio::sync::Mutex;
+use tokio::time::timeout;
 
 const ALPN_H3: &[u8] = b"h3";
 const DEFAULT_GATEWAY_PORT: u16 = 443;
+const DEFAULT_GATEWAY_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct GatewayResponse {
@@ -28,8 +33,28 @@ trait GatewayTransport: Send + Sync {
     async fn fetch(&self, dns_name: &str, path: &str) -> Result<GatewayResponse, String>;
 }
 
-#[derive(Clone, Debug, Default)]
-struct Http3GatewayTransport;
+type Http3SendRequest = h3::client::SendRequest<h3_quinn::OpenStreams, bytes::Bytes>;
+
+#[derive(Default)]
+struct Http3GatewayState {
+    resolved_address: Option<SocketAddr>,
+    send_request: Option<Http3SendRequest>,
+}
+
+impl fmt::Debug for Http3GatewayState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Http3GatewayState")
+            .field("resolved_address", &self.resolved_address)
+            .field("has_send_request", &self.send_request.is_some())
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+struct Http3GatewayTransport {
+    endpoint: quinn::Endpoint,
+    state: Mutex<Http3GatewayState>,
+}
 
 pub struct Http3BlockStore {
     dns_name: String,
@@ -55,7 +80,10 @@ impl Clone for Http3BlockStore {
 
 impl Http3BlockStore {
     pub fn new(dns_name: &str) -> Result<Self, BlockStoreError> {
-        Self::with_transport(dns_name, Arc::new(Http3GatewayTransport))
+        Self::with_transport(
+            dns_name,
+            Arc::new(Http3GatewayTransport::new().map_err(BlockStoreError::BackendFailure)?),
+        )
     }
 
     fn with_transport(
@@ -119,6 +147,14 @@ fn build_client_config() -> Result<quinn::ClientConfig, String> {
     Ok(quinn::ClientConfig::new(Arc::new(crypto)))
 }
 
+fn build_client_endpoint() -> Result<quinn::Endpoint, String> {
+    let bind_addr: SocketAddr = (Ipv6Addr::UNSPECIFIED, 0).into();
+    let mut endpoint = quinn::Endpoint::client(bind_addr)
+        .map_err(|error| format!("failed to create QUIC client endpoint: {error}"))?;
+    endpoint.set_default_client_config(build_client_config()?);
+    Ok(endpoint)
+}
+
 fn map_stream_error(error: StreamError) -> String {
     format!("gateway request failed: {error}")
 }
@@ -131,35 +167,17 @@ fn map_connection_error(error: ConnectionError) -> Option<String> {
     }
 }
 
-#[async_trait]
-impl GatewayTransport for Http3GatewayTransport {
-    async fn fetch(&self, dns_name: &str, path: &str) -> Result<GatewayResponse, String> {
+impl Http3GatewayTransport {
+    fn new() -> Result<Self, String> {
+        Ok(Self {
+            endpoint: build_client_endpoint()?,
+            state: Mutex::new(Http3GatewayState::default()),
+        })
+    }
+
+    async fn fetch_once(&self, dns_name: &str, path: &str) -> Result<GatewayResponse, String> {
         let uri = Http3BlockStore::build_block_uri(dns_name, path)?;
-        let address = tokio::net::lookup_host((dns_name, DEFAULT_GATEWAY_PORT))
-            .await
-            .map_err(|error| format!("failed to resolve gateway host {dns_name}: {error}"))?
-            .next()
-            .ok_or_else(|| format!("gateway host {dns_name} did not resolve to an address"))?;
-
-        let mut endpoint = quinn::Endpoint::client("[::]:0".parse().unwrap())
-            .map_err(|error| format!("failed to create QUIC client endpoint: {error}"))?;
-        endpoint.set_default_client_config(build_client_config()?);
-
-        let connection = endpoint
-            .connect(address, dns_name)
-            .map_err(|error| format!("failed to start QUIC connection: {error}"))?
-            .await
-            .map_err(|error| format!("failed to establish QUIC connection: {error}"))?;
-
-        let quinn_connection = h3_quinn::Connection::new(connection);
-        let (mut driver, mut send_request) = h3::client::new(quinn_connection)
-            .await
-            .map_err(|error| format!("failed to initialize HTTP/3 client: {error}"))?;
-
-        let driver_task = tokio::spawn(async move {
-            let result = poll_fn(|cx| driver.poll_close(cx)).await;
-            map_connection_error(result)
-        });
+        let mut send_request = self.get_or_connect(dns_name).await?;
 
         let request = Request::builder()
             .method("GET")
@@ -187,16 +205,81 @@ impl GatewayTransport for Http3GatewayTransport {
             }
         }
 
-        drop(send_request);
-        let connection_result = driver_task
-            .await
-            .map_err(|error| format!("failed to join HTTP/3 connection task: {error}"))?;
-        endpoint.wait_idle().await;
-        if let Some(error) = connection_result {
-            return Err(error);
+        Ok(GatewayResponse { status_code, body })
+    }
+
+    async fn get_or_connect(&self, dns_name: &str) -> Result<Http3SendRequest, String> {
+        let mut state = self.state.lock().await;
+        if let Some(send_request) = state.send_request.clone() {
+            return Ok(send_request);
         }
 
-        Ok(GatewayResponse { status_code, body })
+        let address = if let Some(address) = state.resolved_address {
+            address
+        } else {
+            let resolved = tokio::net::lookup_host((dns_name, DEFAULT_GATEWAY_PORT))
+                .await
+                .map_err(|error| format!("failed to resolve gateway host {dns_name}: {error}"))?
+                .next()
+                .ok_or_else(|| format!("gateway host {dns_name} did not resolve to an address"))?;
+            state.resolved_address = Some(resolved);
+            resolved
+        };
+
+        let connection = self
+            .endpoint
+            .connect(address, dns_name)
+            .map_err(|error| format!("failed to start QUIC connection: {error}"))?
+            .await
+            .map_err(|error| format!("failed to establish QUIC connection: {error}"))?;
+
+        let quinn_connection = h3_quinn::Connection::new(connection);
+        let (mut driver, send_request) = h3::client::new(quinn_connection)
+            .await
+            .map_err(|error| format!("failed to initialize HTTP/3 client: {error}"))?;
+
+        tokio::spawn(async move {
+            let result = poll_fn(|cx| driver.poll_close(cx)).await;
+            let _ = map_connection_error(result);
+        });
+
+        state.send_request = Some(send_request.clone());
+        Ok(send_request)
+    }
+
+    async fn reset_connection(&self) {
+        let mut state = self.state.lock().await;
+        state.send_request = None;
+    }
+
+    async fn fetch_with_timeout(
+        &self,
+        dns_name: &str,
+        path: &str,
+    ) -> Result<GatewayResponse, String> {
+        timeout(DEFAULT_GATEWAY_TIMEOUT, self.fetch_once(dns_name, path))
+            .await
+            .map_err(|_| {
+                format!(
+                    "gateway request exceeded {}s timeout for host {dns_name}",
+                    DEFAULT_GATEWAY_TIMEOUT.as_secs()
+                )
+            })?
+    }
+}
+
+#[async_trait]
+impl GatewayTransport for Http3GatewayTransport {
+    async fn fetch(&self, dns_name: &str, path: &str) -> Result<GatewayResponse, String> {
+        match self.fetch_with_timeout(dns_name, path).await {
+            Ok(response) => Ok(response),
+            Err(error) => {
+                self.reset_connection().await;
+                self.fetch_with_timeout(dns_name, path)
+                    .await
+                    .map_err(|retry_error| format!("{error}; retry failed: {retry_error}"))
+            }
+        }
     }
 }
 

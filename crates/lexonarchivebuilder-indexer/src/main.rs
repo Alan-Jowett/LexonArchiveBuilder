@@ -183,7 +183,7 @@ struct BlockStoreArgs {
 }
 
 impl BlockStoreArgs {
-    fn to_environment_config(&self) -> EnvironmentConfig {
+    fn try_environment_config(&self) -> anyhow::Result<EnvironmentConfig> {
         block_store_environment_config(
             self.block_store_profile,
             self.block_store_root.clone(),
@@ -223,7 +223,7 @@ struct SourceBlockStoreArgs {
 }
 
 impl SourceBlockStoreArgs {
-    fn to_environment_config(&self) -> EnvironmentConfig {
+    fn try_environment_config(&self) -> anyhow::Result<EnvironmentConfig> {
         block_store_environment_config(
             self.source_block_store_profile,
             self.source_block_store_root.clone(),
@@ -280,8 +280,8 @@ fn block_store_environment_config(
     block_store_filesystem_cache_root: Option<PathBuf>,
     block_store_memory_cache_max_resident_blocks: Option<usize>,
     block_store_prefix: Option<String>,
-) -> EnvironmentConfig {
-    match block_store_profile {
+) -> anyhow::Result<EnvironmentConfig> {
+    let environment = match block_store_profile {
         ReadableBlockStoreProfile::Local => EnvironmentConfig::Local {
             block_store_root: block_store_root.expect("local block_store_root is required by clap"),
             embedding: unused_local_embedding(),
@@ -317,9 +317,12 @@ fn block_store_environment_config(
             },
         },
         ReadableBlockStoreProfile::GatewayHttp3 => {
-            unreachable!("gateway-http3 does not map to full EnvironmentConfig")
+            anyhow::bail!(
+                "gateway-http3 is a read-only block-store profile and does not map to EnvironmentConfig"
+            )
         }
-    }
+    };
+    Ok(environment)
 }
 
 fn destination_block_store_environment_config(
@@ -343,6 +346,7 @@ fn destination_block_store_environment_config(
         block_store_memory_cache_max_resident_blocks,
         block_store_prefix,
     )
+    .expect("writable block-store profiles always map to EnvironmentConfig")
 }
 
 fn configured_block_store_from_environment(
@@ -550,7 +554,7 @@ fn configured_block_store(args: &BlockStoreArgs) -> anyhow::Result<ConfiguredBlo
                 .expect("gateway-http3 dns name is required by clap"),
         )
         .context("failed to configure gateway-http3 block store"),
-        _ => configured_block_store_from_environment(&args.to_environment_config()),
+        _ => configured_block_store_from_environment(&args.try_environment_config()?),
     }
 }
 
@@ -564,7 +568,7 @@ fn configured_source_block_store(
                 .expect("gateway-http3 dns name is required by clap"),
         )
         .context("failed to configure gateway-http3 source block store"),
-        _ => configured_block_store_from_environment(&args.to_environment_config()),
+        _ => configured_block_store_from_environment(&args.try_environment_config()?),
     }
 }
 
@@ -832,7 +836,7 @@ mod tests {
                     block_store.block_store_memory_cache_max_resident_blocks,
                     Some(64)
                 );
-                let environment = block_store.to_environment_config();
+                let environment = block_store.try_environment_config().unwrap();
                 match environment {
                     EnvironmentConfig::Production { block_store, .. } => {
                         assert_eq!(
@@ -877,7 +881,7 @@ mod tests {
                     block_store.block_store_profile,
                     ReadableBlockStoreProfile::ProductionV2
                 );
-                let environment = block_store.to_environment_config();
+                let environment = block_store.try_environment_config().unwrap();
                 match environment {
                     EnvironmentConfig::ProductionV2 { block_store, .. } => {
                         assert_eq!(
@@ -922,6 +926,32 @@ mod tests {
                     block_store.block_store_gateway_dns_name,
                     Some("gateway.example.com".into())
                 );
+            }
+            _ => panic!("expected quality command"),
+        }
+    }
+
+    #[test]
+    fn gateway_http3_profile_rejects_environment_config_conversion() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "quality",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--block-store-profile",
+            "gateway-http3",
+            "--block-store-gateway-dns-name",
+            "gateway.example.com",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Quality { block_store, .. } => {
+                let error = block_store
+                    .try_environment_config()
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains("read-only block-store profile"));
             }
             _ => panic!("expected quality command"),
         }
@@ -982,7 +1012,7 @@ mod tests {
                     block_store.block_store_profile,
                     ReadableBlockStoreProfile::ProductionV2
                 );
-                let environment = block_store.to_environment_config();
+                let environment = block_store.try_environment_config().unwrap();
                 match environment {
                     EnvironmentConfig::ProductionV2 { block_store, .. } => {
                         assert_eq!(
@@ -1103,7 +1133,7 @@ mod tests {
                     destination_block_store.destination_block_store_profile,
                     WritableBlockStoreProfile::Local
                 );
-                let environment = source_block_store.to_environment_config();
+                let environment = source_block_store.try_environment_config().unwrap();
                 match environment {
                     EnvironmentConfig::ProductionV2 { block_store, .. } => {
                         assert_eq!(
