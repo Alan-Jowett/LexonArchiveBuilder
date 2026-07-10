@@ -1034,6 +1034,39 @@ mod tests {
     }
 
     #[test]
+    fn search_command_parses_gateway_http3_args() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "search",
+            "--query",
+            "hello",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--embedding-endpoint",
+            "http://localhost:8080",
+            "--block-store-profile",
+            "gateway-http3",
+            "--block-store-gateway-dns-name",
+            "gateway.example.com",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Search { block_store, .. } => {
+                assert_eq!(
+                    block_store.block_store_profile,
+                    ReadableBlockStoreProfile::GatewayHttp3
+                );
+                assert_eq!(
+                    block_store.block_store_gateway_dns_name,
+                    Some("gateway.example.com".to_string())
+                );
+            }
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
     fn copy_command_parses_required_args() {
         let cli = Cli::try_parse_from([
             "lexonarchivebuilder-indexer",

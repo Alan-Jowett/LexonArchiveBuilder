@@ -118,13 +118,35 @@ fn validate_dns_name(dns_name: &str) -> Result<String, BlockStoreError> {
     if trimmed.contains("://")
         || trimmed.contains('/')
         || trimmed.contains(':')
-        || trimmed.chars().any(char::is_whitespace)
+        || trimmed.chars().any(|character| {
+            !(character.is_ascii_alphanumeric() || character == '.' || character == '-')
+        })
     {
         return Err(BlockStoreError::BackendFailure(
-            "gateway dns name must be a bare host name without scheme, path, port, or whitespace"
+            "gateway dns name must be a bare host name containing only ASCII letters, digits, dots, and hyphens".into(),
+        ));
+    }
+
+    if trimmed.starts_with('.')
+        || trimmed.ends_with('.')
+        || trimmed.starts_with('-')
+        || trimmed.ends_with('-')
+    {
+        return Err(BlockStoreError::BackendFailure(
+            "gateway dns name must not start or end with a dot or hyphen".into(),
+        ));
+    }
+
+    if trimmed
+        .split('.')
+        .any(|label| label.is_empty() || label.starts_with('-') || label.ends_with('-'))
+    {
+        return Err(BlockStoreError::BackendFailure(
+            "gateway dns name labels must be non-empty and must not start or end with a hyphen"
                 .into(),
         ));
     }
+
     Ok(trimmed.to_string())
 }
 
@@ -440,6 +462,12 @@ mod tests {
             "gateway.example.com:443",
             "gateway.example.com/path",
             "gateway example.com",
+            "gateway@example.com",
+            "gateway.example.com?x=1",
+            "gateway.example.com#fragment",
+            ".gateway.example.com",
+            "gateway..example.com",
+            "gateway.-example.com",
         ] {
             let error = Http3BlockStore::new(dns_name).unwrap_err();
             assert!(matches!(error, BlockStoreError::BackendFailure(_)));
