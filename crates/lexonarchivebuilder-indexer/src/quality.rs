@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonArchiveBuilder contributors
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -1308,11 +1309,11 @@ fn random_walk_query(
     walk_index: u64,
 ) -> Result<Option<CorpusLeafEntry>, TreeQualityError> {
     let mut current_id = root_id;
-    let mut current_block = root_block.clone();
+    let mut current_block = Cow::Borrowed(root_block);
     let mut depth = 0usize;
     loop {
-        match current_block {
-            Block::Leaf(ref leaf) => {
+        match current_block.as_ref() {
+            Block::Leaf(leaf) => {
                 if leaf.entries.is_empty() {
                     return Ok(None);
                 }
@@ -1332,7 +1333,7 @@ fn random_walk_query(
                     Err(other) => Err(other),
                 };
             }
-            Block::Branch(ref branch) => {
+            Block::Branch(branch) => {
                 if branch.entries.is_empty() {
                     return Ok(None);
                 }
@@ -1355,7 +1356,7 @@ fn random_walk_query(
                     });
                 };
                 current_id = validated_child.hash;
-                current_block = validated_child.block;
+                current_block = Cow::Owned(validated_child.block);
                 depth += 1;
             }
         }
@@ -1452,6 +1453,7 @@ fn approximate_neighbors(
     if max_k == 0 {
         return Ok((Vec::new(), QueryAccessCapture::zeroed(&query.neighbor_id)));
     }
+    let started_at = Instant::now();
     let target = EncodedTargetEmbedding::new(
         encode_embedding_values(
             &query.embedding,
@@ -1462,7 +1464,6 @@ fn approximate_neighbors(
     );
     let counting_store = Arc::new(CountingBlockStore::new(store));
     let search_store = Arc::clone(&counting_store);
-    let started_at = Instant::now();
     let result = crate::block_store::block_on_future_factory(move || async move {
         search_with_partial_retry(
             searcher,
@@ -1539,7 +1540,12 @@ fn summarize_query_accesses(query_accesses: &[QueryAccessCapture]) -> QueryAcces
     let mut touched_blocks = HashMap::<BlockHash, QueryTouchedBlock>::new();
     let mut by_level = BTreeMap::<u64, HashMap<BlockHash, QueryTouchedBlock>>::new();
     let mut estimated_rtts_by_level = BTreeMap::<u64, usize>::new();
+    let mut total_query_elapsed_micros = 0u64;
+    let mut max_query_elapsed_micros = 0u64;
     for query_access in query_accesses {
+        let elapsed = query_access.metrics.actual_query_elapsed_micros;
+        total_query_elapsed_micros = total_query_elapsed_micros.saturating_add(elapsed);
+        max_query_elapsed_micros = max_query_elapsed_micros.max(elapsed);
         for (&block_id, &touch) in &query_access.touched_blocks {
             touched_blocks.entry(block_id).or_insert(touch);
             by_level
@@ -1569,24 +1575,13 @@ fn summarize_query_accesses(query_accesses: &[QueryAccessCapture]) -> QueryAcces
             .iter()
             .map(|query| query.metrics.estimated_rtts)
             .sum(),
-        total_query_elapsed_micros: query_accesses
-            .iter()
-            .map(|query| query.metrics.actual_query_elapsed_micros)
-            .sum(),
+        total_query_elapsed_micros,
         mean_query_elapsed_micros: if query_accesses.is_empty() {
             0
         } else {
-            query_accesses
-                .iter()
-                .map(|query| query.metrics.actual_query_elapsed_micros)
-                .sum::<u64>()
-                / query_accesses.len() as u64
+            total_query_elapsed_micros / query_accesses.len() as u64
         },
-        max_query_elapsed_micros: query_accesses
-            .iter()
-            .map(|query| query.metrics.actual_query_elapsed_micros)
-            .max()
-            .unwrap_or(0),
+        max_query_elapsed_micros,
         levels,
     }
 }
