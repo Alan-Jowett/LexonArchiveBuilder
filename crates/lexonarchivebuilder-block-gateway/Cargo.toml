@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonArchiveBuilder contributors
+
+[package]
+name = "lexonarchivebuilder-block-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+bytes.workspace = true
+clap.workspace = true
+h3.workspace = true
+h3-axum.workspace = true
+h3-quinn.workspace = true
+lexonarchivebuilder-indexer.workspace = true
+lexongraph-block-store.workspace = true
+lexongraph-block-store-azure-table.workspace = true
+quinn.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+lexongraph-block.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
