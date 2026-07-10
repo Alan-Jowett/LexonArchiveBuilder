@@ -12,6 +12,5 @@ RUN apt-get update \
 
 WORKDIR /workspace
 COPY --from=builder /workspace/target/release/lexonarchivebuilder-block-gateway /usr/local/bin/lexonarchivebuilder-block-gateway
-ENV LEXONARCHIVEBUILDER_BLOCK_GATEWAY_SAS_URL=
 
 ENTRYPOINT ["lexonarchivebuilder-block-gateway", "serve", "--listen-addr", "0.0.0.0:443"]
