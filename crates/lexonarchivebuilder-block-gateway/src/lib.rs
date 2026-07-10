@@ -57,12 +57,14 @@ pub fn build_router(store: Arc<dyn BlockStore + Send + Sync>) -> Router {
 pub async fn serve(config: GatewayConfig) -> anyhow::Result<()> {
     install_rustls_provider();
 
-    let store = Arc::new(AzureTableBlockStoreV2::new(&config.sas_url).with_context(|| {
-        format!(
-            "failed to initialize Azure Table block store from SAS URL configured for {}",
-            config.listen_addr
-        )
-    })?);
+    let store = Arc::new(
+        AzureTableBlockStoreV2::new(&config.sas_url).with_context(|| {
+            format!(
+                "failed to initialize Azure Table block store from SAS URL configured for {}",
+                config.listen_addr
+            )
+        })?,
+    );
     let app = build_router(store);
     let server_config =
         build_quic_server_config(&config.certificate_path, &config.private_key_path)?;
