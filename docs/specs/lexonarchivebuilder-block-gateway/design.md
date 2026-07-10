@@ -11,7 +11,7 @@ derived from `docs/specs/lexonarchivebuilder-block-gateway/requirements.md`.
 ## Scope
 
 This document specifies the LexonArchiveBuilder-owned design for a separate
-retrieval-only HTTP block gateway that:
+retrieval-only HTTP/3 block gateway that:
 
 - fronts an approved Azure Table-backed delegated `BlockStore` profile
 - serves immutable block bytes from `/block/<block_id>`
