@@ -5,15 +5,16 @@
 
 ## Status
 
-Phase 2 specification patch for the approved repository-owned Docker image
-publication workflow in
+Approved specification package with implemented block-gateway image-publication
+increment for the repository-owned Docker image publication workflow in
 `docs/specs/lexonarchivebuilder-image-publishing/requirements.md`.
 
 ## Scope
 
 This document specifies the LexonArchiveBuilder-owned design for realizing a
 hosted workflow that publishes self-contained Linux Docker images for the
-repository's current container entrypoints.
+repository's current container entrypoints, including the additive
+`lexonarchivebuilder-block-gateway` runtime image.
 
 This document is layered on top of:
 
@@ -24,6 +25,8 @@ This document is layered on top of:
 - `crates/lexonarchivebuilder-indexer/Dockerfile`
 - `crates/lexonarchivebuilder-indexer/Dockerfile.scale-test`
 - `crates/lexonarchivebuilder-mcp/Dockerfile`
+- `docs/specs/lexonarchivebuilder-block-gateway/requirements.md`
+- `docs/specs/lexonarchivebuilder-block-gateway/design.md`
 
 This document does not define release notes, GitHub Releases, non-GHCR
 distribution, multi-architecture publication, or deployment orchestration.
@@ -39,6 +42,7 @@ distribution, multi-architecture publication, or deployment orchestration.
 ### Indirectly affected artifacts
 
 - `.github/workflows/` image-publication workflow definitions
+- `crates/lexonarchivebuilder-block-gateway/Dockerfile`
 - `crates/lexonarchivebuilder-indexer/Dockerfile`
 - `crates/lexonarchivebuilder-indexer/Dockerfile.scale-test`
 - `crates/lexonarchivebuilder-mcp/Dockerfile`
@@ -98,6 +102,7 @@ entrypoint:
 1. `lexonarchivebuilder-indexer`
 2. `lexonarchivebuilder-scale-test`
 3. `lexonarchivebuilder-mcp`
+4. `lexonarchivebuilder-block-gateway`
 
 Each matrix entry maps to the existing repository Dockerfile that owns that
 entrypoint.
@@ -147,6 +152,19 @@ because it exists in the source tree.
 
 **Traces to:** RQ-IMG-004, RQ-IMG-007
 
+### DSG-IMG-006A `Block-gateway runtime packaging`
+
+The published `lexonarchivebuilder-block-gateway` image packages the
+repository-owned runtime surface needed to launch the gateway, including the
+gateway binary and its documented container entrypoint, while keeping the SAS
+URL plus certificate and private-key material external to the image.
+
+This preserves the already approved gateway startup contract, where those
+values are provided at runtime through flags, environment, or mounted files,
+rather than redefining packaging as a secret-distribution mechanism.
+
+**Traces to:** RQ-IMG-004A, RQ-IMG-009, RQ-BGW-004, RQ-BGW-009
+
 ### DSG-IMG-007 `Scale-test completeness`
 
 The published `lexonarchivebuilder-scale-test` image embeds its wrapper-owned
@@ -188,5 +206,6 @@ matrix boundary if later requirements approve it.
 | DSG-IMG-004 | RQ-IMG-006 |
 | DSG-IMG-005 | RQ-IMG-008 |
 | DSG-IMG-006 | RQ-IMG-004, RQ-IMG-007 |
+| DSG-IMG-006A | RQ-IMG-004A |
 | DSG-IMG-007 | RQ-IMG-005, RQ-IMG-009 |
 | DSG-IMG-009 | RQ-IMG-007 |

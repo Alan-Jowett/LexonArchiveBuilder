@@ -5,9 +5,9 @@
 
 ## Document Status
 
-- **Phase:** Phase 2 - Specification Changes
-- **Status:** Approved requirements patch being propagated into design and validation
-- **Scope:** Repository-owned container-image publishing workflow for Linux Docker consumers of LexonArchiveBuilder runtime and test images
+- **Phase:** Phase 8 - Create Deliverable
+- **Status:** Approved specification package with implemented block-gateway image-publication increment
+- **Scope:** Repository-owned container-image publishing workflow for Linux Docker consumers of LexonArchiveBuilder runtime and test images, including the additive `lexonarchivebuilder-block-gateway` runtime image
 
 ## USER-REQUEST
 
@@ -21,6 +21,10 @@
 - **UR-IMG-8 [ASSUMPTION]:** The first publishing increment should target GitHub Container Registry because the repository already names GHCR image tags in its deployment boundary and the source repository is hosted on GitHub.
 - **UR-IMG-9 [ASSUMPTION]:** The first publishing increment should optimize for Linux-hosted Docker use and does not need to introduce a multi-architecture publication contract unless a later request makes that necessary.
 - **UR-IMG-10 [UNKNOWN]:** The long-term release-tag policy for published images is not yet specified beyond the need for a reusable publication workflow.
+- **UR-IMG-11 [KNOWN]:** Add a Docker container for `lexonarchivebuilder-block-gateway` and add CI publication for it.
+- **UR-IMG-12 [KNOWN]:** This increment should extend the existing image-publication boundary rather than redesigning the broader publication workflow.
+- **UR-IMG-13 [KNOWN]:** The published `lexonarchivebuilder-block-gateway` image should keep the SAS URL plus certificate and private-key material external at runtime rather than baking those secrets into the image.
+- **UR-IMG-14 [INFERRED]:** Because the gateway runtime already depends on operator-supplied network address, SAS URL, and certificate files, the image contract should package the runtime binary and its repository-owned launch surface while preserving runtime secret injection through flags, environment, or mounted files.
 
 ## Change Manifest
 
@@ -33,6 +37,8 @@
 | CM-IMG-005 | Add | Preserve architecture and environment invariants by keeping image publication separate from indexing, MCP, storage, and embedding semantics | UR-IMG-6 |
 | CM-IMG-006 | Add | Constrain the first increment to Linux Docker consumption without requiring a new multi-architecture contract | UR-IMG-2, UR-IMG-9 |
 | CM-IMG-007 | Add | Record the unresolved long-term release-tag policy so the first workflow does not silently over-commit to a release process that was not requested | UR-IMG-10 |
+| CM-IMG-008 | Revise | Expand the approved published image set so the existing workflow also publishes `lexonarchivebuilder-block-gateway` without redesigning the broader image-publication boundary | UR-IMG-11, UR-IMG-12 |
+| CM-IMG-009 | Add | Require the published block-gateway image to package its repository-owned runtime surface while keeping SAS and certificate material external at runtime | UR-IMG-13, UR-IMG-14 |
 
 ## Before / After
 
@@ -56,6 +62,16 @@
 - **Before [KNOWN]:** Existing deployment requirements refer to GHCR image tags, but the repository does not yet define the publication workflow that would supply those tags.
 - **After [KNOWN]:** The repository defines image-publication requirements aligned with GHCR-backed downstream consumption.
 
+### BA-IMG-005
+
+- **Before [KNOWN]:** The approved image-publication boundary covered `lexonarchivebuilder-indexer`, `lexonarchivebuilder-scale-test`, and `lexonarchivebuilder-mcp`, but not the newly added `lexonarchivebuilder-block-gateway` runtime.
+- **After [KNOWN]:** The requirements expand the approved image set so the existing publication workflow also covers `lexonarchivebuilder-block-gateway`.
+
+### BA-IMG-006
+
+- **Before [KNOWN]:** The image-publication requirements defined self-contained runtime assets generically, but they did not spell out how the new block-gateway image should separate packaged runtime files from runtime-injected secrets and certificates.
+- **After [KNOWN]:** The requirements now state that the block-gateway image packages its repository-owned runtime surface while leaving the SAS URL plus certificate/private-key material external at runtime.
+
 ## Requirements
 
 ### Functional Requirements
@@ -75,9 +91,10 @@ The first publishing increment SHALL publish all current repository-owned image 
 1. `lexonarchivebuilder-indexer`
 2. `lexonarchivebuilder-scale-test`
 3. `lexonarchivebuilder-mcp`
+4. `lexonarchivebuilder-block-gateway`
 
 - **Boundary [KNOWN]:** This requirement applies to the current repository image surfaces and does not by itself require future image families.
-- **Traceability:** UR-IMG-3, UR-IMG-4
+- **Traceability:** UR-IMG-3, UR-IMG-4, UR-IMG-11, UR-IMG-12
 
 #### RQ-IMG-003 - Hosted publication workflow
 
@@ -92,7 +109,15 @@ Each published image SHALL contain the repository-owned files required by its do
 
 - **Required property [KNOWN]:** Callers should not need a repository checkout at runtime merely to supply files that the image's own documented entrypoint expects to exist inside the image.
 - **Boundary [INFERRED]:** Images only need to embed repository-owned runtime assets that are required by their documented entrypoints; they do not need to embed unrelated repository content.
-- **Traceability:** UR-IMG-2, UR-IMG-7
+- **Traceability:** UR-IMG-2, UR-IMG-7, UR-IMG-14
+
+#### RQ-IMG-004A - Block-gateway runtime secret externalization
+
+The published `lexonarchivebuilder-block-gateway` image SHALL package the gateway's repository-owned runtime surface without embedding the SAS URL, certificate, or private-key material required for a production invocation.
+
+- **Required property [KNOWN]:** The image remains usable only when operators provide those values through runtime configuration or mounted secret files rather than through image-baked credentials.
+- **Boundary [INFERRED]:** This requirement constrains packaging and secret placement only; it does not redefine the gateway's approved startup-time configuration contract.
+- **Traceability:** UR-IMG-13, UR-IMG-14
 
 #### RQ-IMG-005 - Scale-test runtime completeness
 
@@ -160,8 +185,9 @@ The image-publication workflow SHALL remain a packaging surface and SHALL NOT co
 |---|---|---|
 | Indexing remains separate from search serving | Preserved | Image publication packages existing entrypoints but does not merge their runtime roles |
 | Local/testing versus production behavior stays behind stable adapters | Preserved | The workflow publishes reusable artifacts without redefining environment-specific storage or embedding contracts |
-| The architecture remains extensible to future content types | Preserved | The packaging boundary is image-entrypoint-oriented rather than hard-coded to only today's content types |
+| The architecture remains extensible to future content types | Preserved | The packaging boundary remains image-entrypoint-oriented rather than hard-coded to only today's content types |
 | The repository remains subordinate to LexonGraph-owned indexing and search contracts | Preserved | Publishing prebuilt images does not redefine delegated upstream APIs or behaviors |
+| Runtime secrets stay outside published image artifacts when the runtime contract already expects operator-supplied credentials | Preserved with clarified packaging rule | The block-gateway image may package its runtime binary and launch surface, but the SAS URL and certificate material remain external at runtime |
 
 ## Coverage Notes
 
@@ -171,9 +197,16 @@ The image-publication workflow SHALL remain a packaging surface and SHALL NOT co
   - `crates/lexonarchivebuilder-indexer/Dockerfile:1-16`
   - `crates/lexonarchivebuilder-indexer/Dockerfile.scale-test:1-16`
   - `crates/lexonarchivebuilder-mcp/Dockerfile:1-16`
+  - `.github/workflows/publish-images.yml:1-75`
+  - `docs/specs/lexonarchivebuilder-block-gateway/requirements.md:8-183`
+  - `crates/lexonarchivebuilder-block-gateway/Cargo.toml:1-32`
+  - `crates/lexonarchivebuilder-block-gateway/src/main.rs:1-57`
   - `docs/specs/lexonarchivebuilder-deployment/requirements.md:11-29`
   - user request in this session: "add a workflow to publish docker images that contain the files required to run the tests on a Linux machine with docker"
   - user clarification in this session: "publish all of them"
+  - user request in this session: "create a docker container and add a ci step to publish it"
+  - user clarification in this session selecting `Yes — add only \`lexonarchivebuilder-block-gateway\` to the existing publication boundary (Recommended)`
+  - user clarification in this session selecting `Yes — keep credentials and certificates external at runtime (Recommended)`
 - **Excluded from this requirements artifact [KNOWN]:**
   - implementation details of the workflow file
   - Dockerfile edits before the implementation phase

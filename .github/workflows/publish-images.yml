@@ -40,6 +40,8 @@ jobs:
             dockerfile: crates/lexonarchivebuilder-indexer/Dockerfile.scale-test
           - image: lexonarchivebuilder-mcp
             dockerfile: crates/lexonarchivebuilder-mcp/Dockerfile
+          - image: lexonarchivebuilder-block-gateway
+            dockerfile: crates/lexonarchivebuilder-block-gateway/Dockerfile
 
     steps:
       - uses: actions/checkout@v4
