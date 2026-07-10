@@ -5,18 +5,17 @@
 
 ## Status
 
-Approved specification package with implemented HTTP/3 block-gateway slice for the
-`lexonarchivebuilder-block-gateway` requirements in
-`docs/specs/lexonarchivebuilder-block-gateway/requirements.md`.
+Approved specification package with implemented Azure Table overlay gateway mode
+derived from `docs/specs/lexonarchivebuilder-block-gateway/requirements.md`.
 
 ## Scope
 
 This document specifies the LexonArchiveBuilder-owned design for a separate
-retrieval-only HTTP block gateway that:
+retrieval-only HTTP/3 block gateway that:
 
-- fronts the delegated LexonGraph Azure Storage Table v2 block-store
+- fronts an approved Azure Table-backed delegated `BlockStore` profile
 - serves immutable block bytes from `/block/<block_id>`
-- uses startup-time SAS configuration
+- uses startup-time storage-profile configuration
 - returns block bytes as `application/octet-stream`
 - projects immutable-cache semantics for successful responses
 - remains deployable as a VM-hosted process, containerized process, or
@@ -99,11 +98,19 @@ the approved current surface.
 
 ### DSG-BGW-003 `Startup-configured Azure Table dependency`
 
-The gateway binds its Azure Storage Table dependency at process startup through
-one SAS URL configuration input.
+The gateway binds its Azure Table-backed storage dependency at process startup.
 
-That input may be supplied through direct process arguments or equivalent
-startup environment configuration, but it is always bound before the gateway
+The startup configuration selects one approved backend profile:
+
+1. direct Azure Storage Table v2
+2. additive overlay-backed Azure Table v2
+
+The direct profile binds one Azure Storage Table SAS URL. The overlay-backed
+profile binds the Azure Storage Table v2 backing-store configuration together
+with one filesystem-cache root and one in-memory cache-capacity setting.
+
+Those inputs may be supplied through direct process arguments or equivalent
+startup environment configuration, but they are always bound before the gateway
 serves requests.
 
 The external HTTP caller never supplies backend credentials. This preserves one
@@ -111,13 +118,13 @@ stable fetch contract across VM, container, and function-hosted realizations,
 because hosting-specific request adapters only need to invoke the same
 preconfigured application boundary.
 
-**Traces to:** RQ-BGW-004, RQ-BGW-009
+**Traces to:** RQ-BGW-004, RQ-BGW-005A, RQ-BGW-005B, RQ-BGW-009
 
 ### DSG-BGW-004 `Delegated block-store reuse`
 
 The gateway resolves blocks through the same delegated LexonGraph Azure Table
-block-store family already present in the repository's direct Azure-oriented
-storage seam.
+block-store family already present in the repository's Azure-oriented storage
+seams.
 
 The gateway consumes the delegated block-store abstraction as a backend-owned
 byte store. It does not reinterpret block bytes, re-encode payloads, or define
@@ -127,6 +134,46 @@ This keeps the gateway aligned with the repository's shared `BlockStore`
 boundary rather than inventing a gateway-specific storage protocol.
 
 **Traces to:** RQ-BGW-005, RQ-BGW-012
+
+### DSG-BGW-004A `Approved gateway storage-profile set`
+
+The gateway's non-local storage boundary is intentionally fixed to one approved
+Azure Table-backed profile set rather than to an arbitrary caller-assembled
+storage stack.
+
+That profile set contains exactly:
+
+- the existing direct Azure Storage Table v2 profile
+- the additive overlay-backed profile composed of:
+  - an in-memory cache layer
+  - a local filesystem cache layer
+  - an Azure Storage Table v2 backing-data layer
+
+This preserves one repository-defined operator vocabulary for the gateway while
+keeping the overlay composition narrow and explicit.
+
+**Traces to:** RQ-BGW-005, RQ-BGW-005A, RQ-BGW-005B
+
+### DSG-BGW-004B `Storage-mode-neutral fetch path`
+
+The route handler and HTTP response projection consume only the delegated
+`BlockStore` byte-retrieval contract, independent of whether startup
+configuration selects the direct or overlay-backed Azure Table profile.
+
+The selected profile may change lookup latency or cache hit behavior, but it
+does not change:
+
+- route shape
+- block-identifier parsing
+- successful payload bytes
+- content type
+- immutable-cache response semantics
+- externally visible non-success normalization
+
+This keeps the overlay-backed mode an internal storage-adapter choice rather
+than a new externally visible gateway protocol.
+
+**Traces to:** RQ-BGW-005C, RQ-BGW-006, RQ-BGW-007, RQ-BGW-008
 
 ### DSG-BGW-005 `Exact-byte response projection`
 
@@ -162,9 +209,10 @@ runtime wrapper is:
 3. a function-hosted process
 
 The hosting wrapper may differ in process lifecycle, startup trigger, and
-deployment packaging, but it does not change the route shape, startup-time SAS
-binding model, delegated block-store dependency, success payload, cache
-semantics, or unsuccessful lookup contract.
+deployment packaging, but it does not change the route shape, startup-time
+storage-profile binding model, approved storage-profile set, delegated
+block-store dependency, success payload, cache semantics, or unsuccessful
+lookup contract.
 
 **Traces to:** RQ-BGW-002, RQ-BGW-009
 

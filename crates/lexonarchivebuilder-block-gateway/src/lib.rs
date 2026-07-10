@@ -4,11 +4,12 @@
 use std::fs::File;
 use std::io::BufReader;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+use std::{fmt, fmt::Formatter};
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
@@ -17,10 +18,14 @@ use axum::http::{HeaderValue, Response, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use bytes::Bytes;
+use clap::ValueEnum;
 use h3_axum::{BoxError, is_graceful_h3_close, serve_h3_with_axum};
 use lexonarchivebuilder_indexer::tree_tools::parse_block_hash;
 use lexongraph_block_store::BlockStore;
 use lexongraph_block_store_azure_table_v2::AzureTableBlockStoreV2;
+use lexongraph_block_store_fs::FilesystemBlockStore;
+use lexongraph_block_store_memory::MemoryBlockStore;
+use lexongraph_block_store_overlay::{OverlayBlockStore, OverlayStoreLayer, PassiveLayer};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::sync::Semaphore;
 use tracing::{debug, error, info, warn};
@@ -35,10 +40,29 @@ static NO_STORE_CACHE_CONTROL_HEADER: HeaderValue =
 static OCTET_STREAM_HEADER: HeaderValue = HeaderValue::from_static("application/octet-stream");
 static RUSTLS_PROVIDER: OnceLock<()> = OnceLock::new();
 
+#[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
+pub enum GatewayStorageProfile {
+    Production,
+    ProductionV2,
+}
+
+impl fmt::Display for GatewayStorageProfile {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Production => f.write_str("production"),
+            Self::ProductionV2 => f.write_str("production-v2"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GatewayConfig {
     pub listen_addr: SocketAddr,
-    pub sas_url: String,
+    pub storage_profile: GatewayStorageProfile,
+    pub block_store_container_sas_url: String,
+    pub block_store_filesystem_cache_root: Option<PathBuf>,
+    pub block_store_memory_cache_max_resident_blocks: Option<usize>,
+    pub block_store_prefix: Option<String>,
     pub certificate_path: std::path::PathBuf,
     pub private_key_path: std::path::PathBuf,
 }
@@ -63,14 +87,7 @@ pub fn build_router(store: Arc<dyn BlockStore + Send + Sync>) -> Router {
 pub async fn serve(config: GatewayConfig) -> anyhow::Result<()> {
     install_rustls_provider()?;
 
-    let store = Arc::new(
-        AzureTableBlockStoreV2::new(&config.sas_url).with_context(|| {
-            format!(
-                "failed to initialize Azure Table block store from SAS URL configured for {}",
-                config.listen_addr
-            )
-        })?,
-    );
+    let store = build_store(&config)?;
     let app = build_router(store);
     let server_config =
         build_quic_server_config(&config.certificate_path, &config.private_key_path)?;
@@ -95,6 +112,116 @@ pub async fn serve(config: GatewayConfig) -> anyhow::Result<()> {
                 error!(?error, "HTTP/3 connection failed");
             }
         });
+    }
+
+    Ok(())
+}
+
+fn build_store(config: &GatewayConfig) -> anyhow::Result<Arc<dyn BlockStore + Send + Sync>> {
+    validate_storage_profile_config(config)?;
+
+    let store: Arc<dyn BlockStore + Send + Sync> = match config.storage_profile {
+        GatewayStorageProfile::Production => Arc::new(build_overlay_store(config)?),
+        GatewayStorageProfile::ProductionV2 => {
+            Arc::new(build_direct_azure_table_store(config).with_context(|| {
+                format!(
+                    "failed to initialize Azure Table block store from block_store_container_sas_url configured for {}",
+                    config.listen_addr
+                )
+            })?)
+        }
+    };
+    Ok(store)
+}
+
+fn build_overlay_store(config: &GatewayConfig) -> anyhow::Result<OverlayBlockStore> {
+    let azure_backing_store = build_direct_azure_table_store(config)
+        .context("failed to initialize Azure Table backing store for overlay profile")?;
+    let memory_cache = MemoryBlockStore::new(
+        config
+            .block_store_memory_cache_max_resident_blocks
+            .expect("overlay profile validation should require a memory cache capacity"),
+    )
+    .map_err(|error| anyhow!(error.to_string()))
+    .context("failed to initialize in-memory overlay cache")?;
+    let filesystem_cache = FilesystemBlockStore::new(
+        config
+            .block_store_filesystem_cache_root
+            .as_ref()
+            .expect("overlay profile validation should require a filesystem cache root"),
+    )
+    .context("failed to initialize filesystem overlay cache")?;
+    let layers: Vec<Box<dyn OverlayStoreLayer>> = vec![
+        Box::new(PassiveLayer::cache(memory_cache)),
+        Box::new(PassiveLayer::cache(filesystem_cache)),
+        Box::new(PassiveLayer::writable(azure_backing_store)),
+    ];
+    OverlayBlockStore::new(layers)
+        .map_err(|error| anyhow!(error.to_string()))
+        .context("failed to initialize overlay block store")
+}
+
+fn build_direct_azure_table_store(
+    config: &GatewayConfig,
+) -> anyhow::Result<AzureTableBlockStoreV2> {
+    AzureTableBlockStoreV2::new(&config.block_store_container_sas_url)
+        .map_err(|error| anyhow!(error.to_string()))
+}
+
+fn validate_storage_profile_config(config: &GatewayConfig) -> anyhow::Result<()> {
+    if config.block_store_container_sas_url.trim().is_empty() {
+        bail!("block_store_container_sas_url must not be empty");
+    }
+    if config
+        .block_store_prefix
+        .as_deref()
+        .is_some_and(|prefix| !prefix.trim().is_empty())
+    {
+        bail!(
+            "non-empty block_store_prefix values are not supported by the Azure Table-backed gateway profiles"
+        );
+    }
+
+    match config.storage_profile {
+        GatewayStorageProfile::Production => {
+            if config
+                .block_store_filesystem_cache_root
+                .as_ref()
+                .is_none_or(|path| path.as_os_str().is_empty())
+            {
+                bail!(
+                    "production block_store_filesystem_cache_root is required for the overlay-backed gateway profile"
+                );
+            }
+            match config.block_store_memory_cache_max_resident_blocks {
+                Some(0) => {
+                    bail!(
+                        "production block_store_memory_cache_max_resident_blocks must be at least 1"
+                    );
+                }
+                Some(_) => {}
+                None => {
+                    bail!(
+                        "production block_store_memory_cache_max_resident_blocks is required for the overlay-backed gateway profile"
+                    );
+                }
+            }
+        }
+        GatewayStorageProfile::ProductionV2 => {
+            if config.block_store_filesystem_cache_root.is_some() {
+                bail!(
+                    "production-v2 block_store_filesystem_cache_root is not supported for the direct Azure Table gateway profile"
+                );
+            }
+            if config
+                .block_store_memory_cache_max_resident_blocks
+                .is_some()
+            {
+                bail!(
+                    "production-v2 block_store_memory_cache_max_resident_blocks is not supported for the direct Azure Table gateway profile"
+                );
+            }
+        }
     }
 
     Ok(())
@@ -273,6 +400,7 @@ mod tests {
     use axum::http::Request;
     use lexongraph_block::BlockHash;
     use lexongraph_block_store::{BlockIdStream, BlockStoreError};
+    use std::path::PathBuf;
     use tower::util::ServiceExt;
 
     #[derive(Default)]
@@ -417,5 +545,100 @@ mod tests {
             response.headers().get(CACHE_CONTROL),
             Some(&NO_STORE_CACHE_CONTROL_HEADER)
         );
+    }
+
+    fn test_gateway_config(storage_profile: GatewayStorageProfile) -> GatewayConfig {
+        GatewayConfig {
+            listen_addr: "127.0.0.1:443"
+                .parse()
+                .expect("socket address should parse"),
+            storage_profile,
+            block_store_container_sas_url: "https://example.table.core.windows.net/table?sig=test"
+                .into(),
+            block_store_filesystem_cache_root: None,
+            block_store_memory_cache_max_resident_blocks: None,
+            block_store_prefix: None,
+            certificate_path: PathBuf::from("cert.pem"),
+            private_key_path: PathBuf::from("key.pem"),
+        }
+    }
+
+    #[test]
+    fn overlay_profile_requires_filesystem_cache_root() {
+        let config = test_gateway_config(GatewayStorageProfile::Production);
+
+        let error = validate_storage_profile_config(&config)
+            .expect_err("overlay profile should require a filesystem cache root");
+
+        assert!(
+            error
+                .to_string()
+                .contains("block_store_filesystem_cache_root is required")
+        );
+    }
+
+    #[test]
+    fn overlay_profile_requires_memory_cache_capacity() {
+        let mut config = test_gateway_config(GatewayStorageProfile::Production);
+        config.block_store_filesystem_cache_root = Some(PathBuf::from("cache"));
+
+        let error = validate_storage_profile_config(&config)
+            .expect_err("overlay profile should require a memory cache capacity");
+
+        assert!(
+            error
+                .to_string()
+                .contains("block_store_memory_cache_max_resident_blocks is required")
+        );
+    }
+
+    #[test]
+    fn overlay_profile_rejects_zero_memory_cache_capacity() {
+        let mut config = test_gateway_config(GatewayStorageProfile::Production);
+        config.block_store_filesystem_cache_root = Some(PathBuf::from("cache"));
+        config.block_store_memory_cache_max_resident_blocks = Some(0);
+
+        let error = validate_storage_profile_config(&config)
+            .expect_err("overlay profile should reject zero memory cache capacity");
+
+        assert!(
+            error
+                .to_string()
+                .contains("block_store_memory_cache_max_resident_blocks must be at least 1")
+        );
+    }
+
+    #[test]
+    fn direct_profile_rejects_overlay_cache_arguments() {
+        let mut config = test_gateway_config(GatewayStorageProfile::ProductionV2);
+        config.block_store_filesystem_cache_root = Some(PathBuf::from("cache"));
+
+        let error = validate_storage_profile_config(&config)
+            .expect_err("direct profile should reject overlay cache arguments");
+
+        assert!(
+            error
+                .to_string()
+                .contains("block_store_filesystem_cache_root is not supported")
+        );
+    }
+
+    #[test]
+    fn non_empty_prefix_is_rejected_for_all_gateway_profiles() {
+        let mut config = test_gateway_config(GatewayStorageProfile::ProductionV2);
+        config.block_store_prefix = Some("prefix".into());
+
+        let error = validate_storage_profile_config(&config)
+            .expect_err("gateway profiles should reject non-empty prefixes");
+
+        assert!(error.to_string().contains("block_store_prefix"));
+    }
+
+    #[test]
+    fn direct_profile_accepts_container_sas_url_without_overlay_cache_arguments() {
+        let config = test_gateway_config(GatewayStorageProfile::ProductionV2);
+
+        validate_storage_profile_config(&config)
+            .expect("direct profile should accept container_sas_url without cache arguments");
     }
 }

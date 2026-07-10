@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 8 - Create Deliverable
-- **Status:** Approved specification package with implemented HTTP/3 block-gateway slice
-- **Scope:** `lexonarchivebuilder-block-gateway` retrieval-only boundary for serving immutable block bytes from the LexonGraph Azure Storage Table v2 block-store implementation through a low-cost HTTP daemon deployable on a VM, in a container, or as a function
+- **Status:** Approved specification package with implemented Azure Table overlay gateway mode
+- **Scope:** `lexonarchivebuilder-block-gateway` retrieval-only boundary for serving immutable block bytes through a low-cost HTTP daemon deployable on a VM, in a container, or as a function, using either the direct LexonGraph Azure Storage Table v2 block-store implementation or an additive overlay composed of in-memory cache, local filesystem cache, and Azure Storage Table v2 backing data
 
 ## USER-REQUEST
 
@@ -27,19 +27,26 @@
 - **UR-BGW-14 [INFERRED]:** Because LexonArchiveBuilder blocks are immutable and hash-addressed, long-lived cache semantics are safe only when the gateway preserves block-identity fidelity rather than rewriting payload bytes.
 - **UR-BGW-15 [INFERRED]:** The gateway should stay deployment-neutral and stateless so the same contract can fit VM, container, and function hosting shapes without a separate control-plane service.
 - **UR-BGW-16 [INFERRED]:** The request targets the existing production-oriented Azure Table block-store seam already present in the repository rather than introducing a new repository-owned table backend.
+- **UR-BGW-17 [KNOWN]:** Update the gateway so it can optionally use an overlay block store instead of only the raw Azure Storage Table block store.
+- **UR-BGW-18 [KNOWN]:** The overlay mode should be composed of an in-memory cache, a filesystem cache, and Azure Storage Table v2 as the backing data store.
+- **UR-BGW-19 [INFERRED]:** The existing direct Azure Storage Table v2 mode should remain available as an approved gateway backend mode rather than being replaced outright.
+- **UR-BGW-20 [INFERRED]:** The external HTTP contract should remain stable regardless of whether the gateway is configured for direct Azure Table access or the additive overlay-backed mode.
 
 ## Change Manifest
 
 | ID | Type | Summary | Traceability |
 |---|---|---|---|
 | CM-BGW-001 | Add | Introduce a new separate requirements boundary for `lexonarchivebuilder-block-gateway` | UR-BGW-1, UR-BGW-11 |
-| CM-BGW-002 | Add | Define a low-cost retrieval-only HTTP daemon over the existing Azure Table block-store seam | UR-BGW-2, UR-BGW-6, UR-BGW-13, UR-BGW-16 |
+| CM-BGW-002 | Revise | Define a low-cost retrieval-only HTTP daemon over an approved Azure Table-backed block-store profile set instead of a single direct Azure Table seam | UR-BGW-2, UR-BGW-6, UR-BGW-13, UR-BGW-16, UR-BGW-17, UR-BGW-18, UR-BGW-19 |
 | CM-BGW-003 | Add | Define a stable `GET /block/<block_id>` block-fetch endpoint that returns raw block bytes | UR-BGW-3, UR-BGW-7 |
-| CM-BGW-004 | Add | Require startup-time SAS URL configuration rather than per-request storage credentials | UR-BGW-4, UR-BGW-5 |
+| CM-BGW-004 | Revise | Require startup-time storage-profile configuration rather than per-request storage credentials | UR-BGW-4, UR-BGW-5, UR-BGW-17, UR-BGW-18 |
 | CM-BGW-005 | Add | Require immutable-cache response semantics for successful block fetches | UR-BGW-8, UR-BGW-14 |
 | CM-BGW-006 | Add | Preserve deployment neutrality across VM, container, and function hosting forms | UR-BGW-9, UR-BGW-10, UR-BGW-15 |
 | CM-BGW-007 | Add | Keep the gateway outside the MCP server boundary and avoid search-contract changes | UR-BGW-11, UR-BGW-13 |
 | CM-BGW-008 | Add | Normalize unsuccessful block lookups to `404` | UR-BGW-12 |
+| CM-BGW-009 | Add | Introduce an additive overlay-backed Azure Table mode composed of memory cache, filesystem cache, and Azure Table v2 backing data | UR-BGW-17, UR-BGW-18 |
+| CM-BGW-010 | Add | Preserve the existing direct Azure Table mode as an approved alternative backend profile | UR-BGW-19 |
+| CM-BGW-011 | Add | Preserve one unchanged external HTTP contract across the approved direct and overlay-backed gateway storage profiles | UR-BGW-20 |
 
 ## Before / After
 
@@ -68,6 +75,16 @@
 - **Before [KNOWN]:** The repository's intended shape emphasized no server-side processing beyond indexing and did not explicitly carve out a dedicated immutable-block retrieval daemon.
 - **After [KNOWN]:** The requirements add a scoped retrieval exception: a stateless immutable-block gateway that remains separate from MCP and avoids introducing a central control plane.
 
+### BA-BGW-006
+
+- **Before [KNOWN]:** The gateway requirements constrained the runtime to one direct Azure Storage Table v2 block-store dependency configured from a startup-time SAS URL.
+- **After [KNOWN]:** The gateway requirements constrain the runtime to an approved Azure Table-backed profile set with two startup-selected options: the existing direct Azure Storage Table v2 path and an additive overlay composed of in-memory cache, local filesystem cache, and Azure Storage Table v2 backing data.
+
+### BA-BGW-007
+
+- **Before [KNOWN]:** The requirements treated the gateway's backend choice as a single direct Azure Table seam, so cache layering above Azure Table would have been a contract change rather than an approved operator option.
+- **After [KNOWN]:** The requirements make the overlay-backed Azure Table mode additive, preserve the existing direct mode, and keep both modes behind the same retrieval-only HTTP contract.
+
 ## Requirements
 
 ### Functional Requirements
@@ -95,19 +112,45 @@ The gateway SHALL expose an HTTP endpoint at `/block/<block_id>` for immutable b
 - **Non-goal [KNOWN]:** This increment does not add write, delete, list, or search operations.
 - **Traceability:** UR-BGW-3, UR-BGW-13
 
-#### RQ-BGW-004 - Startup-time storage configuration
+#### RQ-BGW-004 - Startup-time storage-profile configuration
 
-The gateway SHALL obtain the Azure Storage Table SAS URL from process configuration at startup.
+The gateway SHALL obtain its Azure Table-backed storage dependency from process configuration at startup.
 
-- **Constraint [KNOWN]:** Callers do not supply storage credentials on each fetch request.
-- **Traceability:** UR-BGW-4, UR-BGW-5
+- **Direct mode [KNOWN]:** the direct Azure Storage Table v2 profile requires a startup-time SAS URL.
+- **Overlay mode [KNOWN]:** the additive overlay-backed Azure Table profile requires startup-time configuration for the Azure Storage Table v2 backing store plus the filesystem cache root and in-memory cache capacity.
+- **Constraint [KNOWN]:** Callers do not supply storage credentials or cache-selection inputs on each fetch request.
+- **Traceability:** UR-BGW-4, UR-BGW-5, UR-BGW-17, UR-BGW-18
 
-#### RQ-BGW-005 - Delegated Azure Table block-store retrieval
+#### RQ-BGW-005 - Approved delegated Azure Table block-store profiles
 
-The gateway SHALL resolve requested blocks through the LexonGraph-owned Azure Storage Table v2 block-store API already adopted by this repository's production-oriented direct Azure profile.
+The gateway SHALL resolve requested blocks through the LexonGraph-owned Azure Storage Table v2 block-store API using one approved startup-selected backend profile.
 
+- **Approved profiles [KNOWN]:** direct Azure Storage Table v2, or an additive overlay composed of in-memory cache, local filesystem cache, and Azure Storage Table v2 backing data.
 - **Constraint [INFERRED]:** The gateway must reuse the existing delegated `BlockStore` contract family rather than inventing a repository-local table-storage protocol.
-- **Traceability:** UR-BGW-6, UR-BGW-16
+- **Constraint [INFERRED]:** The overlay-backed profile is fixed to the repository-approved cache stack rather than an arbitrary caller-assembled storage graph.
+- **Traceability:** UR-BGW-6, UR-BGW-16, UR-BGW-17, UR-BGW-18, UR-BGW-19
+
+#### RQ-BGW-005A - Direct Azure Table mode preservation
+
+The existing direct Azure Storage Table v2 gateway mode SHALL remain an approved optional backend profile in this increment.
+
+- **Constraint [INFERRED]:** Adding the overlay-backed mode must not silently remove the current direct Azure Table operating mode.
+- **Traceability:** UR-BGW-17, UR-BGW-19
+
+#### RQ-BGW-005B - Overlay-backed Azure Table mode
+
+The additive overlay-backed gateway mode SHALL layer an in-memory cache and a local filesystem cache in front of Azure Storage Table v2 backing data.
+
+- **Constraint [KNOWN]:** The overlay-backed mode uses Azure Storage Table v2 for durable block bytes rather than substituting Azure Blob backing storage.
+- **Constraint [INFERRED]:** The cache layers are internal to the delegated storage dependency and do not redefine block identity or payload bytes.
+- **Traceability:** UR-BGW-17, UR-BGW-18, UR-BGW-20
+
+#### RQ-BGW-005C - Storage-mode-neutral HTTP contract
+
+The gateway's externally visible HTTP behavior SHALL remain unchanged across the approved direct and overlay-backed Azure Table profiles.
+
+- **Constraint [INFERRED]:** Route shape, successful response payload bytes, content type, cache semantics, and unsuccessful lookup normalization remain governed by the same gateway requirements regardless of selected backend profile.
+- **Traceability:** UR-BGW-17, UR-BGW-19, UR-BGW-20
 
 #### RQ-BGW-006 - Raw block-byte response
 
@@ -178,6 +221,7 @@ The gateway SHALL remain block-oriented and content-type-neutral so future conte
 - Introducing write, delete, list, or search operations on the gateway
 - Requiring Azure Front Door, a load balancer, or another higher-cost traffic-management layer in this increment
 - Defining a separate repository-owned storage-table protocol or backend outside the delegated LexonGraph Azure Table v2 block-store API
+- Introducing a plain Azure Blob-backed gateway mode or another non-Azure-Table durable backing store for this gateway increment
 - Finalizing the exact hosting choice among VM, container, or function
 - Finalizing the exact cache-header syntax for "cacheable forever"
 - Adding a local filesystem or local/testing block-store mode for this gateway in the first increment
@@ -188,7 +232,7 @@ The gateway SHALL remain block-oriented and content-type-neutral so future conte
 |---|---|---|
 | Indexing remains separate from search serving | Preserved | The gateway is retrieval-only and does not redefine indexing or MCP search semantics |
 | Existing MCP server contract remains stable | Preserved | The gateway is a separate boundary rather than an MCP-surface change |
-| Environment-specific adapters stay behind stable seams | Preserved with revised production seam | The gateway reuses the existing direct Azure Table block-store seam rather than exposing storage details on each request |
+| Environment-specific adapters stay behind stable seams | Preserved with revised approved storage-profile set | The gateway now supports either the existing direct Azure Table profile or the additive overlay-backed Azure Table profile while still keeping backend selection behind startup-time configuration |
 | Repository avoids a new central control plane | Preserved | The requirements constrain the gateway to a thin stateless daemon rather than a coordinating service |
 | Repository shape avoids broad new server-side processing beyond indexing | Revised with scoped exception | This patch adds a dedicated immutable-block retrieval surface, but limits it to simple block serving with no search, orchestration, or mutation semantics |
 | Future content-type extensibility remains possible | Preserved | The gateway is block-oriented and does not encode email- or document-specific behavior |
@@ -199,29 +243,31 @@ The gateway SHALL remain block-oriented and content-type-neutral so future conte
 - **Q-BGW-002 [UNKNOWN]:** Should the first executable realization require support for HEAD requests, or is GET-only sufficient in the initial contract?
 - **Q-BGW-003 [UNKNOWN]:** Should the gateway preserve any repository-owned diagnostics or health endpoint beyond the block-fetch surface, or should the first increment remain endpoint-minimal?
 - **Q-BGW-004 [UNKNOWN]:** Should a future local/testing realization emulate the Azure Table dependency for development, or remain production-oriented only?
+- **Q-BGW-005 [UNKNOWN]:** Should legacy direct-Azure startup inputs continue to imply the direct profile by default, or should operators be required to select direct versus overlay mode explicitly?
+- **Q-BGW-006 [UNKNOWN]:** Should the overlay-backed mode reuse the indexer's existing cache-configuration vocabulary exactly, or may the gateway define a narrower gateway-specific configuration surface over the same underlying profile?
 
 ## Coverage Notes
 
 - **Covered sources [KNOWN]:**
-  - `README.md:21-31`
-  - `README.md:45-52`
-  - `docs/specs/lexonarchivebuilder-mcp/requirements.md:87-100`
-  - `docs/specs/lexonarchivebuilder-deployment/requirements.md:116-121`
-  - `docs/specs/lexonarchivebuilder-indexer/requirements.md:166-169`
-  - `docs/specs/lexonarchivebuilder-indexer/design.md:1060-1079`
+  - `docs/specs/lexonarchivebuilder-block-gateway/requirements.md:8-194`
+  - `docs/specs/lexonarchivebuilder-block-gateway/design.md:14-188`
+  - `docs/specs/lexonarchivebuilder-block-gateway/validation.md:16-108`
+  - `docs/specs/lexonarchivebuilder-indexer/requirements.md:166-167`
+  - `docs/specs/lexonarchivebuilder-indexer/requirements.md:202-204`
+  - `docs/specs/lexonarchivebuilder-indexer/design.md:1065-1068`
+  - `crates/lexonarchivebuilder-block-gateway/src/lib.rs:42-58`
+  - `crates/lexonarchivebuilder-block-gateway/src/lib.rs:110-159`
+  - `crates/lexonarchivebuilder-block-gateway/src/main.rs:20-56`
   - `crates/lexonarchivebuilder-indexer/src/block_store.rs:21-25`
-  - `crates/lexonarchivebuilder-indexer/src/block_store.rs:78-83`
-  - user request in this session describing a low-cost daemon front-end to Azure Storage Table with `/block/<block_id>` retrieval
-  - user clarification in this session selecting `Yes — create a new separate spec package (Recommended)`
-  - user clarification in this session selecting `Process configuration at startup (Recommended)`
-  - user clarification in this session selecting `Yes — keep it as a separate daemon boundary (Recommended)`
-  - user clarification in this session selecting `Always 404 for any non-success lookup`
-  - user clarification in this session selecting `lexonarchivebuilder-block-gateway (Recommended)`
+  - `crates/lexonarchivebuilder-indexer/src/block_store.rs:47-83`
+  - `crates/lexonarchivebuilder-indexer/src/config.rs:118-136`
+  - `crates/lexonarchivebuilder-indexer/src/config.rs:380-429`
+  - user request in this session: "update the gateway to optionally add a mode where it use an overaly block store instead of the raw azure storage table block store. Overlay should be memory cache + file system cache + azure table block store v2 (for data)"
 
 - **Sampled claim re-checks [KNOWN]:**
-  - `README.md:23-31` still describes the repository as CDN-backed and intentionally separate between indexing and search serving.
-  - `docs/specs/lexonarchivebuilder-indexer/design.md:1060-1079` still defines the shared delegated `BlockStore` boundary used across repository-owned artifacts.
-  - `crates/lexonarchivebuilder-indexer/src/block_store.rs:21-25` and `:78-83` still show an existing Azure Table-backed `ConfiguredBlockStore::AzureTable` path wired through `AzureTableBlockStore`.
+  - `crates/lexonarchivebuilder-block-gateway/src/lib.rs:42-58` and `:110-124` now define `GatewayStorageProfile` and select either the overlay-backed or direct Azure Table profile in `build_store`, confirming the gateway runtime is profile-driven rather than single-profile.
+  - `crates/lexonarchivebuilder-indexer/src/block_store.rs:47-83` still shows existing repository prior art for both an overlay-backed store and a direct Azure Table v2 store under one `ConfiguredBlockStore` boundary.
+  - `crates/lexonarchivebuilder-indexer/src/config.rs:380-429` still enforces distinct validation rules for overlay-backed versus direct Azure Table-backed production profiles, confirming the repository already distinguishes those profile shapes.
 
 - **Excluded from this phase [KNOWN]:**
   - Rust implementation, host packaging, deployment automation, and tests
