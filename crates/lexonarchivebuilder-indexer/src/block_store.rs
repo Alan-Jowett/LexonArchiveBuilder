@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
 use lexongraph_block_store_azure_sdk::AzureBlobBlockStore;
-use lexongraph_block_store_azure_table::AzureTableBlockStore;
+use lexongraph_block_store_azure_table_v2::AzureTableBlockStoreV2;
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_block_store_memory::MemoryBlockStore;
 use lexongraph_block_store_overlay::{OverlayBlockStore, OverlayStoreLayer, PassiveLayer};
@@ -21,7 +21,7 @@ use crate::paths::resolve_path;
 pub enum ConfiguredBlockStore {
     Local(FilesystemBlockStore),
     Overlay(Arc<OverlayBlockStore>),
-    AzureTable(AzureTableBlockStore),
+    AzureTable(AzureTableBlockStoreV2),
 }
 
 impl ConfiguredBlockStore {
@@ -79,7 +79,7 @@ impl ConfiguredBlockStore {
         config
             .validate_for_azure_table()
             .map_err(|error| BlockStoreError::BackendFailure(error.to_string()))?;
-        AzureTableBlockStore::new(&config.container_sas_url).map(Self::AzureTable)
+        AzureTableBlockStoreV2::new(&config.container_sas_url).map(Self::AzureTable)
     }
 }
 
