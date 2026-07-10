@@ -2,7 +2,7 @@
 // Copyright (c) 2026 LexonArchiveBuilder contributors
 
 use std::fmt;
-use std::net::{Ipv6Addr, SocketAddr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -196,12 +196,41 @@ fn build_client_config() -> Result<quinn::ClientConfig, String> {
     Ok(quinn::ClientConfig::new(Arc::new(crypto)))
 }
 
+fn preferred_resolved_address(
+    addresses: impl IntoIterator<Item = SocketAddr>,
+) -> Result<SocketAddr, String> {
+    let resolved = addresses.into_iter().collect::<Vec<_>>();
+    resolved
+        .iter()
+        .copied()
+        .find(SocketAddr::is_ipv4)
+        .or_else(|| resolved.into_iter().next())
+        .ok_or_else(|| "gateway host did not resolve to an address".into())
+}
+
 fn build_client_endpoint() -> Result<quinn::Endpoint, String> {
-    let bind_addr: SocketAddr = (Ipv6Addr::UNSPECIFIED, 0).into();
-    let mut endpoint = quinn::Endpoint::client(bind_addr)
-        .map_err(|error| format!("failed to create QUIC client endpoint: {error}"))?;
-    endpoint.set_default_client_config(build_client_config()?);
-    Ok(endpoint)
+    let client_config = build_client_config()?;
+    let bind_candidates = [
+        SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)),
+        SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)),
+    ];
+    let mut last_error = None;
+
+    for bind_addr in bind_candidates {
+        match quinn::Endpoint::client(bind_addr) {
+            Ok(mut endpoint) => {
+                endpoint.set_default_client_config(client_config.clone());
+                return Ok(endpoint);
+            }
+            Err(error) => {
+                last_error = Some(format!(
+                    "failed to create QUIC client endpoint bound to {bind_addr}: {error}"
+                ));
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| "failed to create QUIC client endpoint".into()))
 }
 
 fn map_stream_error(error: StreamError) -> String {
@@ -269,11 +298,11 @@ impl Http3GatewayTransport {
         let address = if let Some(address) = resolved_address {
             address
         } else {
-            tokio::net::lookup_host((dns_name, DEFAULT_GATEWAY_PORT))
+            let resolved = tokio::net::lookup_host((dns_name, DEFAULT_GATEWAY_PORT))
                 .await
+                .map_err(|error| format!("failed to resolve gateway host {dns_name}: {error}"))?;
+            preferred_resolved_address(resolved)
                 .map_err(|error| format!("failed to resolve gateway host {dns_name}: {error}"))?
-                .next()
-                .ok_or_else(|| format!("gateway host {dns_name} did not resolve to an address"))?
         };
 
         let connection = self
@@ -502,6 +531,36 @@ mod tests {
         let state = transport.state.lock().await;
         assert_eq!(state.resolved_address, None);
         assert!(state.send_request.is_none());
+    }
+
+    #[test]
+    fn preferred_resolved_address_prefers_ipv4_when_available() {
+        let selected = preferred_resolved_address([
+            SocketAddr::from((Ipv6Addr::LOCALHOST, DEFAULT_GATEWAY_PORT)),
+            SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_GATEWAY_PORT)),
+        ])
+        .unwrap();
+
+        assert!(selected.is_ipv4());
+        assert_eq!(
+            selected,
+            SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_GATEWAY_PORT))
+        );
+    }
+
+    #[test]
+    fn preferred_resolved_address_accepts_ipv6_only_results() {
+        let selected = preferred_resolved_address([SocketAddr::from((
+            Ipv6Addr::LOCALHOST,
+            DEFAULT_GATEWAY_PORT,
+        ))])
+        .unwrap();
+
+        assert!(selected.is_ipv6());
+        assert_eq!(
+            selected,
+            SocketAddr::from((Ipv6Addr::LOCALHOST, DEFAULT_GATEWAY_PORT))
+        );
     }
 
     #[test]
