@@ -76,22 +76,24 @@ async fn main() -> anyhow::Result<()> {
             block_store_prefix,
             certificate,
             private_key,
-        } => serve(GatewayConfig {
-            listen_addr,
-            storage_profile,
-            block_store_container_sas_url: block_store_container_sas_url.ok_or_else(|| {
-                anyhow!(
-                    "block_store_container_sas_url is required for gateway storage profile {:?}",
-                    storage_profile
-                )
-            })?,
-            block_store_filesystem_cache_root,
-            block_store_memory_cache_max_resident_blocks,
-            block_store_prefix,
-            certificate_path: certificate,
-            private_key_path: private_key,
-        })
-        .await,
+        } => {
+            serve(GatewayConfig {
+                listen_addr,
+                storage_profile,
+                block_store_container_sas_url: block_store_container_sas_url.ok_or_else(|| {
+                    anyhow!(
+                        "block_store_container_sas_url is required for gateway storage profile {}",
+                        storage_profile
+                    )
+                })?,
+                block_store_filesystem_cache_root,
+                block_store_memory_cache_max_resident_blocks,
+                block_store_prefix,
+                certificate_path: certificate,
+                private_key_path: private_key,
+            })
+            .await
+        }
     }
 }
 

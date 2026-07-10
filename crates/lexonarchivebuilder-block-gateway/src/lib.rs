@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+use std::{fmt, fmt::Formatter};
 
 use anyhow::{Context, anyhow, bail};
 use axum::Router;
@@ -43,6 +44,15 @@ static RUSTLS_PROVIDER: OnceLock<()> = OnceLock::new();
 pub enum GatewayStorageProfile {
     Production,
     ProductionV2,
+}
+
+impl fmt::Display for GatewayStorageProfile {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Production => f.write_str("production"),
+            Self::ProductionV2 => f.write_str("production-v2"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
