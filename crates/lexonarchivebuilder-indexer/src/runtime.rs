@@ -1723,7 +1723,20 @@ fn prepare_request_replay_batches(
                 progress,
                 format!("Processing mailbox {}", resolved.display()),
             );
-            let expansion = expand_mailbox_item_with_stats(&resolved, metadata, block_store)?;
+            let expansion = match expand_mailbox_item_with_stats(&resolved, metadata, block_store) {
+                Ok(expansion) => expansion,
+                Err(MailboxExpansionError::EmptyMailbox { .. }) => {
+                    report_progress(
+                        progress,
+                        format!(
+                            "Skipping empty mailbox {}; prepared 0 delegated item(s)",
+                            resolved.display()
+                        ),
+                    );
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
             report_progress(
                 progress,
                 format!(
@@ -4072,6 +4085,88 @@ mod tests {
         );
         assert!(progress.iter().any(|line| {
             line.contains("embedding batch(es); waiting for planning pass completion")
+        }));
+        server.join();
+    }
+
+    #[tokio::test]
+    async fn run_request_skips_empty_mailboxes_and_continues_indexing() {
+        let temp = tempdir().unwrap();
+        let empty_mailbox_path = temp.path().join("2026-05.mail");
+        let mailbox_path = temp.path().join("2026-06.mbox");
+        fs::write(&empty_mailbox_path, b"").unwrap();
+        fs::write(
+            &mailbox_path,
+            b"From user@example.com Sat Jan 01 00:00:00 2026\nSubject: Progress\n\nBody\n",
+        )
+        .unwrap();
+
+        let server = spawn_embedding_server(1);
+        let request = BatchRequest {
+            environment: EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: server.base_url.clone(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            block_size_target: 65_536,
+            stage: ExecutionStage::FullPipeline,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
+            max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
+            items: vec![
+                BatchItemConfig::Mailbox {
+                    path: empty_mailbox_path
+                        .strip_prefix(temp.path())
+                        .unwrap()
+                        .to_path_buf(),
+                    metadata: BTreeMap::new(),
+                },
+                BatchItemConfig::Mailbox {
+                    path: mailbox_path
+                        .strip_prefix(temp.path())
+                        .unwrap()
+                        .to_path_buf(),
+                    metadata: BTreeMap::new(),
+                },
+            ],
+        };
+
+        let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let progress_capture = Arc::clone(&progress);
+        let summary = run_request_with_progress(
+            temp.path(),
+            request,
+            ClusteringConfigOverrides::default(),
+            None,
+            move |message| {
+                progress_capture.lock().unwrap().push(message);
+            },
+        )
+        .await
+        .unwrap();
+        let progress = progress.lock().unwrap();
+
+        assert!(!summary.block_ids.is_empty());
+        assert!(progress.iter().any(|line| {
+            line.contains("Skipping empty mailbox") && line.contains("2026-05.mail")
+        }));
+        assert!(
+            progress.iter().any(|line| {
+                line.contains("Processed mailbox") && line.contains("2026-06.mbox")
+            })
+        );
+        assert!(progress.iter().any(|line| {
+            line.contains("Embedded batch") && line.contains("completed 1 of 1 delegated item(s)")
         }));
         server.join();
     }

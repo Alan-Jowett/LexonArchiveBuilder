@@ -105,7 +105,11 @@ pub fn expand_batch_items(
     for item in &request.items {
         if let BatchItemConfig::Mailbox { path, metadata } = item {
             let resolved = resolve_path(request_dir, path);
-            items.extend(expand_mailbox_item(&resolved, metadata, store)?);
+            match expand_mailbox_item(&resolved, metadata, store) {
+                Ok(mailbox_items) => items.extend(mailbox_items),
+                Err(MailboxExpansionError::EmptyMailbox { .. }) => {}
+                Err(error) => return Err(error),
+            }
         }
     }
     Ok(items)
@@ -893,6 +897,69 @@ mod tests {
             items[1].content_ref,
             ContentRef::EmailChunk { .. }
         ));
+    }
+
+    #[test]
+    fn batch_expansion_skips_empty_mailboxes() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty_mailbox_path = dir.path().join("2026-04.mail");
+        let mailbox_path = dir.path().join("2026-05.mbox");
+        fs::write(&empty_mailbox_path, b"").unwrap();
+        fs::write(
+            &mailbox_path,
+            concat!(
+                "From alan@example.com Sat Jan 03 10:00:00 2026\n",
+                "Subject: Non-empty\n",
+                "\n",
+                "Body.\n"
+            ),
+        )
+        .unwrap();
+        let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
+        let request = BatchRequest {
+            environment: EnvironmentConfig::Local {
+                block_store_root: PathBuf::from("blocks"),
+                embedding: LocalEmbeddingConfig {
+                    base_url: "http://localhost:8080".into(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            block_size_target: 65_536,
+            stage: ExecutionStage::FullPipeline,
+            profile_version: lexongraph_streaming_indexer::PUBLISHED_PROFILE_V0_1_0,
+            max_concurrency: None,
+            ref_name: "test-branch".into(),
+            items: vec![
+                BatchItemConfig::Mailbox {
+                    path: empty_mailbox_path
+                        .strip_prefix(dir.path())
+                        .unwrap()
+                        .to_path_buf(),
+                    metadata: BTreeMap::new(),
+                },
+                BatchItemConfig::Mailbox {
+                    path: mailbox_path.strip_prefix(dir.path()).unwrap().to_path_buf(),
+                    metadata: BTreeMap::new(),
+                },
+            ],
+        };
+
+        let items = expand_batch_items(dir.path(), &request, &store).unwrap();
+
+        assert_eq!(items.len(), 1);
+        let metadata = metadata_to_text_map(&items[0].metadata);
+        assert_eq!(
+            metadata.get("email_subject"),
+            Some(&"Non-empty".to_string())
+        );
     }
 
     #[test]
