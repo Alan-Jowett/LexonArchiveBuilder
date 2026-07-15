@@ -234,6 +234,25 @@
 - **UR-209 [INFERRED]:** Because the gateway-backed profile is read-only,
   write-bearing indexing, publication, and copy-destination flows must remain on
   the existing writable profiles rather than silently degrading behavior.
+- **UR-210 [KNOWN]:** LexonArchiveBuilder should continue to index corpora whose
+  total logical data size exceeds available system memory.
+- **UR-211 [KNOWN]:** Both full-pipeline execution and clustering-only replay
+  execution should stay within a caller-configurable fixed memory budget rather
+  than retaining replay inputs, embeddings, or content-expansion state in
+  proportion to total corpus size.
+- **UR-212 [KNOWN]:** LexonArchiveBuilder should strongly prefer a non-spilling
+  realization of that fixed-memory contract; spilling replay inputs,
+  embeddings, or equivalent repository-owned staging artifacts to local storage
+  or `BlockStore` is acceptable only if downstream design can justify that a
+  purely streaming realization is not feasible under the approved upstream
+  lifecycle contract.
+- **UR-213 [INFERRED]:** Adding fixed-memory behavior must preserve the existing
+  stage contract, deterministic replay semantics, immutable-block idempotence,
+  and unchanged MCP search-serving behavior for already-indexed content.
+- **UR-214 [INFERRED]:** The fixed-memory contract should remain content-type-
+  neutral and environment-neutral so mailbox, document, and future content
+  sources participate through the same bounded-memory orchestration boundary in
+  local/testing and production-oriented profiles.
 
 ## Change Manifest
 
@@ -330,6 +349,8 @@
 | CM-INDEXER-089 | Revise | Add an opt-in rooted copy blind-write mode that skips destination existence reads, keeps the current read-before-write behavior as the default, and relaxes exact copied-versus-skipped accounting in the blind-write path | UR-184, UR-186, UR-196, UR-197 |
 | CM-INDEXER-090 | Revise | Add bounded asynchronous destination-write concurrency to rooted copy, expose an operator-selectable in-flight write limit defaulting to `64`, and apply that limit to both the default and blind-write paths whenever a destination write is required | UR-180, UR-184, UR-186, UR-196, UR-198, UR-199, UR-200, UR-201 |
 | CM-INDEXER-091 | Revise | Expand the approved block-store profile vocabulary with an additive `gateway-http3` read-only profile for immutable block fetches, while preserving the existing writable profiles for write-bearing and whole-store-traversal flows | UR-202, UR-203, UR-204, UR-205, UR-206, UR-207, UR-208, UR-209 |
+| CM-INDEXER-092 | Revise | Extend replay-based streaming indexing requirements so LexonArchiveBuilder's repository-owned orchestration remains within a caller-configurable fixed memory budget for both full-pipeline and clustering-only execution over corpora larger than RAM | UR-48, UR-59, UR-160, UR-210, UR-211, UR-213, UR-214 |
+| CM-INDEXER-093 | Add | Prefer purely streaming fixed-memory replay over storage spill, and allow spill-based staging only when downstream design proves it is unavoidable under the approved upstream lifecycle contract | UR-48, UR-160, UR-210, UR-211, UR-212, UR-213 |
 
 ## Before / After
 
@@ -799,6 +820,28 @@
   explicitly preserving the existing writable profiles for indexing,
   publication, and copy-destination flows.
 
+### BA-INDEXER-093
+
+- **Before [KNOWN]:** The requirements constrained concurrent leaf scheduling and
+  replay correctness, but they did not require LexonArchiveBuilder's
+  repository-owned replay orchestration to stay within a fixed memory budget
+  when corpus size exceeded available RAM.
+- **After [KNOWN]:** The requirements now require both full-pipeline and
+  clustering-only execution to keep repository-owned staging, replay, and
+  embedding-retention behavior within a caller-configurable fixed memory budget
+  instead of retaining corpus-scale state in memory.
+
+### BA-INDEXER-094
+
+- **Before [KNOWN]:** The requirements described replay-based streaming and
+  immutable replay-audit journaling, but they did not express whether
+  fixed-memory compliance should prefer pure streaming or may freely spill
+  staging state to storage.
+- **After [KNOWN]:** The requirements now prefer a non-spilling streaming
+  realization and permit spill-based staging only when downstream design can
+  justify that a purely streaming realization is not feasible under the
+  approved upstream lifecycle contract.
+
 ## Requirements
 
 ### Functional Requirements
@@ -846,6 +889,54 @@ LexonArchiveBuilder SHALL adapt the approved batch contract onto the replay-base
 - **Compatibility note [KNOWN]:** The latest known upstream lifecycle renames the repository's previously consumed training-oriented seam to a planning-oriented seam and introduces hierarchy-planning plus bottom-up-assembly status phases behind the same delegated indexing boundary.
 - **Idempotence constraint [INFERRED]:** Adapting to replay-based streaming indexing must preserve the existing immutable, hash-addressed rerun expectations for unchanged content.
 - **Traceability:** UR-3, UR-8, UR-31, UR-45, UR-46, UR-48, UR-49, UR-61, UR-62, UR-63
+
+#### RQ-INDEXER-003A1 - Fixed-memory replay orchestration
+
+LexonArchiveBuilder SHALL keep its repository-owned replay orchestration within a
+caller-configurable fixed memory budget even when the indexed corpus is larger
+than available system memory.
+
+- **Execution scope [KNOWN]:** This requirement applies to both full-pipeline
+  execution and clustering-only replay execution.
+- **Retention boundary [KNOWN]:** Repository-owned staging structures such as
+  replay-item inventories, mailbox-or-document expansion state, replay batches,
+  and stored-embedding retention SHALL NOT require resident memory that scales
+  linearly with total corpus size.
+- **Budget semantics [INFERRED]:** The approved memory budget constrains
+  repository-owned orchestration behavior rather than redefining opaque
+  upstream-owned model state, but LexonArchiveBuilder SHALL treat any upstream
+  incompatibility with this contract as an explicit adaptation finding rather
+  than silently accepting unbounded growth.
+- **Stage-contract boundary [KNOWN]:** Satisfying this requirement SHALL NOT
+  change the caller-visible stage contract, `BatchSummary` contract, or MCP
+  search-serving behavior for already-indexed content.
+- **Extensibility boundary [INFERRED]:** Future content types must participate
+  through the same bounded-memory orchestration boundary rather than adding
+  content-type-specific corpus-scale retention exceptions.
+- **Traceability:** UR-47, UR-48, UR-59, UR-160, UR-210, UR-211, UR-213, UR-214
+
+#### RQ-INDEXER-003A2 - Spill-avoidance preference for fixed-memory execution
+
+LexonArchiveBuilder SHALL prefer a purely streaming realization of the fixed-
+memory replay contract and SHALL treat spill-based staging as a constrained
+fallback rather than as the default architecture.
+
+- **Preference rule [KNOWN]:** Repository-owned staging should first be reduced
+  by streaming, segmentation, or replay-shape changes before introducing new
+  spill-to-storage behavior.
+- **Fallback gate [KNOWN]:** Spilling replay inputs, embeddings, or equivalent
+  repository-owned staging artifacts to local storage or `BlockStore` is
+  acceptable only when downstream design can justify that a non-spilling
+  realization is not feasible under the approved upstream replay and
+  finalization lifecycle.
+- **Parity rule [INFERRED]:** Any approved spill fallback must preserve the same
+  deterministic replay semantics across local/testing and production-oriented
+  profiles rather than creating divergent content-model behavior by
+  environment.
+- **Recoverability boundary [INFERRED]:** If spill is later approved, it must
+  remain subordinate to immutable replay-audit and mutable-ref invariants rather
+  than introducing a second authoritative replay catalog.
+- **Traceability:** UR-48, UR-160, UR-210, UR-211, UR-212, UR-213, UR-214
 
 #### RQ-INDEXER-003B - Layer-parallel delegated block processing
 
@@ -1905,6 +1996,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Copy idempotence remains subordinate to immutable block semantics | Preserved with explicit operator-selected tradeoff | Requirements keep read-before-write classification as the default rooted-copy path, allow an opt-in blind-write mode that still treats duplicate publication as safe operator behavior, and now permit bounded asynchronous destination writes without changing rooted reachability or truthful mode-specific outcome semantics |
 | Clustering configuration remains explicit and replayable | Preserved with revised contract | Requirements now treat the selected published profile version as the replay-relevant clustering input rather than a repository-local mode, algorithm, and option tuple |
 | Clustering-size behavior remains deterministic under the selected profile | Preserved with scoped local/testing exception | Normal batch behavior still assigns clustering cardinality to the selected published profile version, while the approved `0.7.0` ladder adds one repository-local deterministic rung table for local/testing evaluation only |
+| Large-corpus indexing remains memory-bounded at the repository orchestration layer | Revised with stronger execution constraint | Requirements now demand a caller-configurable fixed memory budget for repository-owned replay orchestration in both full-pipeline and clustering-only execution, while preferring pure streaming over spill-based staging |
 | Clustering-only replay does not require whole-store rediscovery | Revised with authoritative immutable audit artifact | Requirements now require a shared-BlockStore immutable replay-audit journal as the sole repository-owned replay authority and remove whole-store scan fallback |
 | Repository-owned progress artifacts stay aligned with immutable storage principles | Preserved with stronger alignment | Requirements now move replay and audit state onto immutable hash-addressed blocks plus a mutable head reference, matching the repository's broader storage model instead of retaining a special append-only file journal |
 | Required repository capabilities remain distinguishable from upstream regressions during the latest upgrade | Preserved with clarified scope | The requirements now force the upgrade to classify missing capabilities explicitly instead of silently narrowing split-stage replay, published-profile adoption, progress projection, or MCP-facing behavior |
@@ -1943,6 +2035,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - **Q-INDEXER-079 [UNKNOWN]:** Should a future increment add repository-documented recommended `RUST_LOG` filter presets for common debugging cases such as Azure Table transport, retry behavior, or HTTP wire visibility, or is raw operator-selected filtering sufficient?
 - **Q-INDEXER-080 [UNKNOWN]:** Should a future rooted-copy increment expose backend-specific blind-write optimizations more granularly, or is one repository-wide opt-in mode sufficient as long as the default preserves exact copied-versus-skipped accounting?
 - **Q-INDEXER-081 [UNKNOWN]:** After the first bounded-write increment lands with default limit `64`, should a future increment keep one shared repository-wide destination-write default across block-store backends, or allow backend-specific recommended defaults while preserving the same CLI surface?
+- **Q-INDEXER-082 [UNKNOWN]:** If downstream design concludes that purely streaming fixed-memory replay is not feasible under the approved upstream lifecycle, what proof threshold should be required before a spill-based fallback becomes an approved repository design?
 
 ## Coverage Notes
 
@@ -1963,6 +2056,9 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
   - user request in this session: "clean up the dead spec/code that is unrelated to the new profile version based path. It has left over stuff from the previous path where we tried to define it at this layer."
   - user request in this session: "the upstream LexonGraph API has evolved to allow either divisive or aggregation based clustering. We need to expose this as an option at this layer as well"
   - user clarification in this session: "I think it is important to both. Aggregate should be the default with an option to try out divisive (but I suspect that won't be interesting)"
+  - user request in this session: "fix LexonArchiveBuilder to work with fixed memory budget when data size exceeds memory"
+  - user clarification in this session selecting: "Both full-pipeline and clustering-only must stay within a caller-configurable memory budget, and spilling/replay to local disk or BlockStore is acceptable (Recommended)"
+  - user clarification in this session: "both, but prefer not to spill to storage unless we can prove its unavoidable. Try realy not to spill"
   - user clarification in this session selecting: "Preserve existing MCP/search behavior exactly (Recommended)"
   - user clarification in this session selecting: "Uniform content-type-agnostic control (Recommended)"
   - user clarification in this session selecting: "Yes, keep the same contract and default across environments (Recommended)"
