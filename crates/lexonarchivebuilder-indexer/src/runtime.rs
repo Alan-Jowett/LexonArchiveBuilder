@@ -211,6 +211,7 @@ enum ClusteringFailureInput {
 struct EmbeddingHealthDiagnostics {
     available_embedding_count: usize,
     missing_embedding_count: usize,
+    embedding_lookup_error_count: usize,
     undecodable_embedding_count: usize,
     non_finite_embedding_count: usize,
     zero_vector_count: usize,
@@ -224,6 +225,7 @@ struct EmbeddingHealthDiagnostics {
     non_zero_variance_dimension_count: Option<usize>,
     max_component_variance: Option<f64>,
     top_repeated_embedding_groups: Vec<RepeatedEmbeddingGroupDiagnostics>,
+    embedding_lookup_error_sample: Vec<EmbeddingLookupErrorDiagnostics>,
     suspicious_input_sample: Vec<SuspiciousClusteringFailureInput>,
 }
 
@@ -246,6 +248,13 @@ struct SuspiciousClusteringFailureInput {
     reasons: Vec<String>,
     embedding_fingerprint: Option<String>,
     l2_norm: Option<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct EmbeddingLookupErrorDiagnostics {
+    input: ClusteringFailureInput,
+    content_fingerprint: Option<String>,
+    error: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -390,7 +399,7 @@ struct ExternalizedStoredLeafEmbeddingProvider {
 struct ExternalizedReplayBatchIterator {
     db_path: PathBuf,
     batch_size: usize,
-    cursor: Option<(String, String)>,
+    cursor: Option<(String, Vec<u8>)>,
 }
 
 #[derive(Debug)]
@@ -421,6 +430,30 @@ struct RecordingEmbeddingProvider<EP> {
 enum StoredLeafEmbeddingProviderError {
     #[error("no stored embedding was available for the requested replay input")]
     MissingStoredEmbedding,
+    #[error("failed to open bounded replay state {path}: {source}")]
+    OpenReplayState {
+        path: String,
+        #[source]
+        source: rusqlite::Error,
+    },
+    #[error("failed to query bounded replay state {path}: {source}")]
+    QueryReplayState {
+        path: String,
+        #[source]
+        source: rusqlite::Error,
+    },
+    #[error("bounded replay state referenced invalid block id {block_id}: {message}")]
+    InvalidStoredEmbeddingBlockId { block_id: String, message: String },
+    #[error("failed to read stored embedding block {block_id}: {source}")]
+    ReadStoredEmbeddingBlock {
+        block_id: String,
+        #[source]
+        source: BlockStoreError,
+    },
+    #[error("stored embedding block {block_id} is missing")]
+    MissingStoredEmbeddingBlock { block_id: String },
+    #[error("stored embedding block {block_id} is invalid: {message}")]
+    InvalidStoredEmbeddingBlock { block_id: String, message: String },
 }
 
 #[cfg(test)]
@@ -431,7 +464,7 @@ enum AutoSizingBuiltInPlanningError {
 }
 
 trait ClusteringFailureEmbeddingSource {
-    fn embedding_for_hash(&self, input_hash: &[u8; 32]) -> Option<Vec<u8>>;
+    fn embedding_for_hash(&self, input_hash: &[u8; 32]) -> Result<Option<Vec<u8>>, String>;
 }
 
 impl StagedBlocks {
@@ -655,8 +688,8 @@ impl EmbeddingProvider for ValidateOnlyEmbeddingProvider {
 }
 
 impl ClusteringFailureEmbeddingSource for StoredLeafEmbeddingProvider {
-    fn embedding_for_hash(&self, input_hash: &[u8; 32]) -> Option<Vec<u8>> {
-        self.embeddings_by_input_hash.get(input_hash).cloned()
+    fn embedding_for_hash(&self, input_hash: &[u8; 32]) -> Result<Option<Vec<u8>>, String> {
+        Ok(self.embeddings_by_input_hash.get(input_hash).cloned())
     }
 }
 
@@ -669,27 +702,15 @@ impl EmbeddingProvider for ExternalizedStoredLeafEmbeddingProvider {
         _: &EmbeddingSpec,
     ) -> Result<Vec<u8>, Self::Error> {
         let key = hash_embedding_input(input).into_bytes();
-        self.embedding_for_hash(&key)
+        self.load_embedding_for_hash(&key)?
             .ok_or(StoredLeafEmbeddingProviderError::MissingStoredEmbedding)
     }
 }
 
 impl ClusteringFailureEmbeddingSource for ExternalizedStoredLeafEmbeddingProvider {
-    fn embedding_for_hash(&self, input_hash: &[u8; 32]) -> Option<Vec<u8>> {
-        let conn = Connection::open(&self.db_path).ok()?;
-        let block_id = conn
-            .query_row(
-                "SELECT block_id FROM replay_inputs WHERE input_hash = ?1",
-                params![input_hash.as_slice()],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .ok()??;
-        let block_hash = parse_block_hash(&block_id).ok()?;
-        let validated = block_on_block_store_future(self.block_store.get(&block_hash)).ok()??;
-        let replayed =
-            replay_item_from_validated_block(&validated, &self.embedding_spec).ok()??;
-        Some(replayed.1)
+    fn embedding_for_hash(&self, input_hash: &[u8; 32]) -> Result<Option<Vec<u8>>, String> {
+        self.load_embedding_for_hash(input_hash)
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -704,10 +725,10 @@ impl<EP> RecordingEmbeddingProvider<EP> {
 }
 
 impl<EP> ClusteringFailureEmbeddingSource for RecordingEmbeddingProvider<EP> {
-    fn embedding_for_hash(&self, input_hash: &[u8; 32]) -> Option<Vec<u8>> {
-        lock_unpoisoned(&self.embeddings_by_input_hash)
+    fn embedding_for_hash(&self, input_hash: &[u8; 32]) -> Result<Option<Vec<u8>>, String> {
+        Ok(lock_unpoisoned(&self.embeddings_by_input_hash)
             .get(input_hash)
-            .cloned()
+            .cloned())
     }
 }
 
@@ -745,7 +766,7 @@ impl ExternalizedReplayState {
     fn replay_input_block_ids(&self) -> Result<Vec<String>, RuntimeError> {
         let conn = open_externalized_replay_db(&self.db_path)?;
         let mut statement = conn
-            .prepare("SELECT block_id FROM replay_inputs ORDER BY content_key, metadata_json")
+            .prepare("SELECT block_id FROM replay_inputs ORDER BY content_key, metadata_sort_key")
             .map_err(|source| RuntimeError::ReplayStateSql {
                 path: self.db_path.display().to_string(),
                 source,
@@ -774,17 +795,78 @@ impl ExternalizedReplayState {
     }
 }
 
+impl ExternalizedStoredLeafEmbeddingProvider {
+    fn load_embedding_for_hash(
+        &self,
+        input_hash: &[u8; 32],
+    ) -> Result<Option<Vec<u8>>, StoredLeafEmbeddingProviderError> {
+        let db_path = self.db_path.display().to_string();
+        let conn = Connection::open(&self.db_path).map_err(|source| {
+            StoredLeafEmbeddingProviderError::OpenReplayState {
+                path: db_path.clone(),
+                source,
+            }
+        })?;
+        let block_id = conn
+            .query_row(
+                "SELECT block_id FROM replay_inputs WHERE input_hash = ?1",
+                params![input_hash.as_slice()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(
+                |source| StoredLeafEmbeddingProviderError::QueryReplayState {
+                    path: db_path,
+                    source,
+                },
+            )?;
+        let Some(block_id) = block_id else {
+            return Ok(None);
+        };
+        let block_hash = parse_block_hash(&block_id).map_err(|error| {
+            StoredLeafEmbeddingProviderError::InvalidStoredEmbeddingBlockId {
+                block_id: block_id.clone(),
+                message: error.to_string(),
+            }
+        })?;
+        let validated =
+            block_on_block_store_future(self.block_store.get(&block_hash)).map_err(|source| {
+                StoredLeafEmbeddingProviderError::ReadStoredEmbeddingBlock {
+                    block_id: block_id.clone(),
+                    source,
+                }
+            })?;
+        let Some(validated) = validated else {
+            return Err(StoredLeafEmbeddingProviderError::MissingStoredEmbeddingBlock { block_id });
+        };
+        let replayed = replay_item_from_validated_block(&validated, &self.embedding_spec)
+            .map_err(
+                |error| StoredLeafEmbeddingProviderError::InvalidStoredEmbeddingBlock {
+                    block_id: block_id.clone(),
+                    message: error.to_string(),
+                },
+            )?
+            .ok_or_else(
+                || StoredLeafEmbeddingProviderError::InvalidStoredEmbeddingBlock {
+                    block_id,
+                    message: "stored block does not contain a replayable leaf embedding".into(),
+                },
+            )?;
+        Ok(Some(replayed.1))
+    }
+}
+
 impl ExternalizedReplayBatchIterator {
     fn next_batch(&mut self) -> Result<Option<ReplayBatch>, RuntimeError> {
         let conn = open_externalized_replay_db(&self.db_path)?;
-        let rows = if let Some((content_key, metadata_json)) = &self.cursor {
+        let rows = if let Some((content_key, metadata_sort_key)) = &self.cursor {
             let mut statement = conn
                 .prepare(
-                    "SELECT content_key, metadata_json, record_bytes
+                    "SELECT content_key, metadata_sort_key, record_bytes
                      FROM replay_inputs
                      WHERE content_key > ?1
-                        OR (content_key = ?1 AND metadata_json > ?2)
-                     ORDER BY content_key, metadata_json
+                        OR (content_key = ?1 AND metadata_sort_key > ?2)
+                     ORDER BY content_key, metadata_sort_key
                      LIMIT ?3",
                 )
                 .map_err(|source| RuntimeError::ReplayStateSql {
@@ -793,11 +875,11 @@ impl ExternalizedReplayBatchIterator {
                 })?;
             statement
                 .query_map(
-                    params![content_key, metadata_json, self.batch_size as i64],
+                    params![content_key, metadata_sort_key, self.batch_size as i64],
                     |row| {
                         Ok((
                             row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
+                            row.get::<_, Vec<u8>>(1)?,
                             row.get::<_, Vec<u8>>(2)?,
                         ))
                     },
@@ -814,9 +896,9 @@ impl ExternalizedReplayBatchIterator {
         } else {
             let mut statement = conn
                 .prepare(
-                    "SELECT content_key, metadata_json, record_bytes
+                    "SELECT content_key, metadata_sort_key, record_bytes
                      FROM replay_inputs
-                     ORDER BY content_key, metadata_json
+                     ORDER BY content_key, metadata_sort_key
                      LIMIT ?1",
                 )
                 .map_err(|source| RuntimeError::ReplayStateSql {
@@ -827,7 +909,7 @@ impl ExternalizedReplayBatchIterator {
                 .query_map(params![self.batch_size as i64], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
+                        row.get::<_, Vec<u8>>(1)?,
                         row.get::<_, Vec<u8>>(2)?,
                     ))
                 })
@@ -846,8 +928,8 @@ impl ExternalizedReplayBatchIterator {
         }
         let mut items = Vec::with_capacity(rows.len());
         let mut audit_records = Vec::with_capacity(rows.len());
-        for (content_key, metadata_json, record_bytes) in rows {
-            self.cursor = Some((content_key, metadata_json));
+        for (content_key, metadata_sort_key, record_bytes) in rows {
+            self.cursor = Some((content_key, metadata_sort_key));
             let record = decode_externalized_replay_record(&self.db_path, &record_bytes)?;
             items.push(
                 replay_journal_record_to_item(&record)
@@ -1040,6 +1122,7 @@ fn published_planning_direction_name(direction: BuiltInPlanningDirection) -> Str
 }
 
 const SUSPICIOUS_INPUT_SAMPLE_LIMIT: usize = 5;
+const EXTERNALIZED_CLUSTERING_DIAGNOSTIC_INPUT_LIMIT: usize = 1024;
 const VARIANCE_EPSILON: f64 = 1e-12;
 
 #[derive(Clone, Debug, Default)]
@@ -1048,6 +1131,7 @@ struct EmbeddingObservation {
     l2_norm: Option<f64>,
     content_fingerprint: Option<String>,
     missing: bool,
+    lookup_error: Option<String>,
     undecodable: bool,
     non_finite: bool,
     zero_vector: bool,
@@ -1062,6 +1146,7 @@ fn build_embedding_health_diagnostics(
 ) -> EmbeddingHealthDiagnostics {
     let mut available_embedding_count = 0usize;
     let mut missing_embedding_count = 0usize;
+    let mut embedding_lookup_error_count = 0usize;
     let mut undecodable_embedding_count = 0usize;
     let mut non_finite_embedding_count = 0usize;
     let mut zero_vector_count = 0usize;
@@ -1087,15 +1172,26 @@ fn build_embedding_health_diagnostics(
         };
         let input_hash = hash_embedding_content(&content.media_type, &content.body);
         let content_fingerprint = Some(input_hash.to_string());
-        let Some(embedding_bytes) = embedding_source.embedding_for_hash(&input_hash.into_bytes())
-        else {
-            missing_embedding_count += 1;
-            observations.push(EmbeddingObservation {
-                content_fingerprint,
-                missing: true,
-                ..EmbeddingObservation::default()
-            });
-            continue;
+        let embedding_bytes = match embedding_source.embedding_for_hash(&input_hash.into_bytes()) {
+            Ok(Some(embedding_bytes)) => embedding_bytes,
+            Ok(None) => {
+                missing_embedding_count += 1;
+                observations.push(EmbeddingObservation {
+                    content_fingerprint,
+                    missing: true,
+                    ..EmbeddingObservation::default()
+                });
+                continue;
+            }
+            Err(error) => {
+                embedding_lookup_error_count += 1;
+                observations.push(EmbeddingObservation {
+                    content_fingerprint,
+                    lookup_error: Some(error),
+                    ..EmbeddingObservation::default()
+                });
+                continue;
+            }
         };
         available_embedding_count += 1;
 
@@ -1249,10 +1345,23 @@ fn build_embedding_health_diagnostics(
     top_repeated_embedding_groups.truncate(SUSPICIOUS_INPUT_SAMPLE_LIMIT);
 
     let mut suspicious_input_sample = Vec::new();
+    let mut embedding_lookup_error_sample = Vec::new();
     for (input, observation) in inputs.iter().zip(observations.iter()) {
+        if let Some(error) = observation.lookup_error.as_ref()
+            && embedding_lookup_error_sample.len() < SUSPICIOUS_INPUT_SAMPLE_LIMIT
+        {
+            embedding_lookup_error_sample.push(EmbeddingLookupErrorDiagnostics {
+                input: input.clone(),
+                content_fingerprint: observation.content_fingerprint.clone(),
+                error: error.clone(),
+            });
+        }
         let mut reasons = Vec::new();
         if observation.missing {
             reasons.push("missing-embedding".to_string());
+        }
+        if observation.lookup_error.is_some() {
+            reasons.push("embedding-lookup-error".to_string());
         }
         if observation.undecodable {
             reasons.push("undecodable-embedding".to_string());
@@ -1295,6 +1404,7 @@ fn build_embedding_health_diagnostics(
     EmbeddingHealthDiagnostics {
         available_embedding_count,
         missing_embedding_count,
+        embedding_lookup_error_count,
         undecodable_embedding_count,
         non_finite_embedding_count,
         zero_vector_count,
@@ -1308,6 +1418,7 @@ fn build_embedding_health_diagnostics(
         non_zero_variance_dimension_count,
         max_component_variance,
         top_repeated_embedding_groups,
+        embedding_lookup_error_sample,
         suspicious_input_sample,
     }
 }
@@ -1417,6 +1528,9 @@ fn build_externalized_clustering_failure_diagnostics(
     replay_state: &ExternalizedReplayState,
     embedding_spec: &EmbeddingSpec,
 ) -> Option<ClusteringFailureDiagnostics> {
+    if replay_state.total_items > EXTERNALIZED_CLUSTERING_DIAGNOSTIC_INPUT_LIMIT {
+        return None;
+    }
     let replay_batches = replay_state.collect_replay_batches().ok()?;
     build_clustering_failure_diagnostics(
         resolver,
@@ -2162,6 +2276,7 @@ async fn stream_request_ingestion_to_store(
             }
             batch_number += 1;
             let batch_items = std::mem::take(&mut buffered_items);
+            let batch_item_count = batch_items.len();
             let constructed = ingest_replay_batch_to_store(
                 block_store,
                 resolver.clone(),
@@ -2174,7 +2289,7 @@ async fn stream_request_ingestion_to_store(
                 completed_items,
             )
             .await?;
-            completed_items += constructed.block_ids.len();
+            completed_items += batch_item_count;
             staged.extend_constructed(&constructed);
         }
     }
@@ -2225,6 +2340,7 @@ async fn stream_request_ingestion_to_store(
                 }
                 batch_number += 1;
                 let batch_items = std::mem::take(&mut buffered_items);
+                let batch_item_count = batch_items.len();
                 let constructed = ingest_replay_batch_to_store(
                     block_store,
                     resolver.clone(),
@@ -2237,7 +2353,7 @@ async fn stream_request_ingestion_to_store(
                     completed_items,
                 )
                 .await?;
-                completed_items += constructed.block_ids.len();
+                completed_items += batch_item_count;
                 staged.extend_constructed(&constructed);
             }
         }
@@ -2246,6 +2362,7 @@ async fn stream_request_ingestion_to_store(
     if !buffered_items.is_empty() {
         batch_number += 1;
         let batch_items = std::mem::take(&mut buffered_items);
+        let batch_item_count = batch_items.len();
         let constructed = ingest_replay_batch_to_store(
             block_store,
             resolver.clone(),
@@ -2258,8 +2375,10 @@ async fn stream_request_ingestion_to_store(
             completed_items,
         )
         .await?;
+        completed_items += batch_item_count;
         staged.extend_constructed(&constructed);
     }
+    debug_assert_eq!(completed_items, total_items);
     report_progress(
         io.progress,
         format!(
@@ -2380,11 +2499,29 @@ fn replay_sort_key(item: &IndexItem<ContentRef>) -> (String, Vec<(String, String
     (content_key, metadata_key)
 }
 
-fn replay_sort_key_sql(item: &IndexItem<ContentRef>) -> Result<(String, String), RuntimeError> {
+fn append_comparable_sort_string(buffer: &mut Vec<u8>, value: &str) {
+    for byte in value.as_bytes() {
+        if *byte == 0 {
+            buffer.extend_from_slice(&[0, 1]);
+        } else {
+            buffer.push(*byte);
+        }
+    }
+    buffer.extend_from_slice(&[0, 0]);
+}
+
+fn encode_metadata_sort_key(metadata_key: &[(String, String)]) -> Vec<u8> {
+    let mut encoded = Vec::new();
+    for (key, value) in metadata_key {
+        append_comparable_sort_string(&mut encoded, key);
+        append_comparable_sort_string(&mut encoded, value);
+    }
+    encoded
+}
+
+fn replay_sort_key_sql(item: &IndexItem<ContentRef>) -> Result<(String, Vec<u8>), RuntimeError> {
     let (content_key, metadata_key) = replay_sort_key(item);
-    let metadata_json =
-        serde_json::to_string(&metadata_key).map_err(RuntimeError::RenderSummary)?;
-    Ok((content_key, metadata_json))
+    Ok((content_key, encode_metadata_sort_key(&metadata_key)))
 }
 
 #[cfg(test)]
@@ -3954,11 +4091,11 @@ fn initialize_externalized_replay_db(path: &Path) -> Result<Connection, RuntimeE
     conn.execute_batch(
         "CREATE TABLE replay_inputs (
             content_key TEXT NOT NULL,
-            metadata_json TEXT NOT NULL,
+            metadata_sort_key BLOB NOT NULL,
             block_id TEXT NOT NULL,
             record_bytes BLOB NOT NULL,
             input_hash BLOB,
-            PRIMARY KEY (content_key, metadata_json)
+            PRIMARY KEY (content_key, metadata_sort_key)
         );
         CREATE INDEX replay_inputs_by_hash ON replay_inputs(input_hash);",
     )
@@ -4043,20 +4180,41 @@ fn externalize_replay_batches_from_journal(
         source,
     })?;
     let db_path = temp_dir.path().join("bounded-replay.sqlite3");
-    let conn = initialize_externalized_replay_db(&db_path)?;
+    let mut conn = initialize_externalized_replay_db(&db_path)?;
+    let transaction = conn
+        .transaction()
+        .map_err(|source| RuntimeError::ReplayStateSql {
+            path: db_path.display().to_string(),
+            source,
+        })?;
+    let mut insert_statement = transaction
+        .prepare(
+            "INSERT OR IGNORE INTO replay_inputs
+                (content_key, metadata_sort_key, block_id, record_bytes, input_hash)
+             VALUES (?1, ?2, '', x'', NULL)",
+        )
+        .map_err(|source| RuntimeError::ReplayStateSql {
+            path: db_path.display().to_string(),
+            source,
+        })?;
+    let mut update_statement = transaction
+        .prepare(
+            "UPDATE replay_inputs
+             SET block_id = ?3, record_bytes = ?4, input_hash = ?5
+             WHERE content_key = ?1 AND metadata_sort_key = ?2",
+        )
+        .map_err(|source| RuntimeError::ReplayStateSql {
+            path: db_path.display().to_string(),
+            source,
+        })?;
     let mut loaded_items = 0usize;
     for_each_replay_journal_record_newest_first(store, mutable_ref_store, |record| {
         let Some(journal_item) = replay_journal_record_to_item(record) else {
             return Ok(());
         };
-        let (content_key, metadata_json) = replay_sort_key_sql(&journal_item)?;
-        let inserted = conn
-            .execute(
-                "INSERT OR IGNORE INTO replay_inputs
-                    (content_key, metadata_json, block_id, record_bytes, input_hash)
-                 VALUES (?1, ?2, '', x'', NULL)",
-                params![content_key.clone(), metadata_json.clone()],
-            )
+        let (content_key, metadata_sort_key) = replay_sort_key_sql(&journal_item)?;
+        let inserted = insert_statement
+            .execute(params![content_key.clone(), metadata_sort_key.clone()])
             .map_err(|source| RuntimeError::ReplayStateSql {
                 path: db_path.display().to_string(),
                 source,
@@ -4100,22 +4258,18 @@ fn externalize_replay_batches_from_journal(
             });
         }
         let encoded = encode_replay_journal_record(record)?;
-        conn.execute(
-            "UPDATE replay_inputs
-             SET block_id = ?3, record_bytes = ?4, input_hash = ?5
-             WHERE content_key = ?1 AND metadata_json = ?2",
-            params![
+        update_statement
+            .execute(params![
                 content_key,
-                metadata_json,
+                metadata_sort_key,
                 block_id,
                 encoded,
                 input_hash.into_bytes().to_vec(),
-            ],
-        )
-        .map_err(|source| RuntimeError::ReplayStateSql {
-            path: db_path.display().to_string(),
-            source,
-        })?;
+            ])
+            .map_err(|source| RuntimeError::ReplayStateSql {
+                path: db_path.display().to_string(),
+                source,
+            })?;
         loaded_items += 1;
         if loaded_items.is_multiple_of(10_000) {
             report_progress(
@@ -4125,6 +4279,14 @@ fn externalize_replay_batches_from_journal(
         }
         Ok(())
     })?;
+    drop(insert_statement);
+    drop(update_statement);
+    transaction
+        .commit()
+        .map_err(|source| RuntimeError::ReplayStateSql {
+            path: db_path.display().to_string(),
+            source,
+        })?;
     if loaded_items == 0 {
         return Err(RuntimeError::NoClusterableBlocks);
     }
@@ -6298,6 +6460,7 @@ mod tests {
         let embedding_health = EmbeddingHealthDiagnostics {
             available_embedding_count: 1,
             missing_embedding_count: 0,
+            embedding_lookup_error_count: 0,
             undecodable_embedding_count: 0,
             non_finite_embedding_count: 0,
             zero_vector_count: 1,
@@ -6311,6 +6474,7 @@ mod tests {
             non_zero_variance_dimension_count: Some(0),
             max_component_variance: Some(0.0),
             top_repeated_embedding_groups: Vec::new(),
+            embedding_lookup_error_sample: Vec::new(),
             suspicious_input_sample: vec![SuspiciousClusteringFailureInput {
                 input: ClusteringFailureInput::Document {
                     logical_id: "document:alpha.txt".into(),
@@ -7264,6 +7428,32 @@ mod tests {
                 ..
             } if path == "C:/temp/alpha.txt"
         ));
+    }
+
+    #[test]
+    fn replay_sort_key_sql_preserves_metadata_prefix_ordering() {
+        let shorter = IndexItem {
+            metadata: vec![(Value::Text("alpha".into()), Value::Text("beta".into()))],
+            content_ref: ContentRef::Inline {
+                media_type: "text/plain".into(),
+                body: b"same".to_vec(),
+            },
+        };
+        let longer = IndexItem {
+            metadata: vec![
+                (Value::Text("alpha".into()), Value::Text("beta".into())),
+                (Value::Text("gamma".into()), Value::Text("delta".into())),
+            ],
+            content_ref: ContentRef::Inline {
+                media_type: "text/plain".into(),
+                body: b"same".to_vec(),
+            },
+        };
+
+        let shorter_key = replay_sort_key_sql(&shorter).unwrap();
+        let longer_key = replay_sort_key_sql(&longer).unwrap();
+        assert!(replay_sort_key(&shorter) < replay_sort_key(&longer));
+        assert!(shorter_key < longer_key);
     }
 
     #[test]
