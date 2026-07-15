@@ -175,6 +175,40 @@ modes rather than introducing a separate stage-specific summary schema.
 **Traces to:** RQ-INDEXER-003A, RQ-INDEXER-003D, RQ-INDEXER-008,
 RQ-INDEXER-010A
 
+### DSG-LFI-001A1 `Fixed-memory replay adapter`
+
+LexonArchiveBuilder realizes the repository-owned replay adapter so resident
+memory stays bounded by a caller-configurable budget even when the indexed
+corpus is larger than RAM.
+
+The repository-owned runtime therefore avoids corpus-scale in-memory retention
+of replay-item inventories, mailbox-or-document expansion state, replay batches,
+or stored-embedding maps. Instead, it advances through the approved upstream
+lifecycle using streaming or segmented replay shapes whose live working set is
+bounded independently of total corpus size.
+
+This entry constrains repository-owned orchestration only. It does not redefine
+opaque upstream-owned model state, but it does require the adapter layer to
+surface any upstream incompatibility with bounded-memory replay as an explicit
+compatibility finding rather than normalizing unbounded retention in-repo.
+
+**Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-010A
+
+### DSG-LFI-001A2 `Streaming-first fixed-memory strategy`
+
+LexonArchiveBuilder treats purely streaming replay as the default realization of
+the fixed-memory contract.
+
+Design work should first reduce memory retention by reshaping repository-owned
+replay preparation, batching, and finalization handoff before introducing any
+spill-to-storage mechanism. If a later design concludes that spill is
+unavoidable under the approved upstream replay and finalization lifecycle, that
+spill path must remain subordinate to the same immutable replay-audit and
+mutable-reference authority already used for split-stage recovery; it may not
+introduce a second authoritative replay catalog.
+
+**Traces to:** RQ-INDEXER-003A2, RQ-INDEXER-003E1, RQ-INDEXER-003E3
+
 ### DSG-LFI-001B `Leaf-layer scheduling discipline`
 
 LexonArchiveBuilder realizes replay-based streaming delegated indexing with a layer-aware
@@ -270,6 +304,9 @@ request-supplied collection items.
 
 This design fixes the replay-safety contract but does not freeze a specific
 serialization schema for the staging artifact in the specification layer.
+It also does not authorize keeping the entire replay set resident in memory:
+the staging shape must support bounded-memory replay preparation and
+finalization handoff under large-corpus operation.
 
 **Traces to:** RQ-INDEXER-003A, RQ-INDEXER-003E, RQ-INDEXER-003E1,
 RQ-INDEXER-003E4, RQ-INDEXER-004F

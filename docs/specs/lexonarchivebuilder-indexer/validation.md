@@ -103,6 +103,21 @@ repository stage contract rather than exposing raw upstream lifecycle phases.
 
 **Traces to:** RQ-INDEXER-003A, DSG-LFI-001A
 
+### VAL-LFI-002E1
+
+Run a representative full-pipeline indexing workload whose logical corpus size
+exceeds available RAM under an explicit caller-selected memory budget.
+
+**Pass condition:** LexonArchiveBuilder completes or fails explicitly without
+repository-owned replay orchestration retaining corpus-scale replay-item,
+embedding, or mailbox-expansion state in memory; the observed working set
+remains bounded by the approved design strategy rather than growing in
+proportion to corpus size, and the caller-visible stage plus summary contracts
+remain unchanged.
+
+**Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A2, DSG-LFI-001A1,
+DSG-LFI-001A2, DSG-LFI-001F
+
 ### VAL-LFI-002F
 
 Inspect delegated leaf scheduling for a batch that produces more than one ready
@@ -217,6 +232,24 @@ success-shaped clustering result.
 
 **Traces to:** RQ-INDEXER-003E, RQ-INDEXER-003E1, RQ-INDEXER-003E3,
 DSG-LFI-001E, DSG-LFI-001F2
+
+### VAL-LFI-002I2
+
+Run the clustering-plus-block-assembly stage against a store whose replay-audit
+journal represents a logical corpus larger than available RAM under an explicit
+caller-selected memory budget.
+
+**Pass condition:** LexonArchiveBuilder reconstructs and submits the approved
+deterministic replay input without whole-store rescans and without
+repository-owned orchestration loading corpus-scale replay inventories or stored
+embeddings into resident memory at once. If the implementation uses any spill
+fallback, the validation evidence shows that the fallback is explicit,
+deterministic, and subordinate to the immutable replay-audit plus mutable-head
+authority rather than acting as a second replay catalog.
+
+**Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A2, RQ-INDEXER-003E,
+RQ-INDEXER-003E1, RQ-INDEXER-003E3, DSG-LFI-001A1, DSG-LFI-001A2,
+DSG-LFI-001E, DSG-LFI-001F, DSG-LFI-001F1, DSG-LFI-001F2
 
 ### VAL-LFI-002J
 
