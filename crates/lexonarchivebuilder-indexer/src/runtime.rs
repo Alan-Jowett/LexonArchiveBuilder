@@ -29,7 +29,7 @@ use lexongraph_streaming_indexer::{
 use reqwest::StatusCode;
 use reqwest::Url;
 use reqwest::blocking::Client;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use thiserror::Error;
@@ -764,7 +764,7 @@ impl ExternalizedReplayState {
     }
 
     fn replay_input_block_ids(&self) -> Result<Vec<String>, RuntimeError> {
-        let conn = open_externalized_replay_db(&self.db_path)?;
+        let conn = open_externalized_replay_db_read_only(&self.db_path)?;
         let mut statement = conn
             .prepare("SELECT block_id FROM replay_inputs ORDER BY content_key, metadata_sort_key")
             .map_err(|source| RuntimeError::ReplayStateSql {
@@ -801,12 +801,11 @@ impl ExternalizedStoredLeafEmbeddingProvider {
         input_hash: &[u8; 32],
     ) -> Result<Option<Vec<u8>>, StoredLeafEmbeddingProviderError> {
         let db_path = self.db_path.display().to_string();
-        let conn = Connection::open(&self.db_path).map_err(|source| {
-            StoredLeafEmbeddingProviderError::OpenReplayState {
+        let conn = Connection::open_with_flags(&self.db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|source| StoredLeafEmbeddingProviderError::OpenReplayState {
                 path: db_path.clone(),
                 source,
-            }
-        })?;
+            })?;
         let block_id = conn
             .query_row(
                 "SELECT block_id FROM replay_inputs WHERE input_hash = ?1",
@@ -858,7 +857,7 @@ impl ExternalizedStoredLeafEmbeddingProvider {
 
 impl ExternalizedReplayBatchIterator {
     fn next_batch(&mut self) -> Result<Option<ReplayBatch>, RuntimeError> {
-        let conn = open_externalized_replay_db(&self.db_path)?;
+        let conn = open_externalized_replay_db_read_only(&self.db_path)?;
         let rows = if let Some((content_key, metadata_sort_key)) = &self.cursor {
             let mut statement = conn
                 .prepare(
@@ -4068,11 +4067,23 @@ fn load_replay_batches_from_store(
     )
 }
 
-fn open_externalized_replay_db(path: &Path) -> Result<Connection, RuntimeError> {
-    let conn = Connection::open(path).map_err(|source| RuntimeError::ReplayStateSql {
+fn open_externalized_replay_db_read_only(path: &Path) -> Result<Connection, RuntimeError> {
+    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|source| {
+        RuntimeError::ReplayStateSql {
+            path: path.display().to_string(),
+            source,
+        }
+    })
+}
+
+fn open_externalized_replay_db_read_write(path: &Path) -> Result<Connection, RuntimeError> {
+    Connection::open(path).map_err(|source| RuntimeError::ReplayStateSql {
         path: path.display().to_string(),
         source,
-    })?;
+    })
+}
+
+fn configure_externalized_replay_db(path: &Path, conn: &Connection) -> Result<(), RuntimeError> {
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|source| RuntimeError::ReplayStateSql {
             path: path.display().to_string(),
@@ -4083,11 +4094,12 @@ fn open_externalized_replay_db(path: &Path) -> Result<Connection, RuntimeError> 
             path: path.display().to_string(),
             source,
         })?;
-    Ok(conn)
+    Ok(())
 }
 
 fn initialize_externalized_replay_db(path: &Path) -> Result<Connection, RuntimeError> {
-    let conn = open_externalized_replay_db(path)?;
+    let conn = open_externalized_replay_db_read_write(path)?;
+    configure_externalized_replay_db(path, &conn)?;
     conn.execute_batch(
         "CREATE TABLE replay_inputs (
             content_key TEXT NOT NULL,
