@@ -1055,6 +1055,17 @@ fn uses_streaming_indexer_v2(clustering: &ConfiguredClustering) -> bool {
     clustering.profile_version == PUBLISHED_PROFILE_V0_7_0
 }
 
+fn is_incomplete_v2_planning_transition(error: &StreamingIndexerError) -> bool {
+    matches!(
+        error,
+        StreamingIndexerError::InvalidLifecycleTransition(message)
+            if message
+                == "planning completion requires every v2 partition to be terminal or routed"
+                || message
+                    == "planning completion requires every routed v2 partition to install child partitions"
+    )
+}
+
 fn clustering_failure_input(item: &IndexItem<ContentRef>) -> ClusteringFailureInput {
     match &item.content_ref {
         ContentRef::Document { path } => {
@@ -4108,102 +4119,115 @@ where
         config.block_size_target,
     )?;
 
-    let mut completed_items = 0usize;
-    let mut iterator = replay_state.batch_iterator();
-    let mut batch_number = 0usize;
-    while let Some(batch) = iterator.next_batch()? {
-        if batch.items.is_empty() {
-            continue;
-        }
-        batch_number += 1;
-        let batch_item_count = batch.items.len();
-        report_progress(
-            io.progress,
-            config.submission_progress_kind.started_message(
-                batch_number,
-                total_batches,
-                batch_item_count,
-                completed_items,
-                total_items,
-            ),
-        );
-        await_with_periodic_progress(
-            indexer.ingest_batch(&batch.items),
-            io.progress,
-            PROGRESS_HEARTBEAT_INTERVAL,
-            |elapsed| {
-                config.submission_progress_kind.heartbeat_message(
+    loop {
+        let mut completed_items = 0usize;
+        let mut iterator = replay_state.batch_iterator();
+        let mut batch_number = 0usize;
+        while let Some(batch) = iterator.next_batch()? {
+            if batch.items.is_empty() {
+                continue;
+            }
+            batch_number += 1;
+            let batch_item_count = batch.items.len();
+            report_progress(
+                io.progress,
+                config.submission_progress_kind.started_message(
                     batch_number,
                     total_batches,
                     batch_item_count,
                     completed_items,
                     total_items,
-                    elapsed.as_millis(),
-                )
-            },
-        )
-        .await?;
-        completed_items += batch_item_count;
+                ),
+            );
+            await_with_periodic_progress(
+                indexer.ingest_batch(&batch.items),
+                io.progress,
+                PROGRESS_HEARTBEAT_INTERVAL,
+                |elapsed| {
+                    config.submission_progress_kind.heartbeat_message(
+                        batch_number,
+                        total_batches,
+                        batch_item_count,
+                        completed_items,
+                        total_items,
+                        elapsed.as_millis(),
+                    )
+                },
+            )
+            .await?;
+            completed_items += batch_item_count;
+            report_progress(
+                io.progress,
+                config.submission_progress_kind.completion_message(
+                    batch_number,
+                    total_batches,
+                    completed_items,
+                    total_items,
+                ),
+            );
+        }
         report_progress(
             io.progress,
-            config.submission_progress_kind.completion_message(
-                batch_number,
-                total_batches,
-                completed_items,
-                total_items,
+            config
+                .submission_progress_kind
+                .handoff_message(total_batches, total_items),
+        );
+        let pass_report = indexer.finish_pass().map_err(|error| {
+            clustering_failure_error(
+                error,
+                clustering_failure_diagnostics
+                    .get_or_init(|| {
+                        build_externalized_clustering_failure_diagnostics(
+                            &diagnostics_resolver,
+                            &diagnostics_embedding_provider,
+                            None,
+                            &config,
+                            &replay_state,
+                            embedding_spec,
+                        )
+                    })
+                    .as_ref(),
+                io.progress,
+            )
+        })?;
+        report_progress(
+            io.progress,
+            format!(
+                "Completed planning pass {} over {} item(s)",
+                pass_report.completed_pass_count, pass_report.observed_item_count
             ),
         );
+        match indexer.mark_planning_complete() {
+            Ok(()) => break,
+            Err(error) if is_incomplete_v2_planning_transition(&error) => {
+                report_progress(
+                    io.progress,
+                    format!(
+                        "Planning pass {} requires another full replay pass before v2 planning can complete",
+                        pass_report.completed_pass_count
+                    ),
+                );
+            }
+            Err(error) => {
+                return Err(clustering_failure_error(
+                    error,
+                    clustering_failure_diagnostics
+                        .get_or_init(|| {
+                            build_externalized_clustering_failure_diagnostics(
+                                &diagnostics_resolver,
+                                &diagnostics_embedding_provider,
+                                None,
+                                &config,
+                                &replay_state,
+                                embedding_spec,
+                            )
+                        })
+                        .as_ref(),
+                    io.progress,
+                ));
+            }
+        }
     }
-
-    report_progress(
-        io.progress,
-        config
-            .submission_progress_kind
-            .handoff_message(total_batches, total_items),
-    );
-    let pass_report = indexer.finish_pass().map_err(|error| {
-        clustering_failure_error(
-            error,
-            clustering_failure_diagnostics
-                .get_or_init(|| {
-                    build_externalized_clustering_failure_diagnostics(
-                        &diagnostics_resolver,
-                        &diagnostics_embedding_provider,
-                        None,
-                        &config,
-                        &replay_state,
-                        embedding_spec,
-                    )
-                })
-                .as_ref(),
-            io.progress,
-        )
-    })?;
-    report_progress(
-        io.progress,
-        format!(
-            "Completed planning pass {} over {} item(s)",
-            pass_report.completed_pass_count, pass_report.observed_item_count
-        ),
-    );
-    indexer.mark_planning_complete().map_err(|error| {
-        clustering_failure_error(
-            error,
-            clustering_failure_diagnostics
-                .get_or_init(|| {
-                    build_externalized_clustering_failure_diagnostics(
-                        &diagnostics_resolver,
-                        &diagnostics_embedding_provider,
-                        None,
-                        &config,
-                        &replay_state,
-                        embedding_spec,
-                    )
-                })
-                .as_ref(),
-            io.progress,
-        )
-    })?;
     report_progress(
         io.progress,
         "Streaming planning complete; starting final materialization".into(),
@@ -6179,6 +6203,99 @@ mod tests {
         .unwrap();
 
         assert!(!summary.block_ids.is_empty());
+        server.join();
+    }
+
+    #[tokio::test]
+    async fn published_profile_clustering_replays_until_v2_planning_completes() {
+        let temp = tempdir().unwrap();
+        let document_names = (0..65)
+            .map(|index| format!("doc-{index}"))
+            .collect::<Vec<_>>();
+        for (index, name) in document_names.iter().enumerate() {
+            fs::write(
+                temp.path().join(format!("{name}.txt")),
+                format!("value-{index}\n"),
+            )
+            .unwrap();
+        }
+
+        let embedding_spec = EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        };
+        let server = spawn_embedding_server_with_delay_and_responder(
+            65 * 3,
+            Duration::ZERO,
+            Arc::new(|request| {
+                let request = String::from_utf8_lossy(request);
+                let marker = request.find("value-").expect("request includes test value");
+                let digits = request[marker + "value-".len()..]
+                    .chars()
+                    .take_while(|ch| ch.is_ascii_digit())
+                    .collect::<String>();
+                let value = digits.parse::<f32>().expect("test value suffix is numeric");
+                format!(
+                    r#"{{"data":[{{"embedding":[{value},{}]}}]}}"#,
+                    1000.0 - value
+                )
+            }),
+        );
+        let progress_messages = Arc::new(Mutex::new(Vec::new()));
+        let captured_progress = Arc::clone(&progress_messages);
+        let request = BatchRequest {
+            environment: EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: server.base_url.clone(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: embedding_spec.dims,
+                encoding: embedding_spec.encoding.clone(),
+            },
+            block_size_target: serialized_branch_size(&embedding_spec, 64).unwrap(),
+            stage: ExecutionStage::FullPipeline,
+            profile_version: PUBLISHED_PROFILE_V0_7_0,
+            max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
+            items: document_names
+                .into_iter()
+                .map(|name| BatchItemConfig::Document {
+                    path: PathBuf::from(format!("{name}.txt")),
+                    metadata: BTreeMap::new(),
+                })
+                .collect(),
+        };
+
+        let summary = run_request_with_progress(
+            temp.path(),
+            request,
+            ClusteringConfigOverrides::default(),
+            None,
+            move |message| {
+                captured_progress.lock().unwrap().push(message);
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!summary.block_ids.is_empty());
+        let progress_messages = progress_messages.lock().unwrap();
+        assert!(progress_messages.iter().any(|message| {
+            message
+                == "Planning pass 1 requires another full replay pass before v2 planning can complete"
+        }));
+        assert!(
+            progress_messages
+                .iter()
+                .any(|message| { message.starts_with("Completed planning pass 2 over ") })
+        );
         server.join();
     }
 
