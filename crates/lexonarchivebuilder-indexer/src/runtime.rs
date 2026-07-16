@@ -458,8 +458,6 @@ enum StoredLeafEmbeddingProviderError {
         #[source]
         source: BlockStoreError,
     },
-    #[error("stored embedding block {block_id} is missing")]
-    MissingStoredEmbeddingBlock { block_id: String },
     #[error("stored embedding block {block_id} is invalid: {message}")]
     InvalidStoredEmbeddingBlock { block_id: String, message: String },
 }
@@ -808,11 +806,7 @@ impl ExternalizedStoredLeafEmbeddingProvider {
                 },
             )?;
             let Some(validated) = validated else {
-                return Err(
-                    StoredLeafEmbeddingProviderError::MissingStoredEmbeddingBlock {
-                        block_id: block_hash.to_string(),
-                    },
-                );
+                continue;
             };
             let Some(candidate_hash) =
                 replay_embedding_input_hash(&validated, &self.embedding_spec).map_err(|error| {
@@ -7588,6 +7582,71 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(second, expected_embedding);
+    }
+
+    #[test]
+    fn externalized_replay_provider_skips_unrelated_missing_blocks_during_small_fallback_scans() {
+        let temp = tempdir().unwrap();
+        let block_store = ConfiguredBlockStore::from_environment(
+            temp.path(),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: String::new(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+        )
+        .unwrap();
+        let expected_embedding = vec![0, 0, 0, 0, 0, 0, 128, 63];
+        let block = Block::Leaf(
+            build_leaf_block(
+                VERSION_1,
+                EmbeddingSpec {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                vec![LeafEntry {
+                    embedding: expected_embedding.clone(),
+                    metadata: vec![
+                        (
+                            Value::Text("source_kind".into()),
+                            Value::Text("document".into()),
+                        ),
+                        (
+                            Value::Text("source_path".into()),
+                            Value::Text("C:/docs/alpha.txt".into()),
+                        ),
+                    ],
+                    content: Content {
+                        media_type: "text/plain".into(),
+                        body: b"alpha".to_vec(),
+                    },
+                }],
+                None,
+            )
+            .unwrap(),
+        );
+        let block_id = put_block(&block_store, &block);
+        let provider = ExternalizedStoredLeafEmbeddingProvider {
+            block_store,
+            embedding_spec: EmbeddingSpec {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            ordered_block_ids: Arc::new(vec![BlockHash::from_bytes([9u8; 32]), block_id]),
+            current_batch_embeddings: Arc::new(Mutex::new(HashMap::new())),
+        };
+
+        let embedding = provider
+            .load_embedding_for_hash(&hash_embedding_content("text/plain", b"alpha").into_bytes())
+            .unwrap()
+            .unwrap();
+        assert_eq!(embedding, expected_embedding);
     }
 
     #[test]
