@@ -19,7 +19,8 @@ rapid profile validation, upstream wgpu-acceleration revision
 compatibility, 0.6.x published-profile evaluation, local testing sweep
 automation, v0.7.0 fixed-budget ladder experiment automation, rooted
 block-store copy tooling, upstream embedding-readback API adoption, LAB-owned
-replay-journaled split-stage recovery, and layer-parallel
+replay-journaled split-stage recovery, in-memory replay block-id ordering
+simplification, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
 non-search artifacts in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md`.
@@ -45,7 +46,8 @@ telemetry-count-semantics clarity, clustering-failure diagnostics,
 rooted block-tree quality assessment with rooted TNN-recall diagnostics,
 rooted query access-cost reporting,
 rooted CLI search over stored trees, replay-stable delegated item identity,
-LAB-owned replay-journaled split-stage recovery, and layer-parallel delegated
+LAB-owned replay-journaled split-stage recovery, in-memory replay block-id
+ordering for deterministic clustering replay, and layer-parallel delegated
 block construction for the local/testing profile.
 
 This document is layered on top of:
@@ -187,6 +189,12 @@ or stored-embedding maps. Instead, it advances through the approved upstream
 lifecycle using streaming or segmented replay shapes whose live working set is
 bounded independently of total corpus size.
 
+For replay-journal-driven deterministic ordering, the approved retained state is
+the unique raw block-id list plus any fixed-size per-block journal-integrity
+digests needed to validate replay metadata against referenced payload blocks.
+That retained state remains limited to hash identities and fixed-size digests
+rather than decoded blocks, embeddings, or equivalent payload state.
+
 This entry constrains repository-owned orchestration only. It does not redefine
 opaque upstream-owned model state, but it does require the adapter layer to
 surface any upstream incompatibility with bounded-memory replay as an explicit
@@ -194,20 +202,24 @@ compatibility finding rather than normalizing unbounded retention in-repo.
 
 **Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-010A
 
-### DSG-LFI-001A2 `Streaming-first fixed-memory strategy`
+### DSG-LFI-001A2 `In-memory raw block-id ordering strategy`
 
-LexonArchiveBuilder treats purely streaming replay as the default realization of
-the fixed-memory contract.
+LexonArchiveBuilder realizes replay-journal-driven deterministic ordering for
+this increment as an in-memory raw block-id list with aligned fixed-size
+journal-integrity digests rather than as an externalized ordering catalog.
 
-Design work should first reduce memory retention by reshaping repository-owned
-replay preparation, batching, and finalization handoff before introducing any
-spill-to-storage mechanism. If a later design concludes that spill is
-unavoidable under the approved upstream replay and finalization lifecycle, that
-spill path must remain subordinate to the same immutable replay-audit and
-mutable-reference authority already used for split-stage recovery; it may not
-introduce a second authoritative replay catalog.
+The runtime walks the immutable replay-audit journal, extracts recorded block
+ids, sorts them, dedupes them, and uses that unique block-id order for later
+classification and finalization. When replay-metadata validation requires it,
+the runtime retains one fixed-size digest per ordered block so later payload
+reads can prove the replay-journal record still matches the referenced block.
 
-**Traces to:** RQ-INDEXER-003A2, RQ-INDEXER-003E1, RQ-INDEXER-003E3
+That replay walk reads replay-audit blocks and their recorded ids only. It does
+not dereference referenced payload blocks until later processing needs them,
+and it does not introduce SQLite, spill files, or equivalent repository-owned
+externalized ordering storage.
+
+**Traces to:** RQ-INDEXER-003A2, RQ-INDEXER-003E, RQ-INDEXER-003E1, RQ-INDEXER-003E3
 
 ### DSG-LFI-001B `Leaf-layer scheduling discipline`
 
@@ -287,6 +299,11 @@ replay-audit input surface remain outside the standalone clustering input set.
 Standalone clustering therefore operates over all clustering-eligible blocks
 visible through the selected journal head rather than over a request-local
 summary artifact or a whole-store block scan.
+
+For this increment, replay discovery remains journal-only: it extracts recorded
+block ids from the replay-audit chain, sorts them, dedupes them, and uses that
+unique block-id order as the deterministic processing order before any payload
+block dereference occurs.
 
 **Traces to:** RQ-INDEXER-003E, RQ-INDEXER-003E1, RQ-INDEXER-003E2,
 RQ-INDEXER-003E3, RQ-INDEXER-010A
@@ -1687,6 +1704,8 @@ LexonArchiveBuilder-owned verification artifacts validate:
 - correct leaf-layer concurrency scheduling with cross-layer barriers
 - correct standalone clustering input discovery through the repository-owned
   immutable replay-audit journal without whole-store scan fallback
+- correct journal-only replay-list reconstruction through sorted deduped block
+  ids with payload reads deferred until later processing
 - correct adoption of the upstream published-profile API with defaulted and
   explicit profile-version selection plus explicit rejection of retired
   low-level clustering controls

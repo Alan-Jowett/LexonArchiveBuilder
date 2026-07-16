@@ -19,8 +19,9 @@ upstream `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, 0.6.x published-profile
 evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
 experiment automation, upstream embedding-readback
-API adoption, LAB-owned replay-journaled split-stage recovery, and
-layer-parallel block-construction evolution, and v2 custom-block adoption for
+API adoption, LAB-owned replay-journaled split-stage recovery, in-memory replay
+block-id ordering simplification, and layer-parallel block-construction
+evolution, and v2 custom-block adoption for
 repository-owned non-search artifacts in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md` and
 `docs/specs/lexonarchivebuilder-indexer/design.md`.
@@ -44,7 +45,8 @@ telemetry-count-semantics clarity, clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted CLI
 search over stored trees, rooted block-store copy tooling, replay-stable fingerprinting, LAB-owned replay-journaled
-split-stage recovery, and leaf-layer parallel block scheduling in the
+split-stage recovery, in-memory replay block-id ordering for deterministic
+clustering replay, and leaf-layer parallel block scheduling in the
 local/testing profile.
 
 This package validates LexonArchiveBuilder's batch contract, adapter selection, and
@@ -211,9 +213,12 @@ immutable replay-audit journal head, and an empty request item collection.
 
 **Pass condition:** LexonArchiveBuilder reconstructs the deterministic replay
 input needed by the streaming indexer from the authoritative immutable replay-
-audit journal without rescanning the whole store, excludes artifacts outside
-the approved replay-input surface, and performs clustering or block assembly
-without requiring a prior LexonArchiveBuilder summary manifest.
+audit journal without rescanning the whole store, reads replay-audit blocks and
+their recorded block ids without dereferencing payload blocks during replay-list
+generation, sorts and dedupes those ids into the approved deterministic order,
+excludes artifacts outside the approved replay-input surface, and performs
+clustering or block assembly without requiring a prior LexonArchiveBuilder
+summary manifest.
 
 **Traces to:** RQ-INDEXER-002, RQ-INDEXER-003E, RQ-INDEXER-003E1,
 RQ-INDEXER-003E3, RQ-INDEXER-004F, RQ-INDEXER-010A, DSG-LFI-001E,
@@ -240,12 +245,14 @@ journal represents a logical corpus larger than available RAM under an explicit
 caller-selected memory budget.
 
 **Pass condition:** LexonArchiveBuilder reconstructs and submits the approved
-deterministic replay input without whole-store rescans and without
-repository-owned orchestration loading corpus-scale replay inventories or stored
-embeddings into resident memory at once. If the implementation uses any spill
-fallback, the validation evidence shows that the fallback is explicit,
-deterministic, and subordinate to the immutable replay-audit plus mutable-head
-authority rather than acting as a second replay catalog.
+deterministic replay input without whole-store rescans, without repository-
+owned orchestration loading corpus-scale replay inventories or stored
+embeddings into resident memory at once, and without introducing SQLite, spill
+files, or equivalent externalized ordering state. Validation evidence shows the
+runtime retains only the deduped raw block-id ordering surface plus any aligned
+fixed-size per-block journal-integrity digests in memory during replay-list
+generation, and fetches payload blocks from `BlockStore` only during later
+classification or finalization processing.
 
 **Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A2, RQ-INDEXER-003E,
 RQ-INDEXER-003E1, RQ-INDEXER-003E3, DSG-LFI-001A1, DSG-LFI-001A2,

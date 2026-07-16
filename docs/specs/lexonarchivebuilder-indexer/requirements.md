@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, and v2 custom-block adoption for repository-owned non-search artifacts
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, and v2 custom-block adoption for repository-owned non-search artifacts
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, in-memory replay block-id ordering simplification, and v2 custom-block adoption for repository-owned non-search artifacts
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, in-memory replay block-id ordering for deterministic replay submission, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, and v2 custom-block adoption for repository-owned non-search artifacts
 
 ## USER-REQUEST
 
@@ -253,6 +253,26 @@
   neutral and environment-neutral so mailbox, document, and future content
   sources participate through the same bounded-memory orchestration boundary in
   local/testing and production-oriented profiles.
+- **UR-215 [KNOWN]:** The replay-journal-driven ordering path should walk the
+  replay list, gather the referenced block ids, sort that result, dedupe it,
+  and use the resulting unique block-id order as the deterministic order for
+  classification and finalization.
+- **UR-216 [KNOWN]:** Actual block state such as embeddings or decoded block
+  content should be pulled from the shared `BlockStore` on demand while the
+  ordered block-id list is processed rather than being cached as part of
+  replay-order preparation.
+- **UR-217 [KNOWN]:** SQLite, spill files, and other repository-owned external
+  storage are not required for this ordering path; the approved fix for this
+  increment is the simplest in-memory raw block-id list that satisfies the
+  deterministic replay contract.
+- **UR-218 [INFERRED]:** This simplified ordering path must preserve the
+  existing stage contract, deterministic replay semantics, and content-type-
+  neutral behavior because only hash-addressed block identities become the
+  retained ordering state.
+- **UR-219 [KNOWN]:** Generating the ordered replay list should read the replay-
+  audit journal blocks and their recorded block ids only; it should not fetch
+  the referenced payload blocks until classification or finalization actually
+  processes those ids.
 
 ## Change Manifest
 
@@ -350,7 +370,8 @@
 | CM-INDEXER-090 | Revise | Add bounded asynchronous destination-write concurrency to rooted copy, expose an operator-selectable in-flight write limit defaulting to `64`, and apply that limit to both the default and blind-write paths whenever a destination write is required | UR-180, UR-184, UR-186, UR-196, UR-198, UR-199, UR-200, UR-201 |
 | CM-INDEXER-091 | Revise | Expand the approved block-store profile vocabulary with an additive `gateway-http3` read-only profile for immutable block fetches, while preserving the existing writable profiles for write-bearing and whole-store-traversal flows | UR-202, UR-203, UR-204, UR-205, UR-206, UR-207, UR-208, UR-209 |
 | CM-INDEXER-092 | Revise | Extend replay-based streaming indexing requirements so LexonArchiveBuilder's repository-owned orchestration remains within a caller-configurable fixed memory budget for both full-pipeline and clustering-only execution over corpora larger than RAM | UR-48, UR-59, UR-160, UR-210, UR-211, UR-213, UR-214 |
-| CM-INDEXER-093 | Add | Prefer purely streaming fixed-memory replay over storage spill, and allow spill-based staging only when downstream design proves it is unavoidable under the approved upstream lifecycle contract | UR-48, UR-160, UR-210, UR-211, UR-212, UR-213 |
+| CM-INDEXER-093 | Revise | Realize replay-journal-driven deterministic ordering through an in-memory raw block-id list rather than SQLite or spill-based staging, while leaving block payload state in `BlockStore` until on-demand processing | UR-48, UR-160, UR-210, UR-211, UR-212, UR-213, UR-215, UR-216, UR-217, UR-218 |
+| CM-INDEXER-094 | Add | Require standalone clustering replay to derive its deterministic processing order by reading replay-journal block ids only, then sorting and deduping them before classification and finalization | UR-163, UR-215, UR-216, UR-218, UR-219 |
 
 ## Before / After
 
@@ -837,10 +858,23 @@
   immutable replay-audit journaling, but they did not express whether
   fixed-memory compliance should prefer pure streaming or may freely spill
   staging state to storage.
-- **After [KNOWN]:** The requirements now prefer a non-spilling streaming
-  realization and permit spill-based staging only when downstream design can
-  justify that a purely streaming realization is not feasible under the
-  approved upstream lifecycle contract.
+- **After [KNOWN]:** The requirements now require this replay-ordering path to
+  stay entirely in memory as a raw block-id list and no longer approve SQLite,
+  spill files, or other repository-owned externalized ordering storage for this
+  increment.
+
+### BA-INDEXER-095
+
+- **Before [KNOWN]:** The requirements did not distinguish retaining a
+  deterministic ordering surface from retaining full block payload or embedding
+  state while preparing clustering-only replay.
+- **After [KNOWN]:** The requirements now constrain replay-order preparation to
+  retain only unique raw block ids in memory, with embeddings and decoded block
+  payloads loaded from `BlockStore` on demand during classification and
+  finalization.
+- **After [KNOWN]:** The requirements now make replay-list generation itself
+  journal-only: it reads replay-audit blocks and recorded ids without fetching
+  the referenced payload blocks until later processing needs them.
 
 ## Requirements
 
@@ -902,6 +936,10 @@ than available system memory.
   replay-item inventories, mailbox-or-document expansion state, replay batches,
   and stored-embedding retention SHALL NOT require resident memory that scales
   linearly with total corpus size.
+- **Permitted retained state [KNOWN]:** For replay-journal-driven deterministic
+  ordering, LexonArchiveBuilder MAY retain the unique raw block-id list in
+  memory when that retained state is limited to hash identities rather than
+  decoded blocks, embeddings, or equivalent per-block payload state.
 - **Budget semantics [INFERRED]:** The approved memory budget constrains
   repository-owned orchestration behavior rather than redefining opaque
   upstream-owned model state, but LexonArchiveBuilder SHALL treat any upstream
@@ -915,28 +953,37 @@ than available system memory.
   content-type-specific corpus-scale retention exceptions.
 - **Traceability:** UR-47, UR-48, UR-59, UR-160, UR-210, UR-211, UR-213, UR-214
 
-#### RQ-INDEXER-003A2 - Spill-avoidance preference for fixed-memory execution
+#### RQ-INDEXER-003A2 - In-memory raw block-id ordering
 
-LexonArchiveBuilder SHALL prefer a purely streaming realization of the fixed-
-memory replay contract and SHALL treat spill-based staging as a constrained
-fallback rather than as the default architecture.
+LexonArchiveBuilder SHALL realize replay-journal-driven deterministic ordering
+for this increment by retaining the unique raw block-id ordering plus any
+fixed-size per-block journal-integrity digests needed to validate replay
+metadata in memory, and SHALL NOT introduce SQLite, spill files, or other
+repository-owned externalized ordering storage.
 
-- **Preference rule [KNOWN]:** Repository-owned staging should first be reduced
-  by streaming, segmentation, or replay-shape changes before introducing new
-  spill-to-storage behavior.
-- **Fallback gate [KNOWN]:** Spilling replay inputs, embeddings, or equivalent
-  repository-owned staging artifacts to local storage or `BlockStore` is
-  acceptable only when downstream design can justify that a non-spilling
-  realization is not feasible under the approved upstream replay and
-  finalization lifecycle.
-- **Parity rule [INFERRED]:** Any approved spill fallback must preserve the same
-  deterministic replay semantics across local/testing and production-oriented
-  profiles rather than creating divergent content-model behavior by
-  environment.
-- **Recoverability boundary [INFERRED]:** If spill is later approved, it must
-  remain subordinate to immutable replay-audit and mutable-ref invariants rather
-  than introducing a second authoritative replay catalog.
-- **Traceability:** UR-48, UR-160, UR-210, UR-211, UR-212, UR-213, UR-214
+- **Ordering algorithm [KNOWN]:** The runtime SHALL walk the replay list,
+  gather referenced block ids, sort that list, dedupe it, and use the
+  resulting unique block-id order as the deterministic order for classification
+  and finalization.
+- **Payload boundary [KNOWN]:** Actual block state such as embeddings, decoded
+  block bytes, or equivalent derived payload state SHALL be loaded from the
+  shared `BlockStore` on demand while that ordered block-id list is processed
+  rather than being cached as part of replay-order preparation.
+- **Integrity boundary [KNOWN]:** Additional retained replay-order state, when
+  present, SHALL remain limited to fixed-size journal-integrity digests derived
+  from replay-audit metadata rather than decoded payload blocks, embeddings, or
+  other corpus-scale variable-size state.
+- **Replay-walk boundary [KNOWN]:** Building that ordered block-id list SHALL
+  read replay-audit journal blocks and recorded block ids only; it SHALL NOT
+  fetch referenced payload blocks during replay-list generation.
+- **Simplicity rule [KNOWN]:** The approved fix for this increment is the
+  simplest in-memory raw block-id list that satisfies deterministic replay; a
+  repository-owned SQLite catalog, spill file, or equivalent externalized
+  ordering store is out of scope.
+- **Parity rule [INFERRED]:** This ordering rule SHALL apply consistently
+  across local/testing and production-oriented profiles rather than creating
+  environment-specific replay-order behavior.
+- **Traceability:** UR-48, UR-160, UR-210, UR-211, UR-212, UR-213, UR-214, UR-215, UR-216, UR-217, UR-218
 
 #### RQ-INDEXER-003B - Layer-parallel delegated block processing
 
@@ -1008,6 +1055,14 @@ snapshot.
 - **Scope [KNOWN]:** Standalone clustering SHALL examine all clustering-
   eligible replayable leaf inputs visible through the selected journal head
   rather than only inputs associated with a prior request or summary.
+- **Ordering rule [KNOWN]:** After replay discovery identifies the eligible
+  replayable leaf block ids, standalone clustering SHALL derive its
+  deterministic processing order by sorting and deduping those block ids before
+  classification and finalization.
+- **Replay-read boundary [KNOWN]:** That discovery step SHALL read the
+  repository-owned replay-audit journal blocks and their recorded ids without
+  dereferencing the referenced payload blocks until later classification or
+  finalization processing.
 - **Filtering boundary [INFERRED]:** Blocks or artifacts outside the approved
   clustering-input surface, including repository-owned artifact classes that
   are not valid clustering inputs, are outside this requirement's input set.
@@ -1996,7 +2051,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Copy idempotence remains subordinate to immutable block semantics | Preserved with explicit operator-selected tradeoff | Requirements keep read-before-write classification as the default rooted-copy path, allow an opt-in blind-write mode that still treats duplicate publication as safe operator behavior, and now permit bounded asynchronous destination writes without changing rooted reachability or truthful mode-specific outcome semantics |
 | Clustering configuration remains explicit and replayable | Preserved with revised contract | Requirements now treat the selected published profile version as the replay-relevant clustering input rather than a repository-local mode, algorithm, and option tuple |
 | Clustering-size behavior remains deterministic under the selected profile | Preserved with scoped local/testing exception | Normal batch behavior still assigns clustering cardinality to the selected published profile version, while the approved `0.7.0` ladder adds one repository-local deterministic rung table for local/testing evaluation only |
-| Large-corpus indexing remains memory-bounded at the repository orchestration layer | Revised with stronger execution constraint | Requirements now demand a caller-configurable fixed memory budget for repository-owned replay orchestration in both full-pipeline and clustering-only execution, while preferring pure streaming over spill-based staging |
+| Large-corpus indexing remains memory-bounded at the repository orchestration layer | Revised with stronger execution constraint | Requirements now demand a caller-configurable fixed memory budget for repository-owned replay orchestration in both full-pipeline and clustering-only execution, and this replay-ordering increment satisfies that constraint by retaining only deduped raw block ids in memory while loading payload state from `BlockStore` on demand |
 | Clustering-only replay does not require whole-store rediscovery | Revised with authoritative immutable audit artifact | Requirements now require a shared-BlockStore immutable replay-audit journal as the sole repository-owned replay authority and remove whole-store scan fallback |
 | Repository-owned progress artifacts stay aligned with immutable storage principles | Preserved with stronger alignment | Requirements now move replay and audit state onto immutable hash-addressed blocks plus a mutable head reference, matching the repository's broader storage model instead of retaining a special append-only file journal |
 | Required repository capabilities remain distinguishable from upstream regressions during the latest upgrade | Preserved with clarified scope | The requirements now force the upgrade to classify missing capabilities explicitly instead of silently narrowing split-stage replay, published-profile adoption, progress projection, or MCP-facing behavior |
@@ -2035,7 +2090,9 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - **Q-INDEXER-079 [UNKNOWN]:** Should a future increment add repository-documented recommended `RUST_LOG` filter presets for common debugging cases such as Azure Table transport, retry behavior, or HTTP wire visibility, or is raw operator-selected filtering sufficient?
 - **Q-INDEXER-080 [UNKNOWN]:** Should a future rooted-copy increment expose backend-specific blind-write optimizations more granularly, or is one repository-wide opt-in mode sufficient as long as the default preserves exact copied-versus-skipped accounting?
 - **Q-INDEXER-081 [UNKNOWN]:** After the first bounded-write increment lands with default limit `64`, should a future increment keep one shared repository-wide destination-write default across block-store backends, or allow backend-specific recommended defaults while preserving the same CLI surface?
-- **Q-INDEXER-082 [UNKNOWN]:** If downstream design concludes that purely streaming fixed-memory replay is not feasible under the approved upstream lifecycle, what proof threshold should be required before a spill-based fallback becomes an approved repository design?
+- **Q-INDEXER-082 [UNKNOWN]:** At what observed unique-block-id scale, if any,
+  should the repository revisit the approved in-memory raw block-id ordering
+  approach for clustering-only replay?
 
 ## Coverage Notes
 
@@ -2059,6 +2116,17 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
   - user request in this session: "fix LexonArchiveBuilder to work with fixed memory budget when data size exceeds memory"
   - user clarification in this session selecting: "Both full-pipeline and clustering-only must stay within a caller-configurable memory budget, and spilling/replay to local disk or BlockStore is acceptable (Recommended)"
   - user clarification in this session: "both, but prefer not to spill to storage unless we can prove its unavoidable. Try realy not to spill"
+  - user clarification in this session: "hold on. If it's only 10 million block ids and they 32 bytes each, we can easily keep it in memory, no need to spill that."
+  - user clarification in this session: "I think the correct behavior is this:
+    1) Walk the replay list gathering all the block ids
+    2) Sort the result list of block ids and dedupe
+    3) Use this as our deterministic order in which we classify and finalize block
+
+    actual block state (embedding etc) is pulled from the block store on demand as we process them and is not cached
+
+    No need for sqlite / spilling / external storage at all.
+
+    This is the simplest fix"
   - user clarification in this session selecting: "Preserve existing MCP/search behavior exactly (Recommended)"
   - user clarification in this session selecting: "Uniform content-type-agnostic control (Recommended)"
   - user clarification in this session selecting: "Yes, keep the same contract and default across environments (Recommended)"
