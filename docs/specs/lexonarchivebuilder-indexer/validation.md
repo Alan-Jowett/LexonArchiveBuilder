@@ -249,9 +249,10 @@ deterministic replay input without whole-store rescans, without repository-
 owned orchestration loading corpus-scale replay inventories or stored
 embeddings into resident memory at once, and without introducing SQLite, spill
 files, or equivalent externalized ordering state. Validation evidence shows the
-runtime retains only the deduped raw block-id ordering surface in memory during
-replay-list generation and fetches payload blocks from `BlockStore` only during
-later classification or finalization processing.
+runtime retains only the deduped raw block-id ordering surface plus any aligned
+fixed-size per-block journal-integrity digests in memory during replay-list
+generation, and fetches payload blocks from `BlockStore` only during later
+classification or finalization processing.
 
 **Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A2, RQ-INDEXER-003E,
 RQ-INDEXER-003E1, RQ-INDEXER-003E3, DSG-LFI-001A1, DSG-LFI-001A2,

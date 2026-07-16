@@ -190,8 +190,10 @@ lifecycle using streaming or segmented replay shapes whose live working set is
 bounded independently of total corpus size.
 
 For replay-journal-driven deterministic ordering, the approved retained state is
-the unique raw block-id list itself. That retained state is limited to hash
-identities rather than decoded blocks, embeddings, or equivalent payload state.
+the unique raw block-id list plus any fixed-size per-block journal-integrity
+digests needed to validate replay metadata against referenced payload blocks.
+That retained state remains limited to hash identities and fixed-size digests
+rather than decoded blocks, embeddings, or equivalent payload state.
 
 This entry constrains repository-owned orchestration only. It does not redefine
 opaque upstream-owned model state, but it does require the adapter layer to
@@ -203,12 +205,14 @@ compatibility finding rather than normalizing unbounded retention in-repo.
 ### DSG-LFI-001A2 `In-memory raw block-id ordering strategy`
 
 LexonArchiveBuilder realizes replay-journal-driven deterministic ordering for
-this increment as an in-memory raw block-id list rather than as an externalized
-ordering catalog.
+this increment as an in-memory raw block-id list with aligned fixed-size
+journal-integrity digests rather than as an externalized ordering catalog.
 
 The runtime walks the immutable replay-audit journal, extracts recorded block
 ids, sorts them, dedupes them, and uses that unique block-id order for later
-classification and finalization.
+classification and finalization. When replay-metadata validation requires it,
+the runtime retains one fixed-size digest per ordered block so later payload
+reads can prove the replay-journal record still matches the referenced block.
 
 That replay walk reads replay-audit blocks and their recorded ids only. It does
 not dereference referenced payload blocks until later processing needs them,

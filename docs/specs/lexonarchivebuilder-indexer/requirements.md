@@ -956,9 +956,10 @@ than available system memory.
 #### RQ-INDEXER-003A2 - In-memory raw block-id ordering
 
 LexonArchiveBuilder SHALL realize replay-journal-driven deterministic ordering
-for this increment by retaining only raw block identities in memory and SHALL
-NOT introduce SQLite, spill files, or other repository-owned externalized
-ordering storage.
+for this increment by retaining the unique raw block-id ordering plus any
+fixed-size per-block journal-integrity digests needed to validate replay
+metadata in memory, and SHALL NOT introduce SQLite, spill files, or other
+repository-owned externalized ordering storage.
 
 - **Ordering algorithm [KNOWN]:** The runtime SHALL walk the replay list,
   gather referenced block ids, sort that list, dedupe it, and use the
@@ -968,6 +969,10 @@ ordering storage.
   block bytes, or equivalent derived payload state SHALL be loaded from the
   shared `BlockStore` on demand while that ordered block-id list is processed
   rather than being cached as part of replay-order preparation.
+- **Integrity boundary [KNOWN]:** Additional retained replay-order state, when
+  present, SHALL remain limited to fixed-size journal-integrity digests derived
+  from replay-audit metadata rather than decoded payload blocks, embeddings, or
+  other corpus-scale variable-size state.
 - **Replay-walk boundary [KNOWN]:** Building that ordered block-id list SHALL
   read replay-audit journal blocks and recorded block ids only; it SHALL NOT
   fetch referenced payload blocks during replay-list generation.
