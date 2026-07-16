@@ -21,8 +21,9 @@ evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
 experiment automation, upstream embedding-readback
 API adoption, LAB-owned replay-journaled split-stage recovery, in-memory replay
 block-id ordering simplification, and layer-parallel block-construction
-evolution, and v2 custom-block adoption for
-repository-owned non-search artifacts in
+evolution, v2 custom-block adoption for
+repository-owned non-search artifacts, and conditional streaming-indexer v2
+adoption with repository-default published profile `0.7.0` in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md` and
 `docs/specs/lexonarchivebuilder-indexer/design.md`.
 
@@ -33,7 +34,7 @@ LexonArchiveBuilder-owned indexer boundary, including local filesystem
 block-store interoperability, replay-based streaming delegated indexing,
 stage-selectable execution, standalone clustering input discovery,
 published-profile API adoption, caller-selectable published-profile
-configuration with default `0.1.0`, latest published-profile and telemetry
+configuration with default `0.7.0`, latest published-profile and telemetry
 compatibility, temporary upstream `main` tracking for rapid profile
 validation, upstream wgpu-acceleration revision compatibility, 0.6.x
 published-profile evaluation, local testing sweep automation, v0.7.0
@@ -277,10 +278,12 @@ Inspect the clustering-enabled profile-selection surface for a representative
 **Pass condition:** the CLI preserves the existing request-file-driven runtime
 shape and stage selector, clustering-enabled execution exposes one
 profile-version selector across CLI and `BatchRequest`, omission resolves to
-default profile `0.1.0`, explicit selection preserves the same contract shape,
+default profile `0.7.0`, explicit selection preserves the same contract shape,
 refreshing the adopted upstream dependency state can add newly published
 selector targets in the active `0.6.x` series without changing that default
-behavior, and
+behavior, the effective selected version is resolved from the existing
+CLI-override then request-file then default precedence before any old-versus-v2
+delegated-surface choice is made, and
 any retired low-level clustering flags or equivalent stale automation inputs
 are rejected explicitly instead of being silently ignored.
 
@@ -296,7 +299,7 @@ published-profile path against the same representative input snapshot.
 profile version and therefore to the same effective delegated planning
 behavior, so the profile-based contract remains deterministic and does not
 create hidden replay drift. When the selector is omitted, that resolved version
-is `0.1.0`.
+is `0.7.0`.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003H,
 RQ-INDEXER-008, DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-010
@@ -323,7 +326,10 @@ published-profile clustering-cardinality boundary.
 clustering-enabled runs reject retired low-level clustering controls, while
 also defining one scoped local/testing-only ladder mechanism that can realize
 the approved rung table without redefining the general batch contract, request
-schema, production behavior, or MCP-facing behavior.
+schema, production behavior, or MCP-facing behavior. If the active upstream
+`0.7.0` v2 surface still lacks a supported override hook for that scoped
+mechanism, the specification must instead require an explicit fail-fast outcome
+rather than silent override loss or fallback to the legacy delegated path.
 
 **Traces to:** RQ-INDEXER-003H, RQ-INDEXER-003J1, DSG-LFI-001H, DSG-LFI-007F1, DSG-LFI-010
 
@@ -334,7 +340,7 @@ indexer contract.
 
 **Pass condition:** the upgrade preserves the approved external stage contract,
 published-profile API adoption for clustering-enabled execution, default
-profile `0.1.0` plus explicit profile-version selection, retirement of the old
+profile `0.7.0` plus explicit profile-version selection, retirement of the old
 low-level clustering control family, deterministic split-stage replay,
 repository-owned progress projection, projection of the latest upstream live
 telemetry and heartbeat events, unchanged MCP search-serving behavior for
@@ -343,12 +349,30 @@ for rapid profile validation and upstream wgpu acceleration without new
 repository-visible low-level controls. This includes refreshing the adopted
 dependency state so newly published profile versions in the active `0.6.x`
 series become selectable while omitted selectors still resolve
-to `0.1.0`, with earlier `0.5.x` alignment retained only as prior comparison
+to `0.7.0`, with earlier `0.5.x` alignment retained only as prior comparison
 context and `0.4.x` retained as historical context, or else any missing
 capability is classified explicitly as an upstream regression or compatibility
 finding rather than being silently dropped.
 
 **Traces to:** RQ-INDEXER-003I, DSG-LFI-001I
+
+### VAL-LFI-002N3
+
+Exercise clustering-enabled execution once with omitted profile selection,
+once with explicit `0.7.0`, and once with one explicit supported non-`0.7.0`
+profile version, including at least one case where the selected version comes
+from the CLI override rather than the request file.
+
+**Pass condition:** omitted selection and explicit `0.7.0` both resolve to the
+same effective profile and use the same v2-backed delegated path, while the
+explicit non-`0.7.0` run preserves the same caller-visible selector contract
+but uses the existing non-v2 delegated path instead. No run silently coerces an
+explicit non-`0.7.0` selection back to `0.7.0`, and the delegated-surface
+choice is identical whether the effective selected profile came from the CLI,
+the request file, or the omitted-selector default.
+
+**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003I,
+DSG-LFI-001G, DSG-LFI-001I, DSG-LFI-001I1
 
 ### VAL-LFI-002N1
 
@@ -375,7 +399,10 @@ default rung set `4x256`, `8x128`, `16x64`, `32x32`, and `64x16`, emits
 per-rung build and rooted-quality artifacts plus a comparable summary table,
 and includes preflight validation plus deterministic rung ordering in the same
 local/testing-only automation surface rather than defining a new production or
-MCP-visible entrypoint.
+MCP-visible entrypoint. If the active upstream `0.7.0` v2 surface still lacks
+the required override hook, the same automation may satisfy this increment by
+failing fast before execution with an explicit operator-facing explanation of
+the unsupported ladder gap.
 
 **Traces to:** RQ-INDEXER-003J1, DSG-LFI-001H, DSG-LFI-001I, DSG-LFI-007F, DSG-LFI-007F1
 
