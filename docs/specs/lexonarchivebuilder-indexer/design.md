@@ -22,7 +22,8 @@ block-store copy tooling, upstream embedding-readback API adoption, LAB-owned
 replay-journaled split-stage recovery, in-memory replay block-id ordering
 simplification, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
-non-search artifacts in
+non-search artifacts, plus conditional streaming-indexer v2 adoption with
+repository-default published profile `0.7.0`, in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md`.
 
 ## Scope
@@ -33,7 +34,7 @@ indexer requirements, including the email-ingestion refinement from `.mail` and
 units plus the local filesystem block-store interoperability correction,
 replay-based streaming delegated indexing adoption, stage-selectable execution,
 standalone clustering input discovery, delegated published-profile adoption,
-caller-selectable published-profile configuration with default `0.1.0`,
+caller-selectable published-profile configuration with default `0.7.0`,
 latest published-profile and telemetry compatibility, temporary upstream
 `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, upstream regression assessment,
@@ -420,7 +421,7 @@ planning pass or standalone clustering replay begins.
 
 The resolved profile version comes from the approved caller-visible
 profile-selection contract; when omitted, it defaults to upstream published
-profile version `0.1.0`.
+profile version `0.7.0`.
 
 LexonArchiveBuilder treats the upstream LexonGraph streaming indexer as the
 authority for the planning, packing, hierarchy, summary, and clustering
@@ -434,14 +435,14 @@ materialization do not observe intra-run clustering-configuration drift.
 
 **[KNOWN]:** The upstream published-profile surface exposes this increment's
 approved contract through `PublishedProfileVersion`, the current default
-constant `PUBLISHED_PROFILE_V0_1_0`, and the higher-level
+constant `PUBLISHED_PROFILE_V0_7_0`, and the higher-level
 `with_published_profile(...)` construction path.
 
 When the temporarily tracked upstream `main` branch publishes additional
 profile versions in the active `0.6.x` experiment series, LexonArchiveBuilder
 refreshes its adopted dependency state so that the same selector surface can
 target those versions immediately, without changing the repository default
-away from `0.1.0`. Earlier `0.5.x` alignment remains prior comparison context
+away from `0.7.0`. Earlier `0.5.x` alignment remains prior comparison context
 for evaluation, while `0.4.x` remains historical context for older
 experiments, not the current named selector target.
 
@@ -456,7 +457,7 @@ indexer.
 In this increment, that normalization means:
 
 - clustering-enabled execution resolves to one selected published profile
-  version, defaulting to `0.1.0` when the caller omits the selector
+  version, defaulting to `0.7.0` when the caller omits the selector
 - refreshing the adopted upstream dependency state may add newly published
   selector targets in the active `0.6.x` series, but does not change
   omitted-selector behavior unless a later approved increment changes the
@@ -502,8 +503,10 @@ upgrade whenever the latest upstream contract still supports them semantically:
 - the external stage contract
 - deterministic split-stage replay
 - adoption of the published-profile API for clustering-enabled execution
-- defaulting to published profile `0.1.0` while permitting explicit selection
+- defaulting to published profile `0.7.0` while permitting explicit selection
   of another upstream-published profile version for evaluation
+- conditional use of the upstream streaming-indexer v2 API only when the
+  effective selected profile version is `0.7.0`
 - refreshing the adopted upstream dependency state so newly published versions
   in the active `0.6.x` series become selectable without redefining the
   repository default, while retaining earlier `0.5.x` alignment as prior
@@ -526,6 +529,32 @@ upstream regression rather than silently deleting the affected repository-owned
 behavior.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003I, RQ-INDEXER-009, RQ-INDEXER-010A
+
+### DSG-LFI-001I1 `Conditional streaming-indexer v2 selection`
+
+LexonArchiveBuilder chooses the delegated upstream streaming-indexer surface
+from the effective selected published profile version rather than from a
+repository-local clustering-mode switch.
+
+In this increment:
+
+- effective profile `0.7.0` routes clustering-enabled execution through
+  `StreamingIndexingRunV2`
+- explicitly selected non-`0.7.0` profiles continue to use the existing
+  non-v2 streaming-indexer integration path
+- the effective profile is resolved from the existing CLI-override,
+  request-file, then repository-default precedence before delegated surface
+  selection, so a CLI-selected non-`0.7.0` profile remains non-v2 and a
+  CLI-selected `0.7.0` profile remains v2
+- the request and CLI selector surface stays unchanged across both paths
+- the selection decision is made once per invocation and remains fixed for all
+  replay passes, planning completion, and final materialization
+
+This preserves the caller-visible published-profile contract while letting the
+repository adopt the upstream true-streaming v2 surface only where the upstream
+contract currently supports it.
+
+**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003I, RQ-INDEXER-010A
 
 ### DSG-LFI-002 `Batch runtime shape`
 
@@ -1408,7 +1437,7 @@ The approved operator-facing behavior is:
 - callers continue to choose whether clustering runs by selecting the execution
   stage
 - callers may also select the published profile version for clustering-enabled
-  stages, with omission resolving to the default `0.1.0` profile
+  stages, with omission resolving to the default `0.7.0` profile
 - the request-file-driven runtime shape remains preserved for batch items,
   environment selection, stage selection, and profile-version selection
 - any legacy low-level clustering flags that remain in old automation fail
@@ -1528,6 +1557,14 @@ That execution plan:
 Because the approved ladder is a repository-local experiment aid, its rung table
 is repository-owned and deterministic rather than an open-ended low-level
 clustering-control API.
+
+While effective profile `0.7.0` is required to stay on
+`StreamingIndexingRunV2`, the current upstream v2 constructor still accepts
+only the published profile version and not a resolved profile with adjusted
+local/testing ladder cardinality. Until that upstream gap is closed,
+LexonArchiveBuilder may keep the same repository-local ladder surface but fail
+it explicitly during preflight when a rung requires clustering-cardinality
+selection that the active v2 surface cannot represent.
 
 **Traces to:** RQ-INDEXER-003J1
 

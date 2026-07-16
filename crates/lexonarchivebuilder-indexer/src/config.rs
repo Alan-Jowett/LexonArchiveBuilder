@@ -8,7 +8,9 @@ use ciborium::Value;
 use clap::{Args, ValueEnum};
 use lexongraph_block::EmbeddingSpec;
 use lexongraph_streaming_indexer::{IndexItem, Metadata};
-pub use lexongraph_streaming_indexer::{PUBLISHED_PROFILE_V0_1_0, PublishedProfileVersion};
+pub use lexongraph_streaming_indexer::{
+    PUBLISHED_PROFILE_V0_1_0, PUBLISHED_PROFILE_V0_7_0, PublishedProfileVersion,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -78,6 +80,7 @@ impl ClusteringConfigOverrides {
         environment: &EnvironmentConfig,
     ) -> Result<ConfiguredClustering, ConfigError> {
         self.validate()?;
+        let profile_version = self.profile_version.unwrap_or(request_profile_version);
         if self.local_testing_cluster_count.is_some()
             && matches!(
                 environment,
@@ -86,8 +89,12 @@ impl ClusteringConfigOverrides {
         {
             return Err(ConfigError::LocalTestingClusterCountRequiresLocalEnvironment);
         }
+        if self.local_testing_cluster_count.is_some() && profile_version == PUBLISHED_PROFILE_V0_7_0
+        {
+            return Err(ConfigError::LocalTestingClusterCountUnsupportedForPublishedProfileV0_7_0);
+        }
         Ok(ConfiguredClustering {
-            profile_version: self.profile_version.unwrap_or(request_profile_version),
+            profile_version,
             local_testing_cluster_count: self.local_testing_cluster_count,
         })
     }
@@ -262,6 +269,10 @@ pub enum ConfigError {
         "local testing cluster_count override is only supported for local and local-overlay environments"
     )]
     LocalTestingClusterCountRequiresLocalEnvironment,
+    #[error(
+        "local testing cluster_count override is not supported for published profile 0.7.0 because that profile now runs through the streaming-indexer v2 path"
+    )]
+    LocalTestingClusterCountUnsupportedForPublishedProfileV0_7_0,
 }
 
 impl BatchRequest {
@@ -580,7 +591,7 @@ fn default_block_size_target() -> usize {
 }
 
 fn default_profile_version() -> PublishedProfileVersion {
-    PUBLISHED_PROFILE_V0_1_0
+    PUBLISHED_PROFILE_V0_7_0
 }
 
 fn default_local_model() -> String {
@@ -814,7 +825,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(request.stage, ExecutionStage::FullPipeline);
-        assert_eq!(request.profile_version, PUBLISHED_PROFILE_V0_1_0);
+        assert_eq!(request.profile_version, PUBLISHED_PROFILE_V0_7_0);
     }
 
     #[test]
@@ -1389,7 +1400,7 @@ mod tests {
     }
 
     #[test]
-    fn clustering_defaults_to_published_profile_v0_1_0() {
+    fn clustering_defaults_to_published_profile_v0_7_0() {
         let clustering = ClusteringConfigOverrides::default()
             .to_configured_clustering(
                 default_profile_version(),
@@ -1407,7 +1418,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(clustering.profile_version, PUBLISHED_PROFILE_V0_1_0);
+        assert_eq!(clustering.profile_version, PUBLISHED_PROFILE_V0_7_0);
         assert_eq!(clustering.local_testing_cluster_count, None);
     }
 
@@ -1467,6 +1478,61 @@ mod tests {
     #[test]
     fn clustering_override_preserves_local_testing_cluster_count_for_local_environment() {
         let clustering = ClusteringConfigOverrides {
+            profile_version: Some(PublishedProfileVersion::new(0, 6, 0)),
+            local_testing_cluster_count: Some(32),
+        }
+        .to_configured_clustering(
+            PublishedProfileVersion::new(0, 6, 0),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: "http://127.0.0.1:8080".into(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 30,
+                    max_retries: 5,
+                    retry_delay_ms: 1_000,
+                },
+            },
+        )
+        .unwrap();
+
+        assert_eq!(clustering.local_testing_cluster_count, Some(32));
+    }
+
+    #[test]
+    fn clustering_override_preserves_local_testing_cluster_count_when_cli_selects_non_v2_over_request_v0_7_0()
+     {
+        let clustering = ClusteringConfigOverrides {
+            profile_version: Some(PublishedProfileVersion::new(0, 6, 0)),
+            local_testing_cluster_count: Some(32),
+        }
+        .to_configured_clustering(
+            PublishedProfileVersion::new(0, 7, 0),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: "http://127.0.0.1:8080".into(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 30,
+                    max_retries: 5,
+                    retry_delay_ms: 1_000,
+                },
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            clustering.profile_version,
+            PublishedProfileVersion::new(0, 6, 0)
+        );
+        assert_eq!(clustering.local_testing_cluster_count, Some(32));
+    }
+
+    #[test]
+    fn clustering_override_rejects_local_testing_cluster_count_for_published_profile_v0_7_0() {
+        let error = ClusteringConfigOverrides {
             profile_version: None,
             local_testing_cluster_count: Some(32),
         }
@@ -1484,9 +1550,41 @@ mod tests {
                 },
             },
         )
-        .unwrap();
+        .unwrap_err();
 
-        assert_eq!(clustering.local_testing_cluster_count, Some(32));
+        assert!(matches!(
+            error,
+            ConfigError::LocalTestingClusterCountUnsupportedForPublishedProfileV0_7_0
+        ));
+    }
+
+    #[test]
+    fn clustering_override_rejects_local_testing_cluster_count_when_cli_selects_v0_7_0_over_request_non_v2()
+     {
+        let error = ClusteringConfigOverrides {
+            profile_version: Some(PublishedProfileVersion::new(0, 7, 0)),
+            local_testing_cluster_count: Some(32),
+        }
+        .to_configured_clustering(
+            PublishedProfileVersion::new(0, 6, 0),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: "http://127.0.0.1:8080".into(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 30,
+                    max_retries: 5,
+                    retry_delay_ms: 1_000,
+                },
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigError::LocalTestingClusterCountUnsupportedForPublishedProfileV0_7_0
+        ));
     }
 
     #[test]

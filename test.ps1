@@ -71,6 +71,10 @@ function Get-V070LadderEntries {
 
     $logDir = Join-Path $OutputRoot 'logs'
 
+    if ($Profile -eq '0.7.0') {
+        throw "Published profile 0.7.0 now runs through the streaming-indexer v2 path, which rejects --local-testing-cluster-count. The repository-local ladder automation needs an updated upstream-supported override path before it can run."
+    }
+
     foreach ($rung in $Rungs) {
         $parsed = Parse-LadderRung -Rung $rung -ExpectedBudget $Budget
         $validateLog = Join-Path $logDir ("validate-v{0}-tw{1}-cc{2}.log" -f $Profile, $parsed.beam_width, $parsed.cluster_count)

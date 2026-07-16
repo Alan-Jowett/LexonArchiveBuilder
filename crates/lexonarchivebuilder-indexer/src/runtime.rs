@@ -23,8 +23,8 @@ use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_streaming_indexer::{
     BuiltInPlanningDirection, ContentResolver, IndexItem, PlanningStage, PublishedIndexingProfile,
     PublishedPlanningStrategy, StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingRun,
-    StreamingIndexingStatus, StreamingIndexingStatusObserver, StreamingIndexingStatusState,
-    published_indexing_profile,
+    StreamingIndexingRunV2, StreamingIndexingStatus, StreamingIndexingStatusObserver,
+    StreamingIndexingStatusState, published_indexing_profile,
 };
 use reqwest::StatusCode;
 use reqwest::Url;
@@ -41,7 +41,8 @@ use crate::block_store::{
 use crate::config::MUTABLE_REF_ROOT_DIR;
 use crate::config::{
     BatchItemConfig, BatchRequest, BatchSummary, ClusteringConfigOverrides, ConfigError,
-    ConfiguredClustering, ExecutionStage, MutableRefStoreLocation, metadata_to_text_map,
+    ConfiguredClustering, ExecutionStage, MutableRefStoreLocation, PUBLISHED_PROFILE_V0_7_0,
+    metadata_to_text_map,
 };
 use crate::custom_blocks::{
     REPLAY_JOURNAL_BLOCK_TYPE, REPLAY_JOURNAL_MEDIA_TYPE, custom_block_payload,
@@ -1050,6 +1051,10 @@ fn resolved_published_profile(
     Ok(profile)
 }
 
+fn uses_streaming_indexer_v2(clustering: &ConfiguredClustering) -> bool {
+    clustering.profile_version == PUBLISHED_PROFILE_V0_7_0
+}
+
 fn clustering_failure_input(item: &IndexItem<ContentRef>) -> ClusteringFailureInput {
     match &item.content_ref {
         ContentRef::Document { path } => {
@@ -1844,15 +1849,26 @@ fn validate_request_with_overrides(
         .resolve_mutable_ref_store(request_dir, &request.ref_name);
 
     if stage.includes_clustering() {
-        let profile = resolved_published_profile(&clustering)?;
-        let _: StreamingIndexingRun<ContentRef, _, _, _, _> =
-            StreamingIndexingRun::with_resolved_published_profile(
-                ValidateOnlyResolver,
-                ValidateOnlyEmbeddingProvider,
-                profile,
-                request.to_embedding_spec(),
-                request.block_size_target,
-            )?;
+        if uses_streaming_indexer_v2(&clustering) {
+            let _: StreamingIndexingRunV2<ContentRef, _, _> =
+                StreamingIndexingRunV2::with_published_profile(
+                    ValidateOnlyResolver,
+                    ValidateOnlyEmbeddingProvider,
+                    clustering.profile_version,
+                    request.to_embedding_spec(),
+                    request.block_size_target,
+                )?;
+        } else {
+            let profile = resolved_published_profile(&clustering)?;
+            let _: StreamingIndexingRun<ContentRef, _, _, _, _> =
+                StreamingIndexingRun::with_resolved_published_profile(
+                    ValidateOnlyResolver,
+                    ValidateOnlyEmbeddingProvider,
+                    profile,
+                    request.to_embedding_spec(),
+                    request.block_size_target,
+                )?;
+        }
     }
 
     if stage == ExecutionStage::ClusteringAndBlockAssembly {
@@ -3841,6 +3857,43 @@ async fn run_streaming_stage_externalized<EP>(
 where
     EP: EmbeddingProvider + ClusteringFailureEmbeddingSource + Clone,
 {
+    if uses_streaming_indexer_v2(&config.clustering) {
+        return run_streaming_stage_externalized_v2(
+            resolver,
+            embedding_provider,
+            config,
+            replay_state,
+            block_store,
+            embedding_spec,
+            io,
+        )
+        .await;
+    }
+
+    run_streaming_stage_externalized_legacy(
+        resolver,
+        embedding_provider,
+        config,
+        replay_state,
+        block_store,
+        embedding_spec,
+        io,
+    )
+    .await
+}
+
+async fn run_streaming_stage_externalized_legacy<EP>(
+    resolver: LocalFilesystemContentResolver,
+    embedding_provider: EP,
+    config: StreamingStageConfig,
+    replay_state: ExternalizedReplayState,
+    block_store: &ConfiguredBlockStore,
+    embedding_spec: &EmbeddingSpec,
+    io: RuntimeIo<'_>,
+) -> Result<BatchSummary, RuntimeError>
+where
+    EP: EmbeddingProvider + ClusteringFailureEmbeddingSource + Clone,
+{
     let latest_failed_status = Arc::new(Mutex::new(None));
     let observer = Some(make_status_observer(
         Arc::clone(io.progress),
@@ -3976,6 +4029,197 @@ where
                             &diagnostics_resolver,
                             &diagnostics_embedding_provider,
                             lock_unpoisoned(&latest_failed_status).as_ref(),
+                            &config,
+                            &replay_state,
+                            embedding_spec,
+                        )
+                    })
+                    .as_ref(),
+                io.progress,
+            )
+        })?;
+
+    if result.block_ids.is_empty() {
+        return Err(RuntimeError::EmptyDelegatedOutput);
+    }
+
+    if let Some(mutable_ref_store) = io.mutable_ref_store {
+        let mut records = Vec::new();
+        let input_block_ids = replay_state.replay_input_block_ids()?;
+        records.push(replay_journal_indexing_outcome_record(
+            input_block_ids,
+            &result.block_ids,
+            &result.root_id,
+        ));
+        let replay_journal_head_block_id = append_replay_journal_records_async(
+            block_store.clone(),
+            mutable_ref_store.clone(),
+            records,
+        )
+        .await?;
+        update_mutable_ref_store_async(
+            mutable_ref_store.clone(),
+            MutableRefStoreUpdate {
+                current_root_block_id: Some(result.root_id.to_string()),
+                replay_journal_head_block_id,
+                metadata: io.mutable_ref_metadata.cloned(),
+            },
+        )
+        .await?;
+    }
+
+    let mut block_ids = result
+        .block_ids
+        .into_iter()
+        .map(|block_id| block_id.to_string())
+        .collect::<Vec<_>>();
+    block_ids.sort();
+    block_ids.dedup();
+    Ok(BatchSummary {
+        root_id: result.root_id.to_string(),
+        block_count: block_ids.len(),
+        block_ids,
+    })
+}
+
+async fn run_streaming_stage_externalized_v2<EP>(
+    resolver: LocalFilesystemContentResolver,
+    embedding_provider: EP,
+    config: StreamingStageConfig,
+    replay_state: ExternalizedReplayState,
+    block_store: &ConfiguredBlockStore,
+    embedding_spec: &EmbeddingSpec,
+    io: RuntimeIo<'_>,
+) -> Result<BatchSummary, RuntimeError>
+where
+    EP: EmbeddingProvider + ClusteringFailureEmbeddingSource + Clone,
+{
+    let total_batches = replay_state.total_batches();
+    let total_items = replay_state.total_items;
+    let clustering_failure_diagnostics = OnceLock::new();
+    let diagnostics_resolver = resolver.clone();
+    let diagnostics_embedding_provider = embedding_provider.clone();
+
+    let mut indexer = StreamingIndexingRunV2::with_published_profile(
+        resolver,
+        embedding_provider,
+        config.clustering.profile_version,
+        embedding_spec.clone(),
+        config.block_size_target,
+    )?;
+
+    let mut completed_items = 0usize;
+    let mut iterator = replay_state.batch_iterator();
+    let mut batch_number = 0usize;
+    while let Some(batch) = iterator.next_batch()? {
+        if batch.items.is_empty() {
+            continue;
+        }
+        batch_number += 1;
+        let batch_item_count = batch.items.len();
+        report_progress(
+            io.progress,
+            config.submission_progress_kind.started_message(
+                batch_number,
+                total_batches,
+                batch_item_count,
+                completed_items,
+                total_items,
+            ),
+        );
+        await_with_periodic_progress(
+            indexer.ingest_batch(&batch.items),
+            io.progress,
+            PROGRESS_HEARTBEAT_INTERVAL,
+            |elapsed| {
+                config.submission_progress_kind.heartbeat_message(
+                    batch_number,
+                    total_batches,
+                    batch_item_count,
+                    completed_items,
+                    total_items,
+                    elapsed.as_millis(),
+                )
+            },
+        )
+        .await?;
+        completed_items += batch_item_count;
+        report_progress(
+            io.progress,
+            config.submission_progress_kind.completion_message(
+                batch_number,
+                total_batches,
+                completed_items,
+                total_items,
+            ),
+        );
+    }
+
+    report_progress(
+        io.progress,
+        config
+            .submission_progress_kind
+            .handoff_message(total_batches, total_items),
+    );
+    let pass_report = indexer.finish_pass().map_err(|error| {
+        clustering_failure_error(
+            error,
+            clustering_failure_diagnostics
+                .get_or_init(|| {
+                    build_externalized_clustering_failure_diagnostics(
+                        &diagnostics_resolver,
+                        &diagnostics_embedding_provider,
+                        None,
+                        &config,
+                        &replay_state,
+                        embedding_spec,
+                    )
+                })
+                .as_ref(),
+            io.progress,
+        )
+    })?;
+    report_progress(
+        io.progress,
+        format!(
+            "Completed planning pass {} over {} item(s)",
+            pass_report.completed_pass_count, pass_report.observed_item_count
+        ),
+    );
+    indexer.mark_planning_complete().map_err(|error| {
+        clustering_failure_error(
+            error,
+            clustering_failure_diagnostics
+                .get_or_init(|| {
+                    build_externalized_clustering_failure_diagnostics(
+                        &diagnostics_resolver,
+                        &diagnostics_embedding_provider,
+                        None,
+                        &config,
+                        &replay_state,
+                        embedding_spec,
+                    )
+                })
+                .as_ref(),
+            io.progress,
+        )
+    })?;
+    report_progress(
+        io.progress,
+        "Streaming planning complete; starting final materialization".into(),
+    );
+    let result = indexer
+        .finalize(replay_state.finalize_source(), block_store)
+        .await
+        .map_err(|error| {
+            clustering_failure_error(
+                error,
+                clustering_failure_diagnostics
+                    .get_or_init(|| {
+                        build_externalized_clustering_failure_diagnostics(
+                            &diagnostics_resolver,
+                            &diagnostics_embedding_provider,
+                            None,
                             &config,
                             &replay_state,
                             embedding_spec,
@@ -4769,7 +5013,9 @@ mod tests {
 
     use ciborium::value::Value;
     use lexongraph_block::Content;
-    use lexongraph_streaming_indexer::{PUBLISHED_PROFILE_V0_1_0, PublishedProfileVersion};
+    use lexongraph_streaming_indexer::{
+        PUBLISHED_PROFILE_V0_1_0, PUBLISHED_PROFILE_V0_7_0, PublishedProfileVersion,
+    };
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -5319,6 +5565,7 @@ mod tests {
                 "encoding": request.embedding_spec.encoding
             },
             "block_size_target": request.block_size_target,
+            "profile_version": request.profile_version.to_string(),
             "ref_name": request.ref_name,
             "stage": "clustering-and-block-assembly",
             "items": []
@@ -5805,6 +6052,7 @@ mod tests {
                     "dims": 2,
                     "encoding": "f32le"
                 },
+                "profile_version": "0.1.0",
                 "ref_name": "test-branch",
                 "items": [
                     {
@@ -5986,7 +6234,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_testing_cluster_override_runs_published_profile_end_to_end() {
+    async fn local_testing_cluster_override_is_rejected_for_published_profile_v0_7_0() {
         let temp = tempdir().unwrap();
         for index in 0..12 {
             fs::write(
@@ -6026,7 +6274,7 @@ mod tests {
         )
         .unwrap();
 
-        let summary = run_request_file_with_overrides(
+        let error = run_request_file_with_overrides(
             &request_path,
             None,
             ClusteringConfigOverrides {
@@ -6035,9 +6283,14 @@ mod tests {
             },
         )
         .await
-        .unwrap();
+        .unwrap_err();
 
-        assert!(!summary.block_ids.is_empty());
+        assert!(matches!(
+            error,
+            RuntimeError::Config(
+                ConfigError::LocalTestingClusterCountUnsupportedForPublishedProfileV0_7_0
+            )
+        ));
         server.join();
     }
 
@@ -6479,19 +6732,58 @@ mod tests {
     #[test]
     fn effective_clustering_diagnostics_reflects_local_testing_cluster_override() {
         let clustering = ClusteringConfigOverrides {
-            profile_version: Some(PublishedProfileVersion::new(0, 7, 0)),
+            profile_version: Some(PublishedProfileVersion::new(0, 6, 0)),
             local_testing_cluster_count: Some(32),
         }
         .to_configured_clustering(
-            PublishedProfileVersion::new(0, 7, 0),
+            PublishedProfileVersion::new(0, 6, 0),
             &local_test_environment(String::new()),
         )
         .expect("published profile config");
         let diagnostics =
             effective_clustering_diagnostics(&clustering).expect("published profile diagnostics");
 
-        assert_eq!(diagnostics.profile_version, "0.7.0");
+        assert_eq!(diagnostics.profile_version, "0.6.0");
         assert_eq!(diagnostics.cluster_count, Some(32));
+    }
+
+    #[test]
+    fn streaming_indexer_v2_selection_follows_effective_profile_precedence() {
+        let default_v2 = ClusteringConfigOverrides::default()
+            .to_configured_clustering(
+                PUBLISHED_PROFILE_V0_7_0,
+                &local_test_environment(String::new()),
+            )
+            .expect("v2 published profile config");
+        let default_legacy = ClusteringConfigOverrides::default()
+            .to_configured_clustering(
+                PUBLISHED_PROFILE_V0_1_0,
+                &local_test_environment(String::new()),
+            )
+            .expect("legacy published profile config");
+        let cli_to_v2 = ClusteringConfigOverrides {
+            profile_version: Some(PUBLISHED_PROFILE_V0_7_0),
+            local_testing_cluster_count: None,
+        }
+        .to_configured_clustering(
+            PUBLISHED_PROFILE_V0_1_0,
+            &local_test_environment(String::new()),
+        )
+        .expect("cli-selected v2 published profile config");
+        let cli_to_legacy = ClusteringConfigOverrides {
+            profile_version: Some(PUBLISHED_PROFILE_V0_1_0),
+            local_testing_cluster_count: None,
+        }
+        .to_configured_clustering(
+            PUBLISHED_PROFILE_V0_7_0,
+            &local_test_environment(String::new()),
+        )
+        .expect("cli-selected legacy published profile config");
+
+        assert!(uses_streaming_indexer_v2(&default_v2));
+        assert!(!uses_streaming_indexer_v2(&default_legacy));
+        assert!(uses_streaming_indexer_v2(&cli_to_v2));
+        assert!(!uses_streaming_indexer_v2(&cli_to_legacy));
     }
 
     #[test]
