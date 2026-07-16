@@ -371,11 +371,12 @@ struct StreamingStageConfig {
 }
 
 type ReplayedLeaf = (IndexItem<ContentRef>, Vec<u8>);
+type EmbeddingCache = HashMap<[u8; 32], Vec<u8>>;
 
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct StoredLeafEmbeddingProvider {
-    embeddings_by_input_hash: Arc<HashMap<[u8; 32], Vec<u8>>>,
+    embeddings_by_input_hash: Arc<EmbeddingCache>,
 }
 
 #[derive(Debug)]
@@ -386,7 +387,7 @@ struct ExternalizedReplayState {
     block_store: ConfiguredBlockStore,
     embedding_spec: EmbeddingSpec,
     expected_replay_key_digests: Arc<Vec<BlockHash>>,
-    current_batch_embeddings: Arc<Mutex<HashMap<[u8; 32], Vec<u8>>>>,
+    current_batch_embeddings: Arc<Mutex<EmbeddingCache>>,
 }
 
 #[derive(Clone, Debug)]
@@ -394,7 +395,8 @@ struct ExternalizedStoredLeafEmbeddingProvider {
     block_store: ConfiguredBlockStore,
     embedding_spec: EmbeddingSpec,
     ordered_block_ids: Arc<Vec<BlockHash>>,
-    current_batch_embeddings: Arc<Mutex<HashMap<[u8; 32], Vec<u8>>>>,
+    current_batch_embeddings: Arc<Mutex<EmbeddingCache>>,
+    fallback_embeddings: Arc<Mutex<Option<EmbeddingCache>>>,
 }
 
 #[derive(Debug)]
@@ -405,7 +407,7 @@ struct ExternalizedReplayBatchIterator {
     block_store: ConfiguredBlockStore,
     embedding_spec: EmbeddingSpec,
     expected_replay_key_digests: Arc<Vec<BlockHash>>,
-    current_batch_embeddings: Arc<Mutex<HashMap<[u8; 32], Vec<u8>>>>,
+    current_batch_embeddings: Arc<Mutex<EmbeddingCache>>,
 }
 
 #[derive(Debug)]
@@ -415,7 +417,7 @@ struct ExternalizedReplayFinalizeSource {
     block_store: ConfiguredBlockStore,
     embedding_spec: EmbeddingSpec,
     expected_replay_key_digests: Arc<Vec<BlockHash>>,
-    current_batch_embeddings: Arc<Mutex<HashMap<[u8; 32], Vec<u8>>>>,
+    current_batch_embeddings: Arc<Mutex<EmbeddingCache>>,
 }
 
 #[derive(Debug)]
@@ -798,6 +800,14 @@ impl ExternalizedStoredLeafEmbeddingProvider {
             return Ok(None);
         }
 
+        {
+            let cache = lock_unpoisoned(&self.fallback_embeddings);
+            if let Some(cache) = cache.as_ref() {
+                return Ok(cache.get(input_hash).cloned());
+            }
+        }
+
+        let mut fallback_embeddings = HashMap::new();
         for block_hash in self.ordered_block_ids.iter() {
             let validated = block_on_block_store_future(self.block_store.get(block_hash)).map_err(
                 |source| StoredLeafEmbeddingProviderError::ReadStoredEmbeddingBlock {
@@ -823,9 +833,6 @@ impl ExternalizedStoredLeafEmbeddingProvider {
                     },
                 );
             };
-            if candidate_hash.into_bytes() != *input_hash {
-                continue;
-            }
             let replayed = replay_item_from_validated_block(&validated, &self.embedding_spec)
                 .map_err(
                     |error| StoredLeafEmbeddingProviderError::InvalidStoredEmbeddingBlock {
@@ -839,11 +846,12 @@ impl ExternalizedStoredLeafEmbeddingProvider {
                         message: "stored block does not contain a replayable leaf embedding".into(),
                     },
                 )?;
-            lock_unpoisoned(&self.current_batch_embeddings).insert(*input_hash, replayed.1.clone());
-            return Ok(Some(replayed.1));
+            fallback_embeddings.insert(candidate_hash.into_bytes(), replayed.1);
         }
 
-        Ok(None)
+        let result = fallback_embeddings.get(input_hash).cloned();
+        *lock_unpoisoned(&self.fallback_embeddings) = Some(fallback_embeddings);
+        Ok(result)
     }
 }
 
@@ -4195,6 +4203,7 @@ fn externalize_replay_batches_from_journal(
     let expected_replay_key_digests =
         Arc::new(ordered_replay_block_ids.expected_replay_key_digests);
     let current_batch_embeddings = Arc::new(Mutex::new(HashMap::new()));
+    let fallback_embeddings = Arc::new(Mutex::new(None));
     Ok((
         ExternalizedReplayState {
             ordered_block_ids: Arc::clone(&ordered_block_ids),
@@ -4210,6 +4219,7 @@ fn externalize_replay_batches_from_journal(
             embedding_spec: embedding_spec.clone(),
             ordered_block_ids,
             current_batch_embeddings,
+            fallback_embeddings,
         },
     ))
 }
@@ -7527,8 +7537,9 @@ mod tests {
             },
         )
         .unwrap();
-        let expected_embedding = vec![0, 0, 0, 0, 0, 0, 128, 63];
-        let block = Block::Leaf(
+        let expected_alpha_embedding = vec![0, 0, 0, 0, 0, 0, 128, 63];
+        let expected_beta_embedding = vec![0, 0, 0, 64, 0, 0, 128, 63];
+        let alpha_block = Block::Leaf(
             build_leaf_block(
                 VERSION_1,
                 EmbeddingSpec {
@@ -7536,7 +7547,7 @@ mod tests {
                     encoding: "f32le".into(),
                 },
                 vec![LeafEntry {
-                    embedding: expected_embedding.clone(),
+                    embedding: expected_alpha_embedding.clone(),
                     metadata: vec![
                         (
                             Value::Text("source_kind".into()),
@@ -7556,32 +7567,63 @@ mod tests {
             )
             .unwrap(),
         );
-        let block_id = put_block(&block_store, &block);
+        let beta_block = Block::Leaf(
+            build_leaf_block(
+                VERSION_1,
+                EmbeddingSpec {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                vec![LeafEntry {
+                    embedding: expected_beta_embedding.clone(),
+                    metadata: vec![
+                        (
+                            Value::Text("source_kind".into()),
+                            Value::Text("document".into()),
+                        ),
+                        (
+                            Value::Text("source_path".into()),
+                            Value::Text("C:/docs/beta.txt".into()),
+                        ),
+                    ],
+                    content: Content {
+                        media_type: "text/plain".into(),
+                        body: b"beta".to_vec(),
+                    },
+                }],
+                None,
+            )
+            .unwrap(),
+        );
+        let alpha_block_id = put_block(&block_store, &alpha_block);
+        let beta_block_id = put_block(&block_store, &beta_block);
         let provider = ExternalizedStoredLeafEmbeddingProvider {
             block_store,
             embedding_spec: EmbeddingSpec {
                 dims: 2,
                 encoding: "f32le".into(),
             },
-            ordered_block_ids: Arc::new(vec![block_id]),
+            ordered_block_ids: Arc::new(vec![alpha_block_id, beta_block_id]),
             current_batch_embeddings: Arc::new(Mutex::new(HashMap::new())),
+            fallback_embeddings: Arc::new(Mutex::new(None)),
         };
-        let input_hash = hash_embedding_content("text/plain", b"alpha").into_bytes();
+        let alpha_input_hash = hash_embedding_content("text/plain", b"alpha").into_bytes();
+        let beta_input_hash = hash_embedding_content("text/plain", b"beta").into_bytes();
 
         let first = provider
-            .load_embedding_for_hash(&input_hash)
+            .load_embedding_for_hash(&alpha_input_hash)
             .unwrap()
             .unwrap();
-        assert_eq!(first, expected_embedding);
+        assert_eq!(first, expected_alpha_embedding);
 
         let block_store_root = temp.path().join("blocks");
         fs::remove_dir_all(&block_store_root).unwrap();
 
         let second = provider
-            .load_embedding_for_hash(&input_hash)
+            .load_embedding_for_hash(&beta_input_hash)
             .unwrap()
             .unwrap();
-        assert_eq!(second, expected_embedding);
+        assert_eq!(second, expected_beta_embedding);
     }
 
     #[test]
@@ -7640,6 +7682,7 @@ mod tests {
             },
             ordered_block_ids: Arc::new(vec![BlockHash::from_bytes([9u8; 32]), block_id]),
             current_batch_embeddings: Arc::new(Mutex::new(HashMap::new())),
+            fallback_embeddings: Arc::new(Mutex::new(None)),
         };
 
         let embedding = provider
@@ -7682,6 +7725,7 @@ mod tests {
             },
             ordered_block_ids: Arc::new(ordered_block_ids),
             current_batch_embeddings: Arc::new(Mutex::new(HashMap::new())),
+            fallback_embeddings: Arc::new(Mutex::new(None)),
         };
 
         let result = provider
