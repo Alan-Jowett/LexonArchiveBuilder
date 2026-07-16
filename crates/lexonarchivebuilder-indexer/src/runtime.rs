@@ -386,6 +386,7 @@ struct ExternalizedReplayState {
     block_store: ConfiguredBlockStore,
     embedding_spec: EmbeddingSpec,
     input_hash_to_block_id: Arc<Mutex<HashMap<[u8; 32], BlockHash>>>,
+    expected_replay_key_digests: Arc<HashMap<BlockHash, BlockHash>>,
 }
 
 #[derive(Clone, Debug)]
@@ -403,6 +404,7 @@ struct ExternalizedReplayBatchIterator {
     block_store: ConfiguredBlockStore,
     embedding_spec: EmbeddingSpec,
     input_hash_to_block_id: Arc<Mutex<HashMap<[u8; 32], BlockHash>>>,
+    expected_replay_key_digests: Arc<HashMap<BlockHash, BlockHash>>,
 }
 
 #[derive(Debug)]
@@ -412,11 +414,25 @@ struct ExternalizedReplayFinalizeSource {
     block_store: ConfiguredBlockStore,
     embedding_spec: EmbeddingSpec,
     input_hash_to_block_id: Arc<Mutex<HashMap<[u8; 32], BlockHash>>>,
+    expected_replay_key_digests: Arc<HashMap<BlockHash, BlockHash>>,
 }
 
 #[derive(Debug)]
 struct ExternalizedReplayFinalizeIterator {
     inner: ExternalizedReplayBatchIterator,
+}
+
+#[derive(Debug)]
+struct OrderedReplayBlockIds {
+    ordered_block_ids: Vec<BlockHash>,
+    expected_replay_key_digests: HashMap<BlockHash, BlockHash>,
+}
+
+#[derive(Debug)]
+struct ReplayBatchLoad {
+    batch: ReplayBatch,
+    input_hash_to_block_id: Vec<([u8; 32], BlockHash)>,
+    embeddings_by_input_hash: Vec<([u8; 32], Vec<u8>)>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -734,6 +750,7 @@ impl ExternalizedReplayState {
             block_store: self.block_store.clone(),
             embedding_spec: self.embedding_spec.clone(),
             input_hash_to_block_id: Arc::clone(&self.input_hash_to_block_id),
+            expected_replay_key_digests: Arc::clone(&self.expected_replay_key_digests),
         }
     }
 
@@ -744,6 +761,7 @@ impl ExternalizedReplayState {
             block_store: self.block_store.clone(),
             embedding_spec: self.embedding_spec.clone(),
             input_hash_to_block_id: Arc::clone(&self.input_hash_to_block_id),
+            expected_replay_key_digests: Arc::clone(&self.expected_replay_key_digests),
         }
     }
 
@@ -821,10 +839,12 @@ impl ExternalizedReplayBatchIterator {
             &self.ordered_block_ids[self.next_index..end],
             &self.block_store,
             &self.embedding_spec,
-            &self.input_hash_to_block_id,
+            Some(&self.expected_replay_key_digests),
         )?;
+        lock_unpoisoned(&self.input_hash_to_block_id)
+            .extend(batch.input_hash_to_block_id.iter().copied());
         self.next_index = end;
-        Ok(Some(batch))
+        Ok(Some(batch.batch))
     }
 }
 
@@ -841,6 +861,7 @@ impl IntoIterator for ExternalizedReplayFinalizeSource {
                 block_store: self.block_store,
                 embedding_spec: self.embedding_spec,
                 input_hash_to_block_id: self.input_hash_to_block_id,
+                expected_replay_key_digests: self.expected_replay_key_digests,
             },
         }
     }
@@ -861,11 +882,12 @@ fn replay_batch_from_block_ids(
     block_ids: &[BlockHash],
     store: &ConfiguredBlockStore,
     embedding_spec: &EmbeddingSpec,
-    input_hash_to_block_id: &Arc<Mutex<HashMap<[u8; 32], BlockHash>>>,
-) -> Result<ReplayBatch, RuntimeError> {
+    expected_replay_key_digests: Option<&HashMap<BlockHash, BlockHash>>,
+) -> Result<ReplayBatchLoad, RuntimeError> {
     let mut items = Vec::with_capacity(block_ids.len());
     let mut audit_records = Vec::with_capacity(block_ids.len());
-    let mut mappings = Vec::with_capacity(block_ids.len());
+    let mut input_hash_to_block_id = Vec::with_capacity(block_ids.len());
+    let mut embeddings_by_input_hash = Vec::with_capacity(block_ids.len());
     for block_id in block_ids {
         let Some(validated) = block_on_block_store_future(store.get(block_id))? else {
             return Err(RuntimeError::ReadReplayJournal {
@@ -881,20 +903,39 @@ fn replay_batch_from_block_ids(
                 block_id: block_id.to_string(),
             });
         };
-        let Some((item, _)) = replay_item_from_validated_block(&validated, embedding_spec)? else {
+        let Some((item, embedding)) = replay_item_from_validated_block(&validated, embedding_spec)?
+        else {
             return Err(RuntimeError::MissingReplayMetadata {
                 block_id: block_id.to_string(),
             });
         };
-        mappings.push((input_hash.into_bytes(), validated.hash));
+        if let Some(expected_digests) = expected_replay_key_digests {
+            let Some(expected_digest) = expected_digests.get(&validated.hash) else {
+                return Err(RuntimeError::InvalidReplayJournalHead {
+                    block_id: validated.hash.to_string(),
+                    message: "journal entry digest is missing for referenced replay block".into(),
+                });
+            };
+            if replay_sort_key_digest(&item) != *expected_digest {
+                return Err(RuntimeError::InvalidReplayJournalHead {
+                    block_id: validated.hash.to_string(),
+                    message: "journal entry does not match referenced block replay metadata".into(),
+                });
+            }
+        }
+        input_hash_to_block_id.push((input_hash.into_bytes(), validated.hash));
+        embeddings_by_input_hash.push((input_hash.into_bytes(), embedding));
         audit_records.push(replay_journal_record_from_item(validated.hash, &item));
         items.push(item);
     }
-    lock_unpoisoned(input_hash_to_block_id).extend(mappings);
-    Ok(ReplayBatch {
-        items,
-        audit_records,
-        completion_message: None,
+    Ok(ReplayBatchLoad {
+        batch: ReplayBatch {
+            items,
+            audit_records,
+            completion_message: None,
+        },
+        input_hash_to_block_id,
+        embeddings_by_input_hash,
     })
 }
 
@@ -2426,7 +2467,6 @@ fn replay_sort_key(item: &IndexItem<ContentRef>) -> (String, Vec<(String, String
     (content_key, metadata_key)
 }
 
-#[cfg(test)]
 fn append_comparable_sort_string(buffer: &mut Vec<u8>, value: &str) {
     for byte in value.as_bytes() {
         if *byte == 0 {
@@ -2438,7 +2478,6 @@ fn append_comparable_sort_string(buffer: &mut Vec<u8>, value: &str) {
     buffer.extend_from_slice(&[0, 0]);
 }
 
-#[cfg(test)]
 fn encode_metadata_sort_key(metadata_key: &[(String, String)]) -> Vec<u8> {
     let mut encoded = Vec::new();
     for (key, value) in metadata_key {
@@ -2446,6 +2485,14 @@ fn encode_metadata_sort_key(metadata_key: &[(String, String)]) -> Vec<u8> {
         append_comparable_sort_string(&mut encoded, value);
     }
     encoded
+}
+
+fn replay_sort_key_digest(item: &IndexItem<ContentRef>) -> BlockHash {
+    let (content_key, metadata_key) = replay_sort_key(item);
+    let mut encoded = Vec::new();
+    append_comparable_sort_string(&mut encoded, &content_key);
+    encoded.extend_from_slice(&encode_metadata_sort_key(&metadata_key));
+    hash_bytes(&encoded)
 }
 
 #[cfg(test)]
@@ -4046,19 +4093,31 @@ fn collect_ordered_replay_block_ids_from_journal(
     store: &ConfiguredBlockStore,
     mutable_ref_store: &MutableRefStoreLocation,
     progress: &ProgressReporter,
-) -> Result<Vec<BlockHash>, RuntimeError> {
+) -> Result<OrderedReplayBlockIds, RuntimeError> {
     let mut ordered_block_ids = Vec::new();
+    let mut expected_replay_key_digests = HashMap::new();
     let mut scanned_inputs = 0usize;
     for_each_replay_journal_record_newest_first(store, mutable_ref_store, |record| {
         let ReplayJournalRecord::ReplayInput { block_id, .. } = record else {
             return Ok(());
         };
-        ordered_block_ids.push(parse_block_hash(block_id).map_err(|error| {
-            RuntimeError::InvalidReplayJournalHead {
+        let block_id =
+            parse_block_hash(block_id).map_err(|error| RuntimeError::InvalidReplayJournalHead {
                 block_id: block_id.clone(),
                 message: error.to_string(),
-            }
-        })?);
+            })?;
+        let journal_item = replay_journal_record_to_item(record)
+            .expect("replay input records should convert back into replay items");
+        let digest = replay_sort_key_digest(&journal_item);
+        if let Some(previous_digest) = expected_replay_key_digests.insert(block_id, digest)
+            && previous_digest != digest
+        {
+            return Err(RuntimeError::InvalidReplayJournalHead {
+                block_id: block_id.to_string(),
+                message: "conflicting replay journal metadata references the same block id".into(),
+            });
+        }
+        ordered_block_ids.push(block_id);
         scanned_inputs += 1;
         if scanned_inputs.is_multiple_of(10_000) {
             report_progress(
@@ -4070,7 +4129,7 @@ fn collect_ordered_replay_block_ids_from_journal(
         }
         Ok(())
     })?;
-    ordered_block_ids.sort_by_key(|block_id| block_id.into_bytes());
+    ordered_block_ids.sort_unstable_by_key(|block_id| block_id.into_bytes());
     ordered_block_ids.dedup();
     if ordered_block_ids.is_empty() {
         return Err(RuntimeError::NoClusterableBlocks);
@@ -4082,7 +4141,10 @@ fn collect_ordered_replay_block_ids_from_journal(
             ordered_block_ids.len()
         ),
     );
-    Ok(ordered_block_ids)
+    Ok(OrderedReplayBlockIds {
+        ordered_block_ids,
+        expected_replay_key_digests,
+    })
 }
 
 fn externalize_replay_batches_from_journal(
@@ -4098,18 +4160,21 @@ fn externalize_replay_batches_from_journal(
     ),
     RuntimeError,
 > {
-    let ordered_block_ids =
+    let ordered_replay_block_ids =
         collect_ordered_replay_block_ids_from_journal(store, mutable_ref_store, progress)?;
-    let total_items = ordered_block_ids.len();
+    let total_items = ordered_replay_block_ids.ordered_block_ids.len();
     let input_hash_to_block_id = Arc::new(Mutex::new(HashMap::new()));
     Ok((
         ExternalizedReplayState {
-            ordered_block_ids: Arc::new(ordered_block_ids),
+            ordered_block_ids: Arc::new(ordered_replay_block_ids.ordered_block_ids),
             total_items,
             batch_size: max_concurrency.max(1),
             block_store: store.clone(),
             embedding_spec: embedding_spec.clone(),
             input_hash_to_block_id: Arc::clone(&input_hash_to_block_id),
+            expected_replay_key_digests: Arc::new(
+                ordered_replay_block_ids.expected_replay_key_digests,
+            ),
         },
         ExternalizedStoredLeafEmbeddingProvider {
             block_store: store.clone(),
@@ -4173,48 +4238,24 @@ fn load_replay_batches_from_journal(
     mutable_ref_store: &MutableRefStoreLocation,
     progress: &ProgressReporter,
 ) -> Result<(Vec<ReplayBatch>, StoredLeafEmbeddingProvider), RuntimeError> {
-    let ordered_block_ids =
+    let ordered_replay_block_ids =
         collect_ordered_replay_block_ids_from_journal(store, mutable_ref_store, progress)?;
     let mut embeddings_by_input_hash = HashMap::new();
     let mut replay_batches = Vec::new();
-    for chunk in ordered_block_ids.chunks(max_concurrency.max(1)) {
+    for chunk in ordered_replay_block_ids
+        .ordered_block_ids
+        .chunks(max_concurrency.max(1))
+    {
         let batch = replay_batch_from_block_ids(
             chunk,
             store,
             embedding_spec,
-            &Arc::new(Mutex::new(HashMap::new())),
+            Some(&ordered_replay_block_ids.expected_replay_key_digests),
         )?;
-        for (item, record) in batch.items.iter().zip(batch.audit_records.iter()) {
-            let ReplayJournalRecord::ReplayInput { block_id, .. } = record else {
-                unreachable!("replay batches constructed from block ids only contain replay inputs")
-            };
-            let block_id =
-                parse_block_hash(block_id).expect("replay batch block id should stay valid");
-            let Some(validated) = block_on_block_store_future(store.get(&block_id))? else {
-                return Err(RuntimeError::ReadReplayJournal {
-                    block_id: block_id.to_string(),
-                    source: io::Error::new(
-                        ErrorKind::NotFound,
-                        "journal entry references missing block",
-                    ),
-                });
-            };
-            let Some(key) = replay_embedding_input_hash(&validated, embedding_spec)? else {
-                return Err(RuntimeError::MissingReplayMetadata {
-                    block_id: block_id.to_string(),
-                });
-            };
-            let Some((block_item, embedding)) =
-                replay_item_from_validated_block(&validated, embedding_spec)?
-            else {
-                return Err(RuntimeError::MissingReplayMetadata {
-                    block_id: block_id.to_string(),
-                });
-            };
-            debug_assert_eq!(replay_sort_key(item), replay_sort_key(&block_item));
-            embeddings_by_input_hash.insert(key.into_bytes(), embedding);
+        for (input_hash, embedding) in &batch.embeddings_by_input_hash {
+            embeddings_by_input_hash.insert(*input_hash, embedding.clone());
         }
-        replay_batches.push(batch);
+        replay_batches.push(batch.batch);
     }
     let replay_item_count: usize = replay_batches.iter().map(|batch| batch.items.len()).sum();
     if replay_item_count == 0 {

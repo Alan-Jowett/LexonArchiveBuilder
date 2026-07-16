@@ -261,10 +261,6 @@
   content should be pulled from the shared `BlockStore` on demand while the
   ordered block-id list is processed rather than being cached as part of
   replay-order preparation.
-- **UR-219 [KNOWN]:** Generating the ordered replay list should read the replay-
-  audit journal blocks and their recorded block ids only; it should not fetch
-  the referenced payload blocks until classification or finalization actually
-  processes those ids.
 - **UR-217 [KNOWN]:** SQLite, spill files, and other repository-owned external
   storage are not required for this ordering path; the approved fix for this
   increment is the simplest in-memory raw block-id list that satisfies the
@@ -273,6 +269,10 @@
   existing stage contract, deterministic replay semantics, and content-type-
   neutral behavior because only hash-addressed block identities become the
   retained ordering state.
+- **UR-219 [KNOWN]:** Generating the ordered replay list should read the replay-
+  audit journal blocks and their recorded block ids only; it should not fetch
+  the referenced payload blocks until classification or finalization actually
+  processes those ids.
 
 ## Change Manifest
 
