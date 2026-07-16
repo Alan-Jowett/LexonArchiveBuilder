@@ -2124,7 +2124,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 
     actual block state (embedding etc) is pulled from the block store on demand as we process them and is not cached
 
-    No need for sqllite / spilling / external storage at all.
+    No need for sqlite / spilling / external storage at all.
 
     This is the simplest fix"
   - user clarification in this session selecting: "Preserve existing MCP/search behavior exactly (Recommended)"
