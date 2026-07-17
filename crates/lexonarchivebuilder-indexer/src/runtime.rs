@@ -5033,7 +5033,7 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use std::thread;
     use std::time::{Duration, Instant};
@@ -6246,8 +6246,7 @@ mod tests {
             dims: 2,
             encoding: "f32le".into(),
         };
-        let server = spawn_embedding_server_with_delay_and_responder(
-            65 * 3,
+        let server = spawn_embedding_server_with_delay_and_responder_until_stopped(
             Duration::ZERO,
             Arc::new(|request| {
                 let request = String::from_utf8_lossy(request);
@@ -8632,6 +8631,7 @@ mod tests {
         base_url: String,
         handle: thread::JoinHandle<()>,
         max_in_flight: Arc<AtomicUsize>,
+        stop_requested: Option<Arc<AtomicBool>>,
     }
 
     struct RefBlobServer {
@@ -8641,6 +8641,9 @@ mod tests {
 
     impl TestServer {
         fn join(self) {
+            if let Some(stop_requested) = &self.stop_requested {
+                stop_requested.store(true, Ordering::SeqCst);
+            }
             self.handle.join().unwrap();
         }
 
@@ -8660,6 +8663,12 @@ mod tests {
     }
 
     type EmbeddingResponseBuilder = Arc<dyn Fn(&[u8]) -> String + Send + Sync + 'static>;
+
+    #[derive(Clone, Copy)]
+    enum TestServerTermination {
+        AfterExpectedRequests(usize),
+        ExplicitStop,
+    }
 
     impl Drop for InFlightGuard {
         fn drop(&mut self) {
@@ -8804,6 +8813,29 @@ mod tests {
         response_delay: Duration,
         responder: EmbeddingResponseBuilder,
     ) -> TestServer {
+        spawn_embedding_server_with_delay_and_responder_with_termination(
+            TestServerTermination::AfterExpectedRequests(expected_requests),
+            response_delay,
+            responder,
+        )
+    }
+
+    fn spawn_embedding_server_with_delay_and_responder_until_stopped(
+        response_delay: Duration,
+        responder: EmbeddingResponseBuilder,
+    ) -> TestServer {
+        spawn_embedding_server_with_delay_and_responder_with_termination(
+            TestServerTermination::ExplicitStop,
+            response_delay,
+            responder,
+        )
+    }
+
+    fn spawn_embedding_server_with_delay_and_responder_with_termination(
+        termination: TestServerTermination,
+        response_delay: Duration,
+        responder: EmbeddingResponseBuilder,
+    ) -> TestServer {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
@@ -8813,6 +8845,11 @@ mod tests {
         let current_in_flight_for_thread = Arc::clone(&current_in_flight);
         let max_in_flight = Arc::new(AtomicUsize::new(0));
         let max_in_flight_for_thread = Arc::clone(&max_in_flight);
+        let stop_requested = match termination {
+            TestServerTermination::AfterExpectedRequests(_) => None,
+            TestServerTermination::ExplicitStop => Some(Arc::new(AtomicBool::new(false))),
+        };
+        let stop_requested_for_thread = stop_requested.as_ref().map(Arc::clone);
         let (ready_tx, ready_rx) = mpsc::channel();
         let handle = thread::spawn(move || {
             ready_tx.send(()).unwrap();
@@ -8820,11 +8857,25 @@ mod tests {
             let deadline = Instant::now() + Duration::from_secs(15);
             let mut last_activity = Instant::now();
             while Instant::now() < deadline {
-                if seen_for_thread.load(Ordering::SeqCst) >= expected_requests
-                    && current_in_flight_for_thread.load(Ordering::SeqCst) == 0
-                    && Instant::now().duration_since(last_activity) >= idle_after_expected
-                {
-                    break;
+                let no_in_flight = current_in_flight_for_thread.load(Ordering::SeqCst) == 0;
+                if no_in_flight {
+                    match termination {
+                        TestServerTermination::AfterExpectedRequests(expected_requests)
+                            if seen_for_thread.load(Ordering::SeqCst) >= expected_requests
+                                && Instant::now().duration_since(last_activity)
+                                    >= idle_after_expected =>
+                        {
+                            break;
+                        }
+                        TestServerTermination::ExplicitStop
+                            if stop_requested_for_thread.as_ref().is_some_and(
+                                |stop_requested| stop_requested.load(Ordering::SeqCst),
+                            ) =>
+                        {
+                            break;
+                        }
+                        _ => {}
+                    }
                 }
                 let (mut stream, _) = match listener.accept() {
                     Ok(pair) => pair,
@@ -8910,6 +8961,7 @@ mod tests {
             base_url: format!("http://{}", address),
             handle,
             max_in_flight,
+            stop_requested,
         }
     }
 }
