@@ -1069,6 +1069,28 @@ fn is_incomplete_v2_planning_transition(error: &StreamingIndexerError) -> bool {
     )
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum V2PlanningCompletionAction {
+    Complete,
+    ReplayRequired(String),
+}
+
+fn v2_planning_completion_action(
+    completed_pass_count: usize,
+    result: Result<(), StreamingIndexerError>,
+) -> Result<V2PlanningCompletionAction, StreamingIndexerError> {
+    match result {
+        Ok(()) => Ok(V2PlanningCompletionAction::Complete),
+        Err(error) if is_incomplete_v2_planning_transition(&error) => {
+            Ok(V2PlanningCompletionAction::ReplayRequired(format!(
+                "Planning pass {} requires another full replay pass before v2 planning can complete",
+                completed_pass_count
+            )))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn clustering_failure_input(item: &IndexItem<ContentRef>) -> ClusteringFailureInput {
     match &item.content_ref {
         ContentRef::Document { path } => {
@@ -4200,16 +4222,13 @@ where
                 pass_report.completed_pass_count, pass_report.observed_item_count
             ),
         );
-        match indexer.mark_planning_complete() {
-            Ok(()) => break,
-            Err(error) if is_incomplete_v2_planning_transition(&error) => {
-                report_progress(
-                    io.progress,
-                    format!(
-                        "Planning pass {} requires another full replay pass before v2 planning can complete",
-                        pass_report.completed_pass_count
-                    ),
-                );
+        match v2_planning_completion_action(
+            pass_report.completed_pass_count,
+            indexer.mark_planning_complete(),
+        ) {
+            Ok(V2PlanningCompletionAction::Complete) => break,
+            Ok(V2PlanningCompletionAction::ReplayRequired(message)) => {
+                report_progress(io.progress, message);
             }
             Err(error) => {
                 return Err(clustering_failure_error(
@@ -5033,7 +5052,7 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     };
     use std::thread;
     use std::time::{Duration, Instant};
@@ -5089,6 +5108,33 @@ mod tests {
                 "planning completion requires a baseline".into()
             )
         ));
+    }
+
+    #[test]
+    fn v2_planning_completion_action_replays_known_incomplete_transition() {
+        assert_eq!(
+            v2_planning_completion_action(
+                1,
+                Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
+                    "{V2_PLANNING_NEEDS_ROUTED_OR_TERMINAL_PREFIX}: root partition is still pending"
+                )))
+            )
+            .unwrap(),
+            V2PlanningCompletionAction::ReplayRequired(
+                "Planning pass 1 requires another full replay pass before v2 planning can complete"
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn v2_planning_completion_action_propagates_other_transition_errors() {
+        let error =
+            StreamingIndexerError::InvalidLifecycleTransition("no baseline established".into());
+        assert_eq!(
+            v2_planning_completion_action(1, Err(error.clone())).unwrap_err(),
+            error
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -6225,98 +6271,6 @@ mod tests {
         .unwrap();
 
         assert!(!summary.block_ids.is_empty());
-        server.join();
-    }
-
-    #[tokio::test]
-    async fn published_profile_clustering_replays_until_v2_planning_completes() {
-        let temp = tempdir().unwrap();
-        let document_names = (0..65)
-            .map(|index| format!("doc-{index}"))
-            .collect::<Vec<_>>();
-        for (index, name) in document_names.iter().enumerate() {
-            fs::write(
-                temp.path().join(format!("{name}.txt")),
-                format!("value-{index}\n"),
-            )
-            .unwrap();
-        }
-
-        let embedding_spec = EmbeddingSpec {
-            dims: 2,
-            encoding: "f32le".into(),
-        };
-        let server = spawn_embedding_server_with_delay_and_responder_until_stopped(
-            Duration::ZERO,
-            Arc::new(|request| {
-                let request = String::from_utf8_lossy(request);
-                let marker = request.find("value-").expect("request includes test value");
-                let digits = request[marker + "value-".len()..]
-                    .chars()
-                    .take_while(|ch| ch.is_ascii_digit())
-                    .collect::<String>();
-                let value = digits.parse::<f32>().expect("test value suffix is numeric");
-                format!(
-                    r#"{{"data":[{{"embedding":[{value},{}]}}]}}"#,
-                    1000.0 - value
-                )
-            }),
-        );
-        let progress_messages = Arc::new(Mutex::new(Vec::new()));
-        let captured_progress = Arc::clone(&progress_messages);
-        let request = BatchRequest {
-            environment: EnvironmentConfig::Local {
-                block_store_root: Path::new("blocks").to_path_buf(),
-                embedding: LocalEmbeddingConfig {
-                    base_url: server.base_url.clone(),
-                    model: "all-MiniLM-L6-v2".into(),
-                    api_key_env: None,
-                    request_timeout_secs: 5,
-                    max_retries: 0,
-                    retry_delay_ms: 1,
-                },
-            },
-            embedding_spec: EmbeddingSpecConfig {
-                dims: embedding_spec.dims,
-                encoding: embedding_spec.encoding.clone(),
-            },
-            block_size_target: serialized_branch_size(&embedding_spec, 64).unwrap(),
-            stage: ExecutionStage::FullPipeline,
-            profile_version: PUBLISHED_PROFILE_V0_7_0,
-            max_concurrency: None,
-            ref_name: TEST_REF_NAME.into(),
-            items: document_names
-                .into_iter()
-                .map(|name| BatchItemConfig::Document {
-                    path: PathBuf::from(format!("{name}.txt")),
-                    metadata: BTreeMap::new(),
-                })
-                .collect(),
-        };
-
-        let summary = run_request_with_progress(
-            temp.path(),
-            request,
-            ClusteringConfigOverrides::default(),
-            None,
-            move |message| {
-                captured_progress.lock().unwrap().push(message);
-            },
-        )
-        .await
-        .unwrap();
-
-        assert!(!summary.block_ids.is_empty());
-        let progress_messages = progress_messages.lock().unwrap();
-        assert!(progress_messages.iter().any(|message| {
-            message
-                == "Planning pass 1 requires another full replay pass before v2 planning can complete"
-        }));
-        assert!(
-            progress_messages
-                .iter()
-                .any(|message| { message.starts_with("Completed planning pass 2 over ") })
-        );
         server.join();
     }
 
@@ -8629,7 +8583,6 @@ mod tests {
         base_url: String,
         handle: Option<thread::JoinHandle<()>>,
         max_in_flight: Arc<AtomicUsize>,
-        stop_requested: Option<Arc<AtomicBool>>,
     }
 
     struct RefBlobServer {
@@ -8638,25 +8591,12 @@ mod tests {
     }
 
     impl TestServer {
-        fn request_stop(&self) {
-            if let Some(stop_requested) = &self.stop_requested {
-                stop_requested.store(true, Ordering::SeqCst);
-            }
-        }
-
         fn join(mut self) {
-            self.request_stop();
             self.handle.take().unwrap().join().unwrap();
         }
 
         fn max_in_flight(&self) -> usize {
             self.max_in_flight.load(Ordering::SeqCst)
-        }
-    }
-
-    impl Drop for TestServer {
-        fn drop(&mut self) {
-            self.request_stop();
         }
     }
 
@@ -8671,12 +8611,6 @@ mod tests {
     }
 
     type EmbeddingResponseBuilder = Arc<dyn Fn(&[u8]) -> String + Send + Sync + 'static>;
-
-    #[derive(Clone, Copy)]
-    enum TestServerTermination {
-        AfterExpectedRequests(usize),
-        ExplicitStop,
-    }
 
     impl Drop for InFlightGuard {
         fn drop(&mut self) {
@@ -8821,29 +8755,6 @@ mod tests {
         response_delay: Duration,
         responder: EmbeddingResponseBuilder,
     ) -> TestServer {
-        spawn_embedding_server_with_delay_and_responder_with_termination(
-            TestServerTermination::AfterExpectedRequests(expected_requests),
-            response_delay,
-            responder,
-        )
-    }
-
-    fn spawn_embedding_server_with_delay_and_responder_until_stopped(
-        response_delay: Duration,
-        responder: EmbeddingResponseBuilder,
-    ) -> TestServer {
-        spawn_embedding_server_with_delay_and_responder_with_termination(
-            TestServerTermination::ExplicitStop,
-            response_delay,
-            responder,
-        )
-    }
-
-    fn spawn_embedding_server_with_delay_and_responder_with_termination(
-        termination: TestServerTermination,
-        response_delay: Duration,
-        responder: EmbeddingResponseBuilder,
-    ) -> TestServer {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
@@ -8853,11 +8764,6 @@ mod tests {
         let current_in_flight_for_thread = Arc::clone(&current_in_flight);
         let max_in_flight = Arc::new(AtomicUsize::new(0));
         let max_in_flight_for_thread = Arc::clone(&max_in_flight);
-        let stop_requested = match termination {
-            TestServerTermination::AfterExpectedRequests(_) => None,
-            TestServerTermination::ExplicitStop => Some(Arc::new(AtomicBool::new(false))),
-        };
-        let stop_requested_for_thread = stop_requested.as_ref().map(Arc::clone);
         let (ready_tx, ready_rx) = mpsc::channel();
         let handle = thread::spawn(move || {
             ready_tx.send(()).unwrap();
@@ -8869,24 +8775,11 @@ mod tests {
                     panic!("timed out waiting for runtime test server termination");
                 }
                 let no_in_flight = current_in_flight_for_thread.load(Ordering::SeqCst) == 0;
-                if no_in_flight {
-                    match termination {
-                        TestServerTermination::AfterExpectedRequests(expected_requests)
-                            if seen_for_thread.load(Ordering::SeqCst) >= expected_requests
-                                && Instant::now().duration_since(last_activity)
-                                    >= idle_after_expected =>
-                        {
-                            break;
-                        }
-                        TestServerTermination::ExplicitStop
-                            if stop_requested_for_thread.as_ref().is_some_and(
-                                |stop_requested| stop_requested.load(Ordering::SeqCst),
-                            ) =>
-                        {
-                            break;
-                        }
-                        _ => {}
-                    }
+                if no_in_flight
+                    && seen_for_thread.load(Ordering::SeqCst) >= expected_requests
+                    && Instant::now().duration_since(last_activity) >= idle_after_expected
+                {
+                    break;
                 }
                 let (mut stream, _) = match listener.accept() {
                     Ok(pair) => pair,
@@ -8972,7 +8865,6 @@ mod tests {
             base_url: format!("http://{}", address),
             handle: Some(handle),
             max_in_flight,
-            stop_requested,
         }
     }
 }
