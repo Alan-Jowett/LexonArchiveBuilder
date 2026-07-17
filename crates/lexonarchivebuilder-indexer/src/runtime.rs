@@ -6382,7 +6382,6 @@ mod tests {
             .unwrap();
         }
 
-        let server = spawn_distinct_embedding_server(12);
         let request_path = temp.path().join("request.json");
         fs::write(
             &request_path,
@@ -6391,7 +6390,7 @@ mod tests {
                     "kind": "local",
                     "block_store_root": "blocks",
                     "embedding": {
-                        "base_url": server.base_url,
+                        "base_url": "http://127.0.0.1:8080",
                         "model": "all-MiniLM-L6-v2",
                         "request_timeout_secs": 5,
                         "max_retries": 0,
@@ -6429,7 +6428,6 @@ mod tests {
                 ConfigError::LocalTestingClusterCountUnsupportedForPublishedProfileV0_7_0
             )
         ));
-        server.join();
     }
 
     #[tokio::test]
