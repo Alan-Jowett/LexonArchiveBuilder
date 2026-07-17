@@ -8864,8 +8864,12 @@ mod tests {
         let handle = thread::spawn(move || {
             ready_tx.send(()).unwrap();
             let idle_after_expected = Duration::from_millis(200);
+            let deadline = Instant::now() + Duration::from_secs(60);
             let mut last_activity = Instant::now();
             loop {
+                if Instant::now() >= deadline {
+                    panic!("timed out waiting for runtime test server termination");
+                }
                 let no_in_flight = current_in_flight_for_thread.load(Ordering::SeqCst) == 0;
                 if no_in_flight {
                     match termination {
