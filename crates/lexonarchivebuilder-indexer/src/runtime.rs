@@ -1055,14 +1055,17 @@ fn uses_streaming_indexer_v2(clustering: &ConfiguredClustering) -> bool {
     clustering.profile_version == PUBLISHED_PROFILE_V0_7_0
 }
 
+const V2_PLANNING_NEEDS_ROUTED_OR_TERMINAL_PREFIX: &str =
+    "planning completion requires every v2 partition to be terminal or routed";
+const V2_PLANNING_NEEDS_CHILDREN_PREFIX: &str =
+    "planning completion requires every routed v2 partition to install child partitions";
+
 fn is_incomplete_v2_planning_transition(error: &StreamingIndexerError) -> bool {
     matches!(
         error,
         StreamingIndexerError::InvalidLifecycleTransition(message)
-            if message
-                == "planning completion requires every v2 partition to be terminal or routed"
-                || message
-                    == "planning completion requires every routed v2 partition to install child partitions"
+            if message.starts_with(V2_PLANNING_NEEDS_ROUTED_OR_TERMINAL_PREFIX)
+                || message.starts_with(V2_PLANNING_NEEDS_CHILDREN_PREFIX)
     )
 }
 
@@ -5067,6 +5070,25 @@ mod tests {
             mutable_ref_table_lookup_filter("part'ition", "row'key"),
             "PartitionKey eq 'part''ition' and RowKey eq 'row''key'"
         );
+    }
+
+    #[test]
+    fn incomplete_v2_planning_transition_tolerates_upstream_detail_suffixes() {
+        assert!(is_incomplete_v2_planning_transition(
+            &StreamingIndexerError::InvalidLifecycleTransition(format!(
+                "{V2_PLANNING_NEEDS_ROUTED_OR_TERMINAL_PREFIX}: root partition is still pending"
+            ))
+        ));
+        assert!(is_incomplete_v2_planning_transition(
+            &StreamingIndexerError::InvalidLifecycleTransition(format!(
+                "{V2_PLANNING_NEEDS_CHILDREN_PREFIX} for routed partition root"
+            ))
+        ));
+        assert!(!is_incomplete_v2_planning_transition(
+            &StreamingIndexerError::InvalidLifecycleTransition(
+                "planning completion requires a baseline".into()
+            )
+        ));
     }
 
     #[allow(clippy::too_many_arguments)]
