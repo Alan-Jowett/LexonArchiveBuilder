@@ -8629,7 +8629,7 @@ mod tests {
 
     struct TestServer {
         base_url: String,
-        handle: thread::JoinHandle<()>,
+        handle: Option<thread::JoinHandle<()>>,
         max_in_flight: Arc<AtomicUsize>,
         stop_requested: Option<Arc<AtomicBool>>,
     }
@@ -8640,15 +8640,25 @@ mod tests {
     }
 
     impl TestServer {
-        fn join(self) {
+        fn request_stop(&self) {
             if let Some(stop_requested) = &self.stop_requested {
                 stop_requested.store(true, Ordering::SeqCst);
             }
-            self.handle.join().unwrap();
+        }
+
+        fn join(mut self) {
+            self.request_stop();
+            self.handle.take().unwrap().join().unwrap();
         }
 
         fn max_in_flight(&self) -> usize {
             self.max_in_flight.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Drop for TestServer {
+        fn drop(&mut self) {
+            self.request_stop();
         }
     }
 
@@ -8958,7 +8968,7 @@ mod tests {
 
         TestServer {
             base_url: format!("http://{}", address),
-            handle,
+            handle: Some(handle),
             max_in_flight,
             stop_requested,
         }
