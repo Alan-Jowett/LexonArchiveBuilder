@@ -5749,6 +5749,8 @@ mod tests {
         }
     }
 
+    const UNUSED_LOCAL_EMBEDDING_BASE_URL: &str = "http://127.0.0.1:1";
+
     fn seed_non_finite_leaf_blocks(root: &Path, names: &[&str]) {
         let store =
             ConfiguredBlockStore::from_environment(root, &local_test_environment(String::new()))
@@ -6415,7 +6417,7 @@ mod tests {
                     "kind": "local",
                     "block_store_root": "blocks",
                     "embedding": {
-                        "base_url": "http://127.0.0.1:8080",
+                        "base_url": UNUSED_LOCAL_EMBEDDING_BASE_URL,
                         "model": "all-MiniLM-L6-v2",
                         "request_timeout_secs": 5,
                         "max_retries": 0,
@@ -6466,7 +6468,7 @@ mod tests {
                     "kind": "local",
                     "block_store_root": "blocks",
                     "embedding": {
-                        "base_url": "http://127.0.0.1:8080",
+                        "base_url": UNUSED_LOCAL_EMBEDDING_BASE_URL,
                         "model": "all-MiniLM-L6-v2",
                         "request_timeout_secs": 5,
                         "max_retries": 0,
