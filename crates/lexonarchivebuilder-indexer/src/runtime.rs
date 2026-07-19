@@ -1075,6 +1075,12 @@ enum V2PlanningCompletionAction {
     ReplayRequired(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct V2PlanningPassReport {
+    completed_pass_count: usize,
+    observed_item_count: usize,
+}
+
 fn v2_planning_completion_action(
     completed_pass_count: usize,
     result: Result<(), StreamingIndexerError>,
@@ -1083,11 +1089,32 @@ fn v2_planning_completion_action(
         Ok(()) => Ok(V2PlanningCompletionAction::Complete),
         Err(error) if is_incomplete_v2_planning_transition(&error) => {
             Ok(V2PlanningCompletionAction::ReplayRequired(format!(
-                "Planning pass {} requires another full replay pass before v2 planning can complete",
-                completed_pass_count
+                "Planning pass {} requires another full replay pass before v2 planning can complete: {}",
+                completed_pass_count, error
             )))
         }
         Err(error) => Err(error),
+    }
+}
+
+fn handle_v2_planning_pass_completion(
+    progress: &ProgressReporter,
+    pass_report: V2PlanningPassReport,
+    result: Result<(), StreamingIndexerError>,
+) -> Result<bool, StreamingIndexerError> {
+    report_progress(
+        progress,
+        format!(
+            "Completed planning pass {} over {} item(s)",
+            pass_report.completed_pass_count, pass_report.observed_item_count
+        ),
+    );
+    match v2_planning_completion_action(pass_report.completed_pass_count, result)? {
+        V2PlanningCompletionAction::Complete => Ok(false),
+        V2PlanningCompletionAction::ReplayRequired(message) => {
+            report_progress(progress, message);
+            Ok(true)
+        }
     }
 }
 
@@ -4215,39 +4242,34 @@ where
                 io.progress,
             )
         })?;
-        report_progress(
+        let should_replay = handle_v2_planning_pass_completion(
             io.progress,
-            format!(
-                "Completed planning pass {} over {} item(s)",
-                pass_report.completed_pass_count, pass_report.observed_item_count
-            ),
-        );
-        match v2_planning_completion_action(
-            pass_report.completed_pass_count,
+            V2PlanningPassReport {
+                completed_pass_count: pass_report.completed_pass_count,
+                observed_item_count: pass_report.observed_item_count,
+            },
             indexer.mark_planning_complete(),
-        ) {
-            Ok(V2PlanningCompletionAction::Complete) => break,
-            Ok(V2PlanningCompletionAction::ReplayRequired(message)) => {
-                report_progress(io.progress, message);
-            }
-            Err(error) => {
-                return Err(clustering_failure_error(
-                    error,
-                    clustering_failure_diagnostics
-                        .get_or_init(|| {
-                            build_externalized_clustering_failure_diagnostics(
-                                &diagnostics_resolver,
-                                &diagnostics_embedding_provider,
-                                None,
-                                &config,
-                                &replay_state,
-                                embedding_spec,
-                            )
-                        })
-                        .as_ref(),
-                    io.progress,
-                ));
-            }
+        )
+        .map_err(|error| {
+            clustering_failure_error(
+                error,
+                clustering_failure_diagnostics
+                    .get_or_init(|| {
+                        build_externalized_clustering_failure_diagnostics(
+                            &diagnostics_resolver,
+                            &diagnostics_embedding_provider,
+                            None,
+                            &config,
+                            &replay_state,
+                            embedding_spec,
+                        )
+                    })
+                    .as_ref(),
+                io.progress,
+            )
+        })?;
+        if !should_replay {
+            break;
         }
     }
     report_progress(
@@ -5120,10 +5142,9 @@ mod tests {
                 )))
             )
             .unwrap(),
-            V2PlanningCompletionAction::ReplayRequired(
-                "Planning pass 1 requires another full replay pass before v2 planning can complete"
-                    .into()
-            )
+            V2PlanningCompletionAction::ReplayRequired(format!(
+                "Planning pass 1 requires another full replay pass before v2 planning can complete: invalid lifecycle transition: {V2_PLANNING_NEEDS_ROUTED_OR_TERMINAL_PREFIX}: root partition is still pending"
+            ))
         );
     }
 
@@ -5134,6 +5155,56 @@ mod tests {
         assert_eq!(
             v2_planning_completion_action(1, Err(error.clone())).unwrap_err(),
             error
+        );
+    }
+
+    #[test]
+    fn handle_v2_planning_pass_completion_replays_then_completes() {
+        let progress_messages = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_progress = Arc::clone(&progress_messages);
+        let progress: ProgressReporter = Arc::new(move |message| {
+            captured_progress.lock().unwrap().push(message);
+        });
+
+        assert!(
+            handle_v2_planning_pass_completion(
+                &progress,
+                V2PlanningPassReport {
+                    completed_pass_count: 1,
+                    observed_item_count: 3,
+                },
+                Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
+                    "{V2_PLANNING_NEEDS_ROUTED_OR_TERMINAL_PREFIX}: root partition is still pending"
+                )))
+            )
+            .unwrap()
+        );
+        assert!(
+            !handle_v2_planning_pass_completion(
+                &progress,
+                V2PlanningPassReport {
+                    completed_pass_count: 2,
+                    observed_item_count: 3,
+                },
+                Ok(())
+            )
+            .unwrap()
+        );
+
+        let progress_messages = progress_messages.lock().unwrap();
+        assert_eq!(
+            progress_messages[0],
+            "Completed planning pass 1 over 3 item(s)"
+        );
+        assert!(progress_messages[1].contains(
+            "Planning pass 1 requires another full replay pass before v2 planning can complete"
+        ));
+        assert!(
+            progress_messages[1].contains("requires every v2 partition to be terminal or routed")
+        );
+        assert_eq!(
+            progress_messages[2],
+            "Completed planning pass 2 over 3 item(s)"
         );
     }
 
