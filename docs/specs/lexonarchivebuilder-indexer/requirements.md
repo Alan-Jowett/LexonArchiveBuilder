@@ -293,6 +293,14 @@
   existing execution-stage contract, deterministic replay semantics, retired
   low-level clustering controls, and unchanged MCP search or retrieval
   behavior for already-indexed content.
+- **UR-226 [KNOWN]:** The upstream streaming-indexer v2 lifecycle may require
+  more than one full planning replay pass before planning becomes complete on
+  large corpora.
+- **UR-227 [KNOWN]:** When effective profile `0.7.0` routes execution through
+  the upstream streaming-indexer v2 surface, LexonArchiveBuilder should keep
+  replaying full planning passes until planning completion succeeds or an
+  upstream/runtime error occurs, rather than assuming one completed pass is
+  always sufficient.
 
 ## Change Manifest
 
@@ -394,6 +402,7 @@
 | CM-INDEXER-094 | Add | Require standalone clustering replay to derive its deterministic processing order by reading replay-journal block ids only, then sorting and deduping them before classification and finalization | UR-163, UR-215, UR-216, UR-218, UR-219 |
 | CM-INDEXER-095 | Revise | Advance the repository-default published profile from `0.1.0` to `0.7.0` while preserving the caller-visible profile selector surface and keeping low-level clustering controls retired | UR-52, UR-58, UR-139, UR-141, UR-142, UR-221, UR-222 |
 | CM-INDEXER-096 | Add | Conditionally adopt the upstream streaming-indexer v2 API only for effective profile `0.7.0`, while preserving the existing non-v2 integration path for explicitly selected non-`0.7.0` profiles | UR-220, UR-223, UR-224, UR-225 |
+| CM-INDEXER-097 | Revise | Remove the repository-local one-pass assumption from the effective-`0.7.0` v2 orchestration path so full replay passes continue until upstream planning completion succeeds or an upstream/runtime error occurs | UR-223, UR-225, UR-226, UR-227 |
 
 ## Before / After
 
@@ -917,6 +926,17 @@
   existing non-v2 path for explicitly selected non-`0.7.0` profiles in this
   increment.
 
+### BA-INDEXER-098
+
+- **Before [KNOWN]:** The requirements required effective profile `0.7.0` to
+  use the upstream streaming-indexer v2 surface, but they did not state
+  whether LexonArchiveBuilder should continue replaying additional planning
+  passes when one completed pass leaves v2 planning incomplete.
+- **After [KNOWN]:** The requirements now remove the repository-local
+  single-pass assumption: effective-`0.7.0` v2 orchestration must keep
+  replaying full planning passes until upstream planning completion succeeds or
+  an upstream/runtime error occurs.
+
 ## Requirements
 
 ### Functional Requirements
@@ -1343,6 +1363,9 @@ behavior.
     for evaluation
   - using the upstream streaming-indexer v2 surface only when the effective
     selected profile version is `0.7.0`
+  - continuing effective-`0.7.0` v2 planning replay passes until upstream
+    planning completion succeeds, rather than imposing a repository-local
+    single-pass completion assumption
   - refreshing the adopted upstream dependency state promptly enough that newly
     published upstream profile versions in the current `0.6.x` experiment series
     become selectable
@@ -1364,7 +1387,7 @@ behavior.
   SHALL pick that up through the same temporary `main` tracking rather than by
   introducing repository-local API or contract changes for this increment.
 - **Boundary [KNOWN]:** This requirement does not force LexonArchiveBuilder to re-implement upstream planning internals in-repo; it constrains adaptation and regression reporting at the repository boundary.
-- **Traceability:** UR-47, UR-61, UR-63, UR-64, UR-65, UR-66, UR-67, UR-68, UR-69, UR-71, UR-126, UR-127, UR-128, UR-129, UR-130, UR-140, UR-143, UR-144, UR-145, UR-147, UR-148, UR-220, UR-221, UR-223, UR-224, UR-225
+- **Traceability:** UR-47, UR-61, UR-63, UR-64, UR-65, UR-66, UR-67, UR-68, UR-69, UR-71, UR-126, UR-127, UR-128, UR-129, UR-130, UR-140, UR-143, UR-144, UR-145, UR-147, UR-148, UR-220, UR-221, UR-223, UR-224, UR-225, UR-226, UR-227
 
 #### RQ-INDEXER-003J - Local published-profile sweep automation
 
@@ -2295,6 +2318,8 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   - user request in this session: "LexonGraph has switched to exposing a versioned indexing profile. Currently we hard-code to v0.1.0 (I think). Make this an option we can test different profiles. Can we also pin to main of LexonGraph for now with an explicit note that this is so we can quickly test new profiles?"
   - user request in this session: "can we start prepareing this repo to work with the new v2 api and default to v0.7.0 profile (the only one supported by the new v2 api)"
   - user clarification in this session selecting: "make v0.7.0 the default. Use v2 only if v0.7.0 is selected."
+  - user request in this session: "fix this bug"
+  - user clarification in this session selecting: "Replay until planning completes or an upstream/runtime error occurs (Recommended)"
   - user request in this session: "LexonGraph now has a 0.5.x series of profiles to test. Update to allow us to test this and create/update a test.ps1 I can run them"
   - user request in this session: "update lab to use the new api for reading back embeddings rather then decoding them in lab"
   - `test.ps1:1-90`

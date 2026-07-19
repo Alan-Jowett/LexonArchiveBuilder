@@ -546,13 +546,18 @@ In this increment:
   request-file, then repository-default precedence before delegated surface
   selection, so a CLI-selected non-`0.7.0` profile remains non-v2 and a
   CLI-selected `0.7.0` profile remains v2
+- once effective profile `0.7.0` selects the v2 surface, repository-owned
+  orchestration keeps replaying full planning passes until
+  `mark_planning_complete()` succeeds or an upstream/runtime error occurs,
+  rather than assuming one completed pass is always sufficient
 - the request and CLI selector surface stays unchanged across both paths
 - the selection decision is made once per invocation and remains fixed for all
   replay passes, planning completion, and final materialization
 
 This preserves the caller-visible published-profile contract while letting the
 repository adopt the upstream true-streaming v2 surface only where the upstream
-contract currently supports it.
+contract currently supports it, without imposing a repository-local one-pass
+planning assumption onto large-corpus v2 runs.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003I, RQ-INDEXER-010A
 

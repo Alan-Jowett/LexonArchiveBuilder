@@ -352,7 +352,9 @@ series become selectable while omitted selectors still resolve
 to `0.7.0`, with earlier `0.5.x` alignment retained only as prior comparison
 context and `0.4.x` retained as historical context, or else any missing
 capability is classified explicitly as an upstream regression or compatibility
-finding rather than being silently dropped.
+finding rather than being silently dropped. For effective profile `0.7.0`,
+this also includes preserving the upstream v2 multi-pass lifecycle rather than
+assuming repository-local single-pass planning completion.
 
 **Traces to:** RQ-INDEXER-003I, DSG-LFI-001I
 
@@ -369,10 +371,27 @@ explicit non-`0.7.0` run preserves the same caller-visible selector contract
 but uses the existing non-v2 delegated path instead. No run silently coerces an
 explicit non-`0.7.0` selection back to `0.7.0`, and the delegated-surface
 choice is identical whether the effective selected profile came from the CLI,
-the request file, or the omitted-selector default.
+the request file, or the omitted-selector default. When the effective selected
+profile is `0.7.0`, the same v2-backed path must also preserve repeated full
+planning replays until planning completion succeeds, rather than failing solely
+because one completed v2 planning pass left additional upstream work pending.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003I,
 DSG-LFI-001G, DSG-LFI-001I, DSG-LFI-001I1
+
+### VAL-LFI-002N4
+
+Exercise one effective-`0.7.0` clustering-enabled run whose corpus is large
+enough to require more than one upstream v2 planning replay pass before
+planning becomes complete.
+
+**Pass condition:** LexonArchiveBuilder keeps replaying full planning passes on
+the selected v2 path until `mark_planning_complete()` succeeds or an
+upstream/runtime error occurs. A completed first planning pass that leaves v2
+partitions pending is not treated as a terminal repository-side lifecycle
+failure by itself.
+
+**Traces to:** RQ-INDEXER-003I, DSG-LFI-001I, DSG-LFI-001I1
 
 ### VAL-LFI-002N1
 

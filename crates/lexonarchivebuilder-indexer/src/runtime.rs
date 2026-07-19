@@ -1055,6 +1055,69 @@ fn uses_streaming_indexer_v2(clustering: &ConfiguredClustering) -> bool {
     clustering.profile_version == PUBLISHED_PROFILE_V0_7_0
 }
 
+const V2_PLANNING_NEEDS_ROUTED_OR_TERMINAL_PREFIX: &str =
+    "planning completion requires every v2 partition to be terminal or routed";
+const V2_PLANNING_NEEDS_CHILDREN_PREFIX: &str =
+    "planning completion requires every routed v2 partition to install child partitions";
+
+fn is_incomplete_v2_planning_transition(error: &StreamingIndexerError) -> bool {
+    matches!(
+        error,
+        StreamingIndexerError::InvalidLifecycleTransition(message)
+            if message.starts_with(V2_PLANNING_NEEDS_ROUTED_OR_TERMINAL_PREFIX)
+                || message.starts_with(V2_PLANNING_NEEDS_CHILDREN_PREFIX)
+    )
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum V2PlanningCompletionAction {
+    Complete,
+    ReplayRequired(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct V2PlanningPassReport {
+    completed_pass_count: usize,
+    observed_item_count: usize,
+}
+
+fn v2_planning_completion_action(
+    completed_pass_count: usize,
+    result: Result<(), StreamingIndexerError>,
+) -> Result<V2PlanningCompletionAction, StreamingIndexerError> {
+    match result {
+        Ok(()) => Ok(V2PlanningCompletionAction::Complete),
+        Err(error) if is_incomplete_v2_planning_transition(&error) => {
+            Ok(V2PlanningCompletionAction::ReplayRequired(format!(
+                "Planning pass {} requires another full replay pass before v2 planning can complete: {}",
+                completed_pass_count, error
+            )))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn handle_v2_planning_pass_completion(
+    progress: &ProgressReporter,
+    pass_report: V2PlanningPassReport,
+    result: Result<(), StreamingIndexerError>,
+) -> Result<bool, StreamingIndexerError> {
+    report_progress(
+        progress,
+        format!(
+            "Completed planning pass {} over {} item(s)",
+            pass_report.completed_pass_count, pass_report.observed_item_count
+        ),
+    );
+    match v2_planning_completion_action(pass_report.completed_pass_count, result)? {
+        V2PlanningCompletionAction::Complete => Ok(false),
+        V2PlanningCompletionAction::ReplayRequired(message) => {
+            report_progress(progress, message);
+            Ok(true)
+        }
+    }
+}
+
 fn clustering_failure_input(item: &IndexItem<ContentRef>) -> ClusteringFailureInput {
     match &item.content_ref {
         ContentRef::Document { path } => {
@@ -4108,102 +4171,107 @@ where
         config.block_size_target,
     )?;
 
-    let mut completed_items = 0usize;
-    let mut iterator = replay_state.batch_iterator();
-    let mut batch_number = 0usize;
-    while let Some(batch) = iterator.next_batch()? {
-        if batch.items.is_empty() {
-            continue;
-        }
-        batch_number += 1;
-        let batch_item_count = batch.items.len();
-        report_progress(
-            io.progress,
-            config.submission_progress_kind.started_message(
-                batch_number,
-                total_batches,
-                batch_item_count,
-                completed_items,
-                total_items,
-            ),
-        );
-        await_with_periodic_progress(
-            indexer.ingest_batch(&batch.items),
-            io.progress,
-            PROGRESS_HEARTBEAT_INTERVAL,
-            |elapsed| {
-                config.submission_progress_kind.heartbeat_message(
+    loop {
+        let mut completed_items = 0usize;
+        let mut iterator = replay_state.batch_iterator();
+        let mut batch_number = 0usize;
+        while let Some(batch) = iterator.next_batch()? {
+            if batch.items.is_empty() {
+                continue;
+            }
+            batch_number += 1;
+            let batch_item_count = batch.items.len();
+            report_progress(
+                io.progress,
+                config.submission_progress_kind.started_message(
                     batch_number,
                     total_batches,
                     batch_item_count,
                     completed_items,
                     total_items,
-                    elapsed.as_millis(),
-                )
-            },
-        )
-        .await?;
-        completed_items += batch_item_count;
+                ),
+            );
+            await_with_periodic_progress(
+                indexer.ingest_batch(&batch.items),
+                io.progress,
+                PROGRESS_HEARTBEAT_INTERVAL,
+                |elapsed| {
+                    config.submission_progress_kind.heartbeat_message(
+                        batch_number,
+                        total_batches,
+                        batch_item_count,
+                        completed_items,
+                        total_items,
+                        elapsed.as_millis(),
+                    )
+                },
+            )
+            .await?;
+            completed_items += batch_item_count;
+            report_progress(
+                io.progress,
+                config.submission_progress_kind.completion_message(
+                    batch_number,
+                    total_batches,
+                    completed_items,
+                    total_items,
+                ),
+            );
+        }
         report_progress(
             io.progress,
-            config.submission_progress_kind.completion_message(
-                batch_number,
-                total_batches,
-                completed_items,
-                total_items,
-            ),
+            config
+                .submission_progress_kind
+                .handoff_message(total_batches, total_items),
         );
+        let pass_report = indexer.finish_pass().map_err(|error| {
+            clustering_failure_error(
+                error,
+                clustering_failure_diagnostics
+                    .get_or_init(|| {
+                        build_externalized_clustering_failure_diagnostics(
+                            &diagnostics_resolver,
+                            &diagnostics_embedding_provider,
+                            None,
+                            &config,
+                            &replay_state,
+                            embedding_spec,
+                        )
+                    })
+                    .as_ref(),
+                io.progress,
+            )
+        })?;
+        let should_replay = handle_v2_planning_pass_completion(
+            io.progress,
+            V2PlanningPassReport {
+                completed_pass_count: pass_report.completed_pass_count,
+                observed_item_count: pass_report.observed_item_count,
+            },
+            indexer.mark_planning_complete(),
+        )
+        .map_err(|error| {
+            clustering_failure_error(
+                error,
+                clustering_failure_diagnostics
+                    .get_or_init(|| {
+                        build_externalized_clustering_failure_diagnostics(
+                            &diagnostics_resolver,
+                            &diagnostics_embedding_provider,
+                            None,
+                            &config,
+                            &replay_state,
+                            embedding_spec,
+                        )
+                    })
+                    .as_ref(),
+                io.progress,
+            )
+        })?;
+        if !should_replay {
+            break;
+        }
     }
-
-    report_progress(
-        io.progress,
-        config
-            .submission_progress_kind
-            .handoff_message(total_batches, total_items),
-    );
-    let pass_report = indexer.finish_pass().map_err(|error| {
-        clustering_failure_error(
-            error,
-            clustering_failure_diagnostics
-                .get_or_init(|| {
-                    build_externalized_clustering_failure_diagnostics(
-                        &diagnostics_resolver,
-                        &diagnostics_embedding_provider,
-                        None,
-                        &config,
-                        &replay_state,
-                        embedding_spec,
-                    )
-                })
-                .as_ref(),
-            io.progress,
-        )
-    })?;
-    report_progress(
-        io.progress,
-        format!(
-            "Completed planning pass {} over {} item(s)",
-            pass_report.completed_pass_count, pass_report.observed_item_count
-        ),
-    );
-    indexer.mark_planning_complete().map_err(|error| {
-        clustering_failure_error(
-            error,
-            clustering_failure_diagnostics
-                .get_or_init(|| {
-                    build_externalized_clustering_failure_diagnostics(
-                        &diagnostics_resolver,
-                        &diagnostics_embedding_provider,
-                        None,
-                        &config,
-                        &replay_state,
-                        embedding_spec,
-                    )
-                })
-                .as_ref(),
-            io.progress,
-        )
-    })?;
     report_progress(
         io.progress,
         "Streaming planning complete; starting final materialization".into(),
@@ -5045,6 +5113,101 @@ mod tests {
         );
     }
 
+    #[test]
+    fn incomplete_v2_planning_transition_tolerates_upstream_detail_suffixes() {
+        assert!(is_incomplete_v2_planning_transition(
+            &StreamingIndexerError::InvalidLifecycleTransition(format!(
+                "{V2_PLANNING_NEEDS_ROUTED_OR_TERMINAL_PREFIX}: root partition is still pending"
+            ))
+        ));
+        assert!(is_incomplete_v2_planning_transition(
+            &StreamingIndexerError::InvalidLifecycleTransition(format!(
+                "{V2_PLANNING_NEEDS_CHILDREN_PREFIX} for routed partition root"
+            ))
+        ));
+        assert!(!is_incomplete_v2_planning_transition(
+            &StreamingIndexerError::InvalidLifecycleTransition(
+                "planning completion requires a baseline".into()
+            )
+        ));
+    }
+
+    #[test]
+    fn v2_planning_completion_action_replays_known_incomplete_transition() {
+        assert_eq!(
+            v2_planning_completion_action(
+                1,
+                Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
+                    "{V2_PLANNING_NEEDS_ROUTED_OR_TERMINAL_PREFIX}: root partition is still pending"
+                )))
+            )
+            .unwrap(),
+            V2PlanningCompletionAction::ReplayRequired(format!(
+                "Planning pass 1 requires another full replay pass before v2 planning can complete: invalid lifecycle transition: {V2_PLANNING_NEEDS_ROUTED_OR_TERMINAL_PREFIX}: root partition is still pending"
+            ))
+        );
+    }
+
+    #[test]
+    fn v2_planning_completion_action_propagates_other_transition_errors() {
+        let error =
+            StreamingIndexerError::InvalidLifecycleTransition("no baseline established".into());
+        assert_eq!(
+            v2_planning_completion_action(1, Err(error.clone())).unwrap_err(),
+            error
+        );
+    }
+
+    #[test]
+    fn handle_v2_planning_pass_completion_replays_then_completes() {
+        let progress_messages = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_progress = Arc::clone(&progress_messages);
+        let progress: ProgressReporter = Arc::new(move |message| {
+            captured_progress.lock().unwrap().push(message);
+        });
+
+        assert!(
+            handle_v2_planning_pass_completion(
+                &progress,
+                V2PlanningPassReport {
+                    completed_pass_count: 1,
+                    observed_item_count: 3,
+                },
+                Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
+                    "{V2_PLANNING_NEEDS_ROUTED_OR_TERMINAL_PREFIX}: root partition is still pending"
+                )))
+            )
+            .unwrap()
+        );
+        assert!(
+            !handle_v2_planning_pass_completion(
+                &progress,
+                V2PlanningPassReport {
+                    completed_pass_count: 2,
+                    observed_item_count: 3,
+                },
+                Ok(())
+            )
+            .unwrap()
+        );
+
+        let progress_messages = progress_messages.lock().unwrap();
+        assert_eq!(
+            progress_messages[0],
+            "Completed planning pass 1 over 3 item(s)"
+        );
+        assert!(progress_messages[1].contains(
+            "Planning pass 1 requires another full replay pass before v2 planning can complete"
+        ));
+        assert!(
+            progress_messages[1].contains("requires every v2 partition to be terminal or routed")
+        );
+        assert_eq!(
+            progress_messages[2],
+            "Completed planning pass 2 over 3 item(s)"
+        );
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn test_streaming_status(
         phase: StreamingIndexingPhase,
@@ -5585,6 +5748,8 @@ mod tests {
             },
         }
     }
+
+    const UNUSED_LOCAL_EMBEDDING_BASE_URL: &str = "http://127.0.0.1:1";
 
     fn seed_non_finite_leaf_blocks(root: &Path, names: &[&str]) {
         let store =
@@ -6244,7 +6409,6 @@ mod tests {
             .unwrap();
         }
 
-        let server = spawn_distinct_embedding_server(12);
         let request_path = temp.path().join("request.json");
         fs::write(
             &request_path,
@@ -6253,7 +6417,7 @@ mod tests {
                     "kind": "local",
                     "block_store_root": "blocks",
                     "embedding": {
-                        "base_url": server.base_url,
+                        "base_url": UNUSED_LOCAL_EMBEDDING_BASE_URL,
                         "model": "all-MiniLM-L6-v2",
                         "request_timeout_secs": 5,
                         "max_retries": 0,
@@ -6291,7 +6455,6 @@ mod tests {
                 ConfigError::LocalTestingClusterCountUnsupportedForPublishedProfileV0_7_0
             )
         ));
-        server.join();
     }
 
     #[tokio::test]
@@ -6305,7 +6468,7 @@ mod tests {
                     "kind": "local",
                     "block_store_root": "blocks",
                     "embedding": {
-                        "base_url": "http://127.0.0.1:8080",
+                        "base_url": UNUSED_LOCAL_EMBEDDING_BASE_URL,
                         "model": "all-MiniLM-L6-v2",
                         "request_timeout_secs": 5,
                         "max_retries": 0,
@@ -8491,7 +8654,7 @@ mod tests {
 
     struct TestServer {
         base_url: String,
-        handle: thread::JoinHandle<()>,
+        handle: Option<thread::JoinHandle<()>>,
         max_in_flight: Arc<AtomicUsize>,
     }
 
@@ -8501,8 +8664,8 @@ mod tests {
     }
 
     impl TestServer {
-        fn join(self) {
-            self.handle.join().unwrap();
+        fn join(mut self) {
+            self.handle.take().unwrap().join().unwrap();
         }
 
         fn max_in_flight(&self) -> usize {
@@ -8678,11 +8841,15 @@ mod tests {
         let handle = thread::spawn(move || {
             ready_tx.send(()).unwrap();
             let idle_after_expected = Duration::from_millis(200);
-            let deadline = Instant::now() + Duration::from_secs(15);
+            let deadline = Instant::now() + Duration::from_secs(60);
             let mut last_activity = Instant::now();
-            while Instant::now() < deadline {
-                if seen_for_thread.load(Ordering::SeqCst) >= expected_requests
-                    && current_in_flight_for_thread.load(Ordering::SeqCst) == 0
+            loop {
+                if Instant::now() >= deadline {
+                    panic!("timed out waiting for runtime test server termination");
+                }
+                let no_in_flight = current_in_flight_for_thread.load(Ordering::SeqCst) == 0;
+                if no_in_flight
+                    && seen_for_thread.load(Ordering::SeqCst) >= expected_requests
                     && Instant::now().duration_since(last_activity) >= idle_after_expected
                 {
                     break;
@@ -8769,7 +8936,7 @@ mod tests {
 
         TestServer {
             base_url: format!("http://{}", address),
-            handle,
+            handle: Some(handle),
             max_in_flight,
         }
     }
