@@ -13,6 +13,7 @@ published-profile version selection, latest published-profile and
 telemetry compatibility, upstream regression assessment,
 replay-submission and streaming-status observability,
 pass-end convergence telemetry, v2 intra-pass planning telemetry,
+user-usable convergence diagnosis,
 explicit delegated-contract and
 effective-profile identity signaling, clustering-failure diagnostics,
 rooted block-tree quality assessment with rooted TNN-recall diagnostics,
@@ -46,7 +47,7 @@ v0.7.0 fixed-budget ladder experiment automation, rooted block-store copy toolin
 upstream embedding-readback API adoption, embedding-phase
 batch-progress observability,
 replay-submission observability, streaming-status observability,
-pass-end convergence telemetry, explicit delegated-contract and
+pass-end convergence telemetry, user-usable convergence diagnosis, explicit delegated-contract and
 effective-profile identity signaling, telemetry-count-semantics clarity,
 clustering-failure diagnostics, rooted block-tree quality assessment with
 rooted TNN-recall diagnostics, rooted query access-cost reporting,
@@ -780,6 +781,57 @@ within-pass activity without needing raw upstream enum names or source-code
 knowledge.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003I, RQ-INDEXER-008B, RQ-INDEXER-010A
+
+### DSG-LFI-002B3 `User-usable convergence diagnosis`
+
+LexonArchiveBuilder derives one repository-owned convergence-diagnosis view from
+the same per-run planning telemetry family used for pass-end summaries and
+delegated intra-pass records.
+
+That diagnosis view stays keyed to the effective run identity already surfaced
+for clustering-enabled execution so multiple completed-pass summaries and the
+latest delegated within-pass status can be correlated without requiring users to
+infer whether records came from different profile or contract selections.
+
+The diagnosis view is evidence-first. It relates the latest completed-pass
+summary to prior completed-pass summaries from the same run identity using only
+telemetry the delegated API actually exposed, such as:
+
+- completed-pass number progression
+- planned-versus-terminal partition counts
+- hierarchy depth
+- requested-versus-realized planning cluster counts
+- planning-quality or planning-balance metrics when available
+
+The same diagnosis view also carries the latest available blocked-on evidence
+from delegated within-pass telemetry when that telemetry exists, including
+pending-partition detail, trainer subphase, suspected-stall indicators, or an
+explicit repository-owned `unknown` blocked-on state when the delegated surface
+did not expose enough evidence.
+
+Because the delegated telemetry may still be incomplete, the diagnosis view must
+preserve evidence provenance. Repository-owned summaries may say that the run
+appears to be converging, appears stalled, or remains inconclusive only to the
+extent justified by the exposed telemetry, and they must distinguish:
+
+- conclusions drawn from completed-pass trend evidence
+- last-known blocked-on state from live or latest intra-pass observations
+- uncertainty caused by missing or non-comparable delegated fields
+
+For post-run analysis of non-converged executions, the runtime reuses the same
+request-adjacent planning-telemetry artifact family to persist one deterministic
+diagnosis artifact or terminal diagnosis record containing:
+
+- the effective run identity
+- the latest completed-pass trend evidence available
+- the latest blocked-on evidence available
+- an explicit indication when the diagnosis remained inconclusive
+
+This design keeps the richer diagnosis additive to the existing runtime progress
+and request-adjacent planning-telemetry surfaces. It does not require a new MCP
+surface, metrics backend, or long-lived control-plane service.
+
+**Traces to:** RQ-INDEXER-008B1, RQ-INDEXER-008B2, RQ-INDEXER-010A
 
 ### DSG-LFI-002C `Clustering failure diagnostics`
 
@@ -1897,11 +1949,11 @@ LexonArchiveBuilder consumes them correctly.
 
 **Traces to:** RQ-INDEXER-003A, RQ-INDEXER-003B, RQ-INDEXER-003C,
 RQ-INDEXER-003D, RQ-INDEXER-003E, RQ-INDEXER-003F, RQ-INDEXER-003G,
-RQ-INDEXER-004F, RQ-INDEXER-008A, RQ-INDEXER-008B, RQ-INDEXER-008C,
+RQ-INDEXER-004F, RQ-INDEXER-008A, RQ-INDEXER-008B, RQ-INDEXER-008B1, RQ-INDEXER-008B2, RQ-INDEXER-008C,
 RQ-INDEXER-005B, RQ-INDEXER-008D, RQ-INDEXER-008E,
 RQ-INDEXER-010A, RQ-INDEXER-010B, RQ-INDEXER-010, DSG-LFI-001A,
 DSG-LFI-001B, DSG-LFI-001C, DSG-LFI-001D, DSG-LFI-001E, DSG-LFI-001F,
-DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-001I, DSG-LFI-002A, DSG-LFI-002B,
+DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-001I, DSG-LFI-002A, DSG-LFI-002B, DSG-LFI-002B3,
 DSG-LFI-002C, DSG-LFI-002D, DSG-LFI-002G, DSG-LFI-004G, DSG-LFI-005A, DSG-LFI-005B,
 DSG-LFI-005C, DSG-LFI-005D, DSG-LFI-005E, DSG-LFI-006A, DSG-LFI-007A, DSG-LFI-007B,
 DSG-LFI-007C, DSG-LFI-007D, DSG-LFI-007E, DSG-LFI-007G

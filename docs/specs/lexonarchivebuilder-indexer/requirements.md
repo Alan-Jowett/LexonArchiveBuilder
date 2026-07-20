@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, in-memory replay block-id ordering simplification, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v2 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, and v2 intra-pass planning observability consumption
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, intra-pass planning telemetry projection, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, in-memory replay block-id ordering for deterministic replay submission, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, and conditional use of the upstream streaming-indexer v2 API when the selected published profile is `0.7.0`
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, in-memory replay block-id ordering simplification, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v2 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v2 intra-pass planning observability consumption, and user-usable convergence-diagnosis surfacing
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, intra-pass planning telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, in-memory replay block-id ordering for deterministic replay submission, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, and conditional use of the upstream streaming-indexer v2 API when the selected published profile is `0.7.0`
 
 ## USER-REQUEST
 
@@ -340,6 +340,23 @@
 - **UR-238 [INFERRED]:** Consuming the richer v2 observer surface must preserve
   the approved batch contract, execution-stage contract, replay determinism,
   and unchanged MCP search or retrieval behavior for already-indexed content.
+- **UR-239 [KNOWN]:** LexonGraph now exposes a much richer telemetry set whose
+  purpose is to help the caller determine whether clustering planning is
+  converging and, if not, what the run is blocked on.
+- **UR-240 [KNOWN]:** LexonArchiveBuilder should surface that richer delegated
+  telemetry in a form a user can actually use to diagnose convergence
+  failures.
+- **UR-241 [INFERRED]:** User-usable convergence diagnosis should combine
+  completed-pass convergence evidence with the latest available within-pass
+  blocked-on evidence rather than forcing operators to reconstruct state from
+  separate raw telemetry events manually.
+- **UR-242 [INFERRED]:** When delegated telemetry does not justify a stronger
+  convergence or blocked-on conclusion, LexonArchiveBuilder should report that
+  uncertainty explicitly rather than inventing a repository-owned diagnosis.
+- **UR-243 [INFERRED]:** This richer convergence-diagnosis surfacing must remain
+  additive to the existing runtime progress and request-adjacent planning
+  telemetry artifact surfaces and must not introduce a new control plane or
+  MCP-visible diagnostics surface.
 
 ## Change Manifest
 
@@ -445,6 +462,8 @@
 | CM-INDEXER-098 | Revise | Extend clustering-enabled observability with pass-end convergence telemetry, an operator-discoverable dedicated sink preference, and explicit delegated-contract plus effective-profile identity logging | UR-228, UR-229, UR-230, UR-231, UR-232, UR-233 |
 | CM-INDEXER-099 | Revise | Refresh the adopted LexonGraph integration target so the repository consumes the newer v2 intra-pass planning observer surface now available on upstream `main` | UR-234, UR-238 |
 | CM-INDEXER-100 | Revise | Extend clustering-enabled observability from pass-end-only convergence summaries to operator-visible v2 intra-pass planning telemetry, including pass progress, pending partition detail, trainer subphase summaries, and suspected-stall indicators, while keeping that telemetry additive to the existing runtime progress and dedicated per-run sink surfaces | UR-235, UR-236, UR-237, UR-238 |
+| CM-INDEXER-101 | Revise | Extend clustering-enabled observability from raw pass and intra-pass projection to user-usable convergence diagnosis that combines per-pass trend evidence with latest blocked-on state while preserving explicit uncertainty when telemetry is insufficient | UR-239, UR-240, UR-241, UR-242, UR-243 |
+| CM-INDEXER-102 | Add | Require request-adjacent post-run convergence-diagnosis evidence for non-converged clustering-enabled runs using the existing per-run planning telemetry artifact family rather than a new control-plane or MCP surface | UR-240, UR-241, UR-243 |
 
 ## Before / After
 
@@ -1006,6 +1025,29 @@
   partition detail, trainer subphase summaries, and suspected-stall
   indicators, while preserving operator-understandable repository-owned
   wording.
+
+### BA-INDEXER-101
+
+- **Before [KNOWN]:** The requirements required additive pass-end summaries and
+  live intra-pass projection, but they did not require LexonArchiveBuilder to
+  turn those separate signals into a user-usable answer to "is this run
+  converging?" and "if not, what is it blocked on?".
+- **After [KNOWN]:** The requirements now require clustering-enabled
+  observability to surface user-usable convergence diagnosis that combines
+  per-pass trend evidence with the latest available blocked-on state, and to
+  state uncertainty explicitly when the delegated telemetry does not justify a
+  stronger conclusion.
+
+### BA-INDEXER-102
+
+- **Before [KNOWN]:** Request-adjacent planning telemetry could contain
+  pass-summary and intra-pass records, but the requirements did not require a
+  discoverable post-run convergence-diagnosis summary for failed or otherwise
+  non-converged runs.
+- **After [KNOWN]:** The requirements now require additive request-adjacent
+  convergence-diagnosis evidence for non-converged clustering-enabled runs so
+  users can diagnose the last known convergence state and blocked-on reason
+  without replaying the run or manually correlating every raw telemetry record.
 
 ## Requirements
 
@@ -1866,6 +1908,59 @@ advances, and clustering or block assembly advances.
 - **Non-goal [KNOWN]:** This requirement does not introduce a separate control-plane, metrics backend, or MCP-surface change.
 - **Traceability:** UR-32, UR-33, UR-39, UR-41, UR-45, UR-48, UR-59, UR-60, UR-61, UR-62, UR-63, UR-67, UR-68, UR-69, UR-70, UR-71, UR-228, UR-229, UR-230, UR-231, UR-232, UR-233, UR-234, UR-235, UR-236, UR-237, UR-238
 
+#### RQ-INDEXER-008B1 - User-usable convergence diagnosis
+
+For clustering-enabled execution, LexonArchiveBuilder SHALL surface delegated
+planning telemetry in a user-usable diagnostic form that lets operators
+determine whether planning appears to be converging and, if not, what the run
+is currently or last known to be blocked on.
+
+- **Evidence-composition rule [KNOWN]:** The surfaced diagnosis must relate
+  completed-pass convergence summaries across passes that share the same
+  effective run identity and must also surface the latest available within-pass
+  blocked-on evidence, such as pending partitions, trainer subphase,
+  suspected-stall indicators, or equivalent delegated waiting state when those
+  fields are exposed.
+- **Provenance rule [INFERRED]:** Repository-owned messaging SHOULD make clear
+  which parts of the diagnosis came from completed-pass convergence summaries
+  versus live or last-known within-pass observations.
+- **User-interpretation rule [INFERRED]:** The surfaced diagnosis SHOULD reduce
+  the amount of manual correlation a user must perform across raw progress
+  lines or JSONL records in order to understand convergence behavior.
+- **Honesty rule [KNOWN]:** When delegated telemetry does not justify a stronger
+  conclusion, LexonArchiveBuilder SHALL report that the convergence or
+  blocked-on diagnosis is uncertain or incomplete rather than inventing a
+  repository-owned conclusion unsupported by the telemetry.
+- **Surface boundary [KNOWN]:** This requirement is additive to the existing
+  runtime progress and request-adjacent planning telemetry artifact surfaces
+  and does not introduce a separate control plane or MCP-visible diagnostics
+  surface.
+- **Traceability:** UR-239, UR-240, UR-241, UR-242, UR-243
+
+#### RQ-INDEXER-008B2 - Post-run convergence diagnosis persistence
+
+When clustering-enabled execution ends without confirmed planning completion
+after convergence telemetry has been emitted, LexonArchiveBuilder SHALL
+preserve deterministic request-adjacent convergence-diagnosis evidence for
+post-run analysis.
+
+- **Applicability [INFERRED]:** This requirement applies to repository-owned
+  termination paths such as upstream/runtime failure or other non-converged
+  completion paths that occur after planning telemetry has become available; it
+  does not claim recovery from abrupt external process termination that bypasses
+  repository-controlled shutdown logic.
+- **Minimum content [KNOWN]:** The preserved evidence must identify the
+  effective run identity, the latest completed-pass convergence evidence
+  available for the run, and the latest available blocked-on evidence used for
+  diagnosis.
+- **Artifact-family boundary [INFERRED]:** The first approved realization should
+  reuse the existing request-adjacent planning telemetry artifact family,
+  whether by an end-of-run summary record or a sibling summary artifact, rather
+  than introducing a second unrelated observability channel.
+- **Non-goal [KNOWN]:** This requirement does not require MCP clients to query
+  convergence-diagnosis state through the search-serving surface.
+- **Traceability:** UR-240, UR-241, UR-243
+
 #### RQ-INDEXER-008C - Diagnosable clustering failures
 
 When a clustering-enabled execution fails after LexonArchiveBuilder has determined
@@ -2253,8 +2348,8 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Latest upstream telemetry remains subordinate to the existing runtime progress surface | Preserved with clarified scope | Requirements now constrain richer live telemetry and heartbeat events to the same repository-owned log stream rather than a new telemetry interface |
 | Operator-visible progress counts remain understandable across upstream telemetry changes | Preserved with clarified scope | Requirements now distinguish invocation-total delegated-item counts from stage-local or layer-local telemetry counts so upstream count-shape changes do not create misleading logs |
 | Clustering-enabled run identity remains operator-visible and replay-explainable | Preserved with stronger observability | Requirements now require telemetry to identify both the effective selected published profile version and the delegated legacy-versus-v2 contract family actually used for the run |
-| Repeated planning passes remain diagnosable for convergence without a new control plane | Preserved with expanded observability | Requirements now require additive pass-end convergence telemetry and prefer an operator-discoverable dedicated sink so repeated v2 passes can be judged for convergence without scanning all ordinary progress chatter |
-| Within-pass v2 planning activity remains operator-visible without redefining repository surfaces | Preserved with expanded observability | Requirements now add delegated intra-pass planning telemetry to the same runtime progress plus per-run additive telemetry surfaces instead of introducing a separate repository-owned observability channel |
+| Repeated planning passes remain user-diagnosable for convergence without a new control plane | Preserved with expanded observability | Requirements now require additive pass-end convergence telemetry plus user-usable convergence diagnosis that relates per-pass evidence across the same run identity and can be preserved for post-run analysis without scanning every raw record manually |
+| Within-pass v2 planning activity and blocked-on state remain operator-visible without redefining repository surfaces | Preserved with expanded observability | Requirements now add delegated intra-pass planning telemetry to the same runtime progress plus per-run additive telemetry surfaces and require the surfaced diagnosis to carry the latest available blocked-on evidence without introducing a separate repository-owned observability channel |
 | Post-index quality assessment remains subordinate to existing storage and serving boundaries | Preserved with clarified scope | The new assessment is constrained to a CLI-only operator tool that reads through the shared `BlockStore` boundary and does not alter MCP-facing behavior |
 | Rooted-quality access-cost reporting remains advisory and repository-local | Preserved with clarified scope | Query access statistics and RTT estimates are constrained to CLI quality diagnostics over the existing rooted `BlockStore` boundary and do not redefine MCP search latency, transport, or serving contracts |
 | Stored embedding format awareness remains upstream-owned | Preserved with revised ownership | Requirements now place supported stored-embedding encodings and reconstruction semantics behind the upstream LexonGraph readback API instead of a repository-local decoder table |
@@ -2302,6 +2397,14 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
   telemetry sink, should the first approved realization default to a sibling
   file beside the request or summary artifacts, a distinct process output
   stream, or allow either as long as operators can discover it deterministically?
+- **Q-INDEXER-084 [UNKNOWN]:** Should the first approved user-usable
+  convergence-diagnosis surface emit a repository-owned discrete verdict such
+  as `converging`, `not-converging`, or `inconclusive`, or should it stop at
+  surfacing comparative evidence plus blocked-on state for human judgment?
+- **Q-INDEXER-085 [UNKNOWN]:** For post-run diagnosis of non-converged runs, is
+  it preferable to append one terminal diagnosis record into the existing
+  planning-telemetry artifact, or to emit a separate sibling convergence
+  summary artifact as long as it stays deterministic and request-adjacent?
 
 ## Coverage Notes
 
@@ -2453,9 +2556,15 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   - `Alan-Jowett/LexonGraph` `crates/lexongraph-streaming-indexer/src/lib.rs` on `main`: published-profile surfaces around `PublishedProfileVersion`, `PUBLISHED_PROFILE_V0_1_0`, `PublishedIndexingProfile`, and `with_published_profile`
   - `Alan-Jowett/LexonGraph` `crates/lexongraph-streaming-indexer/src/lib.rs` on `main`: telemetry and heartbeat surfaces around `PlanningStageStatusTracker`, `start_status_heartbeat`, and `with_legacy_item_count`
   - `Alan-Jowett/LexonGraph` compare `00760dd5121466b7f089bd22d3a26d8d23aa61b6...75c936d2d5bf3c8ae7afa6df598e433a731e0c3c`: upstream change "Add v2 intra-pass telemetry (#179)" covering pass progress, pending partition detail, trainer subphase summaries, and suspected-stall indicators
+  - user request in this session: "LexonGraph now exposes a much richer set of telemetry with the goal of helping the caller determine if it is converging or not and if not what it is blocked on. This project needs to surface this in a way a user can use to diagnose convergence failures."
   - `README.md:18-27`
   - `README.md:42-49`
   - `README.md:51-59`
+  - `docs/specs/lexonarchivebuilder-indexer/design.md:670-782`
+  - `docs/specs/lexonarchivebuilder-indexer/validation.md:877-934`
+  - `crates/lexonarchivebuilder-indexer/src/runtime.rs:1112-1367`
+  - `crates/lexonarchivebuilder-indexer/src/runtime.rs:1418-1452`
+  - `crates/lexonarchivebuilder-indexer/src/runtime.rs:5189-5218`
   - `README.md:61-80`
   - `crates/lexonarchivebuilder-indexer/src/mailbox.rs:24-31`
   - `crates/lexonarchivebuilder-indexer/src/mailbox.rs:157-176`
