@@ -1155,6 +1155,7 @@ struct PlanningIntraPassTelemetryRecord {
     elapsed_ms: u128,
     last_progress_ms: Option<u128>,
     pending_partition_count: Option<usize>,
+    pending_partition_preview_count: Option<usize>,
     pending_partitions: Option<Vec<PlanningPendingPartitionTelemetryRecord>>,
     suspected_stall_reason: Option<&'static str>,
     suspected_stall_duration_without_progress_ms: Option<u128>,
@@ -1266,7 +1267,7 @@ impl PlanningTelemetryContext {
                 PlanningCompletionAction::ReplayRequired(reason) => Some(reason.clone()),
             },
         };
-        self.write_json_record(&record, true)
+        self.write_json_record(&record)
     }
 
     fn maybe_write_v2_planning_status_record(
@@ -1282,6 +1283,13 @@ impl PlanningTelemetryContext {
         if matches!(status.state, StreamingIndexingStatusState::Completed) {
             return Ok(());
         }
+        let pending_partitions = status.v2_pending_partitions.as_ref().map(|partitions| {
+            partitions
+                .iter()
+                .take(2)
+                .map(planning_pending_partition_telemetry_record)
+                .collect::<Vec<_>>()
+        });
         let record = PlanningIntraPassTelemetryRecord {
             telemetry_kind: "intra-pass",
             effective_profile_version: self.run_identity.effective_profile_version.clone(),
@@ -1294,12 +1302,8 @@ impl PlanningTelemetryContext {
             elapsed_ms: status.elapsed.as_millis(),
             last_progress_ms: status.last_progress_at.map(|duration| duration.as_millis()),
             pending_partition_count: status.pending_partition_count,
-            pending_partitions: status.v2_pending_partitions.as_ref().map(|partitions| {
-                partitions
-                    .iter()
-                    .map(planning_pending_partition_telemetry_record)
-                    .collect()
-            }),
+            pending_partition_preview_count: pending_partitions.as_ref().map(Vec::len),
+            pending_partitions,
             suspected_stall_reason: status
                 .suspected_stall
                 .as_ref()
@@ -1309,17 +1313,10 @@ impl PlanningTelemetryContext {
                 .as_ref()
                 .map(|stall| stall.duration_without_progress.as_millis()),
         };
-        self.write_json_record(
-            &record,
-            matches!(status.state, StreamingIndexingStatusState::Started),
-        )
+        self.write_json_record(&record)
     }
 
-    fn write_json_record<T: Serialize>(
-        &self,
-        record: &T,
-        prefer_truncate_if_first_record: bool,
-    ) -> Result<(), String> {
+    fn write_json_record<T: Serialize>(&self, record: &T) -> Result<(), String> {
         let Some(path) = &self.sink_path else {
             return Ok(());
         };
@@ -1345,7 +1342,7 @@ impl PlanningTelemetryContext {
             .sink_initialized
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok();
-        if is_first_record && prefer_truncate_if_first_record {
+        if is_first_record {
             file_options.truncate(true);
         } else {
             file_options.append(true);
@@ -7248,9 +7245,97 @@ mod tests {
         assert!(written.contains("\"telemetry_kind\":\"intra-pass\""));
         assert!(written.contains("\"planning_status_state\":\"in-progress\""));
         assert!(written.contains("\"pending_partition_count\":1"));
+        assert!(written.contains("\"pending_partition_preview_count\":1"));
         assert!(written.contains("\"partition_path\":\"root/0\""));
         assert!(written.contains("\"trainer_subphase\":\"plan-cuts\""));
         assert!(written.contains("\"suspected_stall_reason\":\"unchanged-trainer-subphase\""));
+    }
+
+    #[test]
+    fn planning_pass_telemetry_first_intra_pass_record_replaces_prior_run_file_contents() {
+        let temp = tempdir().unwrap();
+        let telemetry_path = temp.path().join("planning-pass-telemetry.jsonl");
+        fs::write(&telemetry_path, "{\"stale\":true}\n").unwrap();
+        let telemetry = PlanningTelemetryContext {
+            run_identity: PlanningRunIdentity {
+                effective_profile_version: "0.7.0".into(),
+                delegated_contract_family: DelegatedContractFamily::V2,
+            },
+            sink_path: Some(telemetry_path.clone()),
+            sink_initialized: Arc::new(AtomicBool::new(false)),
+        };
+        let status = StreamingIndexingStatus {
+            pending_partition_count: Some(1),
+            v2_pending_partitions: Some(vec![test_pending_partition_status(
+                "root/0",
+                7,
+                Some(3),
+                None,
+                Some(StreamingIndexingTrainerSubphase::PlanCuts),
+            )]),
+            ..test_streaming_status(
+                StreamingIndexingPhase::PlanningPass { pass_number: 2 },
+                StreamingIndexingStatusState::InProgress,
+                12,
+                Some(12),
+                4,
+                Some(8),
+                Duration::from_millis(250),
+                None,
+            )
+        };
+
+        telemetry
+            .maybe_write_v2_planning_status_record(&status)
+            .unwrap();
+
+        let written = fs::read_to_string(&telemetry_path).unwrap();
+        assert!(!written.contains("\"stale\":true"));
+        assert!(written.contains("\"telemetry_kind\":\"intra-pass\""));
+        assert_eq!(written.lines().count(), 1);
+    }
+
+    #[test]
+    fn planning_pass_telemetry_bounds_pending_partition_preview_in_jsonl_records() {
+        let temp = tempdir().unwrap();
+        let telemetry_path = temp.path().join("planning-pass-telemetry.jsonl");
+        let telemetry = PlanningTelemetryContext {
+            run_identity: PlanningRunIdentity {
+                effective_profile_version: "0.7.0".into(),
+                delegated_contract_family: DelegatedContractFamily::V2,
+            },
+            sink_path: Some(telemetry_path.clone()),
+            sink_initialized: Arc::new(AtomicBool::new(false)),
+        };
+        let status = StreamingIndexingStatus {
+            pending_partition_count: Some(3),
+            v2_pending_partitions: Some(vec![
+                test_pending_partition_status("root/0", 7, Some(3), None, None),
+                test_pending_partition_status("root/1", 5, Some(2), Some(vec![1, 1]), None),
+                test_pending_partition_status("root/2", 4, Some(1), None, None),
+            ]),
+            ..test_streaming_status(
+                StreamingIndexingPhase::PlanningPass { pass_number: 2 },
+                StreamingIndexingStatusState::InProgress,
+                12,
+                Some(12),
+                4,
+                Some(8),
+                Duration::from_millis(250),
+                None,
+            )
+        };
+
+        telemetry
+            .maybe_write_v2_planning_status_record(&status)
+            .unwrap();
+
+        let written = fs::read_to_string(&telemetry_path).unwrap();
+        assert!(written.contains("\"pending_partition_count\":3"));
+        assert!(written.contains("\"pending_partition_preview_count\":2"));
+        assert!(written.contains("\"partition_path\":\"root/0\""));
+        assert!(written.contains("\"partition_path\":\"root/1\""));
+        assert!(!written.contains("\"partition_path\":\"root/2\""));
     }
 
     #[test]
