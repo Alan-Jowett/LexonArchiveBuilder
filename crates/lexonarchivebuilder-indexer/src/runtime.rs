@@ -1564,6 +1564,9 @@ fn planning_pass_diagnosis(
 }
 
 fn planning_blocked_on_summary(status: &StreamingIndexingStatus) -> Option<String> {
+    if !matches!(status.phase, StreamingIndexingPhase::PlanningPass { .. }) {
+        return None;
+    }
     let mut parts = Vec::new();
     let pending_partition_count = status
         .pending_partition_count
@@ -1595,7 +1598,11 @@ fn planning_blocked_on_summary(status: &StreamingIndexingStatus) -> Option<Strin
             stall.duration_without_progress.as_millis()
         ));
     }
-    (!parts.is_empty()).then(|| parts.join("; "))
+    if parts.is_empty() {
+        Some("unknown".to_string())
+    } else {
+        Some(parts.join("; "))
+    }
 }
 
 fn planning_status_diagnosis_message(
@@ -7642,6 +7649,39 @@ mod tests {
 
         let written = fs::read_to_string(&telemetry_path).unwrap();
         assert!(written.contains("\"pending_partition_count\":2"));
+    }
+
+    #[test]
+    fn planning_pass_telemetry_uses_unknown_blocked_on_state_when_detail_missing() {
+        let temp = tempdir().unwrap();
+        let telemetry_path = temp.path().join("planning-pass-telemetry.jsonl");
+        let telemetry = PlanningTelemetryContext {
+            run_identity: PlanningRunIdentity {
+                effective_profile_version: "0.7.0".into(),
+                delegated_contract_family: DelegatedContractFamily::V2,
+            },
+            sink_path: Some(telemetry_path.clone()),
+            sink_initialized: Arc::new(AtomicBool::new(false)),
+            sink_write_lock: Arc::new(Mutex::new(())),
+            diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
+        };
+        let status = test_streaming_status(
+            StreamingIndexingPhase::PlanningPass { pass_number: 2 },
+            StreamingIndexingStatusState::InProgress,
+            12,
+            Some(12),
+            4,
+            Some(8),
+            Duration::from_millis(250),
+            None,
+        );
+
+        let (record, diagnosis_message) = telemetry.project_planning_status(&status);
+        telemetry.write_json_record(&record.unwrap()).unwrap();
+
+        let written = fs::read_to_string(&telemetry_path).unwrap();
+        assert!(written.contains("\"blocked_on_summary\":\"unknown\""));
+        assert!(diagnosis_message.unwrap().contains("blocked on unknown"));
     }
 
     #[test]
