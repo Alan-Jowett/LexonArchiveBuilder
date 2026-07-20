@@ -70,6 +70,7 @@ const MUTABLE_REF_STORE_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MUTABLE_REF_STORE_HTTP_RETRY_ATTEMPTS: usize = 3;
 const MUTABLE_REF_STORE_HTTP_RETRY_DELAY: Duration = Duration::from_millis(500);
 const MUTABLE_REF_TABLE_SCHEMA_VERSION: i32 = 1;
+const UNKNOWN_BLOCKED_ON_SUMMARY: &str = "unknown";
 #[cfg(test)]
 const TEST_REF_NAME: &str = "test-branch";
 
@@ -1331,8 +1332,11 @@ impl PlanningTelemetryContext {
     ) -> (Option<PlanningIntraPassTelemetryRecord>, Option<String>) {
         let mut state = lock_unpoisoned(&self.diagnosis_state);
         let blocked_on_summary = planning_blocked_on_summary(status);
-        if blocked_on_summary.is_some() {
-            state.latest_blocked_on_summary = blocked_on_summary.clone();
+        if let Some(blocked_on_summary) = blocked_on_summary.as_ref()
+            && (blocked_on_summary != UNKNOWN_BLOCKED_ON_SUMMARY
+                || state.latest_blocked_on_summary.is_none())
+        {
+            state.latest_blocked_on_summary = Some(blocked_on_summary.clone());
         }
         let latest_pass_diagnosis =
             state
@@ -1599,7 +1603,7 @@ fn planning_blocked_on_summary(status: &StreamingIndexingStatus) -> Option<Strin
         ));
     }
     if parts.is_empty() {
-        Some("unknown".to_string())
+        Some(UNKNOWN_BLOCKED_ON_SUMMARY.to_string())
     } else {
         Some(parts.join("; "))
     }
@@ -7682,6 +7686,67 @@ mod tests {
         let written = fs::read_to_string(&telemetry_path).unwrap();
         assert!(written.contains("\"blocked_on_summary\":\"unknown\""));
         assert!(diagnosis_message.unwrap().contains("blocked on unknown"));
+    }
+
+    #[test]
+    fn planning_pass_summary_preserves_last_concrete_blocked_on_summary() {
+        let telemetry = PlanningTelemetryContext {
+            run_identity: PlanningRunIdentity {
+                effective_profile_version: "0.7.0".into(),
+                delegated_contract_family: DelegatedContractFamily::V2,
+            },
+            sink_path: None,
+            sink_initialized: Arc::new(AtomicBool::new(false)),
+            sink_write_lock: Arc::new(Mutex::new(())),
+            diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
+        };
+        let detailed_status = StreamingIndexingStatus {
+            pending_partition_count: Some(1),
+            v2_pending_partitions: Some(vec![test_pending_partition_status(
+                "root/0",
+                7,
+                Some(3),
+                None,
+                Some(StreamingIndexingTrainerSubphase::PlanCuts),
+            )]),
+            ..test_streaming_status(
+                StreamingIndexingPhase::PlanningPass { pass_number: 2 },
+                StreamingIndexingStatusState::InProgress,
+                12,
+                Some(12),
+                4,
+                Some(8),
+                Duration::from_millis(250),
+                None,
+            )
+        };
+        let unknown_status = test_streaming_status(
+            StreamingIndexingPhase::PlanningPass { pass_number: 2 },
+            StreamingIndexingStatusState::InProgress,
+            12,
+            Some(12),
+            4,
+            Some(8),
+            Duration::from_millis(260),
+            None,
+        );
+
+        let _ = telemetry.project_planning_status(&detailed_status);
+        let _ = telemetry.project_planning_status(&unknown_status);
+        let (message, record) = telemetry.project_pass_summary(
+            test_planning_pass_report(1, 3),
+            &PlanningCompletionAction::ReplayRequired("still pending".into()),
+        );
+
+        assert_eq!(
+            record.last_known_blocked_on_summary.as_deref(),
+            Some(
+                "1 pending partition(s); pending detail root/0 expects 7 item(s), observed 3, subphase plan-cuts"
+            )
+        );
+        assert!(message.contains(
+            "last blocked on 1 pending partition(s); pending detail root/0 expects 7 item(s), observed 3, subphase plan-cuts"
+        ));
     }
 
     #[test]
