@@ -12,7 +12,7 @@ clustering input discovery, mutable current-root publication, published-profile 
 published-profile version selection, latest published-profile and telemetry
 compatibility, upstream regression assessment, replay-submission and
 streaming-status observability, pass-end convergence telemetry, v2
-intra-pass planning telemetry, explicit delegated-contract and
+intra-pass planning telemetry, user-usable convergence diagnosis, explicit delegated-contract and
 effective-profile identity signaling,
 clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
@@ -45,7 +45,7 @@ fixed-budget ladder experiment automation, upstream
 embedding-readback API adoption, upstream regression assessment,
 embedding-phase batch-progress observability,
 replay-submission observability, streaming-status observability,
-pass-end convergence telemetry, explicit delegated-contract and
+pass-end convergence telemetry, user-usable convergence diagnosis, explicit delegated-contract and
 effective-profile identity signaling, telemetry-count-semantics clarity,
 clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
@@ -932,6 +932,38 @@ planning telemetry sink is active, the same invocation writes additive
 intra-pass records there rather than creating a second observability artifact.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003I, RQ-INDEXER-008B, DSG-LFI-001I, DSG-LFI-002B, DSG-LFI-002B2
+
+### VAL-LFI-007G3
+
+Run a clustering-enabled execution that emits at least two completed planning
+pass summaries and also exposes at least one within-pass status update with
+blocked-on detail.
+
+**Pass condition:** the repository-owned convergence-diagnosis surface lets a
+user determine, without manually correlating every raw telemetry record,
+whether the run appears to be converging and what it is currently or last known
+to be blocked on. The surfaced diagnosis distinguishes completed-pass trend
+evidence from live or last-known blocked-on evidence and explicitly marks the
+result inconclusive when delegated telemetry is insufficient to support a
+stronger conclusion.
+
+**Traces to:** RQ-INDEXER-008B1, DSG-LFI-002B1, DSG-LFI-002B2, DSG-LFI-002B3
+
+### VAL-LFI-007G4
+
+Run a clustering-enabled execution that emits planning telemetry and then ends
+without confirmed planning completion under a repository-owned non-converged
+termination path.
+
+**Pass condition:** the request-adjacent planning-telemetry artifact family
+contains deterministic post-run convergence-diagnosis evidence for that run,
+including the effective run identity, the latest completed-pass trend evidence,
+the latest blocked-on evidence, and an explicit indication when the diagnosis
+remains inconclusive. The same behavior remains additive to the existing
+runtime-progress and request-adjacent telemetry surfaces and does not require a
+new MCP-visible or control-plane surface.
+
+**Traces to:** RQ-INDEXER-008B2, RQ-INDEXER-010A, DSG-LFI-002B3
 
 ### VAL-LFI-007H
 

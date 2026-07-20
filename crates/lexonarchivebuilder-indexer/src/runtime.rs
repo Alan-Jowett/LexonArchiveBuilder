@@ -1093,6 +1093,39 @@ struct PlanningPassReport {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+enum PlanningConvergenceVerdict {
+    #[serde(rename = "converging")]
+    Converging,
+    #[serde(rename = "not-converging")]
+    NotConverging,
+    #[serde(rename = "inconclusive")]
+    Inconclusive,
+}
+
+impl PlanningConvergenceVerdict {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Converging => "converging",
+            Self::NotConverging => "not-converging",
+            Self::Inconclusive => "inconclusive",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PlanningPassDiagnosis {
+    verdict: PlanningConvergenceVerdict,
+    evidence_summary: String,
+}
+
+#[derive(Debug, Default)]
+struct PlanningTelemetryState {
+    previous_pass_report: Option<PlanningPassReport>,
+    latest_pass_diagnosis: Option<PlanningPassDiagnosis>,
+    latest_blocked_on_summary: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 enum DelegatedContractFamily {
     #[serde(rename = "legacy/non-v2")]
     LegacyNonV2,
@@ -1129,6 +1162,9 @@ struct PlanningPassTelemetryRecord {
     planned_partition_count: usize,
     terminal_partition_count: usize,
     hierarchy_depth: usize,
+    convergence_verdict: PlanningConvergenceVerdict,
+    convergence_evidence_summary: String,
+    last_known_blocked_on_summary: Option<String>,
     planning_completion_state: String,
     planning_completion_reason: Option<String>,
 }
@@ -1159,6 +1195,9 @@ struct PlanningIntraPassTelemetryRecord {
     pending_partitions: Option<Vec<PlanningPendingPartitionTelemetryRecord>>,
     suspected_stall_reason: Option<&'static str>,
     suspected_stall_duration_without_progress_ms: Option<u128>,
+    convergence_verdict: PlanningConvergenceVerdict,
+    convergence_evidence_summary: String,
+    blocked_on_summary: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1166,6 +1205,7 @@ struct PlanningTelemetryContext {
     run_identity: PlanningRunIdentity,
     sink_path: Option<PathBuf>,
     sink_initialized: Arc<AtomicBool>,
+    diagnosis_state: Arc<Mutex<PlanningTelemetryState>>,
 }
 
 fn v2_planning_completion_action(
@@ -1211,7 +1251,15 @@ impl PlanningTelemetryContext {
         message
     }
 
-    fn pass_summary_message(&self, pass_report: PlanningPassReport) -> String {
+    fn project_pass_summary(
+        &self,
+        pass_report: PlanningPassReport,
+        completion: &PlanningCompletionAction,
+    ) -> (String, PlanningPassTelemetryRecord) {
+        let mut state = lock_unpoisoned(&self.diagnosis_state);
+        let diagnosis =
+            planning_pass_diagnosis(state.previous_pass_report, pass_report, completion);
+        let last_known_blocked_on_summary = state.latest_blocked_on_summary.clone();
         let mut message = format!(
             "Completed planning pass {} over {} item(s) for profile {} via {}",
             pass_report.completed_pass_count,
@@ -1237,14 +1285,14 @@ impl PlanningTelemetryContext {
             "; quality {:.6}; balance {:.6}",
             pass_report.planning_quality_metric, pass_report.planning_balance_metric
         ));
-        message
-    }
-
-    fn write_summary_record(
-        &self,
-        pass_report: PlanningPassReport,
-        completion: &PlanningCompletionAction,
-    ) -> Result<(), String> {
+        message.push_str(&format!(
+            "; diagnosis {} ({})",
+            diagnosis.verdict.as_str(),
+            diagnosis.evidence_summary
+        ));
+        if let Some(blocked_on_summary) = last_known_blocked_on_summary.as_deref() {
+            message.push_str(&format!("; last blocked on {blocked_on_summary}"));
+        }
         let record = PlanningPassTelemetryRecord {
             telemetry_kind: "pass-summary",
             effective_profile_version: self.run_identity.effective_profile_version.clone(),
@@ -1258,6 +1306,9 @@ impl PlanningTelemetryContext {
             planned_partition_count: pass_report.planned_partition_count,
             terminal_partition_count: pass_report.terminal_partition_count,
             hierarchy_depth: pass_report.hierarchy_depth,
+            convergence_verdict: diagnosis.verdict,
+            convergence_evidence_summary: diagnosis.evidence_summary.clone(),
+            last_known_blocked_on_summary: last_known_blocked_on_summary.clone(),
             planning_completion_state: match completion {
                 PlanningCompletionAction::Complete => "complete".to_string(),
                 PlanningCompletionAction::ReplayRequired(_) => "replay-required".to_string(),
@@ -1267,21 +1318,42 @@ impl PlanningTelemetryContext {
                 PlanningCompletionAction::ReplayRequired(reason) => Some(reason.clone()),
             },
         };
-        self.write_json_record(&record)
+        state.previous_pass_report = Some(pass_report);
+        state.latest_pass_diagnosis = Some(diagnosis);
+        state.latest_blocked_on_summary = None;
+        (message, record)
     }
 
-    fn maybe_write_v2_planning_status_record(
+    fn project_planning_status(
         &self,
         status: &StreamingIndexingStatus,
-    ) -> Result<(), String> {
+    ) -> (Option<PlanningIntraPassTelemetryRecord>, Option<String>) {
+        let mut state = lock_unpoisoned(&self.diagnosis_state);
+        let blocked_on_summary = planning_blocked_on_summary(status);
+        if blocked_on_summary.is_some() {
+            state.latest_blocked_on_summary = blocked_on_summary.clone();
+        }
+        let latest_pass_diagnosis =
+            state
+                .latest_pass_diagnosis
+                .clone()
+                .unwrap_or_else(|| PlanningPassDiagnosis {
+                    verdict: PlanningConvergenceVerdict::Inconclusive,
+                    evidence_summary: "no completed-pass comparison available yet".to_string(),
+                });
+        let progress_message = planning_status_diagnosis_message(
+            &latest_pass_diagnosis,
+            status,
+            blocked_on_summary.as_deref(),
+        );
         if self.run_identity.delegated_contract_family != DelegatedContractFamily::V2 {
-            return Ok(());
+            return (None, progress_message);
         }
         let StreamingIndexingPhase::PlanningPass { pass_number } = status.phase else {
-            return Ok(());
+            return (None, progress_message);
         };
         if matches!(status.state, StreamingIndexingStatusState::Completed) {
-            return Ok(());
+            return (None, progress_message);
         }
         let pending_partitions = status.v2_pending_partitions.as_ref().map(|partitions| {
             partitions
@@ -1312,8 +1384,11 @@ impl PlanningTelemetryContext {
                 .suspected_stall
                 .as_ref()
                 .map(|stall| stall.duration_without_progress.as_millis()),
+            convergence_verdict: latest_pass_diagnosis.verdict,
+            convergence_evidence_summary: latest_pass_diagnosis.evidence_summary,
+            blocked_on_summary,
         };
-        self.write_json_record(&record)
+        (Some(record), progress_message)
     }
 
     fn write_json_record<T: Serialize>(&self, record: &T) -> Result<(), String> {
@@ -1401,6 +1476,146 @@ fn suspected_stall_reason_label(reason: StreamingIndexingSuspectedStallReason) -
     }
 }
 
+fn planning_partition_gap(report: PlanningPassReport) -> usize {
+    report
+        .planned_partition_count
+        .saturating_sub(report.terminal_partition_count)
+}
+
+fn planning_pass_diagnosis(
+    previous: Option<PlanningPassReport>,
+    current: PlanningPassReport,
+    completion: &PlanningCompletionAction,
+) -> PlanningPassDiagnosis {
+    if matches!(completion, PlanningCompletionAction::Complete) {
+        return PlanningPassDiagnosis {
+            verdict: PlanningConvergenceVerdict::Converging,
+            evidence_summary: format!(
+                "planning completion confirmed on pass {}",
+                current.completed_pass_count
+            ),
+        };
+    }
+    let Some(previous) = previous else {
+        return PlanningPassDiagnosis {
+            verdict: PlanningConvergenceVerdict::Inconclusive,
+            evidence_summary:
+                "first completed pass; need another completed pass before trend can be compared"
+                    .to_string(),
+        };
+    };
+    let previous_gap = planning_partition_gap(previous);
+    let current_gap = planning_partition_gap(current);
+    let mut improvements = Vec::new();
+    let mut regressions = Vec::new();
+    if current.terminal_partition_count > previous.terminal_partition_count {
+        improvements.push(format!(
+            "terminal partitions {} -> {}",
+            previous.terminal_partition_count, current.terminal_partition_count
+        ));
+    } else if current.terminal_partition_count < previous.terminal_partition_count {
+        regressions.push(format!(
+            "terminal partitions {} -> {}",
+            previous.terminal_partition_count, current.terminal_partition_count
+        ));
+    }
+    if current_gap < previous_gap {
+        improvements.push(format!("non-terminal gap {previous_gap} -> {current_gap}"));
+    } else if current_gap > previous_gap {
+        regressions.push(format!("non-terminal gap {previous_gap} -> {current_gap}"));
+    }
+    if !improvements.is_empty() && regressions.is_empty() {
+        return PlanningPassDiagnosis {
+            verdict: PlanningConvergenceVerdict::Converging,
+            evidence_summary: improvements.join("; "),
+        };
+    }
+    if improvements.is_empty() && regressions.is_empty() {
+        return PlanningPassDiagnosis {
+            verdict: PlanningConvergenceVerdict::NotConverging,
+            evidence_summary: format!(
+                "terminal partitions stayed at {} and non-terminal gap stayed at {} across passes {} -> {}",
+                current.terminal_partition_count,
+                current_gap,
+                previous.completed_pass_count,
+                current.completed_pass_count
+            ),
+        };
+    }
+    if improvements.is_empty() {
+        return PlanningPassDiagnosis {
+            verdict: PlanningConvergenceVerdict::NotConverging,
+            evidence_summary: regressions.join("; "),
+        };
+    }
+    if regressions.is_empty() {
+        return PlanningPassDiagnosis {
+            verdict: PlanningConvergenceVerdict::Converging,
+            evidence_summary: improvements.join("; "),
+        };
+    }
+    PlanningPassDiagnosis {
+        verdict: PlanningConvergenceVerdict::Inconclusive,
+        evidence_summary: format!("{}; {}", improvements.join("; "), regressions.join("; ")),
+    }
+}
+
+fn planning_blocked_on_summary(status: &StreamingIndexingStatus) -> Option<String> {
+    let mut parts = Vec::new();
+    let pending_partition_count = status
+        .pending_partition_count
+        .or_else(|| status.v2_pending_partitions.as_ref().map(Vec::len));
+    if let Some(count) = pending_partition_count {
+        parts.push(format!("{count} pending partition(s)"));
+    }
+    if let Some(partitions) = status.v2_pending_partitions.as_ref()
+        && !partitions.is_empty()
+    {
+        let preview = partitions
+            .iter()
+            .take(2)
+            .map(format_pending_partition_message)
+            .collect::<Vec<_>>()
+            .join(" | ");
+        parts.push(format!("pending detail {preview}"));
+        if partitions.len() > 2 {
+            parts.push(format!(
+                "+{} more pending partition(s)",
+                partitions.len() - 2
+            ));
+        }
+    }
+    if let Some(stall) = status.suspected_stall.as_ref() {
+        parts.push(format!(
+            "suspected stall {} for {} ms",
+            suspected_stall_reason_label(stall.reason),
+            stall.duration_without_progress.as_millis()
+        ));
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
+fn planning_status_diagnosis_message(
+    diagnosis: &PlanningPassDiagnosis,
+    status: &StreamingIndexingStatus,
+    blocked_on_summary: Option<&str>,
+) -> Option<String> {
+    let StreamingIndexingPhase::PlanningPass { pass_number } = status.phase else {
+        return None;
+    };
+    let blocked_on_summary = blocked_on_summary?;
+    Some(format!(
+        "Planning diagnosis for pass {pass_number}: verdict {} ({}){}; blocked on {blocked_on_summary}",
+        diagnosis.verdict.as_str(),
+        diagnosis.evidence_summary,
+        status
+            .error
+            .as_ref()
+            .map(|error| format!("; delegated status error {error}"))
+            .unwrap_or_default(),
+    ))
+}
+
 fn planning_pending_partition_telemetry_record(
     partition: &StreamingV2PendingPartitionStatus,
 ) -> PlanningPendingPartitionTelemetryRecord {
@@ -1419,21 +1634,20 @@ fn report_planning_pass_completion(
     pass_report: PlanningPassReport,
     completion: &PlanningCompletionAction,
 ) -> Result<(), RuntimeError> {
-    report_progress(
-        progress,
-        planning_telemetry
-            .map(|telemetry| telemetry.pass_summary_message(pass_report))
-            .unwrap_or_else(|| {
-                format!(
-                    "Completed planning pass {} over {} item(s)",
-                    pass_report.completed_pass_count, pass_report.observed_item_count
-                )
-            }),
-    );
-    if let Some(telemetry) = planning_telemetry
-        && let Err(error) = telemetry.write_summary_record(pass_report, completion)
-    {
-        report_progress(progress, error);
+    if let Some(telemetry) = planning_telemetry {
+        let (message, record) = telemetry.project_pass_summary(pass_report, completion);
+        report_progress(progress, message);
+        if let Err(error) = telemetry.write_json_record(&record) {
+            report_progress(progress, error);
+        }
+    } else {
+        report_progress(
+            progress,
+            format!(
+                "Completed planning pass {} over {} item(s)",
+                pass_report.completed_pass_count, pass_report.observed_item_count
+            ),
+        );
     }
     if let PlanningCompletionAction::ReplayRequired(message) = completion {
         report_progress(progress, message.clone());
@@ -2319,6 +2533,7 @@ where
             run_identity: planning_run_identity(&clustering),
             sink_path: planning_pass_telemetry_path.map(Path::to_path_buf),
             sink_initialized: Arc::new(AtomicBool::new(false)),
+            diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
         });
     let embedding_spec = request.to_embedding_spec();
     let resolver = LocalFilesystemContentResolver::new(block_store.clone());
@@ -5118,12 +5333,22 @@ fn make_status_observer(
                 _ => *captured = Some(status.clone()),
             }
         }
-        if let Some(telemetry) = planning_telemetry.as_ref()
-            && let Err(error) = telemetry.maybe_write_v2_planning_status_record(&status)
-        {
-            report_progress(&progress, error);
+        let diagnosis_message = if let Some(telemetry) = planning_telemetry.as_ref() {
+            let (record, diagnosis_message) = telemetry.project_planning_status(&status);
+            if let Some(record) = record
+                && let Err(error) = telemetry.write_json_record(&record)
+            {
+                report_progress(&progress, error);
+            }
+            diagnosis_message
+        } else {
+            None
+        };
+        let base_message = format_indexing_status(status);
+        report_progress(&progress, base_message);
+        if let Some(diagnosis_message) = diagnosis_message {
+            report_progress(&progress, diagnosis_message);
         }
-        report_progress(&progress, format_indexing_status(status));
     })
 }
 
@@ -5687,6 +5912,28 @@ mod tests {
         assert_eq!(
             progress_messages[2],
             "Completed planning pass 2 over 3 item(s)"
+        );
+    }
+
+    #[test]
+    fn planning_pass_diagnosis_marks_unchanged_replay_as_not_converging() {
+        let previous = test_planning_pass_report(1, 3);
+        let current = test_planning_pass_report(2, 3);
+        let diagnosis = planning_pass_diagnosis(
+            Some(previous),
+            current,
+            &PlanningCompletionAction::ReplayRequired("still pending".into()),
+        );
+        assert_eq!(diagnosis.verdict, PlanningConvergenceVerdict::NotConverging);
+        assert!(
+            diagnosis
+                .evidence_summary
+                .contains("terminal partitions stayed at 9")
+        );
+        assert!(
+            diagnosis
+                .evidence_summary
+                .contains("non-terminal gap stayed at 3")
         );
     }
 
@@ -7135,6 +7382,7 @@ mod tests {
             },
             sink_path: Some(telemetry_path.clone()),
             sink_initialized: Arc::new(AtomicBool::new(false)),
+            diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
         };
         let progress_messages = Arc::new(std::sync::Mutex::new(Vec::new()));
         let captured_progress = Arc::clone(&progress_messages);
@@ -7157,6 +7405,7 @@ mod tests {
         assert!(progress_messages[0].contains("profile 0.7.0 via v2"));
         assert!(progress_messages[0].contains("terminal partitions 9/12"));
         assert!(progress_messages[0].contains("realized/requested clusters 48/64"));
+        assert!(progress_messages[0].contains("diagnosis inconclusive"));
         assert!(progress_messages[1].contains("requires another full replay pass"));
 
         let written = fs::read_to_string(&telemetry_path).unwrap();
@@ -7165,6 +7414,7 @@ mod tests {
         assert!(written.contains("\"delegated_contract_family\":\"v2\""));
         assert!(written.contains("\"planning_completion_state\":\"replay-required\""));
         assert!(written.contains("\"planning_completion_reason\":\"Planning pass 1 requires another full replay pass before v2 planning can complete: still pending\""));
+        assert!(written.contains("\"convergence_verdict\":\"inconclusive\""));
     }
 
     #[test]
@@ -7179,6 +7429,7 @@ mod tests {
             },
             sink_path: Some(telemetry_path.clone()),
             sink_initialized: Arc::new(AtomicBool::new(false)),
+            diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
         };
         let progress: ProgressReporter = Arc::new(|_| {});
 
@@ -7208,6 +7459,7 @@ mod tests {
             },
             sink_path: Some(telemetry_path.clone()),
             sink_initialized: Arc::new(AtomicBool::new(false)),
+            diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
         };
         let status = StreamingIndexingStatus {
             pending_partition_count: Some(1),
@@ -7237,9 +7489,8 @@ mod tests {
             )
         };
 
-        telemetry
-            .maybe_write_v2_planning_status_record(&status)
-            .unwrap();
+        let (record, diagnosis_message) = telemetry.project_planning_status(&status);
+        telemetry.write_json_record(&record.unwrap()).unwrap();
 
         let written = fs::read_to_string(&telemetry_path).unwrap();
         assert!(written.contains("\"telemetry_kind\":\"intra-pass\""));
@@ -7249,6 +7500,13 @@ mod tests {
         assert!(written.contains("\"partition_path\":\"root/0\""));
         assert!(written.contains("\"trainer_subphase\":\"plan-cuts\""));
         assert!(written.contains("\"suspected_stall_reason\":\"unchanged-trainer-subphase\""));
+        assert!(written.contains("\"convergence_verdict\":\"inconclusive\""));
+        assert!(written.contains("\"blocked_on_summary\":\"1 pending partition(s)"));
+        assert!(
+            diagnosis_message
+                .unwrap()
+                .contains("Planning diagnosis for pass 2: verdict inconclusive")
+        );
     }
 
     #[test]
@@ -7263,6 +7521,7 @@ mod tests {
             },
             sink_path: Some(telemetry_path.clone()),
             sink_initialized: Arc::new(AtomicBool::new(false)),
+            diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
         };
         let status = StreamingIndexingStatus {
             pending_partition_count: Some(1),
@@ -7285,9 +7544,8 @@ mod tests {
             )
         };
 
-        telemetry
-            .maybe_write_v2_planning_status_record(&status)
-            .unwrap();
+        let (record, _) = telemetry.project_planning_status(&status);
+        telemetry.write_json_record(&record.unwrap()).unwrap();
 
         let written = fs::read_to_string(&telemetry_path).unwrap();
         assert!(!written.contains("\"stale\":true"));
@@ -7306,6 +7564,7 @@ mod tests {
             },
             sink_path: Some(telemetry_path.clone()),
             sink_initialized: Arc::new(AtomicBool::new(false)),
+            diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
         };
         let status = StreamingIndexingStatus {
             pending_partition_count: Some(3),
@@ -7326,9 +7585,8 @@ mod tests {
             )
         };
 
-        telemetry
-            .maybe_write_v2_planning_status_record(&status)
-            .unwrap();
+        let (record, _) = telemetry.project_planning_status(&status);
+        telemetry.write_json_record(&record.unwrap()).unwrap();
 
         let written = fs::read_to_string(&telemetry_path).unwrap();
         assert!(written.contains("\"pending_partition_count\":3"));
@@ -7362,6 +7620,7 @@ mod tests {
             },
             sink_path: Some(occupied.join("planning-pass-telemetry.jsonl")),
             sink_initialized: Arc::new(AtomicBool::new(false)),
+            diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
         };
         let progress_messages = Arc::new(std::sync::Mutex::new(Vec::new()));
         let captured_progress = Arc::clone(&progress_messages);
