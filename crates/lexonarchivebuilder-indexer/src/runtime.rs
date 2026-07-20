@@ -1252,17 +1252,20 @@ impl PlanningTelemetryContext {
                 source
             )
         })?;
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .map_err(|source| {
-                format!(
-                    "Failed to open planning pass telemetry file {}: {}",
-                    path.display(),
-                    source
-                )
-            })?;
+        let mut file_options = fs::OpenOptions::new();
+        file_options.create(true).write(true);
+        if pass_report.completed_pass_count == 1 {
+            file_options.truncate(true);
+        } else {
+            file_options.append(true);
+        }
+        let mut file = file_options.open(path).map_err(|source| {
+            format!(
+                "Failed to open planning pass telemetry file {}: {}",
+                path.display(),
+                source
+            )
+        })?;
         file.write_all(&rendered)
             .and_then(|()| file.write_all(b"\n"))
             .map_err(|source| {
@@ -6926,6 +6929,34 @@ mod tests {
         assert!(written.contains("\"delegated_contract_family\":\"v2\""));
         assert!(written.contains("\"planning_completion_state\":\"replay-required\""));
         assert!(written.contains("\"planning_completion_reason\":\"Planning pass 1 requires another full replay pass before v2 planning can complete: still pending\""));
+    }
+
+    #[test]
+    fn planning_pass_telemetry_first_pass_replaces_prior_run_file_contents() {
+        let temp = tempdir().unwrap();
+        let telemetry_path = temp.path().join("planning-pass-telemetry.jsonl");
+        fs::write(&telemetry_path, "{\"stale\":true}\n").unwrap();
+        let telemetry = PlanningTelemetryContext {
+            run_identity: PlanningRunIdentity {
+                effective_profile_version: "0.7.0".into(),
+                delegated_contract_family: DelegatedContractFamily::V2,
+            },
+            sink_path: Some(telemetry_path.clone()),
+        };
+        let progress: ProgressReporter = Arc::new(|_| {});
+
+        report_planning_pass_completion(
+            &progress,
+            Some(&telemetry),
+            test_planning_pass_report(1, 3),
+            &PlanningCompletionAction::Complete,
+        )
+        .unwrap();
+
+        let written = fs::read_to_string(&telemetry_path).unwrap();
+        assert!(!written.contains("\"stale\":true"));
+        assert!(written.contains("\"completed_pass_count\":1"));
+        assert_eq!(written.lines().count(), 1);
     }
 
     #[test]
