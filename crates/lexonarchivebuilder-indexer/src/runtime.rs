@@ -1205,6 +1205,7 @@ struct PlanningTelemetryContext {
     run_identity: PlanningRunIdentity,
     sink_path: Option<PathBuf>,
     sink_initialized: Arc<AtomicBool>,
+    sink_write_lock: Arc<Mutex<()>>,
     diagnosis_state: Arc<Mutex<PlanningTelemetryState>>,
 }
 
@@ -1373,7 +1374,9 @@ impl PlanningTelemetryContext {
             phase_total_unit_count: status.phase_total_unit_count,
             elapsed_ms: status.elapsed.as_millis(),
             last_progress_ms: status.last_progress_at.map(|duration| duration.as_millis()),
-            pending_partition_count: status.pending_partition_count,
+            pending_partition_count: status
+                .pending_partition_count
+                .or_else(|| status.v2_pending_partitions.as_ref().map(Vec::len)),
             pending_partition_preview_count: pending_partitions.as_ref().map(Vec::len),
             pending_partitions,
             suspected_stall_reason: status
@@ -1404,13 +1407,15 @@ impl PlanningTelemetryContext {
                 )
             })?;
         }
-        let rendered = serde_json::to_vec(record).map_err(|source| {
+        let mut rendered = serde_json::to_vec(record).map_err(|source| {
             format!(
                 "Failed to render planning pass telemetry for {}: {}",
                 path.display(),
                 source
             )
         })?;
+        rendered.push(b'\n');
+        let _write_guard = lock_unpoisoned(&self.sink_write_lock);
         let mut file_options = fs::OpenOptions::new();
         file_options.create(true).write(true);
         let is_first_record = self
@@ -1429,15 +1434,13 @@ impl PlanningTelemetryContext {
                 source
             )
         })?;
-        file.write_all(&rendered)
-            .and_then(|()| file.write_all(b"\n"))
-            .map_err(|source| {
-                format!(
-                    "Failed to write planning pass telemetry file {}: {}",
-                    path.display(),
-                    source
-                )
-            })
+        file.write_all(&rendered).map_err(|source| {
+            format!(
+                "Failed to write planning pass telemetry file {}: {}",
+                path.display(),
+                source
+            )
+        })
     }
 }
 
@@ -2533,6 +2536,7 @@ where
             run_identity: planning_run_identity(&clustering),
             sink_path: planning_pass_telemetry_path.map(Path::to_path_buf),
             sink_initialized: Arc::new(AtomicBool::new(false)),
+            sink_write_lock: Arc::new(Mutex::new(())),
             diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
         });
     let embedding_spec = request.to_embedding_spec();
@@ -7382,6 +7386,7 @@ mod tests {
             },
             sink_path: Some(telemetry_path.clone()),
             sink_initialized: Arc::new(AtomicBool::new(false)),
+            sink_write_lock: Arc::new(Mutex::new(())),
             diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
         };
         let progress_messages = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -7429,6 +7434,7 @@ mod tests {
             },
             sink_path: Some(telemetry_path.clone()),
             sink_initialized: Arc::new(AtomicBool::new(false)),
+            sink_write_lock: Arc::new(Mutex::new(())),
             diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
         };
         let progress: ProgressReporter = Arc::new(|_| {});
@@ -7459,6 +7465,7 @@ mod tests {
             },
             sink_path: Some(telemetry_path.clone()),
             sink_initialized: Arc::new(AtomicBool::new(false)),
+            sink_write_lock: Arc::new(Mutex::new(())),
             diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
         };
         let status = StreamingIndexingStatus {
@@ -7521,6 +7528,7 @@ mod tests {
             },
             sink_path: Some(telemetry_path.clone()),
             sink_initialized: Arc::new(AtomicBool::new(false)),
+            sink_write_lock: Arc::new(Mutex::new(())),
             diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
         };
         let status = StreamingIndexingStatus {
@@ -7564,6 +7572,7 @@ mod tests {
             },
             sink_path: Some(telemetry_path.clone()),
             sink_initialized: Arc::new(AtomicBool::new(false)),
+            sink_write_lock: Arc::new(Mutex::new(())),
             diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
         };
         let status = StreamingIndexingStatus {
@@ -7597,6 +7606,99 @@ mod tests {
     }
 
     #[test]
+    fn planning_pass_telemetry_derives_pending_partition_count_from_preview() {
+        let temp = tempdir().unwrap();
+        let telemetry_path = temp.path().join("planning-pass-telemetry.jsonl");
+        let telemetry = PlanningTelemetryContext {
+            run_identity: PlanningRunIdentity {
+                effective_profile_version: "0.7.0".into(),
+                delegated_contract_family: DelegatedContractFamily::V2,
+            },
+            sink_path: Some(telemetry_path.clone()),
+            sink_initialized: Arc::new(AtomicBool::new(false)),
+            sink_write_lock: Arc::new(Mutex::new(())),
+            diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
+        };
+        let status = StreamingIndexingStatus {
+            pending_partition_count: None,
+            v2_pending_partitions: Some(vec![
+                test_pending_partition_status("root/0", 7, Some(3), None, None),
+                test_pending_partition_status("root/1", 5, Some(2), None, None),
+            ]),
+            ..test_streaming_status(
+                StreamingIndexingPhase::PlanningPass { pass_number: 2 },
+                StreamingIndexingStatusState::InProgress,
+                12,
+                Some(12),
+                4,
+                Some(8),
+                Duration::from_millis(250),
+                None,
+            )
+        };
+
+        let (record, _) = telemetry.project_planning_status(&status);
+        telemetry.write_json_record(&record.unwrap()).unwrap();
+
+        let written = fs::read_to_string(&telemetry_path).unwrap();
+        assert!(written.contains("\"pending_partition_count\":2"));
+    }
+
+    #[test]
+    fn planning_pass_telemetry_serializes_concurrent_jsonl_writes() {
+        let temp = tempdir().unwrap();
+        let telemetry_path = temp.path().join("planning-pass-telemetry.jsonl");
+        let telemetry = PlanningTelemetryContext {
+            run_identity: PlanningRunIdentity {
+                effective_profile_version: "0.7.0".into(),
+                delegated_contract_family: DelegatedContractFamily::V2,
+            },
+            sink_path: Some(telemetry_path.clone()),
+            sink_initialized: Arc::new(AtomicBool::new(false)),
+            sink_write_lock: Arc::new(Mutex::new(())),
+            diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
+        };
+        let workers = (0..8)
+            .map(|index| {
+                let telemetry = telemetry.clone();
+                std::thread::spawn(move || {
+                    let record = PlanningPassTelemetryRecord {
+                        telemetry_kind: "pass-summary",
+                        effective_profile_version: "0.7.0".into(),
+                        delegated_contract_family: DelegatedContractFamily::V2,
+                        completed_pass_count: index + 1,
+                        observed_item_count: 2,
+                        requested_planning_cluster_count: Some(64),
+                        realized_planning_cluster_count: Some(48),
+                        planning_quality_metric: 0.25,
+                        planning_balance_metric: 0.125,
+                        planned_partition_count: 12,
+                        terminal_partition_count: 9,
+                        hierarchy_depth: 4,
+                        convergence_verdict: PlanningConvergenceVerdict::Inconclusive,
+                        convergence_evidence_summary: format!("worker {index}"),
+                        last_known_blocked_on_summary: Some(format!("worker {index} blocked")),
+                        planning_completion_state: "replay-required".into(),
+                        planning_completion_reason: Some("still pending".into()),
+                    };
+                    telemetry.write_json_record(&record).unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+
+        let written = fs::read_to_string(&telemetry_path).unwrap();
+        let lines = written.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 8);
+        for line in lines {
+            let parsed = serde_json::from_str::<serde_json::Value>(line).unwrap();
+            assert_eq!(parsed["telemetry_kind"], "pass-summary");
+        }
+    }
+
+    #[test]
     fn delegated_contract_family_serialization_matches_operator_visible_strings() {
         assert_eq!(
             serde_json::to_string(&DelegatedContractFamily::LegacyNonV2).unwrap(),
@@ -7620,6 +7722,7 @@ mod tests {
             },
             sink_path: Some(occupied.join("planning-pass-telemetry.jsonl")),
             sink_initialized: Arc::new(AtomicBool::new(false)),
+            sink_write_lock: Arc::new(Mutex::new(())),
             diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
         };
         let progress_messages = Arc::new(std::sync::Mutex::new(Vec::new()));

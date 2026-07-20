@@ -2556,7 +2556,7 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   - `Alan-Jowett/LexonGraph` `crates/lexongraph-streaming-indexer/src/lib.rs` on `main`: published-profile surfaces around `PublishedProfileVersion`, `PUBLISHED_PROFILE_V0_1_0`, `PublishedIndexingProfile`, and `with_published_profile`
   - `Alan-Jowett/LexonGraph` `crates/lexongraph-streaming-indexer/src/lib.rs` on `main`: telemetry and heartbeat surfaces around `PlanningStageStatusTracker`, `start_status_heartbeat`, and `with_legacy_item_count`
   - `Alan-Jowett/LexonGraph` compare `00760dd5121466b7f089bd22d3a26d8d23aa61b6...75c936d2d5bf3c8ae7afa6df598e433a731e0c3c`: upstream change "Add v2 intra-pass telemetry (#179)" covering pass progress, pending partition detail, trainer subphase summaries, and suspected-stall indicators
-  - user request in this session: "Use the skill tool to invoke the \"evolve\" skill, then follow the skill's instructions to help with: lexongraph now exposes a much richer set of telemetry with the goal of helping the caller determine if it is converging or not and if not what it is blocked on. This project needs to surface this in a way an user can use to diagnose convergence failures"
+  - user request in this session: "LexonGraph now exposes a much richer set of telemetry with the goal of helping the caller determine if it is converging or not and if not what it is blocked on. This project needs to surface this in a way a user can use to diagnose convergence failures."
   - `README.md:18-27`
   - `README.md:42-49`
   - `README.md:51-59`
