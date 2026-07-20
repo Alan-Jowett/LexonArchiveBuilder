@@ -1101,9 +1101,10 @@ struct PlanningPassReport {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
 enum DelegatedContractFamily {
+    #[serde(rename = "legacy/non-v2")]
     LegacyNonV2,
+    #[serde(rename = "v2")]
     V2,
 }
 
@@ -6922,6 +6923,18 @@ mod tests {
         assert!(written.contains("\"delegated_contract_family\":\"v2\""));
         assert!(written.contains("\"planning_completion_state\":\"replay-required\""));
         assert!(written.contains("\"planning_completion_reason\":\"Planning pass 1 requires another full replay pass before v2 planning can complete: still pending\""));
+    }
+
+    #[test]
+    fn delegated_contract_family_serialization_matches_operator_visible_strings() {
+        assert_eq!(
+            serde_json::to_string(&DelegatedContractFamily::LegacyNonV2).unwrap(),
+            "\"legacy/non-v2\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DelegatedContractFamily::V2).unwrap(),
+            "\"v2\""
+        );
     }
 
     #[test]
