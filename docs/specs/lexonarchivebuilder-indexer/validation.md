@@ -11,8 +11,9 @@ streaming delegated indexing, stage-selectable execution, standalone
 clustering input discovery, mutable current-root publication, published-profile API adoption,
 published-profile version selection, latest published-profile and telemetry
 compatibility, upstream regression assessment, replay-submission and
-streaming-status observability, pass-end convergence telemetry, explicit
-delegated-contract and effective-profile identity signaling,
+streaming-status observability, pass-end convergence telemetry, v2
+intra-pass planning telemetry, explicit delegated-contract and
+effective-profile identity signaling,
 clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted
@@ -880,8 +881,8 @@ hierarchy-planning telemetry and heartbeat-style in-progress status updates.
 onto the same repository-owned progress surface, preserves distinguishable
 rendering for planning-pass, hierarchy-stage, and materialization progress, and
 does not require operators to consult a second live telemetry interface, even
-though additive completed-pass convergence summaries may also be mirrored to a
-dedicated discoverable sink.
+though additive completed-pass convergence summaries and intra-pass planning
+records may also be mirrored to a dedicated discoverable sink.
 
 **Traces to:** RQ-INDEXER-003I, RQ-INDEXER-008B, DSG-LFI-001I, DSG-LFI-002B
 
@@ -905,7 +906,7 @@ and whose delegated pass-completion surface exposes representative planning
 summary metrics.
 
 **Pass condition:** the normal batch-progress stream announces the active
-dedicated pass-summary sink binding when one exists, each completed planning
+dedicated planning-telemetry sink binding when one exists, each completed planning
 pass emits one additive convergence summary on the normal progress stream, and
 the same logical pass summary is discoverable through the dedicated sink. Each
 summary identifies the effective selected published profile version plus the
@@ -915,6 +916,22 @@ terminal partition counts, hierarchy depth, requested versus realized planning
 cluster counts, and any exposed planning-quality or planning-balance metrics.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003I, RQ-INDEXER-008B, DSG-LFI-001G, DSG-LFI-001I, DSG-LFI-002A, DSG-LFI-002B1
+
+### VAL-LFI-007G2
+
+Run a clustering-enabled execution on an upstream revision that emits v2
+intra-pass planning observer updates before pass completion.
+
+**Pass condition:** the normal batch-progress stream keeps those updates on the
+existing repository-owned progress surface, makes it clear which entries are
+live within-pass observations rather than completed-pass convergence summaries,
+and renders any exposed pass progress, pending partition detail, trainer
+subphase summaries, and suspected-stall indicators without inventing stronger
+completion claims than the delegated observer emitted. When a dedicated per-run
+planning telemetry sink is active, the same invocation writes additive
+intra-pass records there rather than creating a second observability artifact.
+
+**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003I, RQ-INDEXER-008B, DSG-LFI-001I, DSG-LFI-002B, DSG-LFI-002B2
 
 ### VAL-LFI-007H
 
