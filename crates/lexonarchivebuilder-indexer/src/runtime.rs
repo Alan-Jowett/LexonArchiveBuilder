@@ -588,17 +588,6 @@ pub enum RuntimeError {
         #[source]
         source: serde_json::Error,
     },
-    #[error("failed to write planning pass telemetry {path}: {source}")]
-    WritePlanningPassTelemetry {
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("failed to render planning pass telemetry: {source}")]
-    RenderPlanningPassTelemetry {
-        #[source]
-        source: serde_json::Error,
-    },
     #[error("failed to prepare mutable ref store {path}: {source}")]
     PrepareMutableRefStore {
         path: String,
@@ -1222,16 +1211,17 @@ impl PlanningTelemetryContext {
         &self,
         pass_report: PlanningPassReport,
         completion: &PlanningCompletionAction,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), String> {
         let Some(path) = &self.sink_path else {
             return Ok(());
         };
         if let Some(parent) = parent_directory_to_create(path) {
             fs::create_dir_all(parent).map_err(|source| {
-                RuntimeError::WritePlanningPassTelemetry {
-                    path: path.display().to_string(),
-                    source,
-                }
+                format!(
+                    "Failed to create planning pass telemetry directory for {}: {}",
+                    path.display(),
+                    source
+                )
             })?;
         }
         let record = PlanningPassTelemetryRecord {
@@ -1255,21 +1245,32 @@ impl PlanningTelemetryContext {
                 PlanningCompletionAction::ReplayRequired(reason) => Some(reason.clone()),
             },
         };
-        let rendered = serde_json::to_vec(&record)
-            .map_err(|source| RuntimeError::RenderPlanningPassTelemetry { source })?;
+        let rendered = serde_json::to_vec(&record).map_err(|source| {
+            format!(
+                "Failed to render planning pass telemetry for {}: {}",
+                path.display(),
+                source
+            )
+        })?;
         let mut file = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)
-            .map_err(|source| RuntimeError::WritePlanningPassTelemetry {
-                path: path.display().to_string(),
-                source,
+            .map_err(|source| {
+                format!(
+                    "Failed to open planning pass telemetry file {}: {}",
+                    path.display(),
+                    source
+                )
             })?;
         file.write_all(&rendered)
             .and_then(|()| file.write_all(b"\n"))
-            .map_err(|source| RuntimeError::WritePlanningPassTelemetry {
-                path: path.display().to_string(),
-                source,
+            .map_err(|source| {
+                format!(
+                    "Failed to write planning pass telemetry file {}: {}",
+                    path.display(),
+                    source
+                )
             })
     }
 }
@@ -1291,8 +1292,10 @@ fn report_planning_pass_completion(
                 )
             }),
     );
-    if let Some(telemetry) = planning_telemetry {
-        telemetry.write_record(pass_report, completion)?;
+    if let Some(telemetry) = planning_telemetry
+        && let Err(error) = telemetry.write_record(pass_report, completion)
+    {
+        report_progress(progress, error);
     }
     if let PlanningCompletionAction::ReplayRequired(message) = completion {
         report_progress(progress, message.clone());
@@ -6935,6 +6938,43 @@ mod tests {
             serde_json::to_string(&DelegatedContractFamily::V2).unwrap(),
             "\"v2\""
         );
+    }
+
+    #[test]
+    fn planning_pass_telemetry_write_failures_are_reported_without_failing_progress() {
+        let temp = tempdir().unwrap();
+        let occupied = temp.path().join("occupied");
+        fs::write(&occupied, b"not a directory").unwrap();
+        let telemetry = PlanningTelemetryContext {
+            run_identity: PlanningRunIdentity {
+                effective_profile_version: "0.7.0".into(),
+                delegated_contract_family: DelegatedContractFamily::V2,
+            },
+            sink_path: Some(occupied.join("planning-pass-telemetry.jsonl")),
+        };
+        let progress_messages = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_progress = Arc::clone(&progress_messages);
+        let progress: ProgressReporter = Arc::new(move |message| {
+            captured_progress.lock().unwrap().push(message);
+        });
+
+        report_planning_pass_completion(
+            &progress,
+            Some(&telemetry),
+            test_planning_pass_report(1, 3),
+            &PlanningCompletionAction::ReplayRequired(
+                "Planning pass 1 requires another full replay pass before v2 planning can complete: still pending"
+                    .into(),
+            ),
+        )
+        .unwrap();
+
+        let progress_messages = progress_messages.lock().unwrap();
+        assert!(progress_messages[0].contains("profile 0.7.0 via v2"));
+        assert!(
+            progress_messages[1].contains("Failed to create planning pass telemetry directory for")
+        );
+        assert!(progress_messages[2].contains("requires another full replay pass"));
     }
 
     #[test]
