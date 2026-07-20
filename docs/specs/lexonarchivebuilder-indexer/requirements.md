@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, in-memory replay block-id ordering simplification, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v2 adoption with repository-default published profile `0.7.0`, and pass-level convergence telemetry with explicit contract/profile identity logging
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, in-memory replay block-id ordering for deterministic replay submission, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, and conditional use of the upstream streaming-indexer v2 API when the selected published profile is `0.7.0`
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, in-memory replay block-id ordering simplification, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v2 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, and v2 intra-pass planning observability consumption
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, intra-pass planning telemetry projection, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, in-memory replay block-id ordering for deterministic replay submission, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, and conditional use of the upstream streaming-indexer v2 API when the selected published profile is `0.7.0`
 
 ## USER-REQUEST
 
@@ -320,6 +320,26 @@
 - **UR-233 [INFERRED]:** This convergence telemetry must remain additive to the
   existing batch-runtime logging surface and must not change the approved batch
   contract, stage contract, or MCP search-serving behavior.
+- **UR-234 [KNOWN]:** LexonGraph `main` now exposes richer v2 intra-pass planning
+  observability, and LexonArchiveBuilder should refresh its adopted upstream
+  dependency state to consume that newer observer surface.
+- **UR-235 [KNOWN]:** For clustering-enabled runs routed through the upstream
+  streaming-indexer v2 surface, LexonArchiveBuilder should project the new
+  intra-pass planning telemetry onto operator-visible output, including pass
+  progress, pending partition detail, trainer subphase summaries, and
+  suspected-stall indicators when the delegated observer exposes them.
+- **UR-236 [INFERRED]:** This intra-pass observability should complement, not
+  replace, the existing pass-end convergence summaries so operators can see
+  both within-pass activity and end-of-pass convergence results for the same
+  run.
+- **UR-237 [INFERRED]:** When LexonArchiveBuilder writes operator-discoverable
+  request-adjacent planning telemetry artifacts, those artifacts should remain
+  per-run and should carry intra-pass records as well as pass-end summaries
+  whenever the delegated v2 observer exposes enough data to do so without
+  inventing repository-local progress semantics.
+- **UR-238 [INFERRED]:** Consuming the richer v2 observer surface must preserve
+  the approved batch contract, execution-stage contract, replay determinism,
+  and unchanged MCP search or retrieval behavior for already-indexed content.
 
 ## Change Manifest
 
@@ -423,6 +443,8 @@
 | CM-INDEXER-096 | Add | Conditionally adopt the upstream streaming-indexer v2 API only for effective profile `0.7.0`, while preserving the existing non-v2 integration path for explicitly selected non-`0.7.0` profiles | UR-220, UR-223, UR-224, UR-225 |
 | CM-INDEXER-097 | Revise | Remove the repository-local one-pass assumption from the effective-`0.7.0` v2 orchestration path so full replay passes continue until upstream planning completion succeeds or an upstream/runtime error occurs | UR-223, UR-225, UR-226, UR-227 |
 | CM-INDEXER-098 | Revise | Extend clustering-enabled observability with pass-end convergence telemetry, an operator-discoverable dedicated sink preference, and explicit delegated-contract plus effective-profile identity logging | UR-228, UR-229, UR-230, UR-231, UR-232, UR-233 |
+| CM-INDEXER-099 | Revise | Refresh the adopted LexonGraph integration target so the repository consumes the newer v2 intra-pass planning observer surface now available on upstream `main` | UR-234, UR-238 |
+| CM-INDEXER-100 | Revise | Extend clustering-enabled observability from pass-end-only convergence summaries to operator-visible v2 intra-pass planning telemetry, including pass progress, pending partition detail, trainer subphase summaries, and suspected-stall indicators, while keeping that telemetry additive to the existing runtime progress and dedicated per-run sink surfaces | UR-235, UR-236, UR-237, UR-238 |
 
 ## Before / After
 
@@ -971,6 +993,19 @@
   surfaces enough upstream-returned planning summary data to judge whether
   repeated passes are converging; when practical, this telemetry should be
   written to an operator-discoverable dedicated file or separate output stream.
+
+### BA-INDEXER-100
+
+- **Before [KNOWN]:** The requirements required replay-submission visibility,
+  richer live heartbeat projection, and pass-end convergence summaries, but
+  they did not require LexonArchiveBuilder to consume the newer upstream v2
+  intra-pass observer data available while a planning pass is still underway.
+- **After [KNOWN]:** The requirements now require LexonArchiveBuilder to refresh
+  its adopted upstream dependency state and project the newer v2 intra-pass
+  planning observer data when available, including pass progress, pending
+  partition detail, trainer subphase summaries, and suspected-stall
+  indicators, while preserving operator-understandable repository-owned
+  wording.
 
 ## Requirements
 
@@ -1796,6 +1831,17 @@ advances, and clustering or block assembly advances.
 - **Telemetry projection [KNOWN]:** When the latest upstream observer surface emits richer live hierarchy-planning telemetry or heartbeat-style in-progress status updates, LexonArchiveBuilder SHALL continue projecting those events onto the same runtime progress stream rather than dropping them or exposing them only through a separate telemetry path.
 - **Count-semantics clarity [KNOWN]:** If upstream observer events report phase-local or layer-local work counts that differ from the repository-total delegated-item count for the invocation, LexonArchiveBuilder SHALL render progress messages so operators can tell whether a reported count refers to invocation-total delegated items, stage-local processed work, or materialized block counts.
 - **Boundary discipline [INFERRED]:** Repository-owned progress messages SHOULD make clear when they describe local replay submission state versus upstream observer-reported planning, clustering, or materialization state, even when the upstream observer does not expose in-phase processed-versus-remaining counts.
+- **Intra-pass v2 telemetry projection [KNOWN]:** When the effective selected
+  published profile version routes clustering-enabled execution through the
+  upstream streaming-indexer v2 surface, LexonArchiveBuilder SHALL project any
+  delegated intra-pass planning observer data it receives onto operator-visible
+  output, including pass progress, pending partition detail, trainer subphase
+  summaries, and suspected-stall indicators when those fields are exposed.
+- **Intra-pass semantics discipline [INFERRED]:** LexonArchiveBuilder SHOULD
+  render intra-pass planning telemetry in repository-owned language that makes
+  clear whether a record is a live within-pass observation or an end-of-pass
+  convergence summary, and it SHOULD avoid inventing synthetic completion or
+  partition claims beyond what the delegated observer actually exposed.
 - **Per-pass convergence visibility [KNOWN]:** When clustering-enabled execution
   completes a planning pass, operator-visible telemetry SHALL surface enough
   pass-end summary to tell whether planning is converging after `N` passes
@@ -1809,11 +1855,16 @@ advances, and clustering or block assembly advances.
   telemetry to an operator-discoverable dedicated file or separate output
   stream in addition to the ordinary runtime progress log so operators can find
   pass summaries without scanning the full progress transcript.
+- **Dedicated-sink scope [INFERRED]:** When the runtime already writes a
+  request-adjacent per-run planning telemetry artifact, it SHOULD extend that
+  same additive sink with intra-pass planning records from the delegated v2
+  observer rather than creating a second repository-owned observability file
+  for the same run.
 - **Additive-surface rule [INFERRED]:** Any dedicated pass-end telemetry sink
   remains additive to the normal runtime progress stream and SHALL NOT become a
   separate control plane, metrics backend, or MCP-visible surface.
 - **Non-goal [KNOWN]:** This requirement does not introduce a separate control-plane, metrics backend, or MCP-surface change.
-- **Traceability:** UR-32, UR-33, UR-39, UR-41, UR-45, UR-48, UR-59, UR-60, UR-61, UR-62, UR-63, UR-67, UR-68, UR-69, UR-70, UR-71, UR-228, UR-229, UR-230, UR-231, UR-232, UR-233
+- **Traceability:** UR-32, UR-33, UR-39, UR-41, UR-45, UR-48, UR-59, UR-60, UR-61, UR-62, UR-63, UR-67, UR-68, UR-69, UR-70, UR-71, UR-228, UR-229, UR-230, UR-231, UR-232, UR-233, UR-234, UR-235, UR-236, UR-237, UR-238
 
 #### RQ-INDEXER-008C - Diagnosable clustering failures
 
@@ -2203,6 +2254,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Operator-visible progress counts remain understandable across upstream telemetry changes | Preserved with clarified scope | Requirements now distinguish invocation-total delegated-item counts from stage-local or layer-local telemetry counts so upstream count-shape changes do not create misleading logs |
 | Clustering-enabled run identity remains operator-visible and replay-explainable | Preserved with stronger observability | Requirements now require telemetry to identify both the effective selected published profile version and the delegated legacy-versus-v2 contract family actually used for the run |
 | Repeated planning passes remain diagnosable for convergence without a new control plane | Preserved with expanded observability | Requirements now require additive pass-end convergence telemetry and prefer an operator-discoverable dedicated sink so repeated v2 passes can be judged for convergence without scanning all ordinary progress chatter |
+| Within-pass v2 planning activity remains operator-visible without redefining repository surfaces | Preserved with expanded observability | Requirements now add delegated intra-pass planning telemetry to the same runtime progress plus per-run additive telemetry surfaces instead of introducing a separate repository-owned observability channel |
 | Post-index quality assessment remains subordinate to existing storage and serving boundaries | Preserved with clarified scope | The new assessment is constrained to a CLI-only operator tool that reads through the shared `BlockStore` boundary and does not alter MCP-facing behavior |
 | Rooted-quality access-cost reporting remains advisory and repository-local | Preserved with clarified scope | Query access statistics and RTT estimates are constrained to CLI quality diagnostics over the existing rooted `BlockStore` boundary and do not redefine MCP search latency, transport, or serving contracts |
 | Stored embedding format awareness remains upstream-owned | Preserved with revised ownership | Requirements now place supported stored-embedding encodings and reconstruction semantics behind the upstream LexonGraph readback API instead of a repository-local decoder table |
@@ -2400,6 +2452,7 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   - `crates/lexonarchivebuilder-indexer/src/runtime.rs:14-340`
   - `Alan-Jowett/LexonGraph` `crates/lexongraph-streaming-indexer/src/lib.rs` on `main`: published-profile surfaces around `PublishedProfileVersion`, `PUBLISHED_PROFILE_V0_1_0`, `PublishedIndexingProfile`, and `with_published_profile`
   - `Alan-Jowett/LexonGraph` `crates/lexongraph-streaming-indexer/src/lib.rs` on `main`: telemetry and heartbeat surfaces around `PlanningStageStatusTracker`, `start_status_heartbeat`, and `with_legacy_item_count`
+  - `Alan-Jowett/LexonGraph` compare `00760dd5121466b7f089bd22d3a26d8d23aa61b6...75c936d2d5bf3c8ae7afa6df598e433a731e0c3c`: upstream change "Add v2 intra-pass telemetry (#179)" covering pass progress, pending partition detail, trainer subphase summaries, and suspected-stall indicators
   - `README.md:18-27`
   - `README.md:42-49`
   - `README.md:51-59`

@@ -6,6 +6,7 @@ use std::fs;
 use std::future::Future;
 use std::io::{self, Cursor, ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
@@ -24,7 +25,9 @@ use lexongraph_streaming_indexer::{
     BuiltInPlanningDirection, ContentResolver, IndexItem, PlanningStage, PublishedIndexingProfile,
     PublishedPlanningStrategy, StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingRun,
     StreamingIndexingRunV2, StreamingIndexingStatus, StreamingIndexingStatusObserver,
-    StreamingIndexingStatusState, published_indexing_profile,
+    StreamingIndexingStatusState, StreamingIndexingSuspectedStallReason,
+    StreamingIndexingTrainerSubphase, StreamingV2PendingPartitionStatus,
+    published_indexing_profile,
 };
 use reqwest::StatusCode;
 use reqwest::Url;
@@ -1114,6 +1117,7 @@ struct PlanningRunIdentity {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 struct PlanningPassTelemetryRecord {
+    telemetry_kind: &'static str,
     effective_profile_version: String,
     delegated_contract_family: DelegatedContractFamily,
     completed_pass_count: usize,
@@ -1129,10 +1133,38 @@ struct PlanningPassTelemetryRecord {
     planning_completion_reason: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct PlanningPendingPartitionTelemetryRecord {
+    partition_path: String,
+    expected_item_count: usize,
+    observed_replay_progress: Option<usize>,
+    routing_bucket_fill_counts: Option<Vec<usize>>,
+    trainer_subphase: Option<&'static str>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct PlanningIntraPassTelemetryRecord {
+    telemetry_kind: &'static str,
+    effective_profile_version: String,
+    delegated_contract_family: DelegatedContractFamily,
+    pass_number: usize,
+    planning_status_state: &'static str,
+    observed_item_count: usize,
+    completed_unit_count: usize,
+    phase_total_unit_count: Option<usize>,
+    elapsed_ms: u128,
+    last_progress_ms: Option<u128>,
+    pending_partition_count: Option<usize>,
+    pending_partitions: Option<Vec<PlanningPendingPartitionTelemetryRecord>>,
+    suspected_stall_reason: Option<&'static str>,
+    suspected_stall_duration_without_progress_ms: Option<u128>,
+}
+
 #[derive(Clone, Debug)]
 struct PlanningTelemetryContext {
     run_identity: PlanningRunIdentity,
     sink_path: Option<PathBuf>,
+    sink_initialized: Arc<AtomicBool>,
 }
 
 fn v2_planning_completion_action(
@@ -1207,24 +1239,13 @@ impl PlanningTelemetryContext {
         message
     }
 
-    fn write_record(
+    fn write_summary_record(
         &self,
         pass_report: PlanningPassReport,
         completion: &PlanningCompletionAction,
     ) -> Result<(), String> {
-        let Some(path) = &self.sink_path else {
-            return Ok(());
-        };
-        if let Some(parent) = parent_directory_to_create(path) {
-            fs::create_dir_all(parent).map_err(|source| {
-                format!(
-                    "Failed to create planning pass telemetry directory for {}: {}",
-                    path.display(),
-                    source
-                )
-            })?;
-        }
         let record = PlanningPassTelemetryRecord {
+            telemetry_kind: "pass-summary",
             effective_profile_version: self.run_identity.effective_profile_version.clone(),
             delegated_contract_family: self.run_identity.delegated_contract_family,
             completed_pass_count: pass_report.completed_pass_count,
@@ -1245,7 +1266,73 @@ impl PlanningTelemetryContext {
                 PlanningCompletionAction::ReplayRequired(reason) => Some(reason.clone()),
             },
         };
-        let rendered = serde_json::to_vec(&record).map_err(|source| {
+        self.write_json_record(&record, true)
+    }
+
+    fn maybe_write_v2_planning_status_record(
+        &self,
+        status: &StreamingIndexingStatus,
+    ) -> Result<(), String> {
+        if self.run_identity.delegated_contract_family != DelegatedContractFamily::V2 {
+            return Ok(());
+        }
+        let StreamingIndexingPhase::PlanningPass { pass_number } = status.phase else {
+            return Ok(());
+        };
+        if matches!(status.state, StreamingIndexingStatusState::Completed) {
+            return Ok(());
+        }
+        let record = PlanningIntraPassTelemetryRecord {
+            telemetry_kind: "intra-pass",
+            effective_profile_version: self.run_identity.effective_profile_version.clone(),
+            delegated_contract_family: self.run_identity.delegated_contract_family,
+            pass_number,
+            planning_status_state: planning_status_state_label(status.state),
+            observed_item_count: status.item_count,
+            completed_unit_count: status.completed_unit_count,
+            phase_total_unit_count: status.phase_total_unit_count,
+            elapsed_ms: status.elapsed.as_millis(),
+            last_progress_ms: status.last_progress_at.map(|duration| duration.as_millis()),
+            pending_partition_count: status.pending_partition_count,
+            pending_partitions: status.v2_pending_partitions.as_ref().map(|partitions| {
+                partitions
+                    .iter()
+                    .map(planning_pending_partition_telemetry_record)
+                    .collect()
+            }),
+            suspected_stall_reason: status
+                .suspected_stall
+                .as_ref()
+                .map(|stall| suspected_stall_reason_label(stall.reason)),
+            suspected_stall_duration_without_progress_ms: status
+                .suspected_stall
+                .as_ref()
+                .map(|stall| stall.duration_without_progress.as_millis()),
+        };
+        self.write_json_record(
+            &record,
+            matches!(status.state, StreamingIndexingStatusState::Started),
+        )
+    }
+
+    fn write_json_record<T: Serialize>(
+        &self,
+        record: &T,
+        prefer_truncate_if_first_record: bool,
+    ) -> Result<(), String> {
+        let Some(path) = &self.sink_path else {
+            return Ok(());
+        };
+        if let Some(parent) = parent_directory_to_create(path) {
+            fs::create_dir_all(parent).map_err(|source| {
+                format!(
+                    "Failed to create planning pass telemetry directory for {}: {}",
+                    path.display(),
+                    source
+                )
+            })?;
+        }
+        let rendered = serde_json::to_vec(record).map_err(|source| {
             format!(
                 "Failed to render planning pass telemetry for {}: {}",
                 path.display(),
@@ -1254,7 +1341,11 @@ impl PlanningTelemetryContext {
         })?;
         let mut file_options = fs::OpenOptions::new();
         file_options.create(true).write(true);
-        if pass_report.completed_pass_count == 1 {
+        let is_first_record = self
+            .sink_initialized
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+        if is_first_record && prefer_truncate_if_first_record {
             file_options.truncate(true);
         } else {
             file_options.append(true);
@@ -1278,6 +1369,53 @@ impl PlanningTelemetryContext {
     }
 }
 
+fn planning_status_state_label(state: StreamingIndexingStatusState) -> &'static str {
+    match state {
+        StreamingIndexingStatusState::Started => "started",
+        StreamingIndexingStatusState::InProgress => "in-progress",
+        StreamingIndexingStatusState::Completed => "completed",
+        StreamingIndexingStatusState::Failed => "failed",
+    }
+}
+
+fn trainer_subphase_label(subphase: StreamingIndexingTrainerSubphase) -> &'static str {
+    match subphase {
+        StreamingIndexingTrainerSubphase::AnalyzePca => "analyze-pca",
+        StreamingIndexingTrainerSubphase::PlanCuts => "plan-cuts",
+        StreamingIndexingTrainerSubphase::CountCells => "count-cells",
+        StreamingIndexingTrainerSubphase::RealizePartition => "realize-partition",
+    }
+}
+
+fn suspected_stall_reason_label(reason: StreamingIndexingSuspectedStallReason) -> &'static str {
+    match reason {
+        StreamingIndexingSuspectedStallReason::UnchangedPassObservedCount => {
+            "unchanged-pass-observed-count"
+        }
+        StreamingIndexingSuspectedStallReason::UnchangedPendingPartitionProgress => {
+            "unchanged-pending-partition-progress"
+        }
+        StreamingIndexingSuspectedStallReason::UnchangedRoutingBucketFill => {
+            "unchanged-routing-bucket-fill"
+        }
+        StreamingIndexingSuspectedStallReason::UnchangedTrainerSubphase => {
+            "unchanged-trainer-subphase"
+        }
+    }
+}
+
+fn planning_pending_partition_telemetry_record(
+    partition: &StreamingV2PendingPartitionStatus,
+) -> PlanningPendingPartitionTelemetryRecord {
+    PlanningPendingPartitionTelemetryRecord {
+        partition_path: partition.partition_path.clone(),
+        expected_item_count: partition.expected_item_count,
+        observed_replay_progress: partition.observed_replay_progress,
+        routing_bucket_fill_counts: partition.routing_bucket_fill_counts.clone(),
+        trainer_subphase: partition.trainer_subphase.map(trainer_subphase_label),
+    }
+}
+
 fn report_planning_pass_completion(
     progress: &ProgressReporter,
     planning_telemetry: Option<&PlanningTelemetryContext>,
@@ -1296,7 +1434,7 @@ fn report_planning_pass_completion(
             }),
     );
     if let Some(telemetry) = planning_telemetry
-        && let Err(error) = telemetry.write_record(pass_report, completion)
+        && let Err(error) = telemetry.write_summary_record(pass_report, completion)
     {
         report_progress(progress, error);
     }
@@ -2183,6 +2321,7 @@ where
         .then(|| PlanningTelemetryContext {
             run_identity: planning_run_identity(&clustering),
             sink_path: planning_pass_telemetry_path.map(Path::to_path_buf),
+            sink_initialized: Arc::new(AtomicBool::new(false)),
         });
     let embedding_spec = request.to_embedding_spec();
     let resolver = LocalFilesystemContentResolver::new(block_store.clone());
@@ -3933,6 +4072,7 @@ where
     let observer = Some(make_status_observer(
         Arc::clone(io.progress),
         Arc::clone(&latest_failed_status),
+        io.planning_telemetry.cloned(),
     ));
     let total_batches = replay_batches.len();
     let total_items: usize = replay_batches.iter().map(|batch| batch.items.len()).sum();
@@ -4187,6 +4327,7 @@ where
     let observer = Some(make_status_observer(
         Arc::clone(io.progress),
         Arc::clone(&latest_failed_status),
+        io.planning_telemetry.cloned(),
     ));
     let total_batches = replay_state.total_batches();
     let total_items = replay_state.total_items;
@@ -4392,6 +4533,12 @@ async fn run_streaming_stage_externalized_v2<EP>(
 where
     EP: EmbeddingProvider + ClusteringFailureEmbeddingSource + Clone,
 {
+    let latest_failed_status = Arc::new(Mutex::new(None));
+    let observer = Some(make_status_observer(
+        Arc::clone(io.progress),
+        Arc::clone(&latest_failed_status),
+        io.planning_telemetry.cloned(),
+    ));
     let total_batches = replay_state.total_batches();
     let total_items = replay_state.total_items;
     let clustering_failure_diagnostics = OnceLock::new();
@@ -4405,6 +4552,9 @@ where
         embedding_spec.clone(),
         config.block_size_target,
     )?;
+    if let Some(observer) = observer {
+        indexer = indexer.with_observer(observer);
+    }
 
     loop {
         let mut completed_items = 0usize;
@@ -4467,7 +4617,7 @@ where
                         build_externalized_clustering_failure_diagnostics(
                             &diagnostics_resolver,
                             &diagnostics_embedding_provider,
-                            None,
+                            lock_unpoisoned(&latest_failed_status).as_ref(),
                             &config,
                             &replay_state,
                             embedding_spec,
@@ -4501,7 +4651,7 @@ where
                         build_externalized_clustering_failure_diagnostics(
                             &diagnostics_resolver,
                             &diagnostics_embedding_provider,
-                            None,
+                            lock_unpoisoned(&latest_failed_status).as_ref(),
                             &config,
                             &replay_state,
                             embedding_spec,
@@ -4531,7 +4681,7 @@ where
                         build_externalized_clustering_failure_diagnostics(
                             &diagnostics_resolver,
                             &diagnostics_embedding_provider,
-                            None,
+                            lock_unpoisoned(&latest_failed_status).as_ref(),
                             &config,
                             &replay_state,
                             embedding_spec,
@@ -4961,6 +5111,7 @@ fn replay_item_from_validated_block(
 fn make_status_observer(
     progress: ProgressReporter,
     latest_failed_status: Arc<Mutex<Option<StreamingIndexingStatus>>>,
+    planning_telemetry: Option<PlanningTelemetryContext>,
 ) -> StreamingIndexingStatusObserver {
     Arc::new(move |status| {
         if status.state == StreamingIndexingStatusState::Failed {
@@ -4969,6 +5120,11 @@ fn make_status_observer(
                 Some(existing) if !prefer_failed_status(&status, existing) => {}
                 _ => *captured = Some(status.clone()),
             }
+        }
+        if let Some(telemetry) = planning_telemetry.as_ref()
+            && let Err(error) = telemetry.maybe_write_v2_planning_status_record(&status)
+        {
+            report_progress(&progress, error);
         }
         report_progress(&progress, format_indexing_status(status));
     })
@@ -5011,15 +5167,70 @@ fn format_completed_of_total(
     total.map(|total| format!("; completed {completed} of {total} {unit_label}"))
 }
 
+fn format_pending_partition_message(partition: &StreamingV2PendingPartitionStatus) -> String {
+    let mut message = format!(
+        "{} expects {} item(s)",
+        partition.partition_path, partition.expected_item_count
+    );
+    if let Some(observed) = partition.observed_replay_progress {
+        message.push_str(&format!(", observed {observed}"));
+    }
+    if let Some(subphase) = partition.trainer_subphase {
+        message.push_str(&format!(", subphase {}", trainer_subphase_label(subphase)));
+    }
+    if let Some(bucket_fill_counts) = partition.routing_bucket_fill_counts.as_ref() {
+        let joined = bucket_fill_counts
+            .iter()
+            .map(|count| count.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        message.push_str(&format!(", bucket fill [{joined}]"));
+    }
+    message
+}
+
+fn format_planning_status_detail_suffix(status: &StreamingIndexingStatus) -> String {
+    let mut suffix = String::new();
+    let pending_partition_count = status
+        .pending_partition_count
+        .or_else(|| status.v2_pending_partitions.as_ref().map(Vec::len));
+    if let Some(count) = pending_partition_count {
+        suffix.push_str(&format!("; pending partition(s) {count}"));
+    }
+    if let Some(partitions) = status.v2_pending_partitions.as_ref()
+        && !partitions.is_empty()
+    {
+        let preview = partitions
+            .iter()
+            .take(2)
+            .map(format_pending_partition_message)
+            .collect::<Vec<_>>()
+            .join(" | ");
+        suffix.push_str(&format!("; pending detail {preview}"));
+        if partitions.len() > 2 {
+            suffix.push_str(&format!(" | +{} more", partitions.len() - 2));
+        }
+    }
+    if let Some(stall) = status.suspected_stall.as_ref() {
+        suffix.push_str(&format!(
+            "; suspected stall {} for {} ms",
+            suspected_stall_reason_label(stall.reason),
+            stall.duration_without_progress.as_millis()
+        ));
+    }
+    suffix
+}
+
 fn format_indexing_status(status: StreamingIndexingStatus) -> String {
     let elapsed_ms = status.elapsed.as_millis();
-    match (status.phase, status.state) {
+    match (&status.phase, status.state) {
         (
             StreamingIndexingPhase::PlanningPass { pass_number },
             StreamingIndexingStatusState::Started,
         ) => format!(
-            "Planning pass {pass_number} started for {} item(s)",
-            status.item_count
+            "Planning pass {pass_number} started for {} item(s){}",
+            status.item_count,
+            format_planning_status_detail_suffix(&status)
         ),
         (
             StreamingIndexingPhase::PlanningPass { pass_number },
@@ -5032,8 +5243,10 @@ fn format_indexing_status(status: StreamingIndexingStatus) -> String {
             )
             .unwrap_or_default();
             format!(
-                "Planning pass {pass_number} still running after {elapsed_ms} ms for {} item(s){}",
-                status.item_count, progress_suffix
+                "Planning pass {pass_number} still running after {elapsed_ms} ms for {} item(s){}{}",
+                status.item_count,
+                progress_suffix,
+                format_planning_status_detail_suffix(&status)
             )
         }
         (
@@ -5047,15 +5260,18 @@ fn format_indexing_status(status: StreamingIndexingStatus) -> String {
             )
             .unwrap_or_default();
             format!(
-                "Planning pass {pass_number} completed in {elapsed_ms} ms for {} item(s){}",
-                status.item_count, progress_suffix
+                "Planning pass {pass_number} completed in {elapsed_ms} ms for {} item(s){}{}",
+                status.item_count,
+                progress_suffix,
+                format_planning_status_detail_suffix(&status)
             )
         }
         (
             StreamingIndexingPhase::PlanningPass { pass_number },
             StreamingIndexingStatusState::Failed,
         ) => format!(
-            "Planning pass {pass_number} failed after {elapsed_ms} ms: {}",
+            "Planning pass {pass_number} failed after {elapsed_ms} ms{}: {}",
+            format_planning_status_detail_suffix(&status),
             status.error.unwrap_or_else(|| "unknown error".into())
         ),
         (
@@ -5064,7 +5280,7 @@ fn format_indexing_status(status: StreamingIndexingStatus) -> String {
         ) => {
             format!(
                 "{} started for {} item(s)",
-                format_planning_stage(stage),
+                format_planning_stage(*stage),
                 status.item_count,
             )
         }
@@ -5074,7 +5290,7 @@ fn format_indexing_status(status: StreamingIndexingStatus) -> String {
         ) => {
             format!(
                 "{} still running after {elapsed_ms} ms; processed {} stage-local item(s)",
-                format_planning_stage(stage),
+                format_planning_stage(*stage),
                 status.completed_unit_count,
             )
         }
@@ -5084,7 +5300,7 @@ fn format_indexing_status(status: StreamingIndexingStatus) -> String {
         ) => {
             format!(
                 "{} completed in {elapsed_ms} ms after processing {} stage-local item(s)",
-                format_planning_stage(stage),
+                format_planning_stage(*stage),
                 status.completed_unit_count,
             )
         }
@@ -5094,7 +5310,7 @@ fn format_indexing_status(status: StreamingIndexingStatus) -> String {
         ) => {
             format!(
                 "{} failed after {elapsed_ms} ms; processed {} stage-local item(s): {}",
-                format_planning_stage(stage),
+                format_planning_stage(*stage),
                 status.completed_unit_count,
                 status.error.unwrap_or_else(|| "unknown error".into())
             )
@@ -5508,9 +5724,28 @@ mod tests {
             terminal_partition_count: None,
             completed_planner_invocation_count: None,
             fallback_count: None,
+            pending_partition_count: None,
+            v2_pending_partitions: None,
+            suspected_stall: None,
             elapsed,
             last_progress_at: None,
             error: error.map(str::to_owned),
+        }
+    }
+
+    fn test_pending_partition_status(
+        partition_path: &str,
+        expected_item_count: usize,
+        observed_replay_progress: Option<usize>,
+        routing_bucket_fill_counts: Option<Vec<usize>>,
+        trainer_subphase: Option<StreamingIndexingTrainerSubphase>,
+    ) -> StreamingV2PendingPartitionStatus {
+        StreamingV2PendingPartitionStatus {
+            partition_path: partition_path.into(),
+            expected_item_count,
+            observed_replay_progress,
+            routing_bucket_fill_counts,
+            trainer_subphase,
         }
     }
 
@@ -6267,6 +6502,8 @@ mod tests {
         let written = fs::read_to_string(&telemetry_path).unwrap();
         assert!(written.contains("\"effective_profile_version\":\"0.7.0\""));
         assert!(written.contains("\"delegated_contract_family\":\"v2\""));
+        assert!(written.contains("\"telemetry_kind\":\"intra-pass\""));
+        assert!(written.contains("\"telemetry_kind\":\"pass-summary\""));
         assert!(written.contains("\"planning_completion_state\":\"complete\""));
         assert!(written.contains("\"completed_pass_count\":1"));
         server.join();
@@ -6900,6 +7137,7 @@ mod tests {
                 delegated_contract_family: DelegatedContractFamily::V2,
             },
             sink_path: Some(telemetry_path.clone()),
+            sink_initialized: Arc::new(AtomicBool::new(false)),
         };
         let progress_messages = Arc::new(std::sync::Mutex::new(Vec::new()));
         let captured_progress = Arc::clone(&progress_messages);
@@ -6925,6 +7163,7 @@ mod tests {
         assert!(progress_messages[1].contains("requires another full replay pass"));
 
         let written = fs::read_to_string(&telemetry_path).unwrap();
+        assert!(written.contains("\"telemetry_kind\":\"pass-summary\""));
         assert!(written.contains("\"effective_profile_version\":\"0.7.0\""));
         assert!(written.contains("\"delegated_contract_family\":\"v2\""));
         assert!(written.contains("\"planning_completion_state\":\"replay-required\""));
@@ -6942,6 +7181,7 @@ mod tests {
                 delegated_contract_family: DelegatedContractFamily::V2,
             },
             sink_path: Some(telemetry_path.clone()),
+            sink_initialized: Arc::new(AtomicBool::new(false)),
         };
         let progress: ProgressReporter = Arc::new(|_| {});
 
@@ -6955,8 +7195,62 @@ mod tests {
 
         let written = fs::read_to_string(&telemetry_path).unwrap();
         assert!(!written.contains("\"stale\":true"));
+        assert!(written.contains("\"telemetry_kind\":\"pass-summary\""));
         assert!(written.contains("\"completed_pass_count\":1"));
         assert_eq!(written.lines().count(), 1);
+    }
+
+    #[test]
+    fn planning_pass_telemetry_writes_v2_intra_pass_records() {
+        let temp = tempdir().unwrap();
+        let telemetry_path = temp.path().join("planning-pass-telemetry.jsonl");
+        let telemetry = PlanningTelemetryContext {
+            run_identity: PlanningRunIdentity {
+                effective_profile_version: "0.7.0".into(),
+                delegated_contract_family: DelegatedContractFamily::V2,
+            },
+            sink_path: Some(telemetry_path.clone()),
+            sink_initialized: Arc::new(AtomicBool::new(false)),
+        };
+        let status = StreamingIndexingStatus {
+            pending_partition_count: Some(1),
+            v2_pending_partitions: Some(vec![test_pending_partition_status(
+                "root/0",
+                7,
+                Some(3),
+                None,
+                Some(StreamingIndexingTrainerSubphase::PlanCuts),
+            )]),
+            suspected_stall: Some(
+                lexongraph_streaming_indexer::StreamingIndexingSuspectedStall {
+                    reason: StreamingIndexingSuspectedStallReason::UnchangedTrainerSubphase,
+                    duration_without_progress: Duration::from_secs(7),
+                },
+            ),
+            last_progress_at: Some(Duration::from_millis(120)),
+            ..test_streaming_status(
+                StreamingIndexingPhase::PlanningPass { pass_number: 2 },
+                StreamingIndexingStatusState::InProgress,
+                12,
+                Some(12),
+                4,
+                Some(8),
+                Duration::from_millis(250),
+                None,
+            )
+        };
+
+        telemetry
+            .maybe_write_v2_planning_status_record(&status)
+            .unwrap();
+
+        let written = fs::read_to_string(&telemetry_path).unwrap();
+        assert!(written.contains("\"telemetry_kind\":\"intra-pass\""));
+        assert!(written.contains("\"planning_status_state\":\"in-progress\""));
+        assert!(written.contains("\"pending_partition_count\":1"));
+        assert!(written.contains("\"partition_path\":\"root/0\""));
+        assert!(written.contains("\"trainer_subphase\":\"plan-cuts\""));
+        assert!(written.contains("\"suspected_stall_reason\":\"unchanged-trainer-subphase\""));
     }
 
     #[test]
@@ -6982,6 +7276,7 @@ mod tests {
                 delegated_contract_family: DelegatedContractFamily::V2,
             },
             sink_path: Some(occupied.join("planning-pass-telemetry.jsonl")),
+            sink_initialized: Arc::new(AtomicBool::new(false)),
         };
         let progress_messages = Arc::new(std::sync::Mutex::new(Vec::new()));
         let captured_progress = Arc::clone(&progress_messages);
@@ -7458,6 +7753,45 @@ mod tests {
         assert_eq!(
             serialized_branch_size(&embedding_spec, entry_count).unwrap(),
             serialized.bytes.len()
+        );
+    }
+
+    #[test]
+    fn planning_pass_progress_reports_v2_pending_partition_details_and_suspected_stall() {
+        let status = StreamingIndexingStatus {
+            pending_partition_count: Some(3),
+            v2_pending_partitions: Some(vec![
+                test_pending_partition_status(
+                    "root/0",
+                    7,
+                    Some(3),
+                    None,
+                    Some(StreamingIndexingTrainerSubphase::PlanCuts),
+                ),
+                test_pending_partition_status("root/1", 5, Some(2), Some(vec![1, 1]), None),
+                test_pending_partition_status("root/2", 4, Some(1), None, None),
+            ]),
+            suspected_stall: Some(
+                lexongraph_streaming_indexer::StreamingIndexingSuspectedStall {
+                    reason: StreamingIndexingSuspectedStallReason::UnchangedTrainerSubphase,
+                    duration_without_progress: Duration::from_secs(7),
+                },
+            ),
+            ..test_streaming_status(
+                StreamingIndexingPhase::PlanningPass { pass_number: 2 },
+                StreamingIndexingStatusState::InProgress,
+                12,
+                Some(12),
+                4,
+                Some(8),
+                Duration::from_millis(250),
+                None,
+            )
+        };
+
+        assert_eq!(
+            format_indexing_status(status),
+            "Planning pass 2 still running after 250 ms for 12 item(s); completed 4 of 12 pass item(s); pending partition(s) 3; pending detail root/0 expects 7 item(s), observed 3, subphase plan-cuts | root/1 expects 5 item(s), observed 2, bucket fill [1, 1] | +1 more; suspected stall unchanged-trainer-subphase for 7000 ms"
         );
     }
 

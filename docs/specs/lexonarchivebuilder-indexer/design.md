@@ -12,7 +12,8 @@ clustering input discovery, mutable current-root publication, published-profile 
 published-profile version selection, latest published-profile and
 telemetry compatibility, upstream regression assessment,
 replay-submission and streaming-status observability,
-pass-end convergence telemetry, explicit delegated-contract and
+pass-end convergence telemetry, v2 intra-pass planning telemetry,
+explicit delegated-contract and
 effective-profile identity signaling, clustering-failure diagnostics,
 rooted block-tree quality assessment with rooted TNN-recall diagnostics,
 rooted query access-cost reporting, rooted CLI search over stored trees,
@@ -530,6 +531,9 @@ upgrade whenever the latest upstream contract still supports them semantically:
 - repository-owned progress projection over upstream lifecycle events
 - projection of richer live hierarchy-stage telemetry and heartbeat events onto
   that same repository-owned progress surface
+- projection of delegated v2 intra-pass planning telemetry, including pass
+  progress, pending partition detail, trainer subphase summaries, and
+  suspected-stall indicators, onto repository-owned observability surfaces
 - additive pass-end telemetry that identifies the effective profile plus
   delegated contract family and exposes enough planning summary detail to judge
   whether repeated planning passes are converging
@@ -631,7 +635,7 @@ block-assembly progress follows on the same runtime-visible stream.
 For clustering-enabled execution, the normal runtime-visible stream also emits
 one bootstrap identity message that states the effective selected published
 profile version, the delegated contract family actually chosen for the run, and
-the active dedicated pass-summary sink binding when one exists.
+the active dedicated planning-telemetry sink binding when one exists.
 
 For ingestion-plus-embedding execution, the repository-owned runtime must not
 leave a non-empty delegated item set silent between mailbox-preparation
@@ -694,6 +698,12 @@ assembly updates, and heartbeat-style in-progress telemetry onto
 repository-visible progress categories without leaking the raw upstream enum
 names into the external CLI or `BatchRequest` contract.
 
+For effective-`0.7.0` v2 runs, that translation layer also consumes the newer
+intra-pass observer surface when it is emitted. The repository-owned rendering
+may expose pass-progress updates, pending-partition detail, trainer subphase
+summaries, and suspected-stall indicators, but it must preserve the distinction
+between live within-pass observations and later pass-completion summaries.
+
 The translation layer also preserves count-semantics clarity when the newest
 upstream telemetry mixes multiple count shapes:
 
@@ -730,7 +740,7 @@ fields include:
 
 The runtime renders a concise textual summary on the normal batch-progress
 stream and mirrors the same logical record to one operator-discoverable
-dedicated pass-summary sink. The sink binding is repository-owned and may be
+dedicated planning-telemetry sink. The sink binding is repository-owned and may be
 realized either as a request-adjacent file artifact or as a distinct process
 output stream, but in either case the normal progress stream announces which
 binding is active for the invocation.
@@ -738,6 +748,36 @@ binding is active for the invocation.
 This design keeps live observer telemetry on the existing batch-log surface
 while making completed-pass convergence evidence easy to locate without forcing
 operators to scan every ordinary progress line.
+
+**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003I, RQ-INDEXER-008B, RQ-INDEXER-010A
+
+### DSG-LFI-002B2 `V2 intra-pass planning telemetry`
+
+For clustering-enabled runs that route through `StreamingIndexingRunV2`,
+LexonArchiveBuilder reuses the existing planning-telemetry surfaces for
+delegated within-pass planning observations as well as pass-completion
+summaries.
+
+The normal batch-progress stream remains the primary live surface. When the
+delegated observer emits intra-pass progress, the runtime translates that data
+into repository-owned messages that distinguish:
+
+- current planning-pass progress from completed-pass convergence summaries
+- pending-partition detail from repository-owned replay-batch totals
+- trainer subphase summaries from higher-level planning-stage transitions
+- suspected-stall indicators from ordinary elapsed-time heartbeats
+
+When a dedicated request-adjacent planning telemetry sink is active, the same
+run writes additive per-run intra-pass records there rather than creating a
+second observability artifact for the same invocation. Those records remain
+best-effort and additive: failure to render or persist them does not redefine
+the batch contract or create a separate control plane.
+
+The translation layer does not invent repository-local completion, partition,
+or stall semantics that the delegated observer did not expose. It projects the
+observer-visible information in repository-owned wording so operators can judge
+within-pass activity without needing raw upstream enum names or source-code
+knowledge.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003I, RQ-INDEXER-008B, RQ-INDEXER-010A
 
