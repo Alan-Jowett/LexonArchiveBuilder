@@ -12,8 +12,10 @@ clustering input discovery, mutable current-root publication, published-profile 
 published-profile version selection, latest published-profile and
 telemetry compatibility, upstream regression assessment,
 replay-submission and streaming-status observability,
-clustering-failure diagnostics, rooted block-tree quality assessment with
-rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees,
+pass-end convergence telemetry, explicit delegated-contract and
+effective-profile identity signaling, clustering-failure diagnostics,
+rooted block-tree quality assessment with rooted TNN-recall diagnostics,
+rooted query access-cost reporting, rooted CLI search over stored trees,
 replay-stable fingerprinting, temporary upstream `main` tracking for
 rapid profile validation, upstream wgpu-acceleration revision
 compatibility, 0.6.x published-profile evaluation, local testing sweep
@@ -43,9 +45,10 @@ v0.7.0 fixed-budget ladder experiment automation, rooted block-store copy toolin
 upstream embedding-readback API adoption, embedding-phase
 batch-progress observability,
 replay-submission observability, streaming-status observability,
-telemetry-count-semantics clarity, clustering-failure diagnostics,
-rooted block-tree quality assessment with rooted TNN-recall diagnostics,
-rooted query access-cost reporting,
+pass-end convergence telemetry, explicit delegated-contract and
+effective-profile identity signaling, telemetry-count-semantics clarity,
+clustering-failure diagnostics, rooted block-tree quality assessment with
+rooted TNN-recall diagnostics, rooted query access-cost reporting,
 rooted CLI search over stored trees, replay-stable delegated item identity,
 LAB-owned replay-journaled split-stage recovery, in-memory replay block-id
 ordering for deterministic clustering replay, and layer-parallel delegated
@@ -123,7 +126,8 @@ The LexonArchiveBuilder indexer design is intended to be:
 - explicit about delegated clustering selection and option defaulting
 - observable during long-running mailbox batches, local embedding work,
   clustering-only replay submission, streaming final materialization or
-  block-assembly work, and delegated clustering failures
+  block-assembly work, pass-end convergence evaluation, and delegated
+  clustering failures
 - able to assess the post-index quality of a rooted stored block tree without
   introducing a second storage abstraction or an MCP-visible operator surface
 - able to execute ad hoc rooted CLI search over stored trees without
@@ -433,6 +437,13 @@ The selected published profile version remains fixed for the lifetime of one
 batch invocation so replay passes, planning completion, and final
 materialization do not observe intra-run clustering-configuration drift.
 
+For clustering-enabled execution, LexonArchiveBuilder also materializes one
+run-identity tuple pairing the effective selected published profile version with
+the delegated contract family actually chosen for the invocation
+(`legacy/non-v2` versus `v2`). That tuple is emitted at clustering-enabled
+startup and reused by later progress and pass-end telemetry so operators do not
+have to infer old-versus-v2 routing from omitted defaults or source code.
+
 **[KNOWN]:** The upstream published-profile surface exposes this increment's
 approved contract through `PublishedProfileVersion`, the current default
 constant `PUBLISHED_PROFILE_V0_7_0`, and the higher-level
@@ -519,6 +530,9 @@ upgrade whenever the latest upstream contract still supports them semantically:
 - repository-owned progress projection over upstream lifecycle events
 - projection of richer live hierarchy-stage telemetry and heartbeat events onto
   that same repository-owned progress surface
+- additive pass-end telemetry that identifies the effective profile plus
+  delegated contract family and exposes enough planning summary detail to judge
+  whether repeated planning passes are converging
 - unchanged MCP search-serving behavior for already-indexed content
 - temporary explicit tracking of upstream `main` to pick up new published
   profiles and wgpu acceleration quickly
@@ -553,6 +567,9 @@ In this increment:
 - the request and CLI selector surface stays unchanged across both paths
 - the selection decision is made once per invocation and remains fixed for all
   replay passes, planning completion, and final materialization
+- that one-time routing decision is surfaced through the run-identity tuple used
+  by progress and pass-end telemetry so operators can tell why one invocation
+  used the legacy path while another used `StreamingIndexingRunV2`
 
 This preserves the caller-visible published-profile contract while letting the
 repository adopt the upstream true-streaming v2 surface only where the upstream
@@ -611,6 +628,11 @@ surface. For a default full-pipeline run, mailbox or delegated-indexing
 progress appears first and observer-driven streaming final materialization or
 block-assembly progress follows on the same runtime-visible stream.
 
+For clustering-enabled execution, the normal runtime-visible stream also emits
+one bootstrap identity message that states the effective selected published
+profile version, the delegated contract family actually chosen for the run, and
+the active dedicated pass-summary sink binding when one exists.
+
 For ingestion-plus-embedding execution, the repository-owned runtime must not
 leave a non-empty delegated item set silent between mailbox-preparation
 visibility and the first downstream streaming-status event. The design therefore
@@ -651,7 +673,9 @@ This keeps planning-pass, planning-completion, final materialization, and
 clustering
 visibility on the same batch-log surface already used for mailbox and
 delegated-indexing progress. It does not introduce a separate progress
-transport, metrics backend, or MCP-visible monitoring surface.
+transport, metrics backend, or MCP-visible monitoring surface. Any dedicated
+pass-end convergence sink is therefore an additive mirror for completed-pass
+summaries rather than a replacement live telemetry interface.
 
 Because the upstream observer seam begins only once downstream streaming work is
 active, this observer translation complements rather than replaces
@@ -685,6 +709,37 @@ shape across multiple telemetry contexts.
 
 
 **Traces to:** RQ-INDEXER-008B, RQ-INDEXER-010A
+
+### DSG-LFI-002B1 `Pass-end convergence telemetry`
+
+LexonArchiveBuilder realizes pass-end convergence telemetry as one repository-
+owned summary record for each completed clustering planning pass.
+
+That record is populated from the delegated pass-completion surface rather than
+from ad hoc log scraping. When the delegated API exposes them, the projected
+fields include:
+
+- the effective selected published profile version
+- the delegated contract family actually used for the run
+- the completed pass number
+- the observed or replayed item count for the pass
+- requested versus realized planning cluster counts
+- planned versus terminal partition counts
+- hierarchy depth
+- any exposed planning-quality or planning-balance metrics
+
+The runtime renders a concise textual summary on the normal batch-progress
+stream and mirrors the same logical record to one operator-discoverable
+dedicated pass-summary sink. The sink binding is repository-owned and may be
+realized either as a request-adjacent file artifact or as a distinct process
+output stream, but in either case the normal progress stream announces which
+binding is active for the invocation.
+
+This design keeps live observer telemetry on the existing batch-log surface
+while making completed-pass convergence evidence easy to locate without forcing
+operators to scan every ordinary progress line.
+
+**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003I, RQ-INDEXER-008B, RQ-INDEXER-010A
 
 ### DSG-LFI-002C `Clustering failure diagnostics`
 

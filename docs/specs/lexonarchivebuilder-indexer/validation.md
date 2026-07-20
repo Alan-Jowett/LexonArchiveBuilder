@@ -11,7 +11,9 @@ streaming delegated indexing, stage-selectable execution, standalone
 clustering input discovery, mutable current-root publication, published-profile API adoption,
 published-profile version selection, latest published-profile and telemetry
 compatibility, upstream regression assessment, replay-submission and
-streaming-status observability, clustering-failure diagnostics, rooted
+streaming-status observability, pass-end convergence telemetry, explicit
+delegated-contract and effective-profile identity signaling,
+clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted
 CLI search over stored trees, rooted block-store copy tooling, replay-stable fingerprinting, temporary
@@ -42,7 +44,9 @@ fixed-budget ladder experiment automation, upstream
 embedding-readback API adoption, upstream regression assessment,
 embedding-phase batch-progress observability,
 replay-submission observability, streaming-status observability,
-telemetry-count-semantics clarity, clustering-failure diagnostics, rooted
+pass-end convergence telemetry, explicit delegated-contract and
+effective-profile identity signaling, telemetry-count-semantics clarity,
+clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted CLI
 search over stored trees, rooted block-store copy tooling, replay-stable fingerprinting, LAB-owned replay-journaled
@@ -283,7 +287,9 @@ refreshing the adopted upstream dependency state can add newly published
 selector targets in the active `0.6.x` series without changing that default
 behavior, the effective selected version is resolved from the existing
 CLI-override then request-file then default precedence before any old-versus-v2
-delegated-surface choice is made, and
+delegated-surface choice is made, the operator-visible run identity reports
+that same effective version together with the delegated contract family chosen
+for the run, and
 any retired low-level clustering flags or equivalent stale automation inputs
 are rejected explicitly instead of being silently ignored.
 
@@ -354,7 +360,10 @@ context and `0.4.x` retained as historical context, or else any missing
 capability is classified explicitly as an upstream regression or compatibility
 finding rather than being silently dropped. For effective profile `0.7.0`,
 this also includes preserving the upstream v2 multi-pass lifecycle rather than
-assuming repository-local single-pass planning completion.
+assuming repository-local single-pass planning completion, and preserving
+additive pass-end convergence telemetry that identifies the effective profile,
+delegated contract family, and exposed pass metrics needed to judge
+convergence.
 
 **Traces to:** RQ-INDEXER-003I, DSG-LFI-001I
 
@@ -375,6 +384,8 @@ the request file, or the omitted-selector default. When the effective selected
 profile is `0.7.0`, the same v2-backed path must also preserve repeated full
 planning replays until planning completion succeeds, rather than failing solely
 because one completed v2 planning pass left additional upstream work pending.
+The operator-visible run identity must match each resolved effective
+profile-plus-contract pairing in all three cases.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003I,
 DSG-LFI-001G, DSG-LFI-001I, DSG-LFI-001I1
@@ -868,7 +879,9 @@ hierarchy-planning telemetry and heartbeat-style in-progress status updates.
 **Pass condition:** the normal batch log stream projects those telemetry events
 onto the same repository-owned progress surface, preserves distinguishable
 rendering for planning-pass, hierarchy-stage, and materialization progress, and
-does not require operators to consult a second telemetry interface.
+does not require operators to consult a second live telemetry interface, even
+though additive completed-pass convergence summaries may also be mirrored to a
+dedicated discoverable sink.
 
 **Traces to:** RQ-INDEXER-003I, RQ-INDEXER-008B, DSG-LFI-001I, DSG-LFI-002B
 
@@ -884,6 +897,24 @@ or layer-local block or group totals, so newer upstream telemetry does not
 create misleading operator-visible count interpretations.
 
 **Traces to:** RQ-INDEXER-008B, DSG-LFI-002A, DSG-LFI-002B
+
+### VAL-LFI-007G1
+
+Run a clustering-enabled execution that completes at least two planning passes
+and whose delegated pass-completion surface exposes representative planning
+summary metrics.
+
+**Pass condition:** the normal batch-progress stream announces the active
+dedicated pass-summary sink binding when one exists, each completed planning
+pass emits one additive convergence summary on the normal progress stream, and
+the same logical pass summary is discoverable through the dedicated sink. Each
+summary identifies the effective selected published profile version plus the
+delegated contract family actually used for the run, and when the delegated API
+exposes them it also carries pass number, observed item count, planned versus
+terminal partition counts, hierarchy depth, requested versus realized planning
+cluster counts, and any exposed planning-quality or planning-balance metrics.
+
+**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003I, RQ-INDEXER-008B, DSG-LFI-001G, DSG-LFI-001I, DSG-LFI-002A, DSG-LFI-002B1
 
 ### VAL-LFI-007H
 

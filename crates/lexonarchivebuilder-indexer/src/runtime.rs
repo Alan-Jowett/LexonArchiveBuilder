@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::future::Future;
-use std::io::{self, Cursor, ErrorKind};
+use std::io::{self, Cursor, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
@@ -74,6 +74,7 @@ const TEST_REF_NAME: &str = "test-branch";
 struct RuntimeIo<'a> {
     mutable_ref_store: Option<&'a MutableRefStoreLocation>,
     mutable_ref_metadata: Option<&'a BTreeMap<String, String>>,
+    planning_telemetry: Option<&'a PlanningTelemetryContext>,
     progress: &'a ProgressReporter,
 }
 
@@ -587,6 +588,17 @@ pub enum RuntimeError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("failed to write planning pass telemetry {path}: {source}")]
+    WritePlanningPassTelemetry {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to render planning pass telemetry: {source}")]
+    RenderPlanningPassTelemetry {
+        #[source]
+        source: serde_json::Error,
+    },
     #[error("failed to prepare mutable ref store {path}: {source}")]
     PrepareMutableRefStore {
         path: String,
@@ -1070,25 +1082,77 @@ fn is_incomplete_v2_planning_transition(error: &StreamingIndexerError) -> bool {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum V2PlanningCompletionAction {
+enum PlanningCompletionAction {
     Complete,
     ReplayRequired(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct V2PlanningPassReport {
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PlanningPassReport {
     completed_pass_count: usize,
     observed_item_count: usize,
+    requested_planning_cluster_count: Option<u32>,
+    realized_planning_cluster_count: Option<u32>,
+    planning_quality_metric: f64,
+    planning_balance_metric: f64,
+    planned_partition_count: usize,
+    terminal_partition_count: usize,
+    hierarchy_depth: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum DelegatedContractFamily {
+    LegacyNonV2,
+    V2,
+}
+
+impl DelegatedContractFamily {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::LegacyNonV2 => "legacy/non-v2",
+            Self::V2 => "v2",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct PlanningRunIdentity {
+    effective_profile_version: String,
+    delegated_contract_family: DelegatedContractFamily,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct PlanningPassTelemetryRecord {
+    effective_profile_version: String,
+    delegated_contract_family: DelegatedContractFamily,
+    completed_pass_count: usize,
+    observed_item_count: usize,
+    requested_planning_cluster_count: Option<u32>,
+    realized_planning_cluster_count: Option<u32>,
+    planning_quality_metric: f64,
+    planning_balance_metric: f64,
+    planned_partition_count: usize,
+    terminal_partition_count: usize,
+    hierarchy_depth: usize,
+    planning_completion_state: String,
+    planning_completion_reason: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct PlanningTelemetryContext {
+    run_identity: PlanningRunIdentity,
+    sink_path: Option<PathBuf>,
 }
 
 fn v2_planning_completion_action(
     completed_pass_count: usize,
     result: Result<(), StreamingIndexerError>,
-) -> Result<V2PlanningCompletionAction, StreamingIndexerError> {
+) -> Result<PlanningCompletionAction, StreamingIndexerError> {
     match result {
-        Ok(()) => Ok(V2PlanningCompletionAction::Complete),
+        Ok(()) => Ok(PlanningCompletionAction::Complete),
         Err(error) if is_incomplete_v2_planning_transition(&error) => {
-            Ok(V2PlanningCompletionAction::ReplayRequired(format!(
+            Ok(PlanningCompletionAction::ReplayRequired(format!(
                 "Planning pass {} requires another full replay pass before v2 planning can complete: {}",
                 completed_pass_count, error
             )))
@@ -1097,24 +1161,156 @@ fn v2_planning_completion_action(
     }
 }
 
-fn handle_v2_planning_pass_completion(
+fn planning_run_identity(clustering: &ConfiguredClustering) -> PlanningRunIdentity {
+    PlanningRunIdentity {
+        effective_profile_version: clustering.profile_version.to_string(),
+        delegated_contract_family: if uses_streaming_indexer_v2(clustering) {
+            DelegatedContractFamily::V2
+        } else {
+            DelegatedContractFamily::LegacyNonV2
+        },
+    }
+}
+
+impl PlanningTelemetryContext {
+    fn bootstrap_message(&self) -> String {
+        let mut message = format!(
+            "Clustering run identity: effective profile {} via delegated contract {}",
+            self.run_identity.effective_profile_version,
+            self.run_identity.delegated_contract_family.as_str()
+        );
+        if let Some(path) = &self.sink_path {
+            message.push_str(&format!(
+                "; planning pass telemetry file {}",
+                path.display()
+            ));
+        }
+        message
+    }
+
+    fn pass_summary_message(&self, pass_report: PlanningPassReport) -> String {
+        let mut message = format!(
+            "Completed planning pass {} over {} item(s) for profile {} via {}",
+            pass_report.completed_pass_count,
+            pass_report.observed_item_count,
+            self.run_identity.effective_profile_version,
+            self.run_identity.delegated_contract_family.as_str()
+        );
+        message.push_str(&format!(
+            "; terminal partitions {}/{}; hierarchy depth {}",
+            pass_report.terminal_partition_count,
+            pass_report.planned_partition_count,
+            pass_report.hierarchy_depth
+        ));
+        if let (Some(requested), Some(realized)) = (
+            pass_report.requested_planning_cluster_count,
+            pass_report.realized_planning_cluster_count,
+        ) {
+            message.push_str(&format!(
+                "; realized/requested clusters {realized}/{requested}"
+            ));
+        }
+        message.push_str(&format!(
+            "; quality {:.6}; balance {:.6}",
+            pass_report.planning_quality_metric, pass_report.planning_balance_metric
+        ));
+        message
+    }
+
+    fn write_record(
+        &self,
+        pass_report: PlanningPassReport,
+        completion: &PlanningCompletionAction,
+    ) -> Result<(), RuntimeError> {
+        let Some(path) = &self.sink_path else {
+            return Ok(());
+        };
+        if let Some(parent) = parent_directory_to_create(path) {
+            fs::create_dir_all(parent).map_err(|source| {
+                RuntimeError::WritePlanningPassTelemetry {
+                    path: path.display().to_string(),
+                    source,
+                }
+            })?;
+        }
+        let record = PlanningPassTelemetryRecord {
+            effective_profile_version: self.run_identity.effective_profile_version.clone(),
+            delegated_contract_family: self.run_identity.delegated_contract_family,
+            completed_pass_count: pass_report.completed_pass_count,
+            observed_item_count: pass_report.observed_item_count,
+            requested_planning_cluster_count: pass_report.requested_planning_cluster_count,
+            realized_planning_cluster_count: pass_report.realized_planning_cluster_count,
+            planning_quality_metric: pass_report.planning_quality_metric,
+            planning_balance_metric: pass_report.planning_balance_metric,
+            planned_partition_count: pass_report.planned_partition_count,
+            terminal_partition_count: pass_report.terminal_partition_count,
+            hierarchy_depth: pass_report.hierarchy_depth,
+            planning_completion_state: match completion {
+                PlanningCompletionAction::Complete => "complete".to_string(),
+                PlanningCompletionAction::ReplayRequired(_) => "replay-required".to_string(),
+            },
+            planning_completion_reason: match completion {
+                PlanningCompletionAction::Complete => None,
+                PlanningCompletionAction::ReplayRequired(reason) => Some(reason.clone()),
+            },
+        };
+        let rendered = serde_json::to_vec(&record)
+            .map_err(|source| RuntimeError::RenderPlanningPassTelemetry { source })?;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|source| RuntimeError::WritePlanningPassTelemetry {
+                path: path.display().to_string(),
+                source,
+            })?;
+        file.write_all(&rendered)
+            .and_then(|()| file.write_all(b"\n"))
+            .map_err(|source| RuntimeError::WritePlanningPassTelemetry {
+                path: path.display().to_string(),
+                source,
+            })
+    }
+}
+
+fn report_planning_pass_completion(
     progress: &ProgressReporter,
-    pass_report: V2PlanningPassReport,
-    result: Result<(), StreamingIndexerError>,
-) -> Result<bool, StreamingIndexerError> {
+    planning_telemetry: Option<&PlanningTelemetryContext>,
+    pass_report: PlanningPassReport,
+    completion: &PlanningCompletionAction,
+) -> Result<(), RuntimeError> {
     report_progress(
         progress,
-        format!(
-            "Completed planning pass {} over {} item(s)",
-            pass_report.completed_pass_count, pass_report.observed_item_count
-        ),
+        planning_telemetry
+            .map(|telemetry| telemetry.pass_summary_message(pass_report))
+            .unwrap_or_else(|| {
+                format!(
+                    "Completed planning pass {} over {} item(s)",
+                    pass_report.completed_pass_count, pass_report.observed_item_count
+                )
+            }),
     );
-    match v2_planning_completion_action(pass_report.completed_pass_count, result)? {
-        V2PlanningCompletionAction::Complete => Ok(false),
-        V2PlanningCompletionAction::ReplayRequired(message) => {
-            report_progress(progress, message);
-            Ok(true)
-        }
+    if let Some(telemetry) = planning_telemetry {
+        telemetry.write_record(pass_report, completion)?;
+    }
+    if let PlanningCompletionAction::ReplayRequired(message) = completion {
+        report_progress(progress, message.clone());
+    }
+    Ok(())
+}
+
+fn handle_v2_planning_pass_completion(
+    progress: &ProgressReporter,
+    planning_telemetry: Option<&PlanningTelemetryContext>,
+    pass_report: PlanningPassReport,
+    result: Result<(), StreamingIndexerError>,
+) -> Result<bool, RuntimeError> {
+    let completion = v2_planning_completion_action(pass_report.completed_pass_count, result)
+        .map_err(RuntimeError::StreamingIndexer)?;
+    report_planning_pass_completion(progress, planning_telemetry, pass_report, &completion)?;
+    match completion {
+        PlanningCompletionAction::Complete => Ok(false),
+        PlanningCompletionAction::ReplayRequired(_) => Ok(true),
     }
 }
 
@@ -1834,12 +2030,14 @@ pub async fn run_request_file_with_outputs(
     }
     let request_dir = request_path.parent().unwrap_or_else(|| Path::new("."));
     let diagnostics_path = clustering_failure_diagnostics_path(request_path, summary_out);
+    let planning_pass_path = planning_pass_telemetry_path(request_path, summary_out);
 
     run_request_with_progress(
         request_dir,
         request,
         clustering_overrides,
         Some(diagnostics_path.as_path()),
+        Some(planning_pass_path.as_path()),
         |message| {
             eprintln!("{message}");
         },
@@ -1891,6 +2089,7 @@ pub async fn run_request_with_overrides(
         request_dir,
         request,
         clustering_overrides,
+        None,
         None,
         |message| eprintln!("{message}"),
     )
@@ -1956,6 +2155,7 @@ async fn run_request_with_progress<F>(
     request: BatchRequest,
     clustering_overrides: ClusteringConfigOverrides,
     diagnostics_path: Option<&Path>,
+    planning_pass_telemetry_path: Option<&Path>,
     progress: F,
 ) -> Result<BatchSummary, RuntimeError>
 where
@@ -1971,12 +2171,22 @@ where
         .environment
         .resolve_mutable_ref_store(request_dir, &request.ref_name);
     let mutable_ref_metadata = mutable_ref_store_metadata(stage, &clustering);
+    let planning_telemetry = stage
+        .includes_clustering()
+        .then(|| PlanningTelemetryContext {
+            run_identity: planning_run_identity(&clustering),
+            sink_path: planning_pass_telemetry_path.map(Path::to_path_buf),
+        });
     let embedding_spec = request.to_embedding_spec();
     let resolver = LocalFilesystemContentResolver::new(block_store.clone());
     let max_concurrency = request.effective_max_concurrency();
+    if let Some(planning_telemetry) = planning_telemetry.as_ref() {
+        report_progress(&progress, planning_telemetry.bootstrap_message());
+    }
     let io = RuntimeIo {
         mutable_ref_store: mutable_ref_store.as_ref(),
         mutable_ref_metadata: mutable_ref_store.as_ref().map(|_| &mutable_ref_metadata),
+        planning_telemetry: planning_telemetry.as_ref(),
         progress: &progress,
     };
 
@@ -3797,13 +4007,6 @@ where
             io.progress,
         )
     })?;
-    report_progress(
-        io.progress,
-        format!(
-            "Completed planning pass {} over {} item(s)",
-            pass_report.completed_pass_count, pass_report.observed_item_count
-        ),
-    );
     indexer.mark_planning_complete().map_err(|error| {
         clustering_failure_error(
             error,
@@ -3822,6 +4025,22 @@ where
             io.progress,
         )
     })?;
+    report_planning_pass_completion(
+        io.progress,
+        io.planning_telemetry,
+        PlanningPassReport {
+            completed_pass_count: pass_report.completed_pass_count,
+            observed_item_count: pass_report.observed_item_count,
+            requested_planning_cluster_count: pass_report.requested_planning_cluster_count,
+            realized_planning_cluster_count: pass_report.realized_planning_cluster_count,
+            planning_quality_metric: pass_report.planning_quality_metric,
+            planning_balance_metric: pass_report.planning_balance_metric,
+            planned_partition_count: pass_report.planned_partition_count,
+            terminal_partition_count: pass_report.terminal_partition_count,
+            hierarchy_depth: pass_report.hierarchy_depth,
+        },
+        &PlanningCompletionAction::Complete,
+    )?;
     report_progress(
         io.progress,
         "Streaming planning complete; starting final materialization".into(),
@@ -4051,13 +4270,6 @@ where
             io.progress,
         )
     })?;
-    report_progress(
-        io.progress,
-        format!(
-            "Completed planning pass {} over {} item(s)",
-            pass_report.completed_pass_count, pass_report.observed_item_count
-        ),
-    );
     indexer.mark_planning_complete().map_err(|error| {
         clustering_failure_error(
             error,
@@ -4076,6 +4288,22 @@ where
             io.progress,
         )
     })?;
+    report_planning_pass_completion(
+        io.progress,
+        io.planning_telemetry,
+        PlanningPassReport {
+            completed_pass_count: pass_report.completed_pass_count,
+            observed_item_count: pass_report.observed_item_count,
+            requested_planning_cluster_count: pass_report.requested_planning_cluster_count,
+            realized_planning_cluster_count: pass_report.realized_planning_cluster_count,
+            planning_quality_metric: pass_report.planning_quality_metric,
+            planning_balance_metric: pass_report.planning_balance_metric,
+            planned_partition_count: pass_report.planned_partition_count,
+            terminal_partition_count: pass_report.terminal_partition_count,
+            hierarchy_depth: pass_report.hierarchy_depth,
+        },
+        &PlanningCompletionAction::Complete,
+    )?;
     report_progress(
         io.progress,
         "Streaming planning complete; starting final materialization".into(),
@@ -4244,15 +4472,23 @@ where
         })?;
         let should_replay = handle_v2_planning_pass_completion(
             io.progress,
-            V2PlanningPassReport {
+            io.planning_telemetry,
+            PlanningPassReport {
                 completed_pass_count: pass_report.completed_pass_count,
                 observed_item_count: pass_report.observed_item_count,
+                requested_planning_cluster_count: pass_report.requested_planning_cluster_count,
+                realized_planning_cluster_count: pass_report.realized_planning_cluster_count,
+                planning_quality_metric: pass_report.planning_quality_metric,
+                planning_balance_metric: pass_report.planning_balance_metric,
+                planned_partition_count: pass_report.planned_partition_count,
+                terminal_partition_count: pass_report.terminal_partition_count,
+                hierarchy_depth: pass_report.hierarchy_depth,
             },
             indexer.mark_planning_complete(),
         )
-        .map_err(|error| {
-            clustering_failure_error(
-                error,
+        .map_err(|error| match error {
+            RuntimeError::StreamingIndexer(source) => clustering_failure_error(
+                source,
                 clustering_failure_diagnostics
                     .get_or_init(|| {
                         build_externalized_clustering_failure_diagnostics(
@@ -4266,7 +4502,8 @@ where
                     })
                     .as_ref(),
                 io.progress,
-            )
+            ),
+            other => other,
         })?;
         if !should_replay {
             break;
@@ -4574,6 +4811,7 @@ async fn load_replay_batches_from_store_async(
         let io = RuntimeIo {
             mutable_ref_store: Some(&mutable_ref_store),
             mutable_ref_metadata: None,
+            planning_telemetry: None,
             progress: &progress,
         };
         load_replay_batches_from_store(&store, &embedding_spec, max_concurrency, io)
@@ -5048,6 +5286,17 @@ pub fn clustering_failure_diagnostics_path(
     adjacent_output_directory(anchor_path).join(base_name)
 }
 
+pub fn planning_pass_telemetry_path(request_path: &Path, summary_out: Option<&Path>) -> PathBuf {
+    let anchor_path = summary_out.unwrap_or(request_path);
+    let base_name = anchor_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .map(|stem| format!("{stem}.planning-pass-telemetry.jsonl"))
+        .unwrap_or_else(|| "planning-pass-telemetry.jsonl".to_string());
+    adjacent_output_directory(anchor_path).join(base_name)
+}
+
 pub fn write_clustering_failure_diagnostics_file(
     path: &Path,
     diagnostics: &ClusteringFailureDiagnostics,
@@ -5105,6 +5354,23 @@ mod tests {
         crate::block_store::block_on_block_store_future(store.get(block_id)).unwrap()
     }
 
+    fn test_planning_pass_report(
+        completed_pass_count: usize,
+        observed_item_count: usize,
+    ) -> PlanningPassReport {
+        PlanningPassReport {
+            completed_pass_count,
+            observed_item_count,
+            requested_planning_cluster_count: Some(64),
+            realized_planning_cluster_count: Some(48),
+            planning_quality_metric: 0.25,
+            planning_balance_metric: 0.125,
+            planned_partition_count: 12,
+            terminal_partition_count: 9,
+            hierarchy_depth: 4,
+        }
+    }
+
     #[test]
     fn mutable_ref_table_lookup_filter_escapes_single_quotes() {
         assert_eq!(
@@ -5142,7 +5408,7 @@ mod tests {
                 )))
             )
             .unwrap(),
-            V2PlanningCompletionAction::ReplayRequired(format!(
+            PlanningCompletionAction::ReplayRequired(format!(
                 "Planning pass 1 requires another full replay pass before v2 planning can complete: invalid lifecycle transition: {V2_PLANNING_NEEDS_ROUTED_OR_TERMINAL_PREFIX}: root partition is still pending"
             ))
         );
@@ -5169,10 +5435,8 @@ mod tests {
         assert!(
             handle_v2_planning_pass_completion(
                 &progress,
-                V2PlanningPassReport {
-                    completed_pass_count: 1,
-                    observed_item_count: 3,
-                },
+                None,
+                test_planning_pass_report(1, 3),
                 Err(StreamingIndexerError::InvalidLifecycleTransition(format!(
                     "{V2_PLANNING_NEEDS_ROUTED_OR_TERMINAL_PREFIX}: root partition is still pending"
                 )))
@@ -5182,10 +5446,8 @@ mod tests {
         assert!(
             !handle_v2_planning_pass_completion(
                 &progress,
-                V2PlanningPassReport {
-                    completed_pass_count: 2,
-                    observed_item_count: 3,
-                },
+                None,
+                test_planning_pass_report(2, 3),
                 Ok(())
             )
             .unwrap()
@@ -5444,6 +5706,7 @@ mod tests {
             request,
             ClusteringConfigOverrides::default(),
             None,
+            None,
             move |message| {
                 progress_capture.lock().unwrap().push(message);
             },
@@ -5561,6 +5824,7 @@ mod tests {
             request,
             ClusteringConfigOverrides::default(),
             None,
+            None,
             move |message| {
                 progress_capture.lock().unwrap().push(message);
             },
@@ -5656,6 +5920,7 @@ mod tests {
             temp.path(),
             cluster_only_request,
             ClusteringConfigOverrides::default(),
+            None,
             None,
             move |message| {
                 progress_capture.lock().unwrap().push(message);
@@ -5825,6 +6090,7 @@ mod tests {
             request,
             ClusteringConfigOverrides::default(),
             None,
+            None,
             move |message| {
                 progress_capture.lock().unwrap().push(message);
             },
@@ -5938,6 +6204,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn request_file_v2_run_writes_planning_pass_telemetry_beside_summary_output() {
+        let temp = tempdir().unwrap();
+        let alpha_path = temp.path().join("alpha.txt");
+        let beta_path = temp.path().join("beta.txt");
+        fs::write(&alpha_path, b"alpha body\n").unwrap();
+        fs::write(&beta_path, b"beta body\n").unwrap();
+        let request_path = temp.path().join("request.json");
+        let server = spawn_embedding_server(2);
+        fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&json!({
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": {
+                        "base_url": server.base_url.clone(),
+                        "model": "all-MiniLM-L6-v2",
+                        "request_timeout_secs": 5,
+                        "max_retries": 0,
+                        "retry_delay_ms": 1
+                    }
+                },
+                "embedding_spec": {
+                    "dims": 2,
+                    "encoding": "f32le"
+                },
+                "block_size_target": 65536,
+                "profile_version": "0.7.0",
+                "ref_name": TEST_REF_NAME,
+                "items": [
+                    { "kind": "document", "path": "alpha.txt", "metadata": {} },
+                    { "kind": "document", "path": "beta.txt", "metadata": {} }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let summary_out = temp.path().join("output").join("summary.json");
+
+        let summary = run_request_file_with_outputs(
+            &request_path,
+            None,
+            ClusteringConfigOverrides::default(),
+            Some(summary_out.as_path()),
+        )
+        .await
+        .unwrap();
+
+        assert!(!summary.block_ids.is_empty());
+        let telemetry_path = temp
+            .path()
+            .join("output")
+            .join("summary.planning-pass-telemetry.jsonl");
+        let written = fs::read_to_string(&telemetry_path).unwrap();
+        assert!(written.contains("\"effective_profile_version\":\"0.7.0\""));
+        assert!(written.contains("\"delegated_contract_family\":\"v2\""));
+        assert!(written.contains("\"planning_completion_state\":\"complete\""));
+        assert!(written.contains("\"completed_pass_count\":1"));
+        server.join();
+    }
+
+    #[tokio::test]
     async fn diagnostics_write_failure_keeps_original_clustering_error_and_reports_write_failure() {
         let temp = tempdir().unwrap();
         seed_non_finite_leaf_blocks(temp.path(), &["alpha", "beta", "gamma"]);
@@ -5962,6 +6290,7 @@ mod tests {
             request,
             ClusteringConfigOverrides::default(),
             Some(diagnostics_path.as_path()),
+            None,
             move |message| {
                 progress_capture.lock().unwrap().push(message);
             },
@@ -6528,6 +6857,71 @@ mod tests {
             path,
             Path::new("data").join("request.clustering-failure-diagnostics.json")
         );
+    }
+
+    #[test]
+    fn planning_pass_telemetry_path_prefers_summary_output_directory() {
+        let request_path = Path::new("data").join("request.json");
+        let summary_path = Path::new("output").join("summary.json");
+        let path =
+            planning_pass_telemetry_path(request_path.as_path(), Some(summary_path.as_path()));
+
+        assert_eq!(
+            path,
+            Path::new("output").join("summary.planning-pass-telemetry.jsonl")
+        );
+    }
+
+    #[test]
+    fn planning_pass_telemetry_path_falls_back_to_request_directory() {
+        let request_path = Path::new("data").join("request.json");
+        let path = planning_pass_telemetry_path(request_path.as_path(), None);
+
+        assert_eq!(
+            path,
+            Path::new("data").join("request.planning-pass-telemetry.jsonl")
+        );
+    }
+
+    #[test]
+    fn planning_pass_telemetry_writes_jsonl_records_and_detailed_progress() {
+        let temp = tempdir().unwrap();
+        let telemetry_path = temp.path().join("planning-pass-telemetry.jsonl");
+        let telemetry = PlanningTelemetryContext {
+            run_identity: PlanningRunIdentity {
+                effective_profile_version: "0.7.0".into(),
+                delegated_contract_family: DelegatedContractFamily::V2,
+            },
+            sink_path: Some(telemetry_path.clone()),
+        };
+        let progress_messages = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_progress = Arc::clone(&progress_messages);
+        let progress: ProgressReporter = Arc::new(move |message| {
+            captured_progress.lock().unwrap().push(message);
+        });
+
+        report_planning_pass_completion(
+            &progress,
+            Some(&telemetry),
+            test_planning_pass_report(1, 3),
+            &PlanningCompletionAction::ReplayRequired(
+                "Planning pass 1 requires another full replay pass before v2 planning can complete: still pending"
+                    .into(),
+            ),
+        )
+        .unwrap();
+
+        let progress_messages = progress_messages.lock().unwrap();
+        assert!(progress_messages[0].contains("profile 0.7.0 via v2"));
+        assert!(progress_messages[0].contains("terminal partitions 9/12"));
+        assert!(progress_messages[0].contains("realized/requested clusters 48/64"));
+        assert!(progress_messages[1].contains("requires another full replay pass"));
+
+        let written = fs::read_to_string(&telemetry_path).unwrap();
+        assert!(written.contains("\"effective_profile_version\":\"0.7.0\""));
+        assert!(written.contains("\"delegated_contract_family\":\"v2\""));
+        assert!(written.contains("\"planning_completion_state\":\"replay-required\""));
+        assert!(written.contains("\"planning_completion_reason\":\"Planning pass 1 requires another full replay pass before v2 planning can complete: still pending\""));
     }
 
     #[test]
@@ -7614,6 +8008,7 @@ mod tests {
         let io = RuntimeIo {
             mutable_ref_store: Some(&mutable_ref_store),
             mutable_ref_metadata: None,
+            planning_telemetry: None,
             progress: &progress,
         };
         let (replay_batches, _) =
@@ -7711,6 +8106,7 @@ mod tests {
         let io = RuntimeIo {
             mutable_ref_store: Some(&mutable_ref_store),
             mutable_ref_metadata: None,
+            planning_telemetry: None,
             progress: &progress,
         };
         let (replay_batches, _) =
@@ -8266,6 +8662,7 @@ mod tests {
         let io = RuntimeIo {
             mutable_ref_store: Some(&mutable_ref_store),
             mutable_ref_metadata: None,
+            planning_telemetry: None,
             progress: &progress,
         };
         let error =
@@ -8386,6 +8783,7 @@ mod tests {
         let io = RuntimeIo {
             mutable_ref_store: Some(&mutable_ref_store),
             mutable_ref_metadata: None,
+            planning_telemetry: None,
             progress: &progress,
         };
         let (replay_batches, _) =
