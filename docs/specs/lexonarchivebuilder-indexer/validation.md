@@ -22,8 +22,8 @@ upstream `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, 0.6.x published-profile
 evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
 experiment automation, upstream embedding-readback
-API adoption, LAB-owned replay-journaled split-stage recovery, in-memory replay
-block-id ordering simplification, and layer-parallel block-construction
+API adoption, LAB-owned replay-journaled split-stage recovery, bounded-
+residency deterministic replay ordering, and layer-parallel block-construction
 evolution, v2 custom-block adoption for
 repository-owned non-search artifacts, and conditional streaming-indexer v2
 adoption with repository-default published profile `0.7.0`, plus derived
@@ -53,7 +53,7 @@ clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted CLI
 search over stored trees, rooted block-store copy tooling, replay-stable fingerprinting, LAB-owned replay-journaled
-split-stage recovery, in-memory replay block-id ordering for deterministic
+split-stage recovery, bounded-residency deterministic replay ordering for
 clustering replay, derived planner-state-root support for delegated bounded-
 residency out-of-core planning spill, and leaf-layer parallel block scheduling
 in the local/testing profile.
@@ -256,20 +256,38 @@ caller-selected memory budget.
 **Pass condition:** LexonArchiveBuilder reconstructs and submits the approved
 deterministic replay input without whole-store rescans, without repository-
 owned orchestration loading corpus-scale replay inventories or stored
-embeddings into resident memory at once, and without introducing SQLite, spill
-files, or equivalent repository-owned externalized ordering state. Validation
-evidence shows the runtime retains only the deduped raw block-id ordering
-surface plus any aligned fixed-size per-block journal-integrity digests in
-memory during replay-list generation, fetches payload blocks from `BlockStore`
-only during later classification or finalization processing, and—when the
-effective path is v2—keeps any later planner-managed out-of-core files confined
-to the derived delegated planner-state root rather than using them as a replay-
-ordering catalog.
+embeddings into resident memory at once, and without allowing resident memory
+to scale with total replay-input count. Validation evidence shows the runtime
+reads replay-audit blocks only during replay-list generation, keeps live memory
+bounded to compact ordering windows plus merge buffers, leaves payload fetches
+to later classification or finalization processing, and—when the effective path
+is v2—keeps any delegated planner-managed out-of-core files confined to the
+derived planner-state root rather than using them as a replay-ordering
+catalog.
 
 **Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A2, RQ-INDEXER-003A3,
 RQ-INDEXER-003E, RQ-INDEXER-003E1, RQ-INDEXER-003E3, DSG-LFI-001A1,
 DSG-LFI-001A2, DSG-LFI-001A3, DSG-LFI-001E, DSG-LFI-001F, DSG-LFI-001F1,
 DSG-LFI-001F2
+
+### VAL-LFI-002I3
+
+Run the clustering-plus-block-assembly stage against a replay-audit journal
+large enough to require repository-owned replay-order externalization, with one
+case that supplies `--summary-out` and one that omits it.
+
+**Pass condition:** LexonArchiveBuilder derives a run-scoped replay-order
+scratch root from the existing request-adjacent artifact policy without adding
+any new caller-visible selector, keeps that scratch root separate from the
+delegated planner-state root, stores only compact replay-order identities plus
+fixed-size validation evidence in the repository-owned scratch files, and drives
+later classification or finalization from a file-backed deterministic replay
+order without rebuilding a corpus-scale resident vector. If the derived replay-
+order scratch root is required but cannot be created or written, the runtime
+fails explicitly rather than silently reverting to corpus-scale resident replay
+ordering.
+
+**Traces to:** RQ-INDEXER-003A2, DSG-LFI-001A2, DSG-LFI-001A3
 
 ### VAL-LFI-002J
 
