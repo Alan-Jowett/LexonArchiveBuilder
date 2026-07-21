@@ -68,6 +68,7 @@ const REPLAY_JOURNAL_SCHEMA_VERSION: u64 = 1;
 const REPLAY_JOURNAL_BLOCK_MAX_BYTES: usize = 64 * 1024 * 1024;
 const REPLAY_ORDER_ENTRY_BYTES: usize = 64;
 const REPLAY_ORDER_FLUSH_ENTRY_LIMIT: usize = 65_536;
+const REPLAY_ORDER_MERGE_FAN_IN: usize = 64;
 const AZURE_BLOB_API_VERSION: &str = "2023-11-03";
 const MUTABLE_REF_STORE_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MUTABLE_REF_STORE_HTTP_RETRY_ATTEMPTS: usize = 3;
@@ -116,7 +117,10 @@ enum ReplayJournalRecord {
     },
     IndexingOutcome {
         step_kind: ReplayJournalStepKind,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         input_block_ids: Vec<String>,
+        #[serde(default, skip_serializing_if = "usize_is_zero")]
+        input_block_count: usize,
         generated_block_ids: Vec<String>,
         root_block_id: String,
     },
@@ -471,6 +475,7 @@ impl ReplayOrderStorage {
         reader.read_next_entries(self.total_items())
     }
 
+    #[cfg(test)]
     fn replay_input_block_ids(&self) -> Result<Vec<String>, RuntimeError> {
         Ok(self
             .read_all_entries()?
@@ -947,6 +952,10 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     }
 }
 
+fn usize_is_zero(value: &usize) -> bool {
+    *value == 0
+}
+
 impl ExternalizedReplayState {
     fn total_batches(&self) -> usize {
         if self.total_items == 0 {
@@ -972,6 +981,7 @@ impl ExternalizedReplayState {
         })
     }
 
+    #[cfg(test)]
     fn replay_input_block_ids(&self) -> Result<Vec<String>, RuntimeError> {
         self.replay_order.replay_input_block_ids()
     }
@@ -4362,26 +4372,15 @@ fn replay_journal_records_from_block_ids(
 }
 
 #[allow(dead_code)]
-fn replay_input_block_ids_from_batches(batches: &[ReplayBatch]) -> Vec<String> {
-    batches
-        .iter()
-        .flat_map(|batch| batch.audit_records.iter())
-        .filter_map(|record| match record {
-            ReplayJournalRecord::ReplayInput { block_id, .. } => Some(block_id.clone()),
-            ReplayJournalRecord::IndexingOutcome { .. } => None,
-        })
-        .collect()
+fn replay_input_count_from_batches(batches: &[ReplayBatch]) -> usize {
+    batches.iter().map(|batch| batch.items.len()).sum()
 }
 
 fn replay_journal_indexing_outcome_record(
-    input_block_ids: Vec<String>,
+    input_block_count: usize,
     generated_block_ids: &[BlockHash],
     root_id: &BlockHash,
 ) -> ReplayJournalRecord {
-    let mut input_block_ids = input_block_ids;
-    input_block_ids.sort();
-    input_block_ids.dedup();
-
     let mut generated_block_ids = generated_block_ids
         .iter()
         .map(ToString::to_string)
@@ -4391,7 +4390,8 @@ fn replay_journal_indexing_outcome_record(
 
     ReplayJournalRecord::IndexingOutcome {
         step_kind: ReplayJournalStepKind::Indexing,
-        input_block_ids,
+        input_block_ids: Vec::new(),
+        input_block_count,
         generated_block_ids,
         root_block_id: root_id.to_string(),
     }
@@ -4695,19 +4695,16 @@ where
         } else {
             Vec::new()
         };
-        let input_block_ids = if config.stage.includes_ingestion() {
+        let input_block_count = if config.stage.includes_ingestion() {
             records
                 .iter()
-                .filter_map(|record| match record {
-                    ReplayJournalRecord::ReplayInput { block_id, .. } => Some(block_id.clone()),
-                    ReplayJournalRecord::IndexingOutcome { .. } => None,
-                })
-                .collect::<Vec<_>>()
+                .filter(|record| matches!(record, ReplayJournalRecord::ReplayInput { .. }))
+                .count()
         } else {
-            replay_input_block_ids_from_batches(&replay_batches)
+            replay_input_count_from_batches(&replay_batches)
         };
         records.push(replay_journal_indexing_outcome_record(
-            input_block_ids,
+            input_block_count,
             &result.block_ids,
             &result.root_id,
         ));
@@ -4951,13 +4948,11 @@ where
     }
 
     if let Some(mutable_ref_store) = io.mutable_ref_store {
-        let mut records = Vec::new();
-        let input_block_ids = replay_state.replay_input_block_ids()?;
-        records.push(replay_journal_indexing_outcome_record(
-            input_block_ids,
+        let records = vec![replay_journal_indexing_outcome_record(
+            replay_state.total_items,
             &result.block_ids,
             &result.root_id,
-        ));
+        )];
         let replay_journal_head_block_id = append_replay_journal_records_async(
             block_store.clone(),
             mutable_ref_store.clone(),
@@ -5169,13 +5164,11 @@ where
     }
 
     if let Some(mutable_ref_store) = io.mutable_ref_store {
-        let mut records = Vec::new();
-        let input_block_ids = replay_state.replay_input_block_ids()?;
-        records.push(replay_journal_indexing_outcome_record(
-            input_block_ids,
+        let records = vec![replay_journal_indexing_outcome_record(
+            replay_state.total_items,
             &result.block_ids,
             &result.root_id,
-        ));
+        )];
         let replay_journal_head_block_id = append_replay_journal_records_async(
             block_store.clone(),
             mutable_ref_store.clone(),
@@ -5430,6 +5423,41 @@ fn flush_sorted_replay_order_run(
 }
 
 fn merge_sorted_replay_order_runs(
+    run_paths: &[PathBuf],
+    merged_entries_path: &Path,
+) -> Result<usize, RuntimeError> {
+    if run_paths.len() <= REPLAY_ORDER_MERGE_FAN_IN {
+        return merge_sorted_replay_order_run_group(run_paths, merged_entries_path);
+    }
+
+    let scratch_dir =
+        merged_entries_path
+            .parent()
+            .ok_or_else(|| RuntimeError::WriteReplayOrderScratch {
+                path: merged_entries_path.display().to_string(),
+                source: io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "merged replay-order path must have a parent directory",
+                ),
+            })?;
+    let mut pass_index = 0usize;
+    let mut current_paths = run_paths.to_vec();
+    while current_paths.len() > REPLAY_ORDER_MERGE_FAN_IN {
+        let mut next_paths = Vec::new();
+        for (group_index, group) in current_paths.chunks(REPLAY_ORDER_MERGE_FAN_IN).enumerate() {
+            let intermediate_path = scratch_dir.join(format!(
+                "merge-pass-{pass_index:02}-run-{group_index:06}.bin"
+            ));
+            merge_sorted_replay_order_run_group(group, &intermediate_path)?;
+            next_paths.push(intermediate_path);
+        }
+        current_paths = next_paths;
+        pass_index += 1;
+    }
+    merge_sorted_replay_order_run_group(&current_paths, merged_entries_path)
+}
+
+fn merge_sorted_replay_order_run_group(
     run_paths: &[PathBuf],
     merged_entries_path: &Path,
 ) -> Result<usize, RuntimeError> {
@@ -7940,6 +7968,59 @@ mod tests {
         assert!(path.ends_with("summary.planner-state"));
     }
 
+    #[tokio::test]
+    async fn validate_only_uses_summary_output_for_replay_order_scratch_root() {
+        let temp = tempdir().unwrap();
+        fs::write(temp.path().join("alpha.txt"), b"alpha body\n").unwrap();
+        let request_path = temp.path().join("request.json");
+        fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&json!({
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": {
+                        "base_url": "http://unused.local",
+                        "model": "all-MiniLM-L6-v2",
+                        "request_timeout_secs": 5,
+                        "max_retries": 0,
+                        "retry_delay_ms": 1
+                    }
+                },
+                "embedding_spec": {
+                    "dims": 2,
+                    "encoding": "f32le"
+                },
+                "block_size_target": 65536,
+                "profile_version": "0.7.0",
+                "ref_name": TEST_REF_NAME,
+                "items": [
+                    { "kind": "document", "path": "alpha.txt", "metadata": {} }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let output_dir = temp.path().join("output");
+        fs::create_dir_all(&output_dir).unwrap();
+        fs::write(output_dir.join("summary.replay-order"), b"not a directory").unwrap();
+        let summary_out = output_dir.join("summary.json");
+
+        let error = validate_request_file_with_overrides(
+            &request_path,
+            None,
+            ClusteringConfigOverrides::default(),
+            Some(summary_out.as_path()),
+        )
+        .await
+        .unwrap_err();
+
+        let RuntimeError::PrepareReplayOrderScratchRoot { path, .. } = error else {
+            panic!("expected replay-order scratch root preparation error");
+        };
+        assert!(path.ends_with("summary.replay-order"));
+    }
+
     #[test]
     fn clustering_failure_diagnostics_path_prefers_summary_output_directory() {
         let request_path = Path::new("data").join("request.json");
@@ -8086,6 +8167,28 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![block_a, block_b, block_c]
         );
+    }
+
+    #[test]
+    fn merge_sorted_replay_order_runs_handles_more_runs_than_fan_in() {
+        let scratch = tempdir().unwrap();
+        let run_paths = (0..=REPLAY_ORDER_MERGE_FAN_IN)
+            .map(|index| {
+                let block = BlockHash::from_bytes([index as u8; 32]);
+                let digest = BlockHash::from_bytes([(index + 1) as u8; 32]);
+                let mut run = vec![ReplayOrderEntry::new(block, digest)];
+                flush_sorted_replay_order_run(scratch.path(), index, &mut run).unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        let merged_entries_path = scratch.path().join("ordered-replay-many.bin");
+        let total_items = merge_sorted_replay_order_runs(&run_paths, &merged_entries_path).unwrap();
+        assert_eq!(total_items, REPLAY_ORDER_MERGE_FAN_IN + 1);
+
+        let storage = ReplayOrderStorage::new(scratch, merged_entries_path, total_items);
+        let entries = storage.read_all_entries().unwrap();
+        assert_eq!(entries.len(), REPLAY_ORDER_MERGE_FAN_IN + 1);
+        assert!(entries.windows(2).all(|pair| pair[0] <= pair[1]));
     }
 
     #[test]
