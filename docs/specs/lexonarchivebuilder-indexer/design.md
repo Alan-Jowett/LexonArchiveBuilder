@@ -23,8 +23,8 @@ rapid profile validation, upstream wgpu-acceleration revision
 compatibility, 0.6.x published-profile evaluation, local testing sweep
 automation, v0.7.0 fixed-budget ladder experiment automation, rooted
 block-store copy tooling, upstream embedding-readback API adoption, LAB-owned
-replay-journaled split-stage recovery, in-memory replay block-id ordering
-simplification, and layer-parallel
+replay-journaled split-stage recovery, bounded-residency deterministic replay
+ordering, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
 non-search artifacts, plus conditional streaming-indexer v2 adoption with
 repository-default published profile `0.7.0` and derived planner-state-root
@@ -53,8 +53,8 @@ effective-profile identity signaling, telemetry-count-semantics clarity,
 clustering-failure diagnostics, rooted block-tree quality assessment with
 rooted TNN-recall diagnostics, rooted query access-cost reporting,
 rooted CLI search over stored trees, replay-stable delegated item identity,
-LAB-owned replay-journaled split-stage recovery, in-memory replay block-id
-ordering for deterministic clustering replay, derived planner-state-root
+LAB-owned replay-journaled split-stage recovery, bounded-residency deterministic
+replay ordering for clustering replay, derived planner-state-root
 support for delegated bounded-residency out-of-core planning spill, and
 layer-parallel delegated block construction for the local/testing profile.
 
@@ -199,10 +199,15 @@ lifecycle using streaming or segmented replay shapes whose live working set is
 bounded independently of total corpus size.
 
 For replay-journal-driven deterministic ordering, the approved retained state is
-the unique raw block-id list plus any fixed-size per-block journal-integrity
-digests needed to validate replay metadata against referenced payload blocks.
-That retained state remains limited to hash identities and fixed-size digests
-rather than decoded blocks, embeddings, or equivalent payload state.
+a bounded in-memory working window over compact ordering entries that feeds the
+externalized replay-order scratch files while staying within the same caller-
+selected memory budget. In that working window the runtime excludes decoded blocks,
+embeddings, and equivalent payload state from replay-order preparation.
+
+When resident memory would otherwise grow with corpus size, the design shifts
+repository-owned replay ordering onto run-scoped compact scratch files and uses
+bounded merge buffers to produce the same deterministic order without retaining
+a corpus-scale in-memory catalog.
 
 This entry constrains repository-owned orchestration only. It does not redefine
 opaque upstream-owned model state, but it does require the adapter layer to
@@ -211,22 +216,37 @@ compatibility finding rather than normalizing unbounded retention in-repo.
 
 **Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-010A
 
-### DSG-LFI-001A2 `In-memory raw block-id ordering strategy`
+### DSG-LFI-001A2 `Run-scoped replay-order external sort strategy`
 
-LexonArchiveBuilder realizes replay-journal-driven deterministic ordering for
-this increment as an in-memory raw block-id list with aligned fixed-size
-journal-integrity digests rather than as an externalized ordering catalog.
+LexonArchiveBuilder realizes replay-journal-driven deterministic ordering as a
+deterministic flat-file external sort/merge strategy.
 
-The runtime walks the immutable replay-audit journal, extracts recorded block
-ids, sorts them, dedupes them, and uses that unique block-id order for later
-classification and finalization. When replay-metadata validation requires it,
-the runtime retains one fixed-size digest per ordered block so later payload
-reads can prove the replay-journal record still matches the referenced block.
+The runtime walks the immutable replay-audit journal and derives one compact
+ordering entry per replay input containing only the referenced block hash plus
+any fixed-size journal-integrity digest needed for later payload validation.
+That replay walk reads replay-audit blocks and recorded ids only; it does not
+dereference referenced payload blocks while preparing replay order.
 
-That replay walk reads replay-audit blocks and their recorded ids only. It does
-not dereference referenced payload blocks until later processing needs them,
-and it does not introduce SQLite, spill files, or equivalent repository-owned
-externalized ordering storage.
+When the working set approaches the approved memory budget, the runtime sorts
+the current compact-entry window in memory and flushes it as one sorted flat
+run file beneath a repository-owned run-scoped replay-order scratch root. After
+the journal scan completes, the runtime performs a deterministic k-way merge of
+those sorted runs, removes duplicate block ids while validating any aligned
+digest evidence, and materializes the final unique replay order into a compact
+repository-owned file-backed representation rather than rebuilding a
+corpus-scale resident vector.
+
+Later classification and finalization stages consume that final replay order
+through bounded sequential windows or fixed-record offset reads from the
+file-backed representation, preserving the existing deterministic order without
+requiring the full ordered corpus catalog to be resident in memory at once.
+
+The replay-order scratch root follows the existing request-adjacent artifact
+policy but remains a separate repository-owned artifact family from the
+delegated planner-state root. Its contents are opaque implementation scratch
+state rather than a caller-visible manifest contract, and inability to create or
+use that scratch root is an explicit runtime failure for workloads that require
+externalization.
 
 **Traces to:** RQ-INDEXER-003A2, RQ-INDEXER-003E, RQ-INDEXER-003E1, RQ-INDEXER-003E3
 
@@ -571,7 +591,8 @@ upgrade whenever the latest upstream contract still supports them semantically:
   existing request-adjacent artifact/output policy, without introducing a new
   caller-visible selector
 - bounded-residency delegated out-of-core planning spill beneath that derived
-  root while preserving the repository-owned in-memory replay-ordering rule
+  root while preserving a separate repository-owned bounded-residency replay-
+  ordering strategy
 - unchanged MCP search-serving behavior for already-indexed content
 - temporary explicit tracking of upstream `main` to pick up new published
   profiles and wgpu acceleration quickly

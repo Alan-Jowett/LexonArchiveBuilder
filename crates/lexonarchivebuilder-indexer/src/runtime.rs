@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonArchiveBuilder contributors
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
+use std::cmp::Ordering as CmpOrdering;
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
+use std::fs::{self, File};
 use std::future::Future;
-use std::io::{self, Cursor, ErrorKind, Write};
+use std::io::{self, BufReader, BufWriter, Cursor, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -65,6 +66,9 @@ pub const INGESTION_ONLY_ROOT_ID_PLACEHOLDER: &str =
 const PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const REPLAY_JOURNAL_SCHEMA_VERSION: u64 = 1;
 const REPLAY_JOURNAL_BLOCK_MAX_BYTES: usize = 64 * 1024 * 1024;
+const REPLAY_ORDER_ENTRY_BYTES: usize = 64;
+const REPLAY_ORDER_FLUSH_ENTRY_LIMIT: usize = 65_536;
+const REPLAY_ORDER_MERGE_FAN_IN: usize = 64;
 const AZURE_BLOB_API_VERSION: &str = "2023-11-03";
 const MUTABLE_REF_STORE_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MUTABLE_REF_STORE_HTTP_RETRY_ATTEMPTS: usize = 3;
@@ -113,7 +117,10 @@ enum ReplayJournalRecord {
     },
     IndexingOutcome {
         step_kind: ReplayJournalStepKind,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         input_block_ids: Vec<String>,
+        #[serde(default, skip_serializing_if = "usize_is_zero")]
+        input_block_count: usize,
         generated_block_ids: Vec<String>,
         root_block_id: String,
     },
@@ -368,6 +375,160 @@ impl SubmissionProgressKind {
     }
 }
 
+impl ReplayOrderEntry {
+    fn new(block_id: BlockHash, digest: BlockHash) -> Self {
+        Self {
+            block_id: block_id.into_bytes(),
+            digest: digest.into_bytes(),
+        }
+    }
+
+    fn block_hash(self) -> BlockHash {
+        BlockHash::from_bytes(self.block_id)
+    }
+
+    fn digest_hash(self) -> BlockHash {
+        BlockHash::from_bytes(self.digest)
+    }
+
+    fn write_to(self, writer: &mut impl Write) -> io::Result<()> {
+        let mut bytes = [0u8; REPLAY_ORDER_ENTRY_BYTES];
+        bytes[..32].copy_from_slice(&self.block_id);
+        bytes[32..].copy_from_slice(&self.digest);
+        writer.write_all(&bytes)
+    }
+
+    fn read_from(reader: &mut impl Read) -> io::Result<Option<Self>> {
+        let mut bytes = [0u8; REPLAY_ORDER_ENTRY_BYTES];
+        if reader.read(&mut bytes[..1])? == 0 {
+            return Ok(None);
+        }
+        reader.read_exact(&mut bytes[1..])?;
+        let mut block_id = [0u8; 32];
+        block_id.copy_from_slice(&bytes[..32]);
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&bytes[32..]);
+        Ok(Some(Self { block_id, digest }))
+    }
+}
+
+impl Ord for ReplayOrderEntry {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        self.block_id
+            .cmp(&other.block_id)
+            .then_with(|| self.digest.cmp(&other.digest))
+    }
+}
+
+impl PartialOrd for ReplayOrderEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ReplayOrderCursor {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        other
+            .entry
+            .cmp(&self.entry)
+            .then_with(|| other.run_index.cmp(&self.run_index))
+    }
+}
+
+impl PartialOrd for ReplayOrderCursor {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl ReplayOrderStorage {
+    fn new(scratch_dir: tempfile::TempDir, entries_path: PathBuf, total_items: usize) -> Self {
+        Self {
+            inner: Arc::new(ReplayOrderStorageInner {
+                _scratch_dir: scratch_dir,
+                entries_path,
+                total_items,
+            }),
+        }
+    }
+
+    fn total_items(&self) -> usize {
+        self.inner.total_items
+    }
+
+    fn open_reader(&self) -> Result<ReplayOrderReader, RuntimeError> {
+        let file = File::open(&self.inner.entries_path).map_err(|source| {
+            RuntimeError::ReadReplayOrderScratch {
+                path: self.inner.entries_path.display().to_string(),
+                source,
+            }
+        })?;
+        Ok(ReplayOrderReader {
+            path: self.inner.entries_path.clone(),
+            reader: BufReader::new(file),
+            remaining_items: self.inner.total_items,
+        })
+    }
+
+    fn read_all_entries(&self) -> Result<Vec<ReplayOrderEntry>, RuntimeError> {
+        let mut reader = self.open_reader()?;
+        reader.read_next_entries(self.total_items())
+    }
+
+    #[cfg(test)]
+    fn replay_input_block_ids(&self) -> Result<Vec<String>, RuntimeError> {
+        Ok(self
+            .read_all_entries()?
+            .into_iter()
+            .map(|entry| entry.block_hash().to_string())
+            .collect())
+    }
+}
+
+impl ReplayOrderReader {
+    fn read_next_entries(
+        &mut self,
+        max_items: usize,
+    ) -> Result<Vec<ReplayOrderEntry>, RuntimeError> {
+        let target = self.remaining_items.min(max_items);
+        let mut entries = Vec::with_capacity(target);
+        while entries.len() < target {
+            let Some(entry) = ReplayOrderEntry::read_from(&mut self.reader).map_err(|source| {
+                RuntimeError::ReadReplayOrderScratch {
+                    path: self.path.display().to_string(),
+                    source,
+                }
+            })?
+            else {
+                return Err(RuntimeError::ReadReplayOrderScratch {
+                    path: self.path.display().to_string(),
+                    source: io::Error::new(
+                        ErrorKind::UnexpectedEof,
+                        "replay-order scratch file ended before all expected entries were read",
+                    ),
+                });
+            };
+            entries.push(entry);
+        }
+        self.remaining_items = self.remaining_items.saturating_sub(entries.len());
+        Ok(entries)
+    }
+}
+
+fn map_replay_order_runtime_error_to_provider_error(
+    error: RuntimeError,
+) -> StoredLeafEmbeddingProviderError {
+    match error {
+        RuntimeError::ReadReplayOrderScratch { path, source } => {
+            StoredLeafEmbeddingProviderError::ReadReplayOrderScratch { path, source }
+        }
+        other => StoredLeafEmbeddingProviderError::InvalidStoredEmbeddingBlock {
+            block_id: "<replay-order>".into(),
+            message: other.to_string(),
+        },
+    }
+}
+
 #[derive(Clone, Debug)]
 struct StreamingStageConfig {
     stage: ExecutionStage,
@@ -388,12 +549,11 @@ struct StoredLeafEmbeddingProvider {
 
 #[derive(Debug)]
 struct ExternalizedReplayState {
-    ordered_block_ids: Arc<Vec<BlockHash>>,
+    replay_order: ReplayOrderStorage,
     total_items: usize,
     batch_size: usize,
     block_store: ConfiguredBlockStore,
     embedding_spec: EmbeddingSpec,
-    expected_replay_key_digests: Arc<Vec<BlockHash>>,
     current_batch_embeddings: Arc<Mutex<EmbeddingCache>>,
 }
 
@@ -401,30 +561,23 @@ struct ExternalizedReplayState {
 struct ExternalizedStoredLeafEmbeddingProvider {
     block_store: ConfiguredBlockStore,
     embedding_spec: EmbeddingSpec,
-    ordered_block_ids: Arc<Vec<BlockHash>>,
+    replay_order: ReplayOrderStorage,
     current_batch_embeddings: Arc<Mutex<EmbeddingCache>>,
     fallback_embeddings: Arc<Mutex<Option<EmbeddingCache>>>,
 }
 
 #[derive(Debug)]
 struct ExternalizedReplayBatchIterator {
-    ordered_block_ids: Arc<Vec<BlockHash>>,
-    next_index: usize,
+    replay_order_reader: ReplayOrderReader,
     batch_size: usize,
     block_store: ConfiguredBlockStore,
     embedding_spec: EmbeddingSpec,
-    expected_replay_key_digests: Arc<Vec<BlockHash>>,
     current_batch_embeddings: Arc<Mutex<EmbeddingCache>>,
 }
 
 #[derive(Debug)]
 struct ExternalizedReplayFinalizeSource {
-    ordered_block_ids: Arc<Vec<BlockHash>>,
-    batch_size: usize,
-    block_store: ConfiguredBlockStore,
-    embedding_spec: EmbeddingSpec,
-    expected_replay_key_digests: Arc<Vec<BlockHash>>,
-    current_batch_embeddings: Arc<Mutex<EmbeddingCache>>,
+    inner: ExternalizedReplayBatchIterator,
 }
 
 #[derive(Debug)]
@@ -432,10 +585,35 @@ struct ExternalizedReplayFinalizeIterator {
     inner: ExternalizedReplayBatchIterator,
 }
 
+#[derive(Clone, Debug)]
+struct ReplayOrderStorage {
+    inner: Arc<ReplayOrderStorageInner>,
+}
+
 #[derive(Debug)]
-struct OrderedReplayBlockIds {
-    ordered_block_ids: Vec<BlockHash>,
-    expected_replay_key_digests: Vec<BlockHash>,
+struct ReplayOrderStorageInner {
+    _scratch_dir: tempfile::TempDir,
+    entries_path: PathBuf,
+    total_items: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReplayOrderEntry {
+    block_id: [u8; 32],
+    digest: [u8; 32],
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ReplayOrderCursor {
+    entry: ReplayOrderEntry,
+    run_index: usize,
+}
+
+#[derive(Debug)]
+struct ReplayOrderReader {
+    path: PathBuf,
+    reader: BufReader<File>,
+    remaining_items: usize,
 }
 
 #[derive(Debug)]
@@ -469,6 +647,12 @@ enum StoredLeafEmbeddingProviderError {
     },
     #[error("stored embedding block {block_id} is invalid: {message}")]
     InvalidStoredEmbeddingBlock { block_id: String, message: String },
+    #[error("failed to read replay-order scratch file {path}: {source}")]
+    ReadReplayOrderScratch {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
 }
 
 #[cfg(test)]
@@ -605,8 +789,28 @@ pub enum RuntimeError {
         #[source]
         source: io::Error,
     },
+    #[error("failed to prepare replay-order scratch root {path}: {source}")]
+    PrepareReplayOrderScratchRoot {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("clustering run is missing the prepared replay-order scratch root")]
+    MissingReplayOrderScratchRoot,
     #[error("v2 clustering run is missing the prepared planner-state root")]
     MissingPlannerStateRoot,
+    #[error("failed to write replay-order scratch file {path}: {source}")]
+    WriteReplayOrderScratch {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to read replay-order scratch file {path}: {source}")]
+    ReadReplayOrderScratch {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
     #[error("failed to write mutable ref store {path}: {source}")]
     WriteMutableRefStore {
         path: String,
@@ -748,6 +952,10 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     }
 }
 
+fn usize_is_zero(value: &usize) -> bool {
+    *value == 0
+}
+
 impl ExternalizedReplayState {
     fn total_batches(&self) -> usize {
         if self.total_items == 0 {
@@ -757,39 +965,29 @@ impl ExternalizedReplayState {
         }
     }
 
-    fn batch_iterator(&self) -> ExternalizedReplayBatchIterator {
-        ExternalizedReplayBatchIterator {
-            ordered_block_ids: Arc::clone(&self.ordered_block_ids),
-            next_index: 0,
+    fn batch_iterator(&self) -> Result<ExternalizedReplayBatchIterator, RuntimeError> {
+        Ok(ExternalizedReplayBatchIterator {
+            replay_order_reader: self.replay_order.open_reader()?,
             batch_size: self.batch_size,
             block_store: self.block_store.clone(),
             embedding_spec: self.embedding_spec.clone(),
-            expected_replay_key_digests: Arc::clone(&self.expected_replay_key_digests),
             current_batch_embeddings: Arc::clone(&self.current_batch_embeddings),
-        }
+        })
     }
 
-    fn finalize_source(&self) -> ExternalizedReplayFinalizeSource {
-        ExternalizedReplayFinalizeSource {
-            ordered_block_ids: Arc::clone(&self.ordered_block_ids),
-            batch_size: self.batch_size,
-            block_store: self.block_store.clone(),
-            embedding_spec: self.embedding_spec.clone(),
-            expected_replay_key_digests: Arc::clone(&self.expected_replay_key_digests),
-            current_batch_embeddings: Arc::clone(&self.current_batch_embeddings),
-        }
+    fn finalize_source(&self) -> Result<ExternalizedReplayFinalizeSource, RuntimeError> {
+        Ok(ExternalizedReplayFinalizeSource {
+            inner: self.batch_iterator()?,
+        })
     }
 
+    #[cfg(test)]
     fn replay_input_block_ids(&self) -> Result<Vec<String>, RuntimeError> {
-        Ok(self
-            .ordered_block_ids
-            .iter()
-            .map(ToString::to_string)
-            .collect())
+        self.replay_order.replay_input_block_ids()
     }
 
     fn collect_replay_batches(&self) -> Result<Vec<ReplayBatch>, RuntimeError> {
-        let mut iterator = self.batch_iterator();
+        let mut iterator = self.batch_iterator()?;
         let mut batches = Vec::new();
         while let Some(batch) = iterator.next_batch()? {
             batches.push(batch);
@@ -811,7 +1009,7 @@ impl ExternalizedStoredLeafEmbeddingProvider {
             return Ok(Some(embedding));
         }
 
-        if self.ordered_block_ids.len() > EXTERNALIZED_CLUSTERING_DIAGNOSTIC_INPUT_LIMIT {
+        if self.replay_order.total_items() > EXTERNALIZED_CLUSTERING_DIAGNOSTIC_INPUT_LIMIT {
             return Ok(None);
         }
 
@@ -823,13 +1021,19 @@ impl ExternalizedStoredLeafEmbeddingProvider {
         }
 
         let mut fallback_embeddings = HashMap::new();
-        for block_hash in self.ordered_block_ids.iter() {
-            let validated = block_on_block_store_future(self.block_store.get(block_hash)).map_err(
-                |source| StoredLeafEmbeddingProviderError::ReadStoredEmbeddingBlock {
-                    block_id: block_hash.to_string(),
-                    source,
-                },
-            )?;
+        for entry in self
+            .replay_order
+            .read_all_entries()
+            .map_err(map_replay_order_runtime_error_to_provider_error)?
+        {
+            let block_hash = entry.block_hash();
+            let validated = block_on_block_store_future(self.block_store.get(&block_hash))
+                .map_err(
+                    |source| StoredLeafEmbeddingProviderError::ReadStoredEmbeddingBlock {
+                        block_id: block_hash.to_string(),
+                        source,
+                    },
+                )?;
             let Some(validated) = validated else {
                 continue;
             };
@@ -872,26 +1076,19 @@ impl ExternalizedStoredLeafEmbeddingProvider {
 
 impl ExternalizedReplayBatchIterator {
     fn next_batch(&mut self) -> Result<Option<ReplayBatch>, RuntimeError> {
-        if self.next_index >= self.ordered_block_ids.len() {
+        let entries = self
+            .replay_order_reader
+            .read_next_entries(self.batch_size)?;
+        if entries.is_empty() {
             lock_unpoisoned(&self.current_batch_embeddings).clear();
             return Ok(None);
         }
-        let end = self
-            .next_index
-            .saturating_add(self.batch_size)
-            .min(self.ordered_block_ids.len());
-        let batch = replay_batch_from_block_ids(
-            &self.ordered_block_ids[self.next_index..end],
-            &self.block_store,
-            &self.embedding_spec,
-            Some(&self.expected_replay_key_digests[self.next_index..end]),
-        )?;
+        let batch = replay_batch_from_entries(&entries, &self.block_store, &self.embedding_spec)?;
         {
             let mut cache = lock_unpoisoned(&self.current_batch_embeddings);
             cache.clear();
             cache.extend(batch.embeddings_by_input_hash.iter().cloned());
         }
-        self.next_index = end;
         Ok(Some(batch.batch))
     }
 }
@@ -901,17 +1098,7 @@ impl IntoIterator for ExternalizedReplayFinalizeSource {
     type IntoIter = ExternalizedReplayFinalizeIterator;
 
     fn into_iter(self) -> Self::IntoIter {
-        ExternalizedReplayFinalizeIterator {
-            inner: ExternalizedReplayBatchIterator {
-                ordered_block_ids: self.ordered_block_ids,
-                next_index: 0,
-                batch_size: self.batch_size,
-                block_store: self.block_store,
-                embedding_spec: self.embedding_spec,
-                expected_replay_key_digests: self.expected_replay_key_digests,
-                current_batch_embeddings: self.current_batch_embeddings,
-            },
-        }
+        ExternalizedReplayFinalizeIterator { inner: self.inner }
     }
 }
 
@@ -926,17 +1113,17 @@ impl Iterator for ExternalizedReplayFinalizeIterator {
     }
 }
 
-fn replay_batch_from_block_ids(
-    block_ids: &[BlockHash],
+fn replay_batch_from_entries(
+    entries: &[ReplayOrderEntry],
     store: &ConfiguredBlockStore,
     embedding_spec: &EmbeddingSpec,
-    expected_replay_key_digests: Option<&[BlockHash]>,
 ) -> Result<ReplayBatchLoad, RuntimeError> {
-    let mut items = Vec::with_capacity(block_ids.len());
-    let mut audit_records = Vec::with_capacity(block_ids.len());
-    let mut embeddings_by_input_hash = Vec::with_capacity(block_ids.len());
-    for (index, block_id) in block_ids.iter().enumerate() {
-        let Some(validated) = block_on_block_store_future(store.get(block_id))? else {
+    let mut items = Vec::with_capacity(entries.len());
+    let mut audit_records = Vec::with_capacity(entries.len());
+    let mut embeddings_by_input_hash = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let block_id = entry.block_hash();
+        let Some(validated) = block_on_block_store_future(store.get(&block_id))? else {
             return Err(RuntimeError::ReadReplayJournal {
                 block_id: block_id.to_string(),
                 source: io::Error::new(
@@ -956,19 +1143,11 @@ fn replay_batch_from_block_ids(
                 block_id: block_id.to_string(),
             });
         };
-        if let Some(expected_digests) = expected_replay_key_digests {
-            let Some(expected_digest) = expected_digests.get(index) else {
-                return Err(RuntimeError::InvalidReplayJournalHead {
-                    block_id: validated.hash.to_string(),
-                    message: "journal entry digest is missing for referenced replay block".into(),
-                });
-            };
-            if replay_sort_key_digest(&item) != *expected_digest {
-                return Err(RuntimeError::InvalidReplayJournalHead {
-                    block_id: validated.hash.to_string(),
-                    message: "journal entry does not match referenced block replay metadata".into(),
-                });
-            }
+        if replay_sort_key_digest(&item) != entry.digest_hash() {
+            return Err(RuntimeError::InvalidReplayJournalHead {
+                block_id: validated.hash.to_string(),
+                message: "journal entry does not match referenced block replay metadata".into(),
+            });
         }
         embeddings_by_input_hash.push((input_hash.into_bytes(), embedding));
         audit_records.push(replay_journal_record_from_item(validated.hash, &item));
@@ -2410,15 +2589,19 @@ pub async fn run_request_file_with_outputs(
     let request_dir = request_path.parent().unwrap_or_else(|| Path::new("."));
     let diagnostics_path = clustering_failure_diagnostics_path(request_path, summary_out);
     let planning_pass_path = planning_pass_telemetry_path(request_path, summary_out);
+    let replay_order_scratch_root = replay_order_scratch_root_path(request_path, summary_out);
     let planner_state_root = planner_state_root_path(request_path, summary_out);
 
     run_request_with_progress(
         request_dir,
         request,
         clustering_overrides,
-        Some(diagnostics_path.as_path()),
-        Some(planning_pass_path.as_path()),
-        Some(planner_state_root.as_path()),
+        RunRequestArtifactPaths {
+            diagnostics_path: Some(diagnostics_path.as_path()),
+            planning_pass_telemetry_path: Some(planning_pass_path.as_path()),
+            replay_order_scratch_root: Some(replay_order_scratch_root.as_path()),
+            planner_state_root: Some(planner_state_root.as_path()),
+        },
         |message| {
             eprintln!("{message}");
         },
@@ -2448,12 +2631,14 @@ pub async fn validate_request_file_with_overrides(
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
+    let replay_order_scratch_root = replay_order_scratch_root_path(request_path, summary_out);
     let planner_state_root = planner_state_root_path(request_path, summary_out);
     tokio::task::spawn_blocking(move || {
         validate_request_with_overrides(
             &request_dir,
             request,
             clustering_overrides,
+            Some(replay_order_scratch_root.as_path()),
             Some(planner_state_root.as_path()),
         )
     })
@@ -2477,18 +2662,25 @@ pub async fn run_request_with_overrides(
         request_dir,
         request,
         clustering_overrides,
-        None,
-        None,
-        None,
+        RunRequestArtifactPaths::default(),
         |message| eprintln!("{message}"),
     )
     .await
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RunRequestArtifactPaths<'a> {
+    diagnostics_path: Option<&'a Path>,
+    planning_pass_telemetry_path: Option<&'a Path>,
+    replay_order_scratch_root: Option<&'a Path>,
+    planner_state_root: Option<&'a Path>,
 }
 
 fn validate_request_with_overrides(
     request_dir: &Path,
     request: BatchRequest,
     clustering_overrides: ClusteringConfigOverrides,
+    replay_order_scratch_root: Option<&Path>,
     planner_state_root: Option<&Path>,
 ) -> Result<(), RuntimeError> {
     request.validate()?;
@@ -2501,6 +2693,10 @@ fn validate_request_with_overrides(
         .resolve_mutable_ref_store(request_dir, &request.ref_name);
 
     if stage.includes_clustering() {
+        let replay_order_scratch_root = replay_order_scratch_root
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| replay_order_scratch_root_for_request_dir(request_dir));
+        prepare_replay_order_scratch_root(&replay_order_scratch_root)?;
         if uses_streaming_indexer_v2(&clustering) {
             let planner_state_root = planner_state_root
                 .map(Path::to_path_buf)
@@ -2549,9 +2745,7 @@ async fn run_request_with_progress<F>(
     request_dir: &Path,
     request: BatchRequest,
     clustering_overrides: ClusteringConfigOverrides,
-    diagnostics_path: Option<&Path>,
-    planning_pass_telemetry_path: Option<&Path>,
-    planner_state_root: Option<&Path>,
+    artifact_paths: RunRequestArtifactPaths<'_>,
     progress: F,
 ) -> Result<BatchSummary, RuntimeError>
 where
@@ -2567,9 +2761,20 @@ where
         .environment
         .resolve_mutable_ref_store(request_dir, &request.ref_name);
     let mutable_ref_metadata = mutable_ref_store_metadata(stage, &clustering);
+    let replay_order_scratch_root = if stage.includes_clustering() {
+        let path = artifact_paths
+            .replay_order_scratch_root
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| replay_order_scratch_root_for_request_dir(request_dir));
+        prepare_replay_order_scratch_root(&path)?;
+        Some(path)
+    } else {
+        None
+    };
     let planner_state_root =
         if stage.includes_clustering() && uses_streaming_indexer_v2(&clustering) {
-            let path = planner_state_root
+            let path = artifact_paths
+                .planner_state_root
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| planner_state_root_for_request_dir(request_dir));
             prepare_planner_state_root(&path)?;
@@ -2581,7 +2786,9 @@ where
         .includes_clustering()
         .then(|| PlanningTelemetryContext {
             run_identity: planning_run_identity(&clustering),
-            sink_path: planning_pass_telemetry_path.map(Path::to_path_buf),
+            sink_path: artifact_paths
+                .planning_pass_telemetry_path
+                .map(Path::to_path_buf),
             sink_initialized: Arc::new(AtomicBool::new(false)),
             sink_write_lock: Arc::new(Mutex::new(())),
             diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
@@ -2651,6 +2858,9 @@ where
             embedding_spec.clone(),
             max_concurrency,
             mutable_ref_store,
+            replay_order_scratch_root
+                .clone()
+                .ok_or(RuntimeError::MissingReplayOrderScratchRoot)?,
             Arc::clone(&progress),
         )
         .await?;
@@ -2681,6 +2891,9 @@ where
             embedding_spec.clone(),
             max_concurrency,
             mutable_ref_store,
+            replay_order_scratch_root
+                .clone()
+                .ok_or(RuntimeError::MissingReplayOrderScratchRoot)?,
             Arc::clone(&progress),
         )
         .await?;
@@ -2703,7 +2916,7 @@ where
     };
 
     if let Err(error) = &result {
-        persist_clustering_failure_diagnostics(diagnostics_path, error, &progress);
+        persist_clustering_failure_diagnostics(artifact_paths.diagnostics_path, error, &progress);
     }
     result
 }
@@ -4159,26 +4372,15 @@ fn replay_journal_records_from_block_ids(
 }
 
 #[allow(dead_code)]
-fn replay_input_block_ids_from_batches(batches: &[ReplayBatch]) -> Vec<String> {
-    batches
-        .iter()
-        .flat_map(|batch| batch.audit_records.iter())
-        .filter_map(|record| match record {
-            ReplayJournalRecord::ReplayInput { block_id, .. } => Some(block_id.clone()),
-            ReplayJournalRecord::IndexingOutcome { .. } => None,
-        })
-        .collect()
+fn replay_input_count_from_batches(batches: &[ReplayBatch]) -> usize {
+    batches.iter().map(|batch| batch.items.len()).sum()
 }
 
 fn replay_journal_indexing_outcome_record(
-    input_block_ids: Vec<String>,
+    input_block_count: usize,
     generated_block_ids: &[BlockHash],
     root_id: &BlockHash,
 ) -> ReplayJournalRecord {
-    let mut input_block_ids = input_block_ids;
-    input_block_ids.sort();
-    input_block_ids.dedup();
-
     let mut generated_block_ids = generated_block_ids
         .iter()
         .map(ToString::to_string)
@@ -4188,7 +4390,8 @@ fn replay_journal_indexing_outcome_record(
 
     ReplayJournalRecord::IndexingOutcome {
         step_kind: ReplayJournalStepKind::Indexing,
-        input_block_ids,
+        input_block_ids: Vec::new(),
+        input_block_count,
         generated_block_ids,
         root_block_id: root_id.to_string(),
     }
@@ -4492,19 +4695,16 @@ where
         } else {
             Vec::new()
         };
-        let input_block_ids = if config.stage.includes_ingestion() {
+        let input_block_count = if config.stage.includes_ingestion() {
             records
                 .iter()
-                .filter_map(|record| match record {
-                    ReplayJournalRecord::ReplayInput { block_id, .. } => Some(block_id.clone()),
-                    ReplayJournalRecord::IndexingOutcome { .. } => None,
-                })
-                .collect::<Vec<_>>()
+                .filter(|record| matches!(record, ReplayJournalRecord::ReplayInput { .. }))
+                .count()
         } else {
-            replay_input_block_ids_from_batches(&replay_batches)
+            replay_input_count_from_batches(&replay_batches)
         };
         records.push(replay_journal_indexing_outcome_record(
-            input_block_ids,
+            input_block_count,
             &result.block_ids,
             &result.root_id,
         ));
@@ -4613,7 +4813,7 @@ where
     }
 
     let mut completed_items = 0usize;
-    let mut iterator = replay_state.batch_iterator();
+    let mut iterator = replay_state.batch_iterator()?;
     let mut batch_number = 0usize;
     while let Some(batch) = iterator.next_batch()? {
         if batch.items.is_empty() {
@@ -4722,7 +4922,7 @@ where
         "Streaming planning complete; starting final materialization".into(),
     );
     let result = indexer
-        .finalize(replay_state.finalize_source(), block_store)
+        .finalize(replay_state.finalize_source()?, block_store)
         .await
         .map_err(|error| {
             clustering_failure_error(
@@ -4748,13 +4948,11 @@ where
     }
 
     if let Some(mutable_ref_store) = io.mutable_ref_store {
-        let mut records = Vec::new();
-        let input_block_ids = replay_state.replay_input_block_ids()?;
-        records.push(replay_journal_indexing_outcome_record(
-            input_block_ids,
+        let records = vec![replay_journal_indexing_outcome_record(
+            replay_state.total_items,
             &result.block_ids,
             &result.root_id,
-        ));
+        )];
         let replay_journal_head_block_id = append_replay_journal_records_async(
             block_store.clone(),
             mutable_ref_store.clone(),
@@ -4827,7 +5025,7 @@ where
 
     loop {
         let mut completed_items = 0usize;
-        let mut iterator = replay_state.batch_iterator();
+        let mut iterator = replay_state.batch_iterator()?;
         let mut batch_number = 0usize;
         while let Some(batch) = iterator.next_batch()? {
             if batch.items.is_empty() {
@@ -4940,7 +5138,7 @@ where
         "Streaming planning complete; starting final materialization".into(),
     );
     let result = indexer
-        .finalize(replay_state.finalize_source(), block_store)
+        .finalize(replay_state.finalize_source()?, block_store)
         .await
         .map_err(|error| {
             clustering_failure_error(
@@ -4966,13 +5164,11 @@ where
     }
 
     if let Some(mutable_ref_store) = io.mutable_ref_store {
-        let mut records = Vec::new();
-        let input_block_ids = replay_state.replay_input_block_ids()?;
-        records.push(replay_journal_indexing_outcome_record(
-            input_block_ids,
+        let records = vec![replay_journal_indexing_outcome_record(
+            replay_state.total_items,
             &result.block_ids,
             &result.root_id,
-        ));
+        )];
         let replay_journal_head_block_id = append_replay_journal_records_async(
             block_store.clone(),
             mutable_ref_store.clone(),
@@ -5097,9 +5293,35 @@ fn for_each_replay_journal_record_newest_first(
 fn collect_ordered_replay_block_ids_from_journal(
     store: &ConfiguredBlockStore,
     mutable_ref_store: &MutableRefStoreLocation,
+    replay_order_scratch_root: &Path,
     progress: &ProgressReporter,
-) -> Result<OrderedReplayBlockIds, RuntimeError> {
-    let mut ordered_entries = Vec::new();
+) -> Result<ReplayOrderStorage, RuntimeError> {
+    collect_ordered_replay_block_ids_from_journal_with_limit(
+        store,
+        mutable_ref_store,
+        replay_order_scratch_root,
+        progress,
+        REPLAY_ORDER_FLUSH_ENTRY_LIMIT,
+    )
+}
+
+fn collect_ordered_replay_block_ids_from_journal_with_limit(
+    store: &ConfiguredBlockStore,
+    mutable_ref_store: &MutableRefStoreLocation,
+    replay_order_scratch_root: &Path,
+    progress: &ProgressReporter,
+    flush_entry_limit: usize,
+) -> Result<ReplayOrderStorage, RuntimeError> {
+    prepare_replay_order_scratch_root(replay_order_scratch_root)?;
+    let scratch_dir = tempfile::Builder::new()
+        .prefix("replay-order-")
+        .tempdir_in(replay_order_scratch_root)
+        .map_err(|source| RuntimeError::PrepareReplayOrderScratchRoot {
+            path: replay_order_scratch_root.display().to_string(),
+            source,
+        })?;
+    let mut ordered_entries = Vec::with_capacity(flush_entry_limit.max(1));
+    let mut run_paths = Vec::new();
     let mut scanned_inputs = 0usize;
     for_each_replay_journal_record_newest_first(store, mutable_ref_store, |record| {
         let ReplayJournalRecord::ReplayInput { block_id, .. } = record else {
@@ -5113,49 +5335,216 @@ fn collect_ordered_replay_block_ids_from_journal(
         let journal_item = replay_journal_record_to_item(record)
             .expect("replay input records should convert back into replay items");
         let digest = replay_sort_key_digest(&journal_item);
-        ordered_entries.push((block_id, digest));
+        ordered_entries.push(ReplayOrderEntry::new(block_id, digest));
+        if ordered_entries.len() >= flush_entry_limit.max(1) {
+            let run_index = run_paths.len();
+            run_paths.push(flush_sorted_replay_order_run(
+                scratch_dir.path(),
+                run_index,
+                &mut ordered_entries,
+            )?);
+        }
         scanned_inputs += 1;
         if scanned_inputs.is_multiple_of(10_000) {
             report_progress(
                 progress,
                 format!(
-                    "Scanned {scanned_inputs} replay journal input(s) while preparing in-memory replay ordering"
+                    "Scanned {scanned_inputs} replay journal input(s) while preparing replay ordering scratch state"
                 ),
             );
         }
         Ok(())
     })?;
-    ordered_entries.sort_unstable_by_key(|(block_id, _)| block_id.into_bytes());
-    let mut ordered_block_ids = Vec::with_capacity(ordered_entries.len());
-    let mut expected_replay_key_digests = Vec::with_capacity(ordered_entries.len());
-    for (block_id, digest) in ordered_entries {
-        if ordered_block_ids.last() == Some(&block_id) {
-            if expected_replay_key_digests.last() != Some(&digest) {
-                return Err(RuntimeError::InvalidReplayJournalHead {
-                    block_id: block_id.to_string(),
-                    message: "conflicting replay journal metadata references the same block id"
-                        .into(),
-                });
-            }
-            continue;
-        }
-        ordered_block_ids.push(block_id);
-        expected_replay_key_digests.push(digest);
+    if !ordered_entries.is_empty() {
+        let run_index = run_paths.len();
+        run_paths.push(flush_sorted_replay_order_run(
+            scratch_dir.path(),
+            run_index,
+            &mut ordered_entries,
+        )?);
     }
-    if ordered_block_ids.is_empty() {
+    if run_paths.is_empty() {
+        return Err(RuntimeError::NoClusterableBlocks);
+    }
+    report_progress(
+        progress,
+        format!(
+            "Materialized {} replay-order scratch run(s) from {scanned_inputs} replay journal input(s)",
+            run_paths.len()
+        ),
+    );
+    let merged_entries_path = scratch_dir.path().join("ordered-replay.bin");
+    let total_items = merge_sorted_replay_order_runs(&run_paths, &merged_entries_path)?;
+    if total_items == 0 {
         return Err(RuntimeError::NoClusterableBlocks);
     }
     report_progress(
         progress,
         format!(
             "Loaded {} replay block id(s) from the replay journal without scanning the full block store",
-            ordered_block_ids.len()
+            total_items
         ),
     );
-    Ok(OrderedReplayBlockIds {
-        ordered_block_ids,
-        expected_replay_key_digests,
-    })
+    Ok(ReplayOrderStorage::new(
+        scratch_dir,
+        merged_entries_path,
+        total_items,
+    ))
+}
+
+fn flush_sorted_replay_order_run(
+    scratch_dir: &Path,
+    run_index: usize,
+    entries: &mut Vec<ReplayOrderEntry>,
+) -> Result<PathBuf, RuntimeError> {
+    entries.sort_unstable();
+    let path = scratch_dir.join(format!("run-{run_index:06}.bin"));
+    let file = File::create(&path).map_err(|source| RuntimeError::WriteReplayOrderScratch {
+        path: path.display().to_string(),
+        source,
+    })?;
+    let mut writer = BufWriter::new(file);
+    for entry in entries.iter().copied() {
+        entry
+            .write_to(&mut writer)
+            .map_err(|source| RuntimeError::WriteReplayOrderScratch {
+                path: path.display().to_string(),
+                source,
+            })?;
+    }
+    writer
+        .flush()
+        .map_err(|source| RuntimeError::WriteReplayOrderScratch {
+            path: path.display().to_string(),
+            source,
+        })?;
+    entries.clear();
+    Ok(path)
+}
+
+fn merge_sorted_replay_order_runs(
+    run_paths: &[PathBuf],
+    merged_entries_path: &Path,
+) -> Result<usize, RuntimeError> {
+    if run_paths.len() <= REPLAY_ORDER_MERGE_FAN_IN {
+        return merge_sorted_replay_order_run_group(run_paths, merged_entries_path);
+    }
+
+    let scratch_dir =
+        merged_entries_path
+            .parent()
+            .ok_or_else(|| RuntimeError::WriteReplayOrderScratch {
+                path: merged_entries_path.display().to_string(),
+                source: io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "merged replay-order path must have a parent directory",
+                ),
+            })?;
+    let mut pass_index = 0usize;
+    let mut current_paths = run_paths.to_vec();
+    while current_paths.len() > REPLAY_ORDER_MERGE_FAN_IN {
+        let mut next_paths = Vec::new();
+        for (group_index, group) in current_paths.chunks(REPLAY_ORDER_MERGE_FAN_IN).enumerate() {
+            let intermediate_path = scratch_dir.join(format!(
+                "merge-pass-{pass_index:02}-run-{group_index:06}.bin"
+            ));
+            merge_sorted_replay_order_run_group(group, &intermediate_path)?;
+            next_paths.push(intermediate_path);
+        }
+        current_paths = next_paths;
+        pass_index += 1;
+    }
+    merge_sorted_replay_order_run_group(&current_paths, merged_entries_path)
+}
+
+fn merge_sorted_replay_order_run_group(
+    run_paths: &[PathBuf],
+    merged_entries_path: &Path,
+) -> Result<usize, RuntimeError> {
+    let output = File::create(merged_entries_path).map_err(|source| {
+        RuntimeError::WriteReplayOrderScratch {
+            path: merged_entries_path.display().to_string(),
+            source,
+        }
+    })?;
+    let mut writer = BufWriter::new(output);
+    let mut readers = Vec::with_capacity(run_paths.len());
+    let mut heap = BinaryHeap::new();
+
+    for (run_index, path) in run_paths.iter().enumerate() {
+        let file = File::open(path).map_err(|source| RuntimeError::ReadReplayOrderScratch {
+            path: path.display().to_string(),
+            source,
+        })?;
+        let mut reader = BufReader::new(file);
+        if let Some(entry) = ReplayOrderEntry::read_from(&mut reader).map_err(|source| {
+            RuntimeError::ReadReplayOrderScratch {
+                path: path.display().to_string(),
+                source,
+            }
+        })? {
+            heap.push(ReplayOrderCursor { entry, run_index });
+        }
+        readers.push((path.clone(), reader));
+    }
+
+    let mut unique_entries = 0usize;
+    let mut previous_entry: Option<ReplayOrderEntry> = None;
+    while let Some(cursor) = heap.pop() {
+        let entry = cursor.entry;
+        if let Some(previous) = previous_entry {
+            if previous.block_id == entry.block_id {
+                if previous.digest != entry.digest {
+                    return Err(RuntimeError::InvalidReplayJournalHead {
+                        block_id: BlockHash::from_bytes(entry.block_id).to_string(),
+                        message: "conflicting replay journal metadata references the same block id"
+                            .into(),
+                    });
+                }
+            } else {
+                previous.write_to(&mut writer).map_err(|source| {
+                    RuntimeError::WriteReplayOrderScratch {
+                        path: merged_entries_path.display().to_string(),
+                        source,
+                    }
+                })?;
+                unique_entries += 1;
+                previous_entry = Some(entry);
+            }
+        } else {
+            previous_entry = Some(entry);
+        }
+
+        let (path, reader) = &mut readers[cursor.run_index];
+        if let Some(next_entry) = ReplayOrderEntry::read_from(reader).map_err(|source| {
+            RuntimeError::ReadReplayOrderScratch {
+                path: path.display().to_string(),
+                source,
+            }
+        })? {
+            heap.push(ReplayOrderCursor {
+                entry: next_entry,
+                run_index: cursor.run_index,
+            });
+        }
+    }
+
+    if let Some(previous) = previous_entry {
+        previous
+            .write_to(&mut writer)
+            .map_err(|source| RuntimeError::WriteReplayOrderScratch {
+                path: merged_entries_path.display().to_string(),
+                source,
+            })?;
+        unique_entries += 1;
+    }
+    writer
+        .flush()
+        .map_err(|source| RuntimeError::WriteReplayOrderScratch {
+            path: merged_entries_path.display().to_string(),
+            source,
+        })?;
+    Ok(unique_entries)
 }
 
 fn externalize_replay_batches_from_journal(
@@ -5163,6 +5552,7 @@ fn externalize_replay_batches_from_journal(
     embedding_spec: &EmbeddingSpec,
     max_concurrency: usize,
     mutable_ref_store: &MutableRefStoreLocation,
+    replay_order_scratch_root: &Path,
     progress: &ProgressReporter,
 ) -> Result<
     (
@@ -5171,28 +5561,28 @@ fn externalize_replay_batches_from_journal(
     ),
     RuntimeError,
 > {
-    let ordered_replay_block_ids =
-        collect_ordered_replay_block_ids_from_journal(store, mutable_ref_store, progress)?;
-    let total_items = ordered_replay_block_ids.ordered_block_ids.len();
-    let ordered_block_ids = Arc::new(ordered_replay_block_ids.ordered_block_ids);
-    let expected_replay_key_digests =
-        Arc::new(ordered_replay_block_ids.expected_replay_key_digests);
+    let replay_order = collect_ordered_replay_block_ids_from_journal(
+        store,
+        mutable_ref_store,
+        replay_order_scratch_root,
+        progress,
+    )?;
+    let total_items = replay_order.total_items();
     let current_batch_embeddings = Arc::new(Mutex::new(HashMap::new()));
     let fallback_embeddings = Arc::new(Mutex::new(None));
     Ok((
         ExternalizedReplayState {
-            ordered_block_ids: Arc::clone(&ordered_block_ids),
+            replay_order: replay_order.clone(),
             total_items,
             batch_size: max_concurrency.max(1),
             block_store: store.clone(),
             embedding_spec: embedding_spec.clone(),
-            expected_replay_key_digests: Arc::clone(&expected_replay_key_digests),
             current_batch_embeddings: Arc::clone(&current_batch_embeddings),
         },
         ExternalizedStoredLeafEmbeddingProvider {
             block_store: store.clone(),
             embedding_spec: embedding_spec.clone(),
-            ordered_block_ids,
+            replay_order,
             current_batch_embeddings,
             fallback_embeddings,
         },
@@ -5204,6 +5594,7 @@ async fn externalize_replay_batches_from_store_async(
     embedding_spec: EmbeddingSpec,
     max_concurrency: usize,
     mutable_ref_store: MutableRefStoreLocation,
+    replay_order_scratch_root: PathBuf,
     progress: ProgressReporter,
 ) -> Result<
     (
@@ -5218,6 +5609,7 @@ async fn externalize_replay_batches_from_store_async(
             &embedding_spec,
             max_concurrency,
             &mutable_ref_store,
+            &replay_order_scratch_root,
             &progress,
         )
     })
@@ -5254,24 +5646,23 @@ fn load_replay_batches_from_journal(
     mutable_ref_store: &MutableRefStoreLocation,
     progress: &ProgressReporter,
 ) -> Result<(Vec<ReplayBatch>, StoredLeafEmbeddingProvider), RuntimeError> {
-    let ordered_replay_block_ids =
-        collect_ordered_replay_block_ids_from_journal(store, mutable_ref_store, progress)?;
+    let replay_order_scratch_root = std::env::temp_dir().join("lexonarchivebuilder-replay-order");
+    let replay_order = collect_ordered_replay_block_ids_from_journal(
+        store,
+        mutable_ref_store,
+        replay_order_scratch_root.as_path(),
+        progress,
+    )?;
     let mut embeddings_by_input_hash = HashMap::new();
     let mut replay_batches = Vec::new();
     let batch_size = max_concurrency.max(1);
-    for (batch_index, chunk) in ordered_replay_block_ids
-        .ordered_block_ids
-        .chunks(batch_size)
-        .enumerate()
-    {
-        let start = batch_index * batch_size;
-        let end = start + chunk.len();
-        let batch = replay_batch_from_block_ids(
-            chunk,
-            store,
-            embedding_spec,
-            Some(&ordered_replay_block_ids.expected_replay_key_digests[start..end]),
-        )?;
+    let mut reader = replay_order.open_reader()?;
+    loop {
+        let entries = reader.read_next_entries(batch_size)?;
+        if entries.is_empty() {
+            break;
+        }
+        let batch = replay_batch_from_entries(&entries, store, embedding_spec)?;
         for (input_hash, embedding) in &batch.embeddings_by_input_hash {
             embeddings_by_input_hash.insert(*input_hash, embedding.clone());
         }
@@ -5803,6 +6194,17 @@ pub fn planning_pass_telemetry_path(request_path: &Path, summary_out: Option<&Pa
     adjacent_output_directory(anchor_path).join(base_name)
 }
 
+pub fn replay_order_scratch_root_path(request_path: &Path, summary_out: Option<&Path>) -> PathBuf {
+    let anchor_path = output_anchor_path(request_path, summary_out);
+    let base_name = anchor_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .map(|stem| format!("{stem}.replay-order"))
+        .unwrap_or_else(|| "replay-order".to_string());
+    adjacent_output_directory(anchor_path).join(base_name)
+}
+
 pub fn planner_state_root_path(request_path: &Path, summary_out: Option<&Path>) -> PathBuf {
     let anchor_path = output_anchor_path(request_path, summary_out);
     let base_name = anchor_path
@@ -5814,29 +6216,38 @@ pub fn planner_state_root_path(request_path: &Path, summary_out: Option<&Path>) 
     adjacent_output_directory(anchor_path).join(base_name)
 }
 
+fn replay_order_scratch_root_for_request_dir(request_dir: &Path) -> PathBuf {
+    request_dir.join("replay-order")
+}
+
 fn planner_state_root_for_request_dir(request_dir: &Path) -> PathBuf {
     request_dir.join("planner-state")
 }
 
-fn prepare_planner_state_root(path: &Path) -> Result<(), RuntimeError> {
-    fs::create_dir_all(path).map_err(|source| RuntimeError::PreparePlannerStateRoot {
-        path: path.display().to_string(),
-        source,
-    })?;
+fn prepare_writable_directory(path: &Path, probe_prefix: &str) -> io::Result<()> {
+    fs::create_dir_all(path)?;
     let mut probe = tempfile::Builder::new()
-        .prefix(".planner-state-write-probe-")
-        .tempfile_in(path)
-        .map_err(|source| RuntimeError::PreparePlannerStateRoot {
+        .prefix(probe_prefix)
+        .tempfile_in(path)?;
+    probe.write_all(&[0]).and_then(|_| probe.flush())
+}
+
+fn prepare_planner_state_root(path: &Path) -> Result<(), RuntimeError> {
+    prepare_writable_directory(path, ".planner-state-write-probe-").map_err(|source| {
+        RuntimeError::PreparePlannerStateRoot {
             path: path.display().to_string(),
             source,
-        })?;
-    probe
-        .write_all(&[0])
-        .and_then(|_| probe.flush())
-        .map_err(|source| RuntimeError::PreparePlannerStateRoot {
+        }
+    })
+}
+
+fn prepare_replay_order_scratch_root(path: &Path) -> Result<(), RuntimeError> {
+    prepare_writable_directory(path, ".replay-order-write-probe-").map_err(|source| {
+        RuntimeError::PrepareReplayOrderScratchRoot {
             path: path.display().to_string(),
             source,
-        })
+        }
+    })
 }
 
 pub fn write_clustering_failure_diagnostics_file(
@@ -5894,6 +6305,27 @@ mod tests {
         block_id: &BlockHash,
     ) -> Option<lexongraph_block::ValidatedBlock> {
         crate::block_store::block_on_block_store_future(store.get(block_id)).unwrap()
+    }
+
+    fn replay_order_storage_for_entries(entries: &[ReplayOrderEntry]) -> ReplayOrderStorage {
+        let scratch_dir = tempdir().unwrap();
+        let entries_path = scratch_dir.path().join("ordered-replay.bin");
+        let file = File::create(&entries_path).unwrap();
+        let mut writer = BufWriter::new(file);
+        for entry in entries.iter().copied() {
+            entry.write_to(&mut writer).unwrap();
+        }
+        writer.flush().unwrap();
+        ReplayOrderStorage::new(scratch_dir, entries_path, entries.len())
+    }
+
+    fn replay_order_storage_for_block_ids(block_ids: &[BlockHash]) -> ReplayOrderStorage {
+        let entries = block_ids
+            .iter()
+            .copied()
+            .map(|block_id| ReplayOrderEntry::new(block_id, BlockHash::from_bytes([0u8; 32])))
+            .collect::<Vec<_>>();
+        replay_order_storage_for_entries(&entries)
     }
 
     fn test_planning_pass_report(
@@ -6294,9 +6726,7 @@ mod tests {
             temp.path(),
             request,
             ClusteringConfigOverrides::default(),
-            None,
-            None,
-            None,
+            RunRequestArtifactPaths::default(),
             move |message| {
                 progress_capture.lock().unwrap().push(message);
             },
@@ -6413,9 +6843,7 @@ mod tests {
             temp.path(),
             request,
             ClusteringConfigOverrides::default(),
-            None,
-            None,
-            None,
+            RunRequestArtifactPaths::default(),
             move |message| {
                 progress_capture.lock().unwrap().push(message);
             },
@@ -6511,9 +6939,7 @@ mod tests {
             temp.path(),
             cluster_only_request,
             ClusteringConfigOverrides::default(),
-            None,
-            None,
-            None,
+            RunRequestArtifactPaths::default(),
             move |message| {
                 progress_capture.lock().unwrap().push(message);
             },
@@ -6681,9 +7107,7 @@ mod tests {
             temp.path(),
             request,
             ClusteringConfigOverrides::default(),
-            None,
-            None,
-            None,
+            RunRequestArtifactPaths::default(),
             move |message| {
                 progress_capture.lock().unwrap().push(message);
             },
@@ -6899,9 +7323,10 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let occupied = temp.path().join("occupied");
-        fs::write(&occupied, b"not a directory").unwrap();
-        let summary_out = occupied.join("summary.json");
+        let output_dir = temp.path().join("output");
+        fs::create_dir_all(&output_dir).unwrap();
+        fs::write(output_dir.join("summary.planner-state"), b"not a directory").unwrap();
+        let summary_out = output_dir.join("summary.json");
 
         let error = run_request_file_with_outputs(
             &request_path,
@@ -6928,23 +7353,24 @@ mod tests {
             serde_json::to_vec_pretty(&stored_leaf_clustering_request_json()).unwrap(),
         )
         .unwrap();
-        let occupied = temp.path().join("occupied");
-        fs::write(&occupied, b"not a directory").unwrap();
-        let summary_out = occupied.join("summary.json");
+        let output_dir = temp.path().join("output");
+        fs::create_dir_all(&output_dir).unwrap();
         let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
         let progress_capture = Arc::clone(&progress);
 
         let bytes = fs::read(&request_path).unwrap();
         let request: BatchRequest = serde_json::from_slice(&bytes).unwrap();
-        let diagnostics_path =
-            clustering_failure_diagnostics_path(&request_path, Some(summary_out.as_path()));
+        let blocked_parent = output_dir.join("blocked-parent");
+        fs::write(&blocked_parent, b"not a directory").unwrap();
+        let diagnostics_path = blocked_parent.join("summary.clustering-failure-diagnostics.json");
         let error = run_request_with_progress(
             temp.path(),
             request,
             ClusteringConfigOverrides::default(),
-            Some(diagnostics_path.as_path()),
-            None,
-            None,
+            RunRequestArtifactPaths {
+                diagnostics_path: Some(diagnostics_path.as_path()),
+                ..RunRequestArtifactPaths::default()
+            },
             move |message| {
                 progress_capture.lock().unwrap().push(message);
             },
@@ -6954,9 +7380,10 @@ mod tests {
 
         assert!(matches!(error, RuntimeError::ClusteringFailure { .. }));
         let progress = progress.lock().unwrap();
+        let diagnostics_path_text = diagnostics_path.display().to_string();
         assert!(progress.iter().any(|line| {
             line.contains("Failed to write clustering failure diagnostics to")
-                && line.contains("summary.clustering-failure-diagnostics.json")
+                && line.contains(&diagnostics_path_text)
         }));
         assert!(
             progress
@@ -7491,6 +7918,7 @@ mod tests {
     #[tokio::test]
     async fn validate_only_uses_summary_output_for_planner_state_root() {
         let temp = tempdir().unwrap();
+        fs::write(temp.path().join("alpha.txt"), b"alpha body\n").unwrap();
         let request_path = temp.path().join("request.json");
         fs::write(
             &request_path,
@@ -7520,9 +7948,10 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let occupied = temp.path().join("occupied");
-        fs::write(&occupied, b"not a directory").unwrap();
-        let summary_out = occupied.join("summary.json");
+        let output_dir = temp.path().join("output");
+        fs::create_dir_all(&output_dir).unwrap();
+        fs::write(output_dir.join("summary.planner-state"), b"not a directory").unwrap();
+        let summary_out = output_dir.join("summary.json");
 
         let error = validate_request_file_with_overrides(
             &request_path,
@@ -7537,6 +7966,59 @@ mod tests {
             panic!("expected planner-state-root preparation error");
         };
         assert!(path.ends_with("summary.planner-state"));
+    }
+
+    #[tokio::test]
+    async fn validate_only_uses_summary_output_for_replay_order_scratch_root() {
+        let temp = tempdir().unwrap();
+        fs::write(temp.path().join("alpha.txt"), b"alpha body\n").unwrap();
+        let request_path = temp.path().join("request.json");
+        fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&json!({
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": {
+                        "base_url": "http://unused.local",
+                        "model": "all-MiniLM-L6-v2",
+                        "request_timeout_secs": 5,
+                        "max_retries": 0,
+                        "retry_delay_ms": 1
+                    }
+                },
+                "embedding_spec": {
+                    "dims": 2,
+                    "encoding": "f32le"
+                },
+                "block_size_target": 65536,
+                "profile_version": "0.7.0",
+                "ref_name": TEST_REF_NAME,
+                "items": [
+                    { "kind": "document", "path": "alpha.txt", "metadata": {} }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let output_dir = temp.path().join("output");
+        fs::create_dir_all(&output_dir).unwrap();
+        fs::write(output_dir.join("summary.replay-order"), b"not a directory").unwrap();
+        let summary_out = output_dir.join("summary.json");
+
+        let error = validate_request_file_with_overrides(
+            &request_path,
+            None,
+            ClusteringConfigOverrides::default(),
+            Some(summary_out.as_path()),
+        )
+        .await
+        .unwrap_err();
+
+        let RuntimeError::PrepareReplayOrderScratchRoot { path, .. } = error else {
+            panic!("expected replay-order scratch root preparation error");
+        };
+        assert!(path.ends_with("summary.replay-order"));
     }
 
     #[test]
@@ -7607,6 +8089,24 @@ mod tests {
     }
 
     #[test]
+    fn replay_order_scratch_root_path_prefers_summary_output_directory() {
+        let request_path = Path::new("data").join("request.json");
+        let summary_path = Path::new("output").join("summary.json");
+        let path =
+            replay_order_scratch_root_path(request_path.as_path(), Some(summary_path.as_path()));
+
+        assert_eq!(path, Path::new("output").join("summary.replay-order"));
+    }
+
+    #[test]
+    fn replay_order_scratch_root_path_falls_back_to_request_directory() {
+        let request_path = Path::new("data").join("request.json");
+        let path = replay_order_scratch_root_path(request_path.as_path(), None);
+
+        assert_eq!(path, Path::new("data").join("request.replay-order"));
+    }
+
+    #[test]
     fn prepare_planner_state_root_probes_and_cleans_up_existing_directory() {
         let temp = tempdir().unwrap();
         let planner_state_root = temp.path().join("planner-state");
@@ -7616,6 +8116,79 @@ mod tests {
 
         let remaining_entries = fs::read_dir(&planner_state_root).unwrap().count();
         assert_eq!(remaining_entries, 0);
+    }
+
+    #[test]
+    fn prepare_replay_order_scratch_root_probes_and_cleans_up_existing_directory() {
+        let temp = tempdir().unwrap();
+        let replay_order_root = temp.path().join("replay-order");
+        fs::create_dir_all(&replay_order_root).unwrap();
+
+        prepare_replay_order_scratch_root(&replay_order_root).unwrap();
+
+        let remaining_entries = fs::read_dir(&replay_order_root).unwrap().count();
+        assert_eq!(remaining_entries, 0);
+    }
+
+    #[test]
+    fn merge_sorted_replay_order_runs_deduplicates_and_orders_entries() {
+        let scratch = tempdir().unwrap();
+        let block_a = BlockHash::from_bytes([1u8; 32]);
+        let block_b = BlockHash::from_bytes([2u8; 32]);
+        let block_c = BlockHash::from_bytes([3u8; 32]);
+        let digest_a = BlockHash::from_bytes([11u8; 32]);
+        let digest_b = BlockHash::from_bytes([12u8; 32]);
+        let digest_c = BlockHash::from_bytes([13u8; 32]);
+
+        let mut first_run = vec![
+            ReplayOrderEntry::new(block_c, digest_c),
+            ReplayOrderEntry::new(block_a, digest_a),
+        ];
+        let mut second_run = vec![
+            ReplayOrderEntry::new(block_b, digest_b),
+            ReplayOrderEntry::new(block_a, digest_a),
+        ];
+        let run_paths = vec![
+            flush_sorted_replay_order_run(scratch.path(), 0, &mut first_run).unwrap(),
+            flush_sorted_replay_order_run(scratch.path(), 1, &mut second_run).unwrap(),
+        ];
+
+        let merged_entries_path = scratch.path().join("ordered-replay.bin");
+        let total_items = merge_sorted_replay_order_runs(&run_paths, &merged_entries_path).unwrap();
+        assert_eq!(total_items, 3);
+
+        let storage = ReplayOrderStorage::new(scratch, merged_entries_path, total_items);
+        let entries = storage.read_all_entries().unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .copied()
+                .map(ReplayOrderEntry::block_hash)
+                .collect::<Vec<_>>(),
+            vec![block_a, block_b, block_c]
+        );
+    }
+
+    #[test]
+    fn merge_sorted_replay_order_runs_handles_more_runs_than_fan_in() {
+        let scratch = tempdir().unwrap();
+        let run_paths = (0..=REPLAY_ORDER_MERGE_FAN_IN)
+            .map(|index| {
+                let block = BlockHash::from_bytes([index as u8; 32]);
+                let digest = BlockHash::from_bytes([(index + 1) as u8; 32]);
+                let mut run = vec![ReplayOrderEntry::new(block, digest)];
+                flush_sorted_replay_order_run(scratch.path(), index, &mut run).unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        let merged_entries_path = scratch.path().join("ordered-replay-many.bin");
+        let total_items = merge_sorted_replay_order_runs(&run_paths, &merged_entries_path).unwrap();
+        assert_eq!(total_items, REPLAY_ORDER_MERGE_FAN_IN + 1);
+
+        let storage = ReplayOrderStorage::new(scratch, merged_entries_path, total_items);
+        let entries = storage.read_all_entries().unwrap();
+        assert_eq!(entries.len(), REPLAY_ORDER_MERGE_FAN_IN + 1);
+        assert!(entries.windows(2).all(|pair| pair[0] <= pair[1]));
     }
 
     #[test]
@@ -9461,6 +10034,7 @@ mod tests {
             &embedding_spec,
             1,
             &mutable_ref_store,
+            temp.path(),
             &progress,
         )
         .unwrap();
@@ -9470,7 +10044,7 @@ mod tests {
             vec![missing_block_id.to_string()]
         );
 
-        let mut iterator = replay_state.batch_iterator();
+        let mut iterator = replay_state.batch_iterator().unwrap();
         let error = iterator.next_batch().unwrap_err();
         assert!(
             matches!(error, RuntimeError::ReadReplayJournal { block_id, .. } if block_id == missing_block_id.to_string())
@@ -9556,10 +10130,11 @@ mod tests {
             &embedding_spec,
             1,
             &mutable_ref_store,
+            temp.path(),
             &progress,
         )
         .unwrap();
-        let mut iterator = replay_state.batch_iterator();
+        let mut iterator = replay_state.batch_iterator().unwrap();
         let batch = iterator.next_batch().unwrap().unwrap();
         assert_eq!(batch.items.len(), 1);
 
@@ -9656,7 +10231,7 @@ mod tests {
                 dims: 2,
                 encoding: "f32le".into(),
             },
-            ordered_block_ids: Arc::new(vec![alpha_block_id, beta_block_id]),
+            replay_order: replay_order_storage_for_block_ids(&[alpha_block_id, beta_block_id]),
             current_batch_embeddings: Arc::new(Mutex::new(HashMap::new())),
             fallback_embeddings: Arc::new(Mutex::new(None)),
         };
@@ -9733,7 +10308,10 @@ mod tests {
                 dims: 2,
                 encoding: "f32le".into(),
             },
-            ordered_block_ids: Arc::new(vec![BlockHash::from_bytes([9u8; 32]), block_id]),
+            replay_order: replay_order_storage_for_block_ids(&[
+                BlockHash::from_bytes([9u8; 32]),
+                block_id,
+            ]),
             current_batch_embeddings: Arc::new(Mutex::new(HashMap::new())),
             fallback_embeddings: Arc::new(Mutex::new(None)),
         };
@@ -9776,7 +10354,7 @@ mod tests {
                 dims: 2,
                 encoding: "f32le".into(),
             },
-            ordered_block_ids: Arc::new(ordered_block_ids),
+            replay_order: replay_order_storage_for_block_ids(&ordered_block_ids),
             current_batch_embeddings: Arc::new(Mutex::new(HashMap::new())),
             fallback_embeddings: Arc::new(Mutex::new(None)),
         };

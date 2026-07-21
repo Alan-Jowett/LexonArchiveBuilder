@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, in-memory replay block-id ordering simplification, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v2 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v2 intra-pass planning observability consumption, user-usable convergence-diagnosis surfacing, and latest-LexonGraph planner-state-root adoption for bounded-residency out-of-core planning spill
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, intra-pass planning telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, in-memory replay block-id ordering for deterministic replay submission, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v2 API when the selected published profile is `0.7.0`, and upstream planner-managed out-of-core planning-state spill for clustering-enabled v2 execution
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v2 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v2 intra-pass planning observability consumption, user-usable convergence-diagnosis surfacing, latest-LexonGraph planner-state-root adoption for bounded-residency out-of-core planning spill, and issue-83 replay-order memory decoupling from corpus size
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, intra-pass planning telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, bounded-residency deterministic replay ordering for deterministic replay submission, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v2 API when the selected published profile is `0.7.0`, and upstream planner-managed out-of-core planning-state spill for clustering-enabled v2 execution
 
 ## USER-REQUEST
 
@@ -386,6 +386,20 @@
   planner-state-root selector for this increment; instead, it should derive the
   delegated v2 planner-state root automatically from the existing request-
   adjacent artifact/output locations.
+- **UR-251 [KNOWN]:** Fix issue #83: the first observed post-planner-spill memory
+  hotspot is repository-owned replay-order preparation, whose memory use should
+  no longer scale with corpus size before delegated planning begins.
+- **UR-252 [KNOWN]:** The acceptance target for fixing issue #83 is that memory
+  usage should not scale with size of corpora.
+- **UR-253 [KNOWN]:** For fixing issue #83, repository-owned replay ordering may
+  use bounded externalized state when needed to keep replay-order preparation
+  memory independent of corpus size.
+- **UR-254 [INFERRED]:** Any issue-83 fix must preserve deterministic replay
+  ordering, the existing stage contract, and unchanged MCP search or retrieval
+  behavior for already-indexed content.
+- **UR-255 [INFERRED]:** Any repository-owned externalized replay-order state
+  approved for issue #83 must remain semantically separate from the delegated
+  planner-state root and from upstream-owned planner spill internals.
 
 ## Change Manifest
 
@@ -496,6 +510,8 @@
 | CM-INDEXER-103 | Revise | Refresh the approved latest-LexonGraph upgrade target to include the upstream streaming-indexer v2 planner-state-root and out-of-core planning-state capability introduced by commit `e8dde151993f1b576ff64b0a551fc13df231414c` | UR-244, UR-246, UR-247 |
 | CM-INDEXER-104 | Add | Require clustering-enabled v2 execution to derive a writable delegated planner-state root from existing request-adjacent artifact/output locations, treat the resulting out-of-core planning data as upstream-owned opaque state, and fail explicitly when that root is unusable without adding a new caller-visible selector | UR-245, UR-247, UR-249, UR-250 |
 | CM-INDEXER-105 | Revise | Clarify that upstream planner-managed out-of-core planning spill is approved for bounded-residency v2 planning while repository-owned deterministic replay ordering remains the existing in-memory raw block-id path with no new repository-owned spill catalog | UR-212, UR-217, UR-246, UR-248 |
+| CM-INDEXER-106 | Revise | Replace the mandatory in-memory-only replay-order catalog with a bounded-residency deterministic replay-ordering contract that may use repository-owned externalized state when needed to keep memory independent of corpus size | UR-251, UR-252, UR-253, UR-254 |
+| CM-INDEXER-107 | Add | Require any repository-owned replay-order externalization approved for issue #83 to remain deterministic, journal-driven, payload-free, environment-neutral, and semantically separate from delegated planner-state spill | UR-212, UR-216, UR-219, UR-254, UR-255 |
 
 ## Before / After
 
@@ -1106,6 +1122,19 @@
   artifact policy, with explicit failure when that derived root is unusable and
   no new caller-visible selector.
 
+### BA-INDEXER-105
+
+- **Before [KNOWN]:** The requirements still treated repository-owned replay
+  ordering as an in-memory-only raw block-id catalog, so large clustering-only
+  runs could satisfy deterministic replay semantics while still retaining
+  corpus-scale resident ordering state before delegated planner spill became
+  relevant.
+- **After [KNOWN]:** The requirements now treat issue #83 as a replay-order
+  memory correction: deterministic replay ordering must remain journal-driven
+  and payload-free, but repository-owned replay-order preparation may use
+  bounded externalized state when needed so resident memory no longer scales
+  with corpus size and remains separate from delegated planner-state spill.
+
 ## Requirements
 
 ### Functional Requirements
@@ -1183,37 +1212,45 @@ than available system memory.
   content-type-specific corpus-scale retention exceptions.
 - **Traceability:** UR-47, UR-48, UR-59, UR-160, UR-210, UR-211, UR-213, UR-214
 
-#### RQ-INDEXER-003A2 - In-memory raw block-id ordering
+#### RQ-INDEXER-003A2 - Bounded-residency deterministic replay ordering
 
 LexonArchiveBuilder SHALL realize replay-journal-driven deterministic ordering
-for this increment by retaining the unique raw block-id ordering plus any
-fixed-size per-block journal-integrity digests needed to validate replay
-metadata in memory, and SHALL NOT introduce SQLite, spill files, or other
-repository-owned externalized ordering storage.
+through a bounded-residency strategy whose live resident memory does not scale
+with total replay-input corpus size.
 
 - **Ordering algorithm [KNOWN]:** The runtime SHALL walk the replay list,
   gather referenced block ids, sort that list, dedupe it, and use the
   resulting unique block-id order as the deterministic order for classification
   and finalization.
+- **Residency rule [KNOWN]:** When corpora exceed available RAM, replay-order
+  preparation SHALL keep repository-owned resident memory bounded
+  independently of total replay-input count rather than retaining a
+  corpus-scale in-memory ordering catalog.
 - **Payload boundary [KNOWN]:** Actual block state such as embeddings, decoded
   block bytes, or equivalent derived payload state SHALL be loaded from the
   shared `BlockStore` on demand while that ordered block-id list is processed
   rather than being cached as part of replay-order preparation.
 - **Integrity boundary [KNOWN]:** Additional retained replay-order state, when
-  present, SHALL remain limited to fixed-size journal-integrity digests derived
-  from replay-audit metadata rather than decoded payload blocks, embeddings, or
-  other corpus-scale variable-size state.
+  present, SHALL remain limited to raw block identities, fixed-size journal-
+  integrity digests, or equivalent compact validation evidence rather than
+  decoded payload blocks, embeddings, or other corpus-scale variable-size
+  state.
 - **Replay-walk boundary [KNOWN]:** Building that ordered block-id list SHALL
   read replay-audit journal blocks and recorded block ids only; it SHALL NOT
   fetch referenced payload blocks during replay-list generation.
-- **Simplicity rule [KNOWN]:** The approved fix for this increment is the
-  simplest in-memory raw block-id list that satisfies deterministic replay; a
-  repository-owned SQLite catalog, spill file, or equivalent externalized
-  ordering store is out of scope.
+- **Externalization rule [KNOWN]:** Repository-owned externalized ordering state
+  is approved when needed to satisfy the bounded-residency contract, provided
+  that the externalized representation remains deterministic, derives only from
+  replay-audit ordering inputs, and does not become a payload cache or a new
+  MCP-facing artifact family.
+- **Separation rule [INFERRED]:** Any repository-owned externalized replay-order
+  state SHALL remain semantically separate from the delegated planner-state
+  root and SHALL NOT depend on upstream-owned planner spill formats,
+  filenames, or lifecycle assumptions.
 - **Parity rule [INFERRED]:** This ordering rule SHALL apply consistently
   across local/testing and production-oriented profiles rather than creating
   environment-specific replay-order behavior.
-- **Traceability:** UR-48, UR-160, UR-210, UR-211, UR-212, UR-213, UR-214, UR-215, UR-216, UR-217, UR-218
+- **Traceability:** UR-48, UR-160, UR-210, UR-211, UR-212, UR-213, UR-214, UR-215, UR-216, UR-218, UR-219, UR-251, UR-252, UR-253, UR-254, UR-255
 
 #### RQ-INDEXER-003A3 - Delegated planner-state-root and out-of-core planning spill
 
@@ -1236,8 +1273,8 @@ out-of-core planning state beneath that root.
   request-adjacent artifact/output policy.
 - **Replay-order boundary [KNOWN]:** This delegated spill approval does not
   relax `RQ-INDEXER-003A2`; repository-owned deterministic replay ordering
-  SHALL remain the approved in-memory raw block-id path rather than growing a
-  repository-owned spill catalog or SQLite store.
+  remains a separate repository-owned bounded-residency concern and SHALL NOT
+  be conflated with the delegated planner-state-root artifact family.
 - **Failure rule [INFERRED]:** If the delegated v2 run cannot establish or use
   the required planner-state root, LexonArchiveBuilder SHALL fail explicitly
   rather than silently falling back to unbounded resident planning state,
@@ -2437,7 +2474,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 | Copy idempotence remains subordinate to immutable block semantics | Preserved with explicit operator-selected tradeoff | Requirements keep read-before-write classification as the default rooted-copy path, allow an opt-in blind-write mode that still treats duplicate publication as safe operator behavior, and now permit bounded asynchronous destination writes without changing rooted reachability or truthful mode-specific outcome semantics |
 | Clustering configuration remains explicit and replayable | Preserved with revised contract | Requirements now treat the selected published profile version as the replay-relevant clustering input, make `0.7.0` the repository default, and constrain the chosen upstream integration surface to follow that effective profile selection rather than a repository-local mode, algorithm, and option tuple |
 | Clustering-size behavior remains deterministic under the selected profile | Preserved with scoped local/testing exception | Normal batch behavior still assigns clustering cardinality to the selected published profile version, while the approved `0.7.0` ladder adds one repository-local deterministic rung table for local/testing evaluation only |
-| Large-corpus indexing remains memory-bounded at the repository orchestration layer | Revised with clarified delegation boundary | Requirements now keep repository-owned replay orchestration on the in-memory deduped raw block-id path while approving delegated v2 planner-managed out-of-core planning state beneath a writable planner-state root, preserving bounded repository-owned residency without reintroducing repository-owned spill catalogs |
+| Large-corpus indexing remains memory-bounded at the repository orchestration layer | Revised with issue-83 replay-order correction | Requirements now permit repository-owned replay ordering to use bounded externalized state when needed so resident memory no longer scales with corpus size, while still keeping delegated v2 planner-managed out-of-core planning state separate beneath the writable planner-state root |
 | Clustering-only replay does not require whole-store rediscovery | Revised with authoritative immutable audit artifact | Requirements now require a shared-BlockStore immutable replay-audit journal as the sole repository-owned replay authority and remove whole-store scan fallback |
 | Repository-owned progress artifacts stay aligned with immutable storage principles | Preserved with stronger alignment | Requirements now move replay and audit state onto immutable hash-addressed blocks plus a mutable head reference, matching the repository's broader storage model instead of retaining a special append-only file journal |
 | Required repository capabilities remain distinguishable from upstream regressions during the latest upgrade | Preserved with clarified scope | The requirements now force the upgrade to classify missing capabilities explicitly instead of silently narrowing split-stage replay, published-profile adoption, progress projection, or MCP-facing behavior |
@@ -2486,9 +2523,10 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - **Q-INDEXER-079 [UNKNOWN]:** Should a future increment add repository-documented recommended `RUST_LOG` filter presets for common debugging cases such as Azure Table transport, retry behavior, or HTTP wire visibility, or is raw operator-selected filtering sufficient?
 - **Q-INDEXER-080 [UNKNOWN]:** Should a future rooted-copy increment expose backend-specific blind-write optimizations more granularly, or is one repository-wide opt-in mode sufficient as long as the default preserves exact copied-versus-skipped accounting?
 - **Q-INDEXER-081 [UNKNOWN]:** After the first bounded-write increment lands with default limit `64`, should a future increment keep one shared repository-wide destination-write default across block-store backends, or allow backend-specific recommended defaults while preserving the same CLI surface?
-- **Q-INDEXER-082 [UNKNOWN]:** At what observed unique-block-id scale, if any,
-  should the repository revisit the approved in-memory raw block-id ordering
-  approach for clustering-only replay?
+- **Q-INDEXER-082 [UNKNOWN]:** After approving bounded repository-owned
+  replay-order externalization for issue #83, should a future increment keep
+  the strategy fully automatic under the existing memory-budget contract, or
+  expose an operator-visible threshold or mode selector?
 - **Q-INDEXER-083 [UNKNOWN]:** For the preferred dedicated pass-end convergence
   telemetry sink, should the first approved realization default to a sibling
   file beside the request or summary artifacts, a distinct process output
@@ -2720,6 +2758,8 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   - user clarification in this session: "see commit
     e8dde151993f1b576ff64b0a551fc13df231414c"
   - user clarification in this session selecting: "Derive it automatically from existing request/output paths"
+  - user request in this session: "fix #83. Goal is that memory usage should not scale with size of corpora"
+  - user clarification in this session selecting: "Allow bounded repository-owned externalized state when needed (Recommended)"
 - **Excluded for now [KNOWN]:**
   - Detailed Rust implementation file paths, crate manifests, Docker assets, and test artifacts, because this requirements document captures the semantic contract and leaves implementation realization to downstream design, validation, and code-review artifacts
   - Exact normalized email CBOR schema, exact duplicated chunk metadata list, and the specific chunking library choice, because those belong to downstream design and validation artifacts rather than requirements
