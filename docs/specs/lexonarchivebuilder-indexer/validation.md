@@ -22,8 +22,8 @@ upstream `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, 0.6.x published-profile
 evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
 experiment automation, upstream embedding-readback
-API adoption, LAB-owned replay-journaled split-stage recovery, bounded-
-residency deterministic replay ordering, and layer-parallel block-construction
+API adoption, LAB-owned replay-journaled split-stage recovery, bounded-residency
+deterministic replay ordering, and layer-parallel block-construction
 evolution, v2 custom-block adoption for
 repository-owned non-search artifacts, and conditional streaming-indexer v2
 adoption with repository-default published profile `0.7.0`, plus derived
@@ -54,8 +54,9 @@ block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted CLI
 search over stored trees, rooted block-store copy tooling, replay-stable fingerprinting, LAB-owned replay-journaled
 split-stage recovery, bounded-residency deterministic replay ordering for
-clustering replay, derived planner-state-root support for delegated bounded-
-residency out-of-core planning spill, and leaf-layer parallel block scheduling
+clustering replay, derived planner-state-root support for delegated
+bounded-residency out-of-core planning spill, and leaf-layer parallel block
+scheduling
 in the local/testing profile.
 
 This package validates LexonArchiveBuilder's batch contract, adapter selection, and
