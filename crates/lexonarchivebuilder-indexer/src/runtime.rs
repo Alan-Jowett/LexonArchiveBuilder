@@ -605,6 +605,8 @@ pub enum RuntimeError {
         #[source]
         source: io::Error,
     },
+    #[error("v2 clustering run is missing the prepared planner-state root")]
+    MissingPlannerStateRoot,
     #[error("failed to write mutable ref store {path}: {source}")]
     WriteMutableRefStore {
         path: String,
@@ -2428,6 +2430,7 @@ pub async fn validate_request_file_with_overrides(
     request_path: &Path,
     stage_override: Option<ExecutionStage>,
     clustering_overrides: ClusteringConfigOverrides,
+    summary_out: Option<&Path>,
 ) -> Result<(), RuntimeError> {
     let bytes = fs::read(request_path).map_err(|source| RuntimeError::ReadRequest {
         path: request_path.display().to_string(),
@@ -2445,7 +2448,7 @@ pub async fn validate_request_file_with_overrides(
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
-    let planner_state_root = planner_state_root_path(request_path, None);
+    let planner_state_root = planner_state_root_path(request_path, summary_out);
     tokio::task::spawn_blocking(move || {
         validate_request_with_overrides(
             &request_dir,
@@ -4816,7 +4819,7 @@ where
         config
             .planner_state_root
             .as_deref()
-            .expect("v2 runs should prepare a planner-state root"),
+            .ok_or(RuntimeError::MissingPlannerStateRoot)?,
     )?;
     if let Some(observer) = observer {
         indexer = indexer.with_observer(observer);
@@ -7458,6 +7461,7 @@ mod tests {
             &request_path,
             None,
             ClusteringConfigOverrides::default(),
+            None,
         )
         .await
         .unwrap_err();
@@ -7468,6 +7472,57 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("requires cluster_count 64"));
         assert!(message.contains("block size target 65536"));
+    }
+
+    #[tokio::test]
+    async fn validate_only_uses_summary_output_for_planner_state_root() {
+        let temp = tempdir().unwrap();
+        let request_path = temp.path().join("request.json");
+        fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&json!({
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": {
+                        "base_url": "http://unused.local",
+                        "model": "all-MiniLM-L6-v2",
+                        "request_timeout_secs": 5,
+                        "max_retries": 0,
+                        "retry_delay_ms": 1
+                    }
+                },
+                "embedding_spec": {
+                    "dims": 2,
+                    "encoding": "f32le"
+                },
+                "block_size_target": 65536,
+                "profile_version": "0.7.0",
+                "ref_name": TEST_REF_NAME,
+                "items": [
+                    { "kind": "document", "path": "alpha.txt", "metadata": {} }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let occupied = temp.path().join("occupied");
+        fs::write(&occupied, b"not a directory").unwrap();
+        let summary_out = occupied.join("summary.json");
+
+        let error = validate_request_file_with_overrides(
+            &request_path,
+            None,
+            ClusteringConfigOverrides::default(),
+            Some(summary_out.as_path()),
+        )
+        .await
+        .unwrap_err();
+
+        let RuntimeError::PreparePlannerStateRoot { path, .. } = error else {
+            panic!("expected planner-state-root preparation error");
+        };
+        assert!(path.ends_with("summary.planner-state"));
     }
 
     #[test]

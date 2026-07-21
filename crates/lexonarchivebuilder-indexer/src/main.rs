@@ -414,9 +414,14 @@ async fn main() -> anyhow::Result<()> {
             clustering,
         } => {
             if validate_only {
-                validate_request_file_with_overrides(&request, stage, clustering)
-                    .await
-                    .with_context(|| format!("failed to validate request {}", request.display()))?;
+                validate_request_file_with_overrides(
+                    &request,
+                    stage,
+                    clustering,
+                    summary_out.as_deref(),
+                )
+                .await
+                .with_context(|| format!("failed to validate request {}", request.display()))?;
                 println!("Validation OK");
             } else {
                 let summary = run_request_file_with_outputs(
