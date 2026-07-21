@@ -199,9 +199,9 @@ lifecycle using streaming or segmented replay shapes whose live working set is
 bounded independently of total corpus size.
 
 For replay-journal-driven deterministic ordering, the approved retained state is
-either a bounded in-memory working window over compact ordering entries or a
-small-workload in-memory fast path that still stays within the same caller-
-selected memory budget. In both cases the runtime excludes decoded blocks,
+a bounded in-memory working window over compact ordering entries that feeds the
+externalized replay-order scratch files while staying within the same caller-
+selected memory budget. In that working window the runtime excludes decoded blocks,
 embeddings, and equivalent payload state from replay-order preparation.
 
 When resident memory would otherwise grow with corpus size, the design shifts
@@ -219,9 +219,7 @@ compatibility finding rather than normalizing unbounded retention in-repo.
 ### DSG-LFI-001A2 `Run-scoped replay-order external sort strategy`
 
 LexonArchiveBuilder realizes replay-journal-driven deterministic ordering as a
-deterministic flat-file external sort/merge strategy, with an optional
-small-workload in-memory fast path only when that fast path already satisfies
-the same bounded-residency contract.
+deterministic flat-file external sort/merge strategy.
 
 The runtime walks the immutable replay-audit journal and derives one compact
 ordering entry per replay input containing only the referenced block hash plus

@@ -1243,9 +1243,6 @@ with total replay-input corpus size.
   that the externalized representation remains deterministic, derives only from
   replay-audit ordering inputs, and does not become a payload cache or a new
   MCP-facing artifact family.
-- **Preference rule [INFERRED]:** LexonArchiveBuilder SHOULD still prefer the
-  simplest non-externalized realization when it already satisfies the approved
-  bounded-residency contract for the current workload.
 - **Separation rule [INFERRED]:** Any repository-owned externalized replay-order
   state SHALL remain semantically separate from the delegated planner-state
   root and SHALL NOT depend on upstream-owned planner spill formats,
