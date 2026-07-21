@@ -228,7 +228,10 @@ their recorded block ids without dereferencing payload blocks during replay-list
 generation, sorts and dedupes those ids into the approved deterministic order,
 excludes artifacts outside the approved replay-input surface, and performs
 clustering or block assembly without requiring a prior LexonArchiveBuilder
-summary manifest.
+summary manifest. Replay submission reconstructs delegated replay content from
+the stored replayable leaf blocks rather than by reopening request-era source
+files or rerunning normalized-email chunk derivation through resolver-owned
+paths.
 
 **Traces to:** RQ-INDEXER-002, RQ-INDEXER-003E, RQ-INDEXER-003E1,
 RQ-INDEXER-003E3, RQ-INDEXER-004F, RQ-INDEXER-010A, DSG-LFI-001E,
@@ -261,10 +264,11 @@ embeddings into resident memory at once, and without allowing resident memory
 to scale with total replay-input count. Validation evidence shows the runtime
 reads replay-audit blocks only during replay-list generation, keeps live memory
 bounded to compact ordering windows plus merge buffers, leaves payload fetches
-to later classification or finalization processing, and—when the effective path
-is v2—keeps any delegated planner-managed out-of-core files confined to the
-derived planner-state root rather than using them as a replay-ordering
-catalog.
+to later classification or finalization processing, uses stored replayable leaf
+content rather than resolver-driven source rematerialization during replay
+submission, and—when the effective path is v2—keeps any delegated
+planner-managed out-of-core files confined to the derived planner-state root
+rather than using them as a replay-ordering catalog.
 
 **Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A2, RQ-INDEXER-003A3,
 RQ-INDEXER-003E, RQ-INDEXER-003E1, RQ-INDEXER-003E3, DSG-LFI-001A1,
@@ -289,6 +293,25 @@ fails explicitly rather than silently reverting to corpus-scale resident replay
 ordering.
 
 **Traces to:** RQ-INDEXER-003A2, DSG-LFI-001A2, DSG-LFI-001A3
+
+### VAL-LFI-002I4
+
+Run a full-pipeline or ingestion-plus-clustering stage that persists both
+document-derived and mailbox-derived replayable leaf outputs, then remove or
+invalidate the original request-era source files before running the
+clustering-plus-block-assembly stage against the resulting replay-journal head.
+
+**Pass condition:** LexonArchiveBuilder successfully reconstructs and submits
+delegated replay inputs for both content classes from the stored replayable
+leaf blocks plus replay metadata already present in the configured block-store
+snapshot. Validation evidence shows clustering-only replay no longer depends on
+reopening request-era document paths, no longer requires normalized-email
+artifact decode plus rechunking as the replay content transport, and still
+preserves provenance plus replay-validation identity needed for diagnostics and
+deterministic fingerprints.
+
+**Traces to:** RQ-INDEXER-003E, RQ-INDEXER-003E1, RQ-INDEXER-003E4,
+RQ-INDEXER-004F, RQ-INDEXER-010A, DSG-LFI-001E, DSG-LFI-001F
 
 ### VAL-LFI-002J
 

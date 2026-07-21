@@ -56,6 +56,7 @@ use crate::mailbox::{MailboxExpansionError, expand_mailbox_item_with_stats};
 use crate::paths::resolve_path;
 use crate::resolver::{
     ContentRef, LocalFilesystemContentResolver, LocalFilesystemContentResolverError,
+    ReplayIdentity, normalize_document_identity_path,
 };
 use crate::tree_tools::{decode_embedding_values, parse_block_hash};
 
@@ -1875,7 +1876,7 @@ fn handle_v2_planning_pass_completion(
 fn clustering_failure_input(item: &IndexItem<ContentRef>) -> ClusteringFailureInput {
     match &item.content_ref {
         ContentRef::Document { path } => {
-            let source_path = path.to_string_lossy().replace('\\', "/");
+            let source_path = normalize_document_identity_path(&path.to_string_lossy());
             ClusteringFailureInput::Document {
                 logical_id: format!("document:{source_path}"),
                 source_path,
@@ -1888,6 +1889,23 @@ fn clustering_failure_input(item: &IndexItem<ContentRef>) -> ClusteringFailureIn
                 media_type: media_type.clone(),
             }
         }
+        ContentRef::StoredReplay { identity, .. } => match identity {
+            ReplayIdentity::Document { source_path } => {
+                let source_path = normalize_document_identity_path(source_path);
+                ClusteringFailureInput::Document {
+                    logical_id: format!("document:{source_path}"),
+                    source_path,
+                }
+            }
+            ReplayIdentity::EmailChunk {
+                email_artifact_ref,
+                chunk_index,
+            } => ClusteringFailureInput::EmailChunk {
+                logical_id: format!("email-chunk:{email_artifact_ref}:{chunk_index}"),
+                email_artifact_ref: email_artifact_ref.clone(),
+                chunk_index: *chunk_index,
+            },
+        },
         ContentRef::EmailChunk {
             email_artifact_ref,
             chunk_index,
@@ -3397,10 +3415,22 @@ fn sort_replay_journal_records(records: &mut [ReplayJournalRecord]) {
 
 fn replay_sort_key(item: &IndexItem<ContentRef>) -> (String, Vec<(String, String)>) {
     let content_key = match &item.content_ref {
-        ContentRef::Document { path } => format!("document:{}", path.to_string_lossy()),
+        ContentRef::Document { path } => format!(
+            "document:{}",
+            normalize_document_identity_path(&path.to_string_lossy())
+        ),
         ContentRef::Inline { media_type, body } => {
             format!("inline:{media_type}:{:?}", body)
         }
+        ContentRef::StoredReplay { identity, .. } => match identity {
+            ReplayIdentity::Document { source_path } => {
+                format!("document:{}", normalize_document_identity_path(source_path))
+            }
+            ReplayIdentity::EmailChunk {
+                email_artifact_ref,
+                chunk_index,
+            } => format!("email:{email_artifact_ref}:{chunk_index:020}"),
+        },
         ContentRef::EmailChunk {
             email_artifact_ref,
             chunk_index,
@@ -4288,6 +4318,18 @@ fn replay_journal_record_from_item(
         ContentRef::Inline { media_type, body } => ReplayJournalContentRef::Inline {
             media_type: media_type.clone(),
             body: body.clone(),
+        },
+        ContentRef::StoredReplay { identity, .. } => match identity {
+            ReplayIdentity::Document { source_path } => ReplayJournalContentRef::Document {
+                path: normalize_document_identity_path(source_path),
+            },
+            ReplayIdentity::EmailChunk {
+                email_artifact_ref,
+                chunk_index,
+            } => ReplayJournalContentRef::EmailChunk {
+                email_artifact_ref: email_artifact_ref.clone(),
+                chunk_index: *chunk_index,
+            },
         },
         ContentRef::EmailChunk {
             email_artifact_ref,
@@ -5733,8 +5775,12 @@ fn replay_item_from_validated_block(
                     block_id: validated.hash.to_string(),
                 });
             };
-            ContentRef::Document {
-                path: source_path.into(),
+            ContentRef::StoredReplay {
+                media_type: entry.content.media_type.clone(),
+                body: entry.content.body.clone(),
+                identity: ReplayIdentity::Document {
+                    source_path: source_path.clone(),
+                },
             }
         }
         "email" => {
@@ -5751,9 +5797,13 @@ fn replay_item_from_validated_block(
                     block_id: validated.hash.to_string(),
                 });
             };
-            ContentRef::EmailChunk {
-                email_artifact_ref: email_artifact_ref.clone(),
-                chunk_index,
+            ContentRef::StoredReplay {
+                media_type: entry.content.media_type.clone(),
+                body: entry.content.body.clone(),
+                identity: ReplayIdentity::EmailChunk {
+                    email_artifact_ref: email_artifact_ref.clone(),
+                    chunk_index,
+                },
             }
         }
         _ => return Ok(None),
@@ -6305,6 +6355,12 @@ mod tests {
         block_id: &BlockHash,
     ) -> Option<lexongraph_block::ValidatedBlock> {
         crate::block_store::block_on_block_store_future(store.get(block_id)).unwrap()
+    }
+
+    fn local_block_path(root: &Path, block_id: &str) -> PathBuf {
+        root.join(&block_id[..2])
+            .join(&block_id[2..4])
+            .join(format!("{block_id}.cbor"))
     }
 
     fn replay_order_storage_for_entries(entries: &[ReplayOrderEntry]) -> ReplayOrderStorage {
@@ -7523,6 +7579,8 @@ mod tests {
             ],
         };
         let seeded = run_request(temp.path(), full_request).await.unwrap();
+        fs::remove_file(&document_a).unwrap();
+        fs::remove_file(&document_b).unwrap();
 
         let cluster_only_request = BatchRequest {
             environment: EnvironmentConfig::Local {
@@ -7558,6 +7616,115 @@ mod tests {
         assert_eq!(first.root_id, seeded.root_id);
         assert_eq!(second.root_id, seeded.root_id);
         assert_eq!(first.block_ids, second.block_ids);
+        server.join();
+    }
+
+    #[tokio::test]
+    async fn clustering_only_stage_reuses_stored_email_leaf_content_without_artifact_decode() {
+        let temp = tempdir().unwrap();
+        let mailbox_path = temp.path().join("2026-01.mbox");
+        fs::write(
+            &mailbox_path,
+            b"From user@example.com Sat Jan 01 00:00:00 2026\nSubject: Hello\n\nBody\n",
+        )
+        .unwrap();
+
+        let server = spawn_embedding_server(1);
+        let full_request = BatchRequest {
+            environment: EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: server.base_url.clone(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            block_size_target: 65_536,
+            stage: ExecutionStage::FullPipeline,
+            profile_version: PUBLISHED_PROFILE_V0_1_0,
+            max_concurrency: None,
+            ref_name: TEST_REF_NAME.into(),
+            items: vec![BatchItemConfig::Mailbox {
+                path: mailbox_path
+                    .strip_prefix(temp.path())
+                    .unwrap()
+                    .to_path_buf(),
+                metadata: BTreeMap::new(),
+            }],
+        };
+        let seeded = run_request(temp.path(), full_request).await.unwrap();
+
+        let block_store_root = temp.path().join("blocks");
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
+        let block_store = ConfiguredBlockStore::from_environment(
+            temp.path(),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: String::new(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+        )
+        .unwrap();
+        let email_artifact_ref = load_replay_journal_records(&block_store, &mutable_ref_store)
+            .unwrap()
+            .into_iter()
+            .find_map(|record| match record {
+                ReplayJournalRecord::ReplayInput {
+                    content_ref:
+                        ReplayJournalContentRef::EmailChunk {
+                            email_artifact_ref, ..
+                        },
+                    ..
+                } => Some(email_artifact_ref),
+                _ => None,
+            })
+            .unwrap();
+        fs::remove_file(&mailbox_path).unwrap();
+        fs::remove_file(local_block_path(&block_store_root, &email_artifact_ref)).unwrap();
+
+        let clustering = run_request(
+            temp.path(),
+            BatchRequest {
+                environment: EnvironmentConfig::Local {
+                    block_store_root: Path::new("blocks").to_path_buf(),
+                    embedding: LocalEmbeddingConfig {
+                        base_url: String::new(),
+                        model: "all-MiniLM-L6-v2".into(),
+                        api_key_env: None,
+                        request_timeout_secs: 5,
+                        max_retries: 0,
+                        retry_delay_ms: 1,
+                    },
+                },
+                embedding_spec: EmbeddingSpecConfig {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                block_size_target: 65_536,
+                stage: ExecutionStage::ClusteringAndBlockAssembly,
+                profile_version: PUBLISHED_PROFILE_V0_1_0,
+                max_concurrency: None,
+                ref_name: TEST_REF_NAME.into(),
+                items: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(clustering.root_id, seeded.root_id);
         server.join();
     }
 
@@ -9983,6 +10150,39 @@ mod tests {
     }
 
     #[test]
+    fn stored_replay_document_identity_normalizes_windows_paths() {
+        let item = IndexItem {
+            metadata: vec![],
+            content_ref: ContentRef::StoredReplay {
+                media_type: "text/plain".into(),
+                body: b"alpha".to_vec(),
+                identity: ReplayIdentity::Document {
+                    source_path: r"C:\temp\alpha.txt".into(),
+                },
+            },
+        };
+
+        assert_eq!(
+            clustering_failure_input(&item),
+            ClusteringFailureInput::Document {
+                logical_id: "document:C:/temp/alpha.txt".into(),
+                source_path: "C:/temp/alpha.txt".into(),
+            }
+        );
+        assert_eq!(
+            replay_sort_key(&item).0,
+            "document:C:/temp/alpha.txt".to_string()
+        );
+        assert!(matches!(
+            replay_journal_record_from_item(BlockHash::from_bytes([7u8; 32]), &item),
+            ReplayJournalRecord::ReplayInput {
+                content_ref: ReplayJournalContentRef::Document { path },
+                ..
+            } if path == "C:/temp/alpha.txt"
+        ));
+    }
+
+    #[test]
     fn externalized_replay_state_defers_payload_reads_until_batch_processing() {
         let temp = tempdir().unwrap();
         let block_store = ConfiguredBlockStore::from_environment(
@@ -10109,6 +10309,16 @@ mod tests {
         let (item, _) = replay_item_from_validated_block(&validated, &embedding_spec)
             .unwrap()
             .unwrap();
+        assert!(matches!(
+            &item.content_ref,
+            ContentRef::StoredReplay {
+                media_type,
+                body,
+                identity: ReplayIdentity::Document { source_path },
+            } if media_type == "text/plain"
+                && body == b"alpha"
+                && source_path == "C:/docs/alpha.txt"
+        ));
         let replay_journal_head_block_id = append_replay_journal_records(
             &block_store,
             &mutable_ref_store,

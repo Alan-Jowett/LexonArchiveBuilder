@@ -512,6 +512,10 @@
 | CM-INDEXER-105 | Revise | Clarify that upstream planner-managed out-of-core planning spill is approved for bounded-residency v2 planning while repository-owned deterministic replay ordering remains the existing in-memory raw block-id path with no new repository-owned spill catalog | UR-212, UR-217, UR-246, UR-248 |
 | CM-INDEXER-106 | Revise | Replace the mandatory in-memory-only replay-order catalog with a bounded-residency deterministic replay-ordering contract that may use repository-owned externalized state when needed to keep memory independent of corpus size | UR-251, UR-252, UR-253, UR-254 |
 | CM-INDEXER-107 | Add | Require any repository-owned replay-order externalization approved for issue #83 to remain deterministic, journal-driven, payload-free, environment-neutral, and semantically separate from delegated planner-state spill | UR-212, UR-216, UR-219, UR-254, UR-255 |
+| CM-INDEXER-108 | Revise | Tighten standalone clustering replay so delegated replay inputs are reconstructed from stored replayable leaf blocks rather than by reopening request-era source references through resolver-owned paths | UR-39, UR-160, UR-163, UR-166 |
+| CM-INDEXER-109 | Add | Require clustering-only replay to remain executable from the stored block-store snapshot once replayable leaf outputs are durable, without depending on original request-era source availability | UR-39, UR-160, UR-163, UR-166 |
+| CM-INDEXER-110 | Add | Preserve provenance and replay-validation identity metadata for clustering-only replay without making metadata-only refs the execution dependency for replayed content reconstruction | UR-16, UR-23, UR-45, UR-49 |
+| CM-INDEXER-111 | Add | Require validation coverage for source-independent document and email-derived clustering-only replay using stored leaf content rather than resolver-driven content rematerialization | UR-39, UR-160, UR-163, UR-166 |
 
 ## Before / After
 
@@ -1135,6 +1139,53 @@
   bounded externalized state when needed so resident memory no longer scales
   with corpus size and remains separate from delegated planner-state spill.
 
+### BA-INDEXER-106
+
+- **Before [KNOWN]:** Standalone clustering requirements said replay inputs are
+  reconstructed from the authoritative replay journal and stored outputs, but
+  they did not explicitly forbid replay from reopening request-era source
+  files or rematerializing email chunk content through resolver-owned artifact
+  decode and rechunking paths.
+- **After [KNOWN]:** The requirements now explicitly constrain clustering-only
+  replay to reconstruct delegated replay content from the stored replayable
+  leaf blocks themselves, while treating request-era source refs and similar
+  metadata as provenance or replay-validation state rather than the primary
+  replay content source.
+
+### BA-INDEXER-107
+
+- **Before [KNOWN]:** The requirements did not state whether clustering-only
+  replay must continue to function after the original request-era documents,
+  mailboxes, or equivalent source containers become unavailable.
+- **After [KNOWN]:** The requirements now explicitly require clustering-only
+  replay to remain executable from the configured block-store snapshot plus
+  replay metadata once replayable leaf outputs are durably stored and surfaced
+  by the authoritative replay journal.
+
+### BA-INDEXER-108
+
+- **Before [KNOWN]:** Replay metadata such as source paths, normalized-email
+  artifact refs, and chunk locators was required for deterministic identity and
+  diagnostics, but the requirements did not clearly separate that role from the
+  runtime's responsibility to reconstruct replayed delegated content.
+- **After [KNOWN]:** The requirements now explicitly separate provenance and
+  replay-validation identity metadata from the stored replay content transport,
+  preserving diagnostics and stable fingerprints without allowing metadata-only
+  refs to force resolver-driven content rematerialization during clustering-only
+  replay.
+
+### BA-INDEXER-109
+
+- **Before [KNOWN]:** Validation covered authoritative replay discovery,
+  deterministic replay ordering, and bounded replay-order residency, but it did
+  not explicitly require coverage for the regression where clustering-only
+  replay reuses stored embeddings while still rematerializing content through
+  resolver paths.
+- **After [KNOWN]:** Validation now explicitly covers document and email-derived
+  clustering-only replay using stored replayable leaf content without source-
+  file reopening, normalized-email rechunking, or equivalent resolver-driven
+  rematerialization.
+
 ## Requirements
 
 ### Functional Requirements
@@ -1364,6 +1415,12 @@ snapshot.
   repository-owned replay-audit journal blocks and their recorded ids without
   dereferencing the referenced payload blocks until later classification or
   finalization processing.
+- **Replay execution boundary [KNOWN]:** After standalone clustering derives the
+  deterministic replayable leaf block-id order, later replay submission SHALL
+  reconstruct delegated replay inputs from the stored replayable leaf blocks
+  themselves rather than by reopening request-era source files or rerunning
+  source-artifact normalization or chunk derivation through resolver-owned
+  paths.
 - **Filtering boundary [INFERRED]:** Blocks or artifacts outside the approved
   clustering-input surface, including repository-owned artifact classes that
   are not valid clustering inputs, are outside this requirement's input set.
@@ -1394,12 +1451,24 @@ environments.
 - **Authority boundary [KNOWN]:** The immutable replay-audit journal SHALL be
   the sole repository-owned authority for replay discovery in this increment;
   whole-store scan fallback is not an approved recovery path.
+- **Source-independence implication [KNOWN]:** Once replayable leaf outputs
+  have been durably persisted and surfaced by the selected replay-journal head,
+  clustering-only replay SHALL remain executable from the configured
+  block-store snapshot plus replay metadata without requiring the original
+  request-era documents, mailboxes, or equivalent source containers to remain
+  present or readable.
 - **Environment scope [KNOWN]:** The same journal contract SHALL apply through
   the shared `BlockStore` boundary in both local/testing and production-
   oriented environments rather than diverging by environment.
 - **Ownership boundary [KNOWN]:** The journal is a LexonArchiveBuilder-owned
   orchestration artifact and SHALL NOT redefine LexonGraph-owned block
   identity, embedding, or replay-validation semantics.
+- **Metadata boundary [KNOWN]:** Replay metadata may preserve source paths,
+  normalized-email artifact refs, chunk locators, and equivalent provenance or
+  replay-validation identity, but clustering-only replay SHALL NOT require
+  those metadata-only refs to act as the primary replay content transport when
+  stored replayable leaf content is already present through the shared
+  `BlockStore`.
 - **Content-model constraint [INFERRED]:** The journal contract SHALL remain
   generic enough that future content types can emit replayable completion
   records without reshaping the batch contract around mailbox-only or

@@ -23,6 +23,17 @@ use crate::mailbox::{
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReplayIdentity {
+    Document {
+        source_path: String,
+    },
+    EmailChunk {
+        email_artifact_ref: String,
+        chunk_index: usize,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ContentRef {
     Document {
         path: PathBuf,
@@ -30,6 +41,11 @@ pub enum ContentRef {
     Inline {
         media_type: String,
         body: Vec<u8>,
+    },
+    StoredReplay {
+        media_type: String,
+        body: Vec<u8>,
+        identity: ReplayIdentity,
     },
     EmailChunk {
         email_artifact_ref: String,
@@ -52,6 +68,10 @@ impl LocalFilesystemContentResolver {
             email_chunk_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
+}
+
+pub(crate) fn normalize_document_identity_path(path: &str) -> String {
+    path.replace('\\', "/")
 }
 
 #[derive(Debug, Error)]
@@ -109,6 +129,12 @@ impl ContentResolver<ContentRef> for LocalFilesystemContentResolver {
                 media_type: media_type.clone(),
                 body: body.clone(),
             }),
+            ContentRef::StoredReplay {
+                media_type, body, ..
+            } => Ok(Content {
+                media_type: media_type.clone(),
+                body: body.clone(),
+            }),
             ContentRef::EmailChunk {
                 email_artifact_ref,
                 chunk_index,
@@ -124,7 +150,11 @@ impl ContentResolver<ContentRef> for LocalFilesystemContentResolver {
     fn fingerprint(&self, content_ref: &ContentRef) -> Result<BlockHash, Self::Error> {
         let fingerprint = match content_ref {
             ContentRef::Document { path } => hash_bytes(
-                format!("document:{}", path.to_string_lossy().replace('\\', "/")).as_bytes(),
+                format!(
+                    "document:{}",
+                    normalize_document_identity_path(&path.to_string_lossy())
+                )
+                .as_bytes(),
             ),
             ContentRef::Inline { media_type, body } => {
                 let mut bytes = media_type.as_bytes().to_vec();
@@ -132,6 +162,18 @@ impl ContentResolver<ContentRef> for LocalFilesystemContentResolver {
                 bytes.extend_from_slice(body);
                 hash_bytes(&bytes)
             }
+            ContentRef::StoredReplay { identity, .. } => match identity {
+                ReplayIdentity::Document { source_path } => hash_bytes(
+                    format!("document:{}", normalize_document_identity_path(source_path))
+                        .as_bytes(),
+                ),
+                ReplayIdentity::EmailChunk {
+                    email_artifact_ref,
+                    chunk_index,
+                } => {
+                    hash_bytes(format!("email-chunk:{email_artifact_ref}:{chunk_index}").as_bytes())
+                }
+            },
             ContentRef::EmailChunk {
                 email_artifact_ref,
                 chunk_index,
@@ -593,6 +635,30 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(resolver.email_chunk_cache.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn stored_replay_resolution_preserves_bytes_and_original_document_fingerprint() {
+        let dir = tempdir().unwrap();
+        let resolver = LocalFilesystemContentResolver::new(local_store(dir.path().join("blocks")));
+        let content_ref = ContentRef::StoredReplay {
+            media_type: "text/plain".into(),
+            body: b"alpha".to_vec(),
+            identity: ReplayIdentity::Document {
+                source_path: "C:\\docs\\alpha.txt".into(),
+            },
+        };
+
+        let content = resolver.resolve(&content_ref).unwrap();
+        assert_eq!(content.body, b"alpha");
+        assert_eq!(
+            resolver.fingerprint(&content_ref).unwrap(),
+            resolver
+                .fingerprint(&ContentRef::Document {
+                    path: PathBuf::from("C:\\docs\\alpha.txt"),
+                })
+                .unwrap()
+        );
     }
 
     fn local_store(path: PathBuf) -> ConfiguredBlockStore {
