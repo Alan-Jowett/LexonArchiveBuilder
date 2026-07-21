@@ -27,7 +27,8 @@ replay-journaled split-stage recovery, in-memory replay block-id ordering
 simplification, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
 non-search artifacts, plus conditional streaming-indexer v2 adoption with
-repository-default published profile `0.7.0`, in
+repository-default published profile `0.7.0` and derived planner-state-root
+support for delegated bounded-residency out-of-core planning spill, in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md`.
 
 ## Scope
@@ -53,8 +54,9 @@ clustering-failure diagnostics, rooted block-tree quality assessment with
 rooted TNN-recall diagnostics, rooted query access-cost reporting,
 rooted CLI search over stored trees, replay-stable delegated item identity,
 LAB-owned replay-journaled split-stage recovery, in-memory replay block-id
-ordering for deterministic clustering replay, and layer-parallel delegated
-block construction for the local/testing profile.
+ordering for deterministic clustering replay, derived planner-state-root
+support for delegated bounded-residency out-of-core planning spill, and
+layer-parallel delegated block construction for the local/testing profile.
 
 This document is layered on top of:
 
@@ -227,6 +229,33 @@ and it does not introduce SQLite, spill files, or equivalent repository-owned
 externalized ordering storage.
 
 **Traces to:** RQ-INDEXER-003A2, RQ-INDEXER-003E, RQ-INDEXER-003E1, RQ-INDEXER-003E3
+
+### DSG-LFI-001A3 `Derived delegated planner-state root`
+
+For effective-`0.7.0` clustering-enabled runs that route through
+`StreamingIndexingRunV2`, LexonArchiveBuilder derives the required delegated
+planner-state root from the same request-adjacent artifact policy already used
+for repository-owned diagnostics and planning telemetry.
+
+The derivation rule is:
+
+- when `--summary-out` is present, place the delegated planner-state root under
+  that directory
+- otherwise, place it under the `--request` file directory
+- materialize one run-scoped child directory so delegated planner scratch state
+  does not collide with summary or telemetry artifacts in the parent directory
+
+LexonArchiveBuilder does not expose a new CLI flag or `BatchRequest` field for
+this path in this increment. It treats the contents beneath the derived root as
+opaque upstream-owned planner state rather than as repository-owned artifacts or
+an interpretable spill format.
+
+If the runtime cannot create or use the derived root, the v2 run fails
+explicitly before claiming a success-shaped clustering outcome. This keeps the
+repository-owned contract stable while satisfying the new upstream writable-root
+requirement without broadening the external batch surface.
+
+**Traces to:** RQ-INDEXER-003A3, RQ-INDEXER-010A
 
 ### DSG-LFI-001B `Leaf-layer scheduling discipline`
 
@@ -538,6 +567,11 @@ upgrade whenever the latest upstream contract still supports them semantically:
 - additive pass-end telemetry that identifies the effective profile plus
   delegated contract family and exposes enough planning summary detail to judge
   whether repeated planning passes are converging
+- derived provision of the upstream-required planner-state root from the
+  existing request-adjacent artifact/output policy, without introducing a new
+  caller-visible selector
+- bounded-residency delegated out-of-core planning spill beneath that derived
+  root while preserving the repository-owned in-memory replay-ordering rule
 - unchanged MCP search-serving behavior for already-indexed content
 - temporary explicit tracking of upstream `main` to pick up new published
   profiles and wgpu acceleration quickly
@@ -547,7 +581,7 @@ the implementation must surface that as an explicit compatibility finding or
 upstream regression rather than silently deleting the affected repository-owned
 behavior.
 
-**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003I, RQ-INDEXER-009, RQ-INDEXER-010A
+**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003I, RQ-INDEXER-003A3, RQ-INDEXER-009, RQ-INDEXER-010A
 
 ### DSG-LFI-001I1 `Conditional streaming-indexer v2 selection`
 
@@ -569,7 +603,11 @@ In this increment:
   orchestration keeps replaying full planning passes until
   `mark_planning_complete()` succeeds or an upstream/runtime error occurs,
   rather than assuming one completed pass is always sufficient
-- the request and CLI selector surface stays unchanged across both paths
+- the request and CLI selector surface stays unchanged across both paths, with
+  no new caller-visible planner-state-root field
+- the v2 path derives the upstream-required planner-state root from the same
+  request-adjacent artifact policy already used for summary and telemetry
+  outputs
 - the selection decision is made once per invocation and remains fixed for all
   replay passes, planning completion, and final materialization
 - that one-time routing decision is surfaced through the run-identity tuple used
@@ -581,7 +619,7 @@ repository adopt the upstream true-streaming v2 surface only where the upstream
 contract currently supports it, without imposing a repository-local one-pass
 planning assumption onto large-corpus v2 runs.
 
-**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003I, RQ-INDEXER-010A
+**Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003I, RQ-INDEXER-003A3, RQ-INDEXER-010A
 
 ### DSG-LFI-002 `Batch runtime shape`
 

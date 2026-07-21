@@ -374,6 +374,7 @@ struct StreamingStageConfig {
     clustering: ConfiguredClustering,
     block_size_target: usize,
     submission_progress_kind: SubmissionProgressKind,
+    planner_state_root: Option<PathBuf>,
 }
 
 type ReplayedLeaf = (IndexItem<ContentRef>, Vec<u8>);
@@ -598,6 +599,14 @@ pub enum RuntimeError {
         #[source]
         source: io::Error,
     },
+    #[error("failed to prepare planner state root {path}: {source}")]
+    PreparePlannerStateRoot {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("v2 clustering run is missing the prepared planner-state root")]
+    MissingPlannerStateRoot,
     #[error("failed to write mutable ref store {path}: {source}")]
     WriteMutableRefStore {
         path: String,
@@ -2401,6 +2410,7 @@ pub async fn run_request_file_with_outputs(
     let request_dir = request_path.parent().unwrap_or_else(|| Path::new("."));
     let diagnostics_path = clustering_failure_diagnostics_path(request_path, summary_out);
     let planning_pass_path = planning_pass_telemetry_path(request_path, summary_out);
+    let planner_state_root = planner_state_root_path(request_path, summary_out);
 
     run_request_with_progress(
         request_dir,
@@ -2408,6 +2418,7 @@ pub async fn run_request_file_with_outputs(
         clustering_overrides,
         Some(diagnostics_path.as_path()),
         Some(planning_pass_path.as_path()),
+        Some(planner_state_root.as_path()),
         |message| {
             eprintln!("{message}");
         },
@@ -2419,6 +2430,7 @@ pub async fn validate_request_file_with_overrides(
     request_path: &Path,
     stage_override: Option<ExecutionStage>,
     clustering_overrides: ClusteringConfigOverrides,
+    summary_out: Option<&Path>,
 ) -> Result<(), RuntimeError> {
     let bytes = fs::read(request_path).map_err(|source| RuntimeError::ReadRequest {
         path: request_path.display().to_string(),
@@ -2436,8 +2448,14 @@ pub async fn validate_request_file_with_overrides(
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
+    let planner_state_root = planner_state_root_path(request_path, summary_out);
     tokio::task::spawn_blocking(move || {
-        validate_request_with_overrides(&request_dir, request, clustering_overrides)
+        validate_request_with_overrides(
+            &request_dir,
+            request,
+            clustering_overrides,
+            Some(planner_state_root.as_path()),
+        )
     })
     .await
     .map_err(RuntimeError::BlockingMutableRefTaskJoin)?
@@ -2461,6 +2479,7 @@ pub async fn run_request_with_overrides(
         clustering_overrides,
         None,
         None,
+        None,
         |message| eprintln!("{message}"),
     )
     .await
@@ -2470,6 +2489,7 @@ fn validate_request_with_overrides(
     request_dir: &Path,
     request: BatchRequest,
     clustering_overrides: ClusteringConfigOverrides,
+    planner_state_root: Option<&Path>,
 ) -> Result<(), RuntimeError> {
     request.validate()?;
     let clustering = clustering_overrides
@@ -2482,6 +2502,10 @@ fn validate_request_with_overrides(
 
     if stage.includes_clustering() {
         if uses_streaming_indexer_v2(&clustering) {
+            let planner_state_root = planner_state_root
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| planner_state_root_for_request_dir(request_dir));
+            prepare_planner_state_root(&planner_state_root)?;
             let _: StreamingIndexingRunV2<ContentRef, _, _> =
                 StreamingIndexingRunV2::with_published_profile(
                     ValidateOnlyResolver,
@@ -2489,6 +2513,7 @@ fn validate_request_with_overrides(
                     clustering.profile_version,
                     request.to_embedding_spec(),
                     request.block_size_target,
+                    planner_state_root.as_path(),
                 )?;
         } else {
             let profile = resolved_published_profile(&clustering)?;
@@ -2526,6 +2551,7 @@ async fn run_request_with_progress<F>(
     clustering_overrides: ClusteringConfigOverrides,
     diagnostics_path: Option<&Path>,
     planning_pass_telemetry_path: Option<&Path>,
+    planner_state_root: Option<&Path>,
     progress: F,
 ) -> Result<BatchSummary, RuntimeError>
 where
@@ -2541,6 +2567,16 @@ where
         .environment
         .resolve_mutable_ref_store(request_dir, &request.ref_name);
     let mutable_ref_metadata = mutable_ref_store_metadata(stage, &clustering);
+    let planner_state_root =
+        if stage.includes_clustering() && uses_streaming_indexer_v2(&clustering) {
+            let path = planner_state_root
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| planner_state_root_for_request_dir(request_dir));
+            prepare_planner_state_root(&path)?;
+            Some(path)
+        } else {
+            None
+        };
     let planning_telemetry = stage
         .includes_clustering()
         .then(|| PlanningTelemetryContext {
@@ -2626,6 +2662,7 @@ where
                 clustering,
                 block_size_target: request.block_size_target,
                 submission_progress_kind: SubmissionProgressKind::Replay,
+                planner_state_root: planner_state_root.clone(),
             },
             replay_state,
             &block_store,
@@ -2655,6 +2692,7 @@ where
                 clustering,
                 block_size_target: request.block_size_target,
                 submission_progress_kind: SubmissionProgressKind::Replay,
+                planner_state_root: planner_state_root.clone(),
             },
             replay_state,
             &block_store,
@@ -4778,6 +4816,10 @@ where
         config.clustering.profile_version,
         embedding_spec.clone(),
         config.block_size_target,
+        config
+            .planner_state_root
+            .as_deref()
+            .ok_or(RuntimeError::MissingPlannerStateRoot)?,
     )?;
     if let Some(observer) = observer {
         indexer = indexer.with_observer(observer);
@@ -5727,6 +5769,10 @@ fn adjacent_output_directory(path: &Path) -> &Path {
         .unwrap_or_else(|| Path::new(""))
 }
 
+fn output_anchor_path<'a>(request_path: &'a Path, summary_out: Option<&'a Path>) -> &'a Path {
+    summary_out.unwrap_or(request_path)
+}
+
 fn parent_directory_to_create(path: &Path) -> Option<&Path> {
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -5736,7 +5782,7 @@ pub fn clustering_failure_diagnostics_path(
     request_path: &Path,
     summary_out: Option<&Path>,
 ) -> PathBuf {
-    let anchor_path = summary_out.unwrap_or(request_path);
+    let anchor_path = output_anchor_path(request_path, summary_out);
     let base_name = anchor_path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -5747,7 +5793,7 @@ pub fn clustering_failure_diagnostics_path(
 }
 
 pub fn planning_pass_telemetry_path(request_path: &Path, summary_out: Option<&Path>) -> PathBuf {
-    let anchor_path = summary_out.unwrap_or(request_path);
+    let anchor_path = output_anchor_path(request_path, summary_out);
     let base_name = anchor_path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -5755,6 +5801,42 @@ pub fn planning_pass_telemetry_path(request_path: &Path, summary_out: Option<&Pa
         .map(|stem| format!("{stem}.planning-pass-telemetry.jsonl"))
         .unwrap_or_else(|| "planning-pass-telemetry.jsonl".to_string());
     adjacent_output_directory(anchor_path).join(base_name)
+}
+
+pub fn planner_state_root_path(request_path: &Path, summary_out: Option<&Path>) -> PathBuf {
+    let anchor_path = output_anchor_path(request_path, summary_out);
+    let base_name = anchor_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .map(|stem| format!("{stem}.planner-state"))
+        .unwrap_or_else(|| "planner-state".to_string());
+    adjacent_output_directory(anchor_path).join(base_name)
+}
+
+fn planner_state_root_for_request_dir(request_dir: &Path) -> PathBuf {
+    request_dir.join("planner-state")
+}
+
+fn prepare_planner_state_root(path: &Path) -> Result<(), RuntimeError> {
+    fs::create_dir_all(path).map_err(|source| RuntimeError::PreparePlannerStateRoot {
+        path: path.display().to_string(),
+        source,
+    })?;
+    let mut probe = tempfile::Builder::new()
+        .prefix(".planner-state-write-probe-")
+        .tempfile_in(path)
+        .map_err(|source| RuntimeError::PreparePlannerStateRoot {
+            path: path.display().to_string(),
+            source,
+        })?;
+    probe
+        .write_all(&[0])
+        .and_then(|_| probe.flush())
+        .map_err(|source| RuntimeError::PreparePlannerStateRoot {
+            path: path.display().to_string(),
+            source,
+        })
 }
 
 pub fn write_clustering_failure_diagnostics_file(
@@ -5985,6 +6067,7 @@ mod tests {
             fallback_count: None,
             pending_partition_count: None,
             v2_pending_partitions: None,
+            v2_completed_pass_summary: None,
             suspected_stall: None,
             elapsed,
             last_progress_at: None,
@@ -6005,6 +6088,11 @@ mod tests {
             observed_replay_progress,
             routing_bucket_fill_counts,
             trainer_subphase,
+            ready_axis_plan_count: None,
+            total_axis_plan_count: None,
+            populated_cell_count: None,
+            realized_cell_count: None,
+            planner_state_fingerprint_hex: String::new(),
         }
     }
 
@@ -6208,6 +6296,7 @@ mod tests {
             ClusteringConfigOverrides::default(),
             None,
             None,
+            None,
             move |message| {
                 progress_capture.lock().unwrap().push(message);
             },
@@ -6326,6 +6415,7 @@ mod tests {
             ClusteringConfigOverrides::default(),
             None,
             None,
+            None,
             move |message| {
                 progress_capture.lock().unwrap().push(message);
             },
@@ -6421,6 +6511,7 @@ mod tests {
             temp.path(),
             cluster_only_request,
             ClusteringConfigOverrides::default(),
+            None,
             None,
             None,
             move |message| {
@@ -6592,6 +6683,7 @@ mod tests {
             ClusteringConfigOverrides::default(),
             None,
             None,
+            None,
             move |message| {
                 progress_capture.lock().unwrap().push(message);
             },
@@ -6758,6 +6850,7 @@ mod tests {
             .path()
             .join("output")
             .join("summary.planning-pass-telemetry.jsonl");
+        let planner_state_root = temp.path().join("output").join("summary.planner-state");
         let written = fs::read_to_string(&telemetry_path).unwrap();
         assert!(written.contains("\"effective_profile_version\":\"0.7.0\""));
         assert!(written.contains("\"delegated_contract_family\":\"v2\""));
@@ -6765,7 +6858,64 @@ mod tests {
         assert!(written.contains("\"telemetry_kind\":\"pass-summary\""));
         assert!(written.contains("\"planning_completion_state\":\"complete\""));
         assert!(written.contains("\"completed_pass_count\":1"));
+        assert!(planner_state_root.is_dir());
         server.join();
+    }
+
+    #[tokio::test]
+    async fn request_file_v2_run_fails_when_derived_planner_state_root_is_unusable() {
+        let temp = tempdir().unwrap();
+        let alpha_path = temp.path().join("alpha.txt");
+        let beta_path = temp.path().join("beta.txt");
+        fs::write(&alpha_path, b"alpha body\n").unwrap();
+        fs::write(&beta_path, b"beta body\n").unwrap();
+        let request_path = temp.path().join("request.json");
+        fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&json!({
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": {
+                        "base_url": "http://unused.local",
+                        "model": "all-MiniLM-L6-v2",
+                        "request_timeout_secs": 5,
+                        "max_retries": 0,
+                        "retry_delay_ms": 1
+                    }
+                },
+                "embedding_spec": {
+                    "dims": 2,
+                    "encoding": "f32le"
+                },
+                "block_size_target": 65536,
+                "profile_version": "0.7.0",
+                "ref_name": TEST_REF_NAME,
+                "items": [
+                    { "kind": "document", "path": "alpha.txt", "metadata": {} },
+                    { "kind": "document", "path": "beta.txt", "metadata": {} }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let occupied = temp.path().join("occupied");
+        fs::write(&occupied, b"not a directory").unwrap();
+        let summary_out = occupied.join("summary.json");
+
+        let error = run_request_file_with_outputs(
+            &request_path,
+            None,
+            ClusteringConfigOverrides::default(),
+            Some(summary_out.as_path()),
+        )
+        .await
+        .unwrap_err();
+
+        let RuntimeError::PreparePlannerStateRoot { path, .. } = error else {
+            panic!("expected planner-state-root preparation error");
+        };
+        assert!(path.ends_with("summary.planner-state"));
     }
 
     #[tokio::test]
@@ -6793,6 +6943,7 @@ mod tests {
             request,
             ClusteringConfigOverrides::default(),
             Some(diagnostics_path.as_path()),
+            None,
             None,
             move |message| {
                 progress_capture.lock().unwrap().push(message);
@@ -7324,6 +7475,7 @@ mod tests {
             &request_path,
             None,
             ClusteringConfigOverrides::default(),
+            None,
         )
         .await
         .unwrap_err();
@@ -7334,6 +7486,57 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("requires cluster_count 64"));
         assert!(message.contains("block size target 65536"));
+    }
+
+    #[tokio::test]
+    async fn validate_only_uses_summary_output_for_planner_state_root() {
+        let temp = tempdir().unwrap();
+        let request_path = temp.path().join("request.json");
+        fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&json!({
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": {
+                        "base_url": "http://unused.local",
+                        "model": "all-MiniLM-L6-v2",
+                        "request_timeout_secs": 5,
+                        "max_retries": 0,
+                        "retry_delay_ms": 1
+                    }
+                },
+                "embedding_spec": {
+                    "dims": 2,
+                    "encoding": "f32le"
+                },
+                "block_size_target": 65536,
+                "profile_version": "0.7.0",
+                "ref_name": TEST_REF_NAME,
+                "items": [
+                    { "kind": "document", "path": "alpha.txt", "metadata": {} }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let occupied = temp.path().join("occupied");
+        fs::write(&occupied, b"not a directory").unwrap();
+        let summary_out = occupied.join("summary.json");
+
+        let error = validate_request_file_with_overrides(
+            &request_path,
+            None,
+            ClusteringConfigOverrides::default(),
+            Some(summary_out.as_path()),
+        )
+        .await
+        .unwrap_err();
+
+        let RuntimeError::PreparePlannerStateRoot { path, .. } = error else {
+            panic!("expected planner-state-root preparation error");
+        };
+        assert!(path.ends_with("summary.planner-state"));
     }
 
     #[test]
@@ -7384,6 +7587,35 @@ mod tests {
             path,
             Path::new("data").join("request.planning-pass-telemetry.jsonl")
         );
+    }
+
+    #[test]
+    fn planner_state_root_path_prefers_summary_output_directory() {
+        let request_path = Path::new("data").join("request.json");
+        let summary_path = Path::new("output").join("summary.json");
+        let path = planner_state_root_path(request_path.as_path(), Some(summary_path.as_path()));
+
+        assert_eq!(path, Path::new("output").join("summary.planner-state"));
+    }
+
+    #[test]
+    fn planner_state_root_path_falls_back_to_request_directory() {
+        let request_path = Path::new("data").join("request.json");
+        let path = planner_state_root_path(request_path.as_path(), None);
+
+        assert_eq!(path, Path::new("data").join("request.planner-state"));
+    }
+
+    #[test]
+    fn prepare_planner_state_root_probes_and_cleans_up_existing_directory() {
+        let temp = tempdir().unwrap();
+        let planner_state_root = temp.path().join("planner-state");
+        fs::create_dir_all(&planner_state_root).unwrap();
+
+        prepare_planner_state_root(&planner_state_root).unwrap();
+
+        let remaining_entries = fs::read_dir(&planner_state_root).unwrap().count();
+        assert_eq!(remaining_entries, 0);
     }
 
     #[test]

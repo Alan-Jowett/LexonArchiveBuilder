@@ -35,6 +35,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
@@ -42,5 +43,4 @@ tokio.workspace = true
 futures.workspace = true
 lexongraph-embeddings-trait = { workspace = true, features = ["conformance"] }
 lexongraph-streaming-indexer = { workspace = true, features = ["conformance"] }
-tempfile.workspace = true
 tokio.workspace = true

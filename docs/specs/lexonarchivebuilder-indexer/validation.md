@@ -26,7 +26,9 @@ API adoption, LAB-owned replay-journaled split-stage recovery, in-memory replay
 block-id ordering simplification, and layer-parallel block-construction
 evolution, v2 custom-block adoption for
 repository-owned non-search artifacts, and conditional streaming-indexer v2
-adoption with repository-default published profile `0.7.0` in
+adoption with repository-default published profile `0.7.0`, plus derived
+planner-state-root support for delegated bounded-residency out-of-core planning
+spill, in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md` and
 `docs/specs/lexonarchivebuilder-indexer/design.md`.
 
@@ -52,8 +54,9 @@ block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted CLI
 search over stored trees, rooted block-store copy tooling, replay-stable fingerprinting, LAB-owned replay-journaled
 split-stage recovery, in-memory replay block-id ordering for deterministic
-clustering replay, and leaf-layer parallel block scheduling in the
-local/testing profile.
+clustering replay, derived planner-state-root support for delegated bounded-
+residency out-of-core planning spill, and leaf-layer parallel block scheduling
+in the local/testing profile.
 
 This package validates LexonArchiveBuilder's batch contract, adapter selection, and
 delegated use of LexonGraph interfaces. It does not redefine validation already
@@ -254,15 +257,19 @@ caller-selected memory budget.
 deterministic replay input without whole-store rescans, without repository-
 owned orchestration loading corpus-scale replay inventories or stored
 embeddings into resident memory at once, and without introducing SQLite, spill
-files, or equivalent externalized ordering state. Validation evidence shows the
-runtime retains only the deduped raw block-id ordering surface plus any aligned
-fixed-size per-block journal-integrity digests in memory during replay-list
-generation, and fetches payload blocks from `BlockStore` only during later
-classification or finalization processing.
+files, or equivalent repository-owned externalized ordering state. Validation
+evidence shows the runtime retains only the deduped raw block-id ordering
+surface plus any aligned fixed-size per-block journal-integrity digests in
+memory during replay-list generation, fetches payload blocks from `BlockStore`
+only during later classification or finalization processing, and—when the
+effective path is v2—keeps any later planner-managed out-of-core files confined
+to the derived delegated planner-state root rather than using them as a replay-
+ordering catalog.
 
-**Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A2, RQ-INDEXER-003E,
-RQ-INDEXER-003E1, RQ-INDEXER-003E3, DSG-LFI-001A1, DSG-LFI-001A2,
-DSG-LFI-001E, DSG-LFI-001F, DSG-LFI-001F1, DSG-LFI-001F2
+**Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A2, RQ-INDEXER-003A3,
+RQ-INDEXER-003E, RQ-INDEXER-003E1, RQ-INDEXER-003E3, DSG-LFI-001A1,
+DSG-LFI-001A2, DSG-LFI-001A3, DSG-LFI-001E, DSG-LFI-001F, DSG-LFI-001F1,
+DSG-LFI-001F2
 
 ### VAL-LFI-002J
 
@@ -364,9 +371,12 @@ this also includes preserving the upstream v2 multi-pass lifecycle rather than
 assuming repository-local single-pass planning completion, and preserving
 additive pass-end convergence telemetry that identifies the effective profile,
 delegated contract family, and exposed pass metrics needed to judge
-convergence.
+convergence. The same upgrade boundary must also preserve automatic derivation
+of the upstream-required planner-state root from existing request-adjacent
+artifact/output locations, with no new caller-visible selector and explicit
+failure when that derived root is unusable.
 
-**Traces to:** RQ-INDEXER-003I, DSG-LFI-001I
+**Traces to:** RQ-INDEXER-003I, RQ-INDEXER-003A3, DSG-LFI-001A3, DSG-LFI-001I
 
 ### VAL-LFI-002N3
 
@@ -401,9 +411,41 @@ planning becomes complete.
 the selected v2 path until `mark_planning_complete()` succeeds or an
 upstream/runtime error occurs. A completed first planning pass that leaves v2
 partitions pending is not treated as a terminal repository-side lifecycle
-failure by itself.
+failure by itself. The same v2 path derives its planner-state root from the
+existing request-adjacent artifact policy and uses no new caller-visible
+planner-state-root selector.
 
-**Traces to:** RQ-INDEXER-003I, DSG-LFI-001I, DSG-LFI-001I1
+**Traces to:** RQ-INDEXER-003I, RQ-INDEXER-003A3, DSG-LFI-001A3, DSG-LFI-001I, DSG-LFI-001I1
+
+### VAL-LFI-002N5
+
+Run one effective-`0.7.0` clustering-enabled invocation with `--summary-out`
+present and one without `--summary-out`, keeping the existing request-file-
+driven batch surface unchanged in both cases.
+
+**Pass condition:** both runs satisfy the upstream v2 writable-root requirement
+without introducing a new CLI flag or `BatchRequest` field for planner-state
+selection. When `--summary-out` is present, the delegated planner-state root is
+derived beneath that directory; otherwise it is derived beneath the `--request`
+file directory. In both cases the derived root is run-scoped and the delegated
+out-of-core planner state stays opaque rather than becoming a repository-owned
+artifact contract.
+
+**Traces to:** RQ-INDEXER-003A3, DSG-LFI-001A3, DSG-LFI-001I1
+
+### VAL-LFI-002N6
+
+Exercise one effective-`0.7.0` clustering-enabled invocation whose derived
+planner-state root cannot be created or written.
+
+**Pass condition:** LexonArchiveBuilder fails explicitly before claiming a
+success-shaped v2 clustering result. The failure identifies the unusable
+derived planner-state-root condition and does not silently fall back to
+unbounded resident planning state, a different delegated contract family, or a
+new ad hoc scratch location outside the approved request-adjacent artifact
+policy.
+
+**Traces to:** RQ-INDEXER-003A3, DSG-LFI-001A3, DSG-LFI-001I
 
 ### VAL-LFI-002N1
 
