@@ -7327,15 +7327,14 @@ mod tests {
         .unwrap();
         let output_dir = temp.path().join("output");
         fs::create_dir_all(&output_dir).unwrap();
-        fs::write(output_dir.join("summary.planner-state"), b"not a directory").unwrap();
-        let summary_out = output_dir.join("summary.json");
         let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
         let progress_capture = Arc::clone(&progress);
 
         let bytes = fs::read(&request_path).unwrap();
         let request: BatchRequest = serde_json::from_slice(&bytes).unwrap();
-        let diagnostics_path =
-            clustering_failure_diagnostics_path(&request_path, Some(summary_out.as_path()));
+        let blocked_parent = output_dir.join("blocked-parent");
+        fs::write(&blocked_parent, b"not a directory").unwrap();
+        let diagnostics_path = blocked_parent.join("summary.clustering-failure-diagnostics.json");
         let error = run_request_with_progress(
             temp.path(),
             request,
@@ -7353,9 +7352,10 @@ mod tests {
 
         assert!(matches!(error, RuntimeError::ClusteringFailure { .. }));
         let progress = progress.lock().unwrap();
+        let diagnostics_path_text = diagnostics_path.display().to_string();
         assert!(progress.iter().any(|line| {
             line.contains("Failed to write clustering failure diagnostics to")
-                && line.contains("summary.clustering-failure-diagnostics.json")
+                && line.contains(&diagnostics_path_text)
         }));
         assert!(
             progress
