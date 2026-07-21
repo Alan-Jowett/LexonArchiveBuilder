@@ -5822,7 +5822,21 @@ fn prepare_planner_state_root(path: &Path) -> Result<(), RuntimeError> {
     fs::create_dir_all(path).map_err(|source| RuntimeError::PreparePlannerStateRoot {
         path: path.display().to_string(),
         source,
-    })
+    })?;
+    let mut probe = tempfile::Builder::new()
+        .prefix(".planner-state-write-probe-")
+        .tempfile_in(path)
+        .map_err(|source| RuntimeError::PreparePlannerStateRoot {
+            path: path.display().to_string(),
+            source,
+        })?;
+    probe
+        .write_all(&[0])
+        .and_then(|_| probe.flush())
+        .map_err(|source| RuntimeError::PreparePlannerStateRoot {
+            path: path.display().to_string(),
+            source,
+        })
 }
 
 pub fn write_clustering_failure_diagnostics_file(
@@ -7590,6 +7604,18 @@ mod tests {
         let path = planner_state_root_path(request_path.as_path(), None);
 
         assert_eq!(path, Path::new("data").join("request.planner-state"));
+    }
+
+    #[test]
+    fn prepare_planner_state_root_probes_and_cleans_up_existing_directory() {
+        let temp = tempdir().unwrap();
+        let planner_state_root = temp.path().join("planner-state");
+        fs::create_dir_all(&planner_state_root).unwrap();
+
+        prepare_planner_state_root(&planner_state_root).unwrap();
+
+        let remaining_entries = fs::read_dir(&planner_state_root).unwrap().count();
+        assert_eq!(remaining_entries, 0);
     }
 
     #[test]
