@@ -361,6 +361,13 @@ block ids from the replay-audit chain, sorts them, dedupes them, and uses that
 unique block-id order as the deterministic processing order before any payload
 block dereference occurs.
 
+Once that deterministic block-id order is established, replay submission reads
+the stored replayable leaf blocks for those ids and reconstructs delegated
+replay inputs from the stored leaf content itself. Request-era document paths,
+normalized-email artifact refs, and similar metadata remain provenance or
+validation state rather than the primary content-reconstruction source for
+standalone clustering replay.
+
 **Traces to:** RQ-INDEXER-003E, RQ-INDEXER-003E1, RQ-INDEXER-003E2,
 RQ-INDEXER-003E3, RQ-INDEXER-010A
 
@@ -368,12 +375,20 @@ RQ-INDEXER-003E3, RQ-INDEXER-010A
 
 Any stage that includes ingestion persists a replay-safe delegated item record
 or equivalent repository-owned staging artifact that captures deterministic item
-ordering, content-reference identity, and fingerprint inputs needed for later
-streaming replays.
+ordering, provenance or replay-validation identity, and fingerprint inputs
+needed for later streaming replays.
 
 A clustering-only invocation reconstructs its replay batches from stored
 clustering-eligible inputs plus that replay metadata rather than from
 request-supplied collection items.
+
+For replay execution, the stored replayable leaf content is the delegated
+content transport. Replay metadata such as source paths, normalized-email
+artifact refs, and chunk locators remains available for diagnostics and
+replay-validation identity, but it does not force the runtime to reopen
+request-era source files or rerun normalized-email chunk derivation when the
+stored replayable leaf already contains the delegated content needed for
+streaming replay.
 
 This design fixes the replay-safety contract but does not freeze a specific
 serialization schema for the staging artifact in the specification layer.
@@ -382,7 +397,7 @@ the staging shape must support bounded-memory replay preparation and
 finalization handoff under large-corpus operation.
 
 **Traces to:** RQ-INDEXER-003A, RQ-INDEXER-003E, RQ-INDEXER-003E1,
-RQ-INDEXER-003E4, RQ-INDEXER-004F
+RQ-INDEXER-003E4, RQ-INDEXER-004F, RQ-INDEXER-010A
 
 ### DSG-LFI-001F1 `Immutable replay-audit publication discipline`
 

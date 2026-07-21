@@ -721,6 +721,7 @@ mod tests {
                 assert_eq!(path, &request_root.join(relative_document_path));
             }
             ContentRef::Inline { .. } => panic!("expected a document content ref"),
+            ContentRef::StoredReplay { .. } => panic!("expected a document content ref"),
             ContentRef::EmailChunk { .. } => panic!("expected a document content ref"),
         }
     }
