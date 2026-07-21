@@ -70,6 +70,10 @@ impl LocalFilesystemContentResolver {
     }
 }
 
+pub(crate) fn normalize_document_identity_path(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
 #[derive(Debug, Error)]
 pub enum LocalFilesystemContentResolverError {
     #[error("content source {path} does not exist")]
@@ -146,7 +150,11 @@ impl ContentResolver<ContentRef> for LocalFilesystemContentResolver {
     fn fingerprint(&self, content_ref: &ContentRef) -> Result<BlockHash, Self::Error> {
         let fingerprint = match content_ref {
             ContentRef::Document { path } => hash_bytes(
-                format!("document:{}", path.to_string_lossy().replace('\\', "/")).as_bytes(),
+                format!(
+                    "document:{}",
+                    normalize_document_identity_path(&path.to_string_lossy())
+                )
+                .as_bytes(),
             ),
             ContentRef::Inline { media_type, body } => {
                 let mut bytes = media_type.as_bytes().to_vec();
@@ -155,9 +163,10 @@ impl ContentResolver<ContentRef> for LocalFilesystemContentResolver {
                 hash_bytes(&bytes)
             }
             ContentRef::StoredReplay { identity, .. } => match identity {
-                ReplayIdentity::Document { source_path } => {
-                    hash_bytes(format!("document:{source_path}").as_bytes())
-                }
+                ReplayIdentity::Document { source_path } => hash_bytes(
+                    format!("document:{}", normalize_document_identity_path(source_path))
+                        .as_bytes(),
+                ),
                 ReplayIdentity::EmailChunk {
                     email_artifact_ref,
                     chunk_index,
@@ -636,7 +645,7 @@ mod tests {
             media_type: "text/plain".into(),
             body: b"alpha".to_vec(),
             identity: ReplayIdentity::Document {
-                source_path: "C:/docs/alpha.txt".into(),
+                source_path: "C:\\docs\\alpha.txt".into(),
             },
         };
 

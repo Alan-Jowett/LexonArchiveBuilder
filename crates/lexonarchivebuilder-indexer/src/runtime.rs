@@ -55,7 +55,8 @@ use crate::embedding::{ConfiguredEmbeddingProvider, ConfiguredEmbeddingProviderE
 use crate::mailbox::{MailboxExpansionError, expand_mailbox_item_with_stats};
 use crate::paths::resolve_path;
 use crate::resolver::{
-    ContentRef, LocalFilesystemContentResolver, LocalFilesystemContentResolverError, ReplayIdentity,
+    ContentRef, LocalFilesystemContentResolver, LocalFilesystemContentResolverError,
+    ReplayIdentity, normalize_document_identity_path,
 };
 use crate::tree_tools::{decode_embedding_values, parse_block_hash};
 
@@ -1875,7 +1876,7 @@ fn handle_v2_planning_pass_completion(
 fn clustering_failure_input(item: &IndexItem<ContentRef>) -> ClusteringFailureInput {
     match &item.content_ref {
         ContentRef::Document { path } => {
-            let source_path = path.to_string_lossy().replace('\\', "/");
+            let source_path = normalize_document_identity_path(&path.to_string_lossy());
             ClusteringFailureInput::Document {
                 logical_id: format!("document:{source_path}"),
                 source_path,
@@ -1889,10 +1890,13 @@ fn clustering_failure_input(item: &IndexItem<ContentRef>) -> ClusteringFailureIn
             }
         }
         ContentRef::StoredReplay { identity, .. } => match identity {
-            ReplayIdentity::Document { source_path } => ClusteringFailureInput::Document {
-                logical_id: format!("document:{source_path}"),
-                source_path: source_path.clone(),
-            },
+            ReplayIdentity::Document { source_path } => {
+                let source_path = normalize_document_identity_path(source_path);
+                ClusteringFailureInput::Document {
+                    logical_id: format!("document:{source_path}"),
+                    source_path,
+                }
+            }
             ReplayIdentity::EmailChunk {
                 email_artifact_ref,
                 chunk_index,
@@ -3411,12 +3415,17 @@ fn sort_replay_journal_records(records: &mut [ReplayJournalRecord]) {
 
 fn replay_sort_key(item: &IndexItem<ContentRef>) -> (String, Vec<(String, String)>) {
     let content_key = match &item.content_ref {
-        ContentRef::Document { path } => format!("document:{}", path.to_string_lossy()),
+        ContentRef::Document { path } => format!(
+            "document:{}",
+            normalize_document_identity_path(&path.to_string_lossy())
+        ),
         ContentRef::Inline { media_type, body } => {
             format!("inline:{media_type}:{:?}", body)
         }
         ContentRef::StoredReplay { identity, .. } => match identity {
-            ReplayIdentity::Document { source_path } => format!("document:{source_path}"),
+            ReplayIdentity::Document { source_path } => {
+                format!("document:{}", normalize_document_identity_path(source_path))
+            }
             ReplayIdentity::EmailChunk {
                 email_artifact_ref,
                 chunk_index,
@@ -4312,7 +4321,7 @@ fn replay_journal_record_from_item(
         },
         ContentRef::StoredReplay { identity, .. } => match identity {
             ReplayIdentity::Document { source_path } => ReplayJournalContentRef::Document {
-                path: source_path.clone(),
+                path: normalize_document_identity_path(source_path),
             },
             ReplayIdentity::EmailChunk {
                 email_artifact_ref,
@@ -10138,6 +10147,39 @@ mod tests {
         let error =
             append_replay_journal_records(&block_store, &mutable_ref_store, &[record]).unwrap_err();
         assert!(matches!(error, RuntimeError::WriteReplayJournal { .. }));
+    }
+
+    #[test]
+    fn stored_replay_document_identity_normalizes_windows_paths() {
+        let item = IndexItem {
+            metadata: vec![],
+            content_ref: ContentRef::StoredReplay {
+                media_type: "text/plain".into(),
+                body: b"alpha".to_vec(),
+                identity: ReplayIdentity::Document {
+                    source_path: r"C:\temp\alpha.txt".into(),
+                },
+            },
+        };
+
+        assert_eq!(
+            clustering_failure_input(&item),
+            ClusteringFailureInput::Document {
+                logical_id: "document:C:/temp/alpha.txt".into(),
+                source_path: "C:/temp/alpha.txt".into(),
+            }
+        );
+        assert_eq!(
+            replay_sort_key(&item).0,
+            "document:C:/temp/alpha.txt".to_string()
+        );
+        assert!(matches!(
+            replay_journal_record_from_item(BlockHash::from_bytes([7u8; 32]), &item),
+            ReplayJournalRecord::ReplayInput {
+                content_ref: ReplayJournalContentRef::Document { path },
+                ..
+            } if path == "C:/temp/alpha.txt"
+        ));
     }
 
     #[test]
