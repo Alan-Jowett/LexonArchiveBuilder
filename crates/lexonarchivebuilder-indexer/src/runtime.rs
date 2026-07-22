@@ -2,7 +2,7 @@
 // Copyright (c) 2026 LexonArchiveBuilder contributors
 
 use std::cmp::Ordering as CmpOrdering;
-use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
 use std::fs::{self, File};
 use std::future::Future;
 use std::io::{self, BufReader, BufWriter, Cursor, ErrorKind, Read, Write};
@@ -65,6 +65,7 @@ type ProgressReporter = Arc<dyn Fn(String) + Send + Sync + 'static>;
 pub const INGESTION_ONLY_ROOT_ID_PLACEHOLDER: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
 const PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+const EXTERNALIZED_REPLAY_PREFETCH_FUTURE_BATCHES: usize = 2;
 const REPLAY_JOURNAL_SCHEMA_VERSION: u64 = 1;
 const REPLAY_JOURNAL_BLOCK_MAX_BYTES: usize = 64 * 1024 * 1024;
 const REPLAY_ORDER_ENTRY_BYTES: usize = 64;
@@ -633,6 +634,9 @@ struct ReplayBatchEntryLoad {
     embedding: Vec<u8>,
 }
 
+type ExternalizedReplayBatchPrefetchHandle =
+    JoinHandle<Result<(ExternalizedReplayBatchIterator, VecDeque<ReplayBatchLoad>), RuntimeError>>;
+
 #[derive(Clone, Copy, Debug)]
 struct ValidateOnlyResolver;
 
@@ -1094,13 +1098,14 @@ impl ExternalizedStoredLeafEmbeddingProvider {
 
 impl ExternalizedReplayBatchIterator {
     fn clear_current_batch_embeddings(&self) {
-        lock_unpoisoned(&self.current_batch_embeddings).clear();
+        clear_externalized_replay_batch_embeddings(&self.current_batch_embeddings);
     }
 
     fn publish_batch_embeddings(&self, embeddings_by_input_hash: &[([u8; 32], Vec<u8>)]) {
-        let mut cache = lock_unpoisoned(&self.current_batch_embeddings);
-        cache.clear();
-        cache.extend(embeddings_by_input_hash.iter().cloned());
+        publish_externalized_replay_batch_embeddings(
+            &self.current_batch_embeddings,
+            embeddings_by_input_hash,
+        );
     }
 
     fn load_next_batch(&mut self) -> Result<Option<ReplayBatchLoad>, RuntimeError> {
@@ -1128,14 +1133,103 @@ impl ExternalizedReplayBatchIterator {
     }
 }
 
-fn spawn_externalized_replay_batch_prefetch(
+fn spawn_externalized_replay_batch_prefetches(
     iterator: ExternalizedReplayBatchIterator,
-) -> JoinHandle<Result<(ExternalizedReplayBatchIterator, Option<ReplayBatchLoad>), RuntimeError>> {
+    batch_count: usize,
+) -> ExternalizedReplayBatchPrefetchHandle {
     tokio::task::spawn_blocking(move || {
         let mut iterator = iterator;
-        let next = iterator.load_next_batch()?;
-        Ok((iterator, next))
+        let mut prefetched_batches = VecDeque::with_capacity(batch_count);
+        for _ in 0..batch_count {
+            let Some(next) = iterator.load_next_batch()? else {
+                break;
+            };
+            prefetched_batches.push_back(next);
+        }
+        Ok((iterator, prefetched_batches))
     })
+}
+
+fn clear_externalized_replay_batch_embeddings(
+    current_batch_embeddings: &Arc<Mutex<EmbeddingCache>>,
+) {
+    lock_unpoisoned(current_batch_embeddings).clear();
+}
+
+fn publish_externalized_replay_batch_embeddings(
+    current_batch_embeddings: &Arc<Mutex<EmbeddingCache>>,
+    embeddings_by_input_hash: &[([u8; 32], Vec<u8>)],
+) {
+    let mut cache = lock_unpoisoned(current_batch_embeddings);
+    cache.clear();
+    cache.extend(embeddings_by_input_hash.iter().cloned());
+}
+
+async fn await_externalized_replay_batch_prefetch(
+    pending_prefetch: &mut Option<ExternalizedReplayBatchPrefetchHandle>,
+    iterator: &mut Option<ExternalizedReplayBatchIterator>,
+    prefetched_batches: &mut VecDeque<ReplayBatchLoad>,
+) -> Result<(), RuntimeError> {
+    let Some(prefetch) = pending_prefetch.take() else {
+        return Ok(());
+    };
+    let (next_iterator, mut newly_prefetched_batches) = prefetch
+        .await
+        .map_err(RuntimeError::BlockingReplayPrefetchTaskJoin)??;
+    *iterator = Some(next_iterator);
+    prefetched_batches.append(&mut newly_prefetched_batches);
+    Ok(())
+}
+
+async fn take_next_externalized_replay_batch(
+    iterator: &mut Option<ExternalizedReplayBatchIterator>,
+    prefetched_batches: &mut VecDeque<ReplayBatchLoad>,
+    pending_prefetch: &mut Option<ExternalizedReplayBatchPrefetchHandle>,
+) -> Result<Option<ReplayBatchLoad>, RuntimeError> {
+    if let Some(next_batch) = prefetched_batches.pop_front() {
+        return Ok(Some(next_batch));
+    }
+    if iterator.is_none() {
+        await_externalized_replay_batch_prefetch(pending_prefetch, iterator, prefetched_batches)
+            .await?;
+    }
+    if let Some(next_batch) = prefetched_batches.pop_front() {
+        return Ok(Some(next_batch));
+    }
+    match iterator.as_mut() {
+        Some(iterator) => iterator.load_next_batch(),
+        None => Ok(None),
+    }
+}
+
+async fn finish_externalized_replay_ingest(
+    ingest_result: Result<(), StreamingIndexerError>,
+    pending_prefetch: &mut Option<ExternalizedReplayBatchPrefetchHandle>,
+    iterator: &mut Option<ExternalizedReplayBatchIterator>,
+    prefetched_batches: &mut VecDeque<ReplayBatchLoad>,
+    progress: &ProgressReporter,
+) -> Result<(), RuntimeError> {
+    match ingest_result {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if let Err(cleanup_error) = await_externalized_replay_batch_prefetch(
+                pending_prefetch,
+                iterator,
+                prefetched_batches,
+            )
+            .await
+            {
+                report_progress(
+                    progress,
+                    format!(
+                        "Replay prefetch cleanup failed after clustering ingestion error: {}",
+                        cleanup_error
+                    ),
+                );
+            }
+            Err(error.into())
+        }
+    }
 }
 
 impl IntoIterator for ExternalizedReplayFinalizeSource {
@@ -5397,6 +5491,7 @@ where
     let clustering_failure_diagnostics = OnceLock::new();
     let diagnostics_resolver = resolver.clone();
     let diagnostics_embedding_provider = embedding_provider.clone();
+    let current_batch_embeddings = Arc::clone(&replay_state.current_batch_embeddings);
 
     let mut indexer = StreamingIndexingRunV2::with_published_profile(
         resolver,
@@ -5415,15 +5510,28 @@ where
 
     loop {
         let mut completed_items = 0usize;
-        let mut iterator = replay_state.batch_iterator()?;
+        let mut iterator = Some(replay_state.batch_iterator()?);
         let mut batch_number = 0usize;
-        let mut current_batch = iterator.load_next_batch()?;
+        let mut current_batch = iterator
+            .as_mut()
+            .expect("iterator must be available before replay starts")
+            .load_next_batch()?;
+        let mut prefetched_batches = VecDeque::new();
+        let mut pending_prefetch = None;
         while let Some(batch) = current_batch {
             if batch.batch.items.is_empty() {
-                current_batch = iterator.load_next_batch()?;
+                current_batch = take_next_externalized_replay_batch(
+                    &mut iterator,
+                    &mut prefetched_batches,
+                    &mut pending_prefetch,
+                )
+                .await?;
                 continue;
             }
-            iterator.publish_batch_embeddings(&batch.embeddings_by_input_hash);
+            publish_externalized_replay_batch_embeddings(
+                &current_batch_embeddings,
+                &batch.embeddings_by_input_hash,
+            );
             batch_number += 1;
             let batch_item_count = batch.batch.items.len();
             report_progress(
@@ -5436,7 +5544,16 @@ where
                     total_items,
                 ),
             );
-            let prefetch = spawn_externalized_replay_batch_prefetch(iterator);
+            let requested_prefetch_count = EXTERNALIZED_REPLAY_PREFETCH_FUTURE_BATCHES
+                .saturating_sub(prefetched_batches.len());
+            if pending_prefetch.is_none() && requested_prefetch_count > 0 {
+                pending_prefetch = Some(spawn_externalized_replay_batch_prefetches(
+                    iterator
+                        .take()
+                        .expect("iterator must be available when spawning prefetch"),
+                    requested_prefetch_count,
+                ));
+            }
             let ingest_result = await_with_periodic_progress(
                 indexer.ingest_batch(&batch.batch.items),
                 io.progress,
@@ -5453,13 +5570,20 @@ where
                 },
             )
             .await;
-            let prefetched_batch = prefetch
-                .await
-                .map_err(RuntimeError::BlockingReplayPrefetchTaskJoin)??;
-            ingest_result?;
-            let (next_iterator, next_batch) = prefetched_batch;
-            iterator = next_iterator;
-            current_batch = next_batch;
+            finish_externalized_replay_ingest(
+                ingest_result,
+                &mut pending_prefetch,
+                &mut iterator,
+                &mut prefetched_batches,
+                io.progress,
+            )
+            .await?;
+            current_batch = take_next_externalized_replay_batch(
+                &mut iterator,
+                &mut prefetched_batches,
+                &mut pending_prefetch,
+            )
+            .await?;
             completed_items += batch_item_count;
             report_progress(
                 io.progress,
@@ -5471,7 +5595,13 @@ where
                 ),
             );
         }
-        iterator.clear_current_batch_embeddings();
+        await_externalized_replay_batch_prefetch(
+            &mut pending_prefetch,
+            &mut iterator,
+            &mut prefetched_batches,
+        )
+        .await?;
+        clear_externalized_replay_batch_embeddings(&current_batch_embeddings);
         report_progress(
             io.progress,
             config
@@ -11068,60 +11198,40 @@ mod tests {
         };
         let alpha_embedding = vec![0, 0, 0, 0, 0, 0, 128, 63];
         let beta_embedding = vec![0, 0, 0, 64, 0, 0, 128, 63];
-        let alpha_block = Block::Leaf(
-            build_leaf_block(
-                VERSION_1,
-                embedding_spec.clone(),
-                vec![LeafEntry {
-                    embedding: alpha_embedding.clone(),
-                    metadata: vec![
-                        (
-                            Value::Text("source_kind".into()),
-                            Value::Text("document".into()),
-                        ),
-                        (
-                            Value::Text("source_path".into()),
-                            Value::Text("C:/docs/alpha.txt".into()),
-                        ),
-                    ],
-                    content: Content {
-                        media_type: "text/plain".into(),
-                        body: b"alpha".to_vec(),
-                    },
-                }],
-                None,
+        let gamma_embedding = vec![0, 0, 128, 64, 0, 0, 128, 63];
+        let make_block = |path: &str, body: &[u8], embedding: Vec<u8>| {
+            Block::Leaf(
+                build_leaf_block(
+                    VERSION_1,
+                    embedding_spec.clone(),
+                    vec![LeafEntry {
+                        embedding,
+                        metadata: vec![
+                            (
+                                Value::Text("source_kind".into()),
+                                Value::Text("document".into()),
+                            ),
+                            (Value::Text("source_path".into()), Value::Text(path.into())),
+                        ],
+                        content: Content {
+                            media_type: "text/plain".into(),
+                            body: body.to_vec(),
+                        },
+                    }],
+                    None,
+                )
+                .unwrap(),
             )
-            .unwrap(),
-        );
-        let beta_block = Block::Leaf(
-            build_leaf_block(
-                VERSION_1,
-                embedding_spec.clone(),
-                vec![LeafEntry {
-                    embedding: beta_embedding.clone(),
-                    metadata: vec![
-                        (
-                            Value::Text("source_kind".into()),
-                            Value::Text("document".into()),
-                        ),
-                        (
-                            Value::Text("source_path".into()),
-                            Value::Text("C:/docs/beta.txt".into()),
-                        ),
-                    ],
-                    content: Content {
-                        media_type: "text/plain".into(),
-                        body: b"beta".to_vec(),
-                    },
-                }],
-                None,
-            )
-            .unwrap(),
-        );
+        };
+        let alpha_block = make_block("C:/docs/alpha.txt", b"alpha", alpha_embedding.clone());
+        let beta_block = make_block("C:/docs/beta.txt", b"beta", beta_embedding.clone());
+        let gamma_block = make_block("C:/docs/gamma.txt", b"gamma", gamma_embedding.clone());
         let alpha_block_id = put_block(&block_store, &alpha_block);
         let beta_block_id = put_block(&block_store, &beta_block);
+        let gamma_block_id = put_block(&block_store, &gamma_block);
         let alpha_validated = get_block(&block_store, &alpha_block_id).unwrap();
         let beta_validated = get_block(&block_store, &beta_block_id).unwrap();
+        let gamma_validated = get_block(&block_store, &gamma_block_id).unwrap();
         let alpha_item = replay_item_from_validated_block(&alpha_validated, &embedding_spec)
             .unwrap()
             .unwrap()
@@ -11130,9 +11240,14 @@ mod tests {
             .unwrap()
             .unwrap()
             .0;
+        let gamma_item = replay_item_from_validated_block(&gamma_validated, &embedding_spec)
+            .unwrap()
+            .unwrap()
+            .0;
         let replay_order = replay_order_storage_for_entries(&[
             ReplayOrderEntry::new(alpha_block_id, replay_sort_key_digest(&alpha_item)),
             ReplayOrderEntry::new(beta_block_id, replay_sort_key_digest(&beta_item)),
+            ReplayOrderEntry::new(gamma_block_id, replay_sort_key_digest(&gamma_item)),
         ]);
         let current_batch_embeddings = Arc::new(Mutex::new(HashMap::new()));
         let mut iterator = ExternalizedReplayBatchIterator {
@@ -11163,7 +11278,25 @@ mod tests {
             alpha_embedding
         );
 
-        let second_batch = iterator.load_next_batch().unwrap().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (next_iterator, mut prefetched_batches) = runtime
+            .block_on(async {
+                spawn_externalized_replay_batch_prefetches(
+                    iterator,
+                    EXTERNALIZED_REPLAY_PREFETCH_FUTURE_BATCHES,
+                )
+                .await
+                .unwrap()
+            })
+            .unwrap();
+        iterator = next_iterator;
+        assert_eq!(
+            prefetched_batches.len(),
+            EXTERNALIZED_REPLAY_PREFETCH_FUTURE_BATCHES
+        );
         assert_eq!(
             provider
                 .load_embedding_for_hash(
@@ -11177,7 +11310,12 @@ mod tests {
             !lock_unpoisoned(&current_batch_embeddings)
                 .contains_key(&hash_embedding_content("text/plain", b"beta").into_bytes())
         );
+        assert!(
+            !lock_unpoisoned(&current_batch_embeddings)
+                .contains_key(&hash_embedding_content("text/plain", b"gamma").into_bytes())
+        );
 
+        let second_batch = prefetched_batches.pop_front().unwrap();
         iterator.publish_batch_embeddings(&second_batch.embeddings_by_input_hash);
         assert_eq!(
             provider
@@ -11188,6 +11326,133 @@ mod tests {
                 .unwrap(),
             beta_embedding
         );
+        assert!(
+            !lock_unpoisoned(&current_batch_embeddings)
+                .contains_key(&hash_embedding_content("text/plain", b"gamma").into_bytes())
+        );
+
+        let third_batch = prefetched_batches.pop_front().unwrap();
+        iterator.publish_batch_embeddings(&third_batch.embeddings_by_input_hash);
+        assert_eq!(
+            provider
+                .load_embedding_for_hash(
+                    &hash_embedding_content("text/plain", b"gamma").into_bytes()
+                )
+                .unwrap()
+                .unwrap(),
+            gamma_embedding
+        );
+    }
+
+    #[test]
+    fn externalized_replay_ready_batch_does_not_wait_for_top_up() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut iterator = None;
+            let mut prefetched_batches = VecDeque::from([ReplayBatchLoad {
+                batch: ReplayBatch {
+                    items: Vec::new(),
+                    audit_records: Vec::new(),
+                    completion_message: None,
+                },
+                embeddings_by_input_hash: Vec::new(),
+            }]);
+            let mut pending_prefetch: Option<ExternalizedReplayBatchPrefetchHandle> =
+                Some(tokio::spawn(async {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    unreachable!()
+                }));
+
+            let next_batch = tokio::time::timeout(
+                Duration::from_millis(50),
+                take_next_externalized_replay_batch(
+                    &mut iterator,
+                    &mut prefetched_batches,
+                    &mut pending_prefetch,
+                ),
+            )
+            .await
+            .expect("ready batch should not wait for top-up prefetch")
+            .unwrap()
+            .expect("expected queued replay batch");
+
+            assert!(next_batch.batch.items.is_empty());
+            assert!(pending_prefetch.is_some());
+            pending_prefetch.take().unwrap().abort();
+        });
+    }
+
+    #[test]
+    fn externalized_replay_ingest_failure_awaits_pending_prefetch_cleanup() {
+        let temp = tempdir().unwrap();
+        let block_store = ConfiguredBlockStore::from_environment(
+            temp.path(),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: String::new(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+        )
+        .unwrap();
+        let embedding_spec = EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        };
+        let replay_order = replay_order_storage_for_entries(&[]);
+        let iterator_for_cleanup = ExternalizedReplayBatchIterator {
+            replay_order_reader: replay_order.open_reader().unwrap(),
+            batch_size: 1,
+            materialization_max_concurrency: 1,
+            block_store,
+            embedding_spec,
+            current_batch_embeddings: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let cleanup_observed = Arc::new(tokio::sync::Notify::new());
+            let cleanup_observed_for_task = Arc::clone(&cleanup_observed);
+            let mut pending_prefetch: Option<ExternalizedReplayBatchPrefetchHandle> =
+                Some(tokio::spawn(async move {
+                    cleanup_observed_for_task.notify_one();
+                    Ok((iterator_for_cleanup, VecDeque::new()))
+                }));
+            let mut iterator = None;
+            let mut prefetched_batches = VecDeque::new();
+            let progress: ProgressReporter = Arc::new(|_| {});
+
+            let result = finish_externalized_replay_ingest(
+                Err(StreamingIndexerError::InvalidLifecycleTransition(
+                    "synthetic ingest failure".into(),
+                )),
+                &mut pending_prefetch,
+                &mut iterator,
+                &mut prefetched_batches,
+                &progress,
+            )
+            .await;
+
+            cleanup_observed.notified().await;
+            assert!(matches!(
+                result,
+                Err(RuntimeError::StreamingIndexer(
+                    StreamingIndexerError::InvalidLifecycleTransition(_)
+                ))
+            ));
+            assert!(pending_prefetch.is_none());
+            assert!(iterator.is_some());
+        });
     }
 
     #[test]

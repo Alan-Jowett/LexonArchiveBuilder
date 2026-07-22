@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, replay-order preparation efficiency, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v2 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v2 intra-pass planning observability consumption, user-usable convergence-diagnosis surfacing, latest-LexonGraph planner-state-root adoption for bounded-residency out-of-core planning spill, issue-83 replay-order memory decoupling from corpus size, bounded replay-batch preparation overlap exploration for issue #88, and issue #93 replay batch-size decoupling from CPU concurrency
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, intra-pass planning telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, bounded-residency deterministic replay ordering for deterministic replay submission, efficient replay-order preparation behind the existing replay contract, bounded replay-batch preparation overlap behind the existing replay contract, independent replay batch-sizing versus replay-materialization concurrency control for clustering replay, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v2 API when the selected published profile is `0.7.0`, and upstream planner-managed out-of-core planning-state spill for clustering-enabled v2 execution
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, replay-order preparation efficiency, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v2 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v2 intra-pass planning observability consumption, user-usable convergence-diagnosis surfacing, latest-LexonGraph planner-state-root adoption for bounded-residency out-of-core planning spill, issue-83 replay-order memory decoupling from corpus size, bounded replay-batch preparation overlap exploration for issue #88, issue #93 replay batch-size decoupling from CPU concurrency, and issue #95 bounded multi-batch replay-prefetch buffering
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, intra-pass planning telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, bounded-residency deterministic replay ordering for deterministic replay submission, efficient replay-order preparation behind the existing replay contract, bounded replay-batch preparation overlap behind the existing replay contract, independent replay batch-sizing versus replay-materialization concurrency control for clustering replay, bounded multi-batch replay-prefetch buffering for clustering replay, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v2 API when the selected published profile is `0.7.0`, and upstream planner-managed out-of-core planning-state spill for clustering-enabled v2 execution
 
 ## USER-REQUEST
 
@@ -486,6 +486,30 @@
   orchestration, content-type-neutral, and environment-neutral, and must not
   alter the caller-visible stage contract, `BatchSummary`, or MCP search/
   retrieval behavior.
+- **UR-278 [KNOWN]:** Issue #95 asks LexonArchiveBuilder to allow replay
+  materialization to prefetch and hold more than one future deterministic
+  replay batch ahead of the current consumer batch when bounded capacity
+  allows, rather than relying on an effectively single-slot producer/consumer
+  handoff.
+- **UR-279 [KNOWN]:** Operators need a bounded multi-batch ready queue so
+  transient replay-materialization jitter is less likely to become directly
+  visible as consumer stalls at replay-batch boundaries during clustering
+  replay.
+- **UR-280 [INFERRED]:** Deeper replay-prefetch buffering must preserve exact
+  deterministic replay batch order and failure attribution; already-prepared
+  future batches must drain in the same order the serial replay loader would
+  have produced rather than in materialization-completion order.
+- **UR-281 [INFERRED]:** Multi-batch replay prefetch must preserve
+  active-batch embedding-cache semantics by keeping prepared future-batch state
+  isolated until delegated handoff reaches that batch, so deeper buffering does
+  not publish the wrong embedding set for the currently ingesting batch.
+- **UR-282 [INFERRED]:** Multi-batch replay prefetch must remain bounded by the
+  existing fixed-memory replay contract, stay neutral across approved content
+  types and storage environments, and avoid introducing a new caller-visible
+  tuning surface unless an existing contract proves insufficient.
+- **UR-283 [KNOWN]:** Validation for this increment should show whether bounded
+  deeper replay-prefetch buffering reduces consumer-visible replay-batch
+  handoff stalls on representative clustering replay workloads.
 
 ## Change Manifest
 
@@ -614,6 +638,9 @@
 | CM-INDEXER-121 | Add | Separate deterministic replay batch-size tuning from repository-owned replay-materialization concurrency so operators can improve replay amortization without implicitly widening worker concurrency or unrelated pipeline semantics | UR-272, UR-273, UR-274 |
 | CM-INDEXER-122 | Add | Require the decoupled replay-tuning surface to preserve bounded-memory replay, deterministic handoff semantics, and active-batch state isolation rather than turning batch-size tuning into an unbounded resident pipeline | UR-274, UR-275 |
 | CM-INDEXER-123 | Add | Require backward-compatible behavior or an explicit migration path for existing `max_concurrency`-based request/config usage, while keeping replay-tuning changes internal to repository-owned orchestration and neutral across content types and environments | UR-276, UR-277 |
+| CM-INDEXER-124 | Revise | Extend replay-batch preparation overlap from an effectively single-successor handoff to a bounded multi-batch ready queue that may stay more than one deterministic replay batch ahead when repository-owned capacity allows | UR-278, UR-279, UR-280 |
+| CM-INDEXER-125 | Add | Require bounded multi-batch replay prefetch to preserve active-batch embedding-cache isolation, deterministic future-batch drain order, and unchanged delegated lifecycle sequencing | UR-280, UR-281 |
+| CM-INDEXER-126 | Add | Require deeper replay-prefetch buffering to remain within the existing fixed-memory replay boundary, stay content-type and environment neutral, and produce validation evidence about consumer-visible stall reduction rather than assuming benefit | UR-282, UR-283 |
 
 ## Before / After
 
@@ -1402,6 +1429,39 @@
   preserving bounded-memory replay, deterministic handoff semantics, and
   unchanged caller-visible stage and MCP-serving contracts.
 
+### BA-INDEXER-121
+
+- **Before [KNOWN]:** The replay-batch overlap contract allowed bounded
+  preparation ahead of the current delegated batch, but the approved
+  requirements still fit an effectively single-successor prefetch handoff and
+  did not explicitly permit a deeper bounded ready queue.
+- **After [KNOWN]:** The requirements now allow repository-owned replay
+  materialization to stay more than one deterministic batch ahead when bounded
+  capacity allows, provided prepared future batches remain queued in exact
+  replay order for later delegated handoff.
+
+### BA-INDEXER-122
+
+- **Before [KNOWN]:** Active-batch isolation requirements explicitly protected
+  the current batch from one prepared successor, but they did not yet state how
+  embedding-cache publication and ready-queue drain order should behave once
+  multiple future batches could be resident.
+- **After [KNOWN]:** The requirements now explicitly require deeper
+  multi-batch replay prefetch to keep future-batch state isolated until its own
+  handoff point, while preserving deterministic drain order and unchanged
+  delegated lifecycle sequencing.
+
+### BA-INDEXER-123
+
+- **Before [KNOWN]:** Replay-prefetch requirements constrained memory growth and
+  lifecycle safety, but they did not explicitly require validation evidence
+  about whether a deeper bounded ready queue actually reduces consumer-visible
+  replay-batch boundary stalls.
+- **After [KNOWN]:** The requirements now require issue #95 validation to show
+  whether bounded multi-batch replay prefetch improves consumer-visible replay
+  handoff behavior on representative clustering workloads without breaking
+  bounded-memory or deterministic replay invariants.
+
 ## Requirements
 
 ### Functional Requirements
@@ -1663,6 +1723,43 @@ concerns.
   environment-selected storage profiles, and SHALL NOT alter the caller-visible
   stage contract, `BatchSummary`, or MCP search/retrieval behavior.
 - **Traceability:** UR-272, UR-273, UR-274, UR-275, UR-276, UR-277
+
+#### RQ-INDEXER-003A8 - Bounded multi-batch replay-prefetch buffering
+
+LexonArchiveBuilder MAY keep a bounded deterministic ready queue of more than
+one fully materialized future replay batch ahead of the currently ingesting
+batch when doing so reduces repository-owned replay handoff stalls without
+violating the approved replay contract.
+
+- **Queue-depth rule [KNOWN]:** Repository-owned replay prefetch MAY stay more
+  than one batch ahead of the consumer when capacity allows, but the number of
+  prepared future batches SHALL remain explicitly bounded rather than growing
+  without limit.
+- **Drain-order rule [KNOWN]:** Prepared future batches SHALL be handed to the
+  delegated streaming lifecycle only in the exact deterministic replay order
+  that the serial replay loader would have produced, regardless of internal
+  materialization completion timing.
+- **Active-batch rule [KNOWN]:** The runtime SHALL continue to publish
+  active-batch embedding-cache state only for the batch currently being handed
+  to delegated `ingest_batch(...)`; prepared future-batch state SHALL remain
+  isolated until its own handoff point.
+- **Lifecycle rule [INFERRED]:** Deeper buffering SHALL remain subordinate to
+  the approved sequential delegated lifecycle and SHALL NOT introduce
+  concurrent delegated `ingest_batch`, `finish_pass`, `mark_planning_complete`,
+  or `finalize` calls on one streaming run.
+- **Boundedness rule [INFERRED]:** A deeper ready queue SHALL remain inside the
+  existing fixed-memory replay boundary rather than becoming an unbounded
+  resident payload pipeline or weakening prepared-future-state isolation.
+- **Parity rule [INFERRED]:** This buffering strategy SHALL remain compatible
+  with both local/testing and production-oriented storage profiles through the
+  same replay and block-store abstraction boundaries, and SHALL NOT require a
+  new caller-visible tuning surface unless an existing contract proves
+  insufficient.
+- **Validation rule [KNOWN]:** The increment SHALL require validation evidence
+  about whether bounded deeper replay-prefetch buffering reduces
+  consumer-visible replay-batch boundary stalls on representative clustering
+  workloads.
+- **Traceability:** UR-278, UR-279, UR-280, UR-281, UR-282, UR-283
 
 #### RQ-INDEXER-003A5 - Efficient replay-order preparation
 

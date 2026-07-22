@@ -24,7 +24,7 @@ compatibility, 0.6.x published-profile evaluation, local testing sweep
 automation, v0.7.0 fixed-budget ladder experiment automation, rooted
 block-store copy tooling, upstream embedding-readback API adoption, LAB-owned
 replay-journaled split-stage recovery, bounded-residency deterministic replay
-ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, replay batch-size decoupling from CPU concurrency, and layer-parallel
+ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, replay batch-size decoupling from CPU concurrency, bounded multi-batch replay-prefetch buffering, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
 non-search artifacts, plus conditional streaming-indexer v2 adoption with
 repository-default published profile `0.7.0` and derived planner-state-root
@@ -57,7 +57,8 @@ rooted TNN-recall diagnostics, rooted query access-cost reporting,
 rooted CLI search over stored trees, replay-stable delegated item identity,
 LAB-owned replay-journaled split-stage recovery, bounded-residency deterministic
 replay ordering for clustering replay, independent replay batch-size versus
-replay-materialization concurrency tuning, derived planner-state-root
+replay-materialization concurrency tuning, bounded multi-batch replay-prefetch
+buffering, derived planner-state-root
 support for delegated bounded-residency out-of-core planning spill, and
 layer-parallel delegated block construction for the local/testing profile.
 
@@ -391,6 +392,33 @@ it does not add a new CLI stage or tuning flag.
 
 **Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A4, RQ-INDEXER-003A6,
 RQ-INDEXER-003A7, RQ-INDEXER-010A
+
+### DSG-LFI-001A8 `Bounded multi-batch replay-prefetch ready queue`
+
+LexonArchiveBuilder may extend repository-owned replay prefetch from a
+single-successor handoff to a bounded deterministic ready queue containing more
+than one fully materialized future replay batch.
+
+The repository-owned side may continue materializing future replay windows while
+the delegated run ingests the current batch, and it may accumulate multiple
+ready future batches when its internal fixed bound allows. However, this ready
+queue remains strictly ordered by deterministic replay sequence rather than by
+materialization completion time, and delegated `ingest_batch(...)` still
+receives batches one at a time in that original replay order.
+
+Prepared future-batch replay items and embedding-cache state remain isolated
+until their own handoff point. The active delegated batch therefore continues to
+observe only its matching replay contents and embedding-cache state, even when
+additional future batches are already resident in the repository-owned ready
+queue.
+
+This increment does not add a new caller-visible queue-depth selector. The
+bounded ready-queue depth remains an internal repository-owned policy chosen to
+reduce consumer-visible replay handoff stalls while staying inside the existing
+fixed-memory replay boundary and preserving the delegated sequential lifecycle.
+
+**Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A4, RQ-INDEXER-003A8,
+RQ-INDEXER-010A
 
 ### DSG-LFI-001B `Leaf-layer scheduling discipline`
 
@@ -1764,6 +1792,10 @@ No CLI flag is added for replay batch size in this increment. The replay-batch
 override remains request-file-only so the existing command-line surface keeps
 its current concurrency meaning while clustering-only experiments can opt into
 independent batch-granularity tuning through the request artifact.
+
+Issue #95 does not add a request or CLI field for replay-prefetch queue depth.
+The number of prepared future replay batches remains an internal bounded policy
+rather than a caller-visible tuning surface in this increment.
 
 This configuration surface remains environment-neutral: local/testing and the
 preserved production-oriented profiles use the same request shape,

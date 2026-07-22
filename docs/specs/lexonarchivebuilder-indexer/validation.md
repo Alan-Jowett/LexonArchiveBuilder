@@ -23,7 +23,7 @@ wgpu-acceleration revision compatibility, 0.6.x published-profile
 evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
 experiment automation, upstream embedding-readback
 API adoption, LAB-owned replay-journaled split-stage recovery, bounded-residency
-deterministic replay ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, replay batch-size decoupling from CPU concurrency, and
+deterministic replay ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, replay batch-size decoupling from CPU concurrency, bounded multi-batch replay-prefetch buffering, and
 layer-parallel block-construction evolution, v2 custom-block adoption for
 repository-owned non-search artifacts, and conditional streaming-indexer v2
 adoption with repository-default published profile `0.7.0`, plus derived
@@ -56,7 +56,8 @@ query access-cost reporting, rooted CLI
 search over stored trees, rooted block-store copy tooling, replay-stable fingerprinting, LAB-owned replay-journaled
 split-stage recovery, bounded-residency deterministic replay ordering for
 clustering replay, independent replay batch-size versus replay-materialization
-concurrency control for clustering replay, derived planner-state-root support for delegated
+concurrency control for clustering replay, bounded multi-batch replay-prefetch
+buffering for clustering replay, derived planner-state-root support for delegated
 bounded-residency out-of-core planning spill, and leaf-layer parallel block
 scheduling
 in the local/testing profile.
@@ -318,23 +319,25 @@ RQ-INDEXER-004F, RQ-INDEXER-010A, DSG-LFI-001E, DSG-LFI-001F
 ### VAL-LFI-002I5
 
 Run the clustering-plus-block-assembly stage against a replay-audit journal
-large enough to require multiple replay batches while instrumenting one future
-batch of repository-owned replay preparation to overlap with delegated
-`ingest_batch(...)` processing of the current batch.
+large enough to require multiple replay batches while instrumenting repository-
+owned replay preparation to overlap with delegated `ingest_batch(...)`
+processing of the current batch and, when bounded capacity allows, to keep more
+than one future batch ready.
 
-**Pass condition:** Validation evidence shows the runtime may prepare at most
-one tightly bounded successor replay batch while the current batch is inside the
-delegated ingestion path, but it never invokes concurrent upstream
+**Pass condition:** Validation evidence shows the runtime may prepare a bounded
+deterministic ready queue of future replay batches while the current batch is
+inside the delegated ingestion path, but it never invokes concurrent upstream
 `ingest_batch(...)`, `finish_pass()`, `mark_planning_complete()`, or
-`finalize(...)` operations on the same delegated run. The active batch continues
-to observe the correct replay content and embedding state until it completes,
-the next batch is submitted in the same deterministic order that non-overlapped
-replay would use, and peak repository-owned resident memory remains bounded to
-the current batch plus the approved prefetched successor state rather than an
-unbounded replay queue.
+`finalize(...)` operations on the same delegated run. The active batch
+continues to observe the correct replay content and embedding state until it
+completes, prepared future batches are submitted only in the same deterministic
+order that non-overlapped replay would use, and peak repository-owned resident
+memory remains bounded to the current batch plus the approved bounded ready
+queue rather than an unbounded replay pipeline.
 
-**Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A4, RQ-INDEXER-004F,
-RQ-INDEXER-010A, DSG-LFI-001A1, DSG-LFI-001A4
+**Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A4, RQ-INDEXER-003A8,
+RQ-INDEXER-004F, RQ-INDEXER-010A, DSG-LFI-001A1, DSG-LFI-001A4,
+DSG-LFI-001A8
 
 ### VAL-LFI-002I6
 
@@ -401,6 +404,25 @@ lifecycle are preserved.
 
 **Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A6, RQ-INDEXER-003A7,
 DSG-LFI-001A1, DSG-LFI-001A6, DSG-LFI-001A7
+
+### VAL-LFI-002I9
+
+Compare the single-successor replay-prefetch baseline against the bounded
+multi-batch ready-queue path on a clustering replay workload large enough to
+require repeated replay-batch handoffs.
+
+**Pass condition:** Validation evidence shows the bounded deeper ready queue may
+keep more than one future replay batch materialized ahead of the current batch
+without changing deterministic batch drain order, active-batch embedding-cache
+publication, or delegated lifecycle sequencing. The record also shows whether
+the deeper ready queue materially reduces consumer-visible replay-batch
+boundary stalls and/or improves replay-handoff smoothness on the representative
+workload; when a like-for-like rerun is not practical, representative profiler
+or timing evidence plus deterministic-correctness regressions are acceptable in
+its place.
+
+**Traces to:** RQ-INDEXER-003A4, RQ-INDEXER-003A8, DSG-LFI-001A4,
+DSG-LFI-001A8
 
 ### VAL-LFI-002J
 
@@ -746,7 +768,8 @@ file may also carry an optional `replay_batch_size` override without adding a
 new CLI flag; when omitted, replay batch sizing preserves the historical
 `max_concurrency`-derived behavior. Any fallback used when direct physical-core
 detection is not available remains documented and does not change the request
-shape.
+shape. Replay-prefetch queue depth remains internal in this increment rather
+than adding a request or CLI tuning field.
 
 **Traces to:** RQ-INDEXER-003C, RQ-INDEXER-003D, RQ-INDEXER-007, DSG-LFI-007B,
 DSG-LFI-008
