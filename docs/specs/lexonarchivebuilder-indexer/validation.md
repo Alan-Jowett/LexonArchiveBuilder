@@ -85,9 +85,10 @@ DSG-LFI-002
 
 Inspect the local Docker Compose topology for the MVP profile.
 
-**Pass condition:** the Compose topology brings up the batch container together
-with the local embedding service and required local storage mounts or volumes
-without introducing a separate long-lived indexing control-plane service.
+**Pass condition:** as a manual/operator validation procedure, the Compose
+topology brings up the batch container together with the local embedding
+service and required local storage mounts or volumes without introducing a
+separate long-lived indexing control-plane service.
 
 **Traces to:** RQ-INDEXER-001, RQ-INDEXER-008A, DSG-LFI-007A
 
@@ -121,14 +122,15 @@ repository stage contract rather than exposing raw upstream lifecycle phases.
 ### VAL-LFI-002E1
 
 Run a representative full-pipeline indexing workload whose logical corpus size
-exceeds available RAM under an explicit caller-selected memory budget.
+exceeds available RAM or otherwise materially exercises replay externalization.
 
 **Pass condition:** LexonArchiveBuilder completes or fails explicitly without
 repository-owned replay orchestration retaining corpus-scale replay-item,
 embedding, or mailbox-expansion state in memory; the observed working set
 remains bounded by the approved design strategy rather than growing in
 proportion to corpus size, and the caller-visible stage plus summary contracts
-remain unchanged.
+remain unchanged. This entry validates bounded-memory behavior, not a dedicated
+caller-visible memory-budget control.
 
 **Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A2, DSG-LFI-001A1,
 DSG-LFI-001A2, DSG-LFI-001F
@@ -605,8 +607,9 @@ policy.
 Run the repository-local published-profile sweep automation against a
 representative local/testing corpus.
 
-**Pass condition:** the runnable `test.ps1` workflow reuses the approved batch
-and rooted-quality operator surfaces, can target the active `0.6.x`
+**Pass condition:** as a repository-local manual/operator procedure, the
+runnable `test.ps1` workflow reuses the approved batch and rooted-quality
+operator surfaces, can target the active `0.6.x`
 published-profile series without per-profile code edits, emits per-profile
 artifacts plus comparable summary output, and keeps any optional `0.5.x`
 baseline comparison in the same local/testing-only automation surface rather
@@ -619,11 +622,12 @@ than changing the batch request contract or MCP behavior.
 Run the approved repository-local `0.7.0` fixed-budget ladder automation
 against a representative local/testing corpus.
 
-**Pass condition:** the runnable ladder reuses the approved batch and
-rooted-quality operator surfaces, preserves the fixed budget `1024` across the
-default rung set `4x256`, `8x128`, `16x64`, `32x32`, and `64x16`, emits
-per-rung build and rooted-quality artifacts plus a comparable summary table,
-and includes preflight validation plus deterministic rung ordering in the same
+**Pass condition:** as a repository-local manual/operator procedure, the
+runnable ladder reuses the approved batch and rooted-quality operator
+surfaces, preserves the fixed budget `1024` across the default rung set
+`4x256`, `8x128`, `16x64`, `32x32`, and `64x16`, emits per-rung build and
+rooted-quality artifacts plus a comparable summary table, and includes
+preflight validation plus deterministic rung ordering in the same
 local/testing-only automation surface rather than defining a new production or
 MCP-visible entrypoint. If the active upstream `0.7.0` v2 surface still lacks
 the required override hook, the same automation may satisfy this increment by
@@ -778,9 +782,10 @@ DSG-LFI-008
 
 Run the local/testing environment profile.
 
-**Pass condition:** LexonArchiveBuilder selects a filesystem-backed `BlockStore` for
-delegated index blocks, normalized email artifacts, and mailbox provenance
-artifacts plus a local STAPI-compatible embedding provider without changing the
+**Pass condition:** as a manual/operator end-to-end validation procedure,
+LexonArchiveBuilder selects a filesystem-backed `BlockStore` for delegated
+index blocks, normalized email artifacts, and mailbox provenance artifacts
+plus a local STAPI-compatible embedding provider without changing the
 collection input contract or the delegated indexer contract.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-007, DSG-LFI-005,

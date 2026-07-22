@@ -193,8 +193,8 @@ RQ-INDEXER-010A
 ### DSG-LFI-001A1 `Fixed-memory replay adapter`
 
 LexonArchiveBuilder realizes the repository-owned replay adapter so resident
-memory stays bounded by a caller-configurable budget even when the indexed
-corpus is larger than RAM.
+memory stays bounded with respect to corpus size even when the indexed corpus
+is larger than RAM.
 
 The repository-owned runtime therefore avoids corpus-scale in-memory retention
 of replay-item inventories, mailbox-or-document expansion state, replay batches,
@@ -204,9 +204,10 @@ bounded independently of total corpus size.
 
 For replay-journal-driven deterministic ordering, the approved retained state is
 a bounded in-memory working window over compact ordering entries that feeds the
-externalized replay-order scratch files while staying within the same caller-
-selected memory budget. In that working window the runtime excludes decoded blocks,
-embeddings, and equivalent payload state from replay-order preparation.
+externalized replay-order scratch files while staying within the same approved
+bounded-residency strategy. In that working window the runtime excludes decoded
+blocks, embeddings, and equivalent payload state from replay-order
+preparation.
 
 When resident memory would otherwise grow with corpus size, the design shifts
 repository-owned replay ordering onto run-scoped compact scratch files and uses
@@ -231,7 +232,8 @@ any fixed-size journal-integrity digest needed for later payload validation.
 That replay walk reads replay-audit blocks and recorded ids only; it does not
 dereference referenced payload blocks while preparing replay order.
 
-When the working set approaches the approved memory budget, the runtime sorts
+When the working set approaches the approved internal spill threshold, the
+runtime sorts
 the current compact-entry window in memory and flushes it as one sorted flat
 run file beneath a repository-owned run-scoped replay-order scratch root. After
 the journal scan completes, the runtime performs a deterministic k-way merge of
@@ -1735,7 +1737,7 @@ environment profile:
 
 | Profile | Block storage | Embedding target |
 |---|---|---|
-| local/testing | local filesystem | local STAPI-compatible service |
+| local/testing | direct local filesystem, or the preserved `local-overlay` storage shape for overlay-backed local testing | local STAPI-compatible service |
 | production | overlay block store: memory cache + local filesystem cache + Azure Blob SAS-backed storage | Azure OpenAI |
 | production-v2 | direct Azure-backed LexonGraph block store | Azure OpenAI |
 
@@ -1743,9 +1745,11 @@ This selection is configuration-driven and preserves one stable delegated
 indexing flow independent of environment across indexed blocks, normalized email
 artifacts, and mailbox provenance artifacts.
 
-For the approved MVP slice, the local/testing profile is the only profile that
-must execute end to end. The production-oriented profiles remain represented at
-this design layer so the same orchestration contract can govern direct-local,
+For the approved MVP slice, the local/testing family is the only profile family
+that must execute end to end. That family includes the direct-local baseline
+and the preserved `local-overlay` configuration shape for overlay-backed local
+testing. The production-oriented profiles remain represented at this design
+layer so the same orchestration contract can govern direct-local,
 overlay-backed, and approved direct-Azure-backed tool targeting without
 introducing ad hoc backend-specific operator modes.
 

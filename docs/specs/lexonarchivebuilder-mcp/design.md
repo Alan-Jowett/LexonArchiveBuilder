@@ -131,25 +131,29 @@ repository-managed dependencies.
 
 ### DSG-LFM-006 `Environment profile selection`
 
-LexonArchiveBuilder selects delegated dependency integrations as an environment profile:
+LexonArchiveBuilder selects delegated dependency integrations as an environment
+profile:
 
 | Profile | Storage / block access | Query-time embeddings when required by delegated search |
 |---|---|---|
-| local/testing | local filesystem-backed access | local embedding service using the same Docker-containerized embedding engine profile as the indexer |
-| production-oriented | overlay block store: memory cache + local filesystem cache + Azure Blob SAS-backed access | Azure OpenAI |
+| local/testing | direct local filesystem-backed access, or the preserved `local-overlay` storage shape for overlay-backed local testing | local embedding service using the same Docker-containerized embedding engine profile as the indexer |
+| production | overlay block store: memory cache + local filesystem cache + Azure Blob SAS-backed access | Azure OpenAI |
+| production-v2 | preserved direct-Azure shared-configuration shape | Azure OpenAI |
 
 This selection is configuration-driven and preserves one delegated search flow
 independent of environment.
 
-The non-local MCP storage target is intentionally fixed to this overlay shape
-rather than to a plain Azure-only mode or a caller-assembled arbitrary storage
-stack. That keeps `search_chunks` and the named retrieval tools on one shared
-storage-targeting contract even when a given retrieval operation is currently
-specified to return an explicit unsupported or unavailable outcome.
+The non-local MCP storage family intentionally excludes a plain Azure-only mode
+or a caller-assembled arbitrary storage stack. That keeps `search_chunks` and
+the named retrieval tools on one shared storage-targeting contract even when a
+given retrieval operation is currently specified to return an explicit
+unsupported or unavailable outcome.
 
-For the first MVP, only the local/testing profile must be executable end to
-end. The production-oriented overlay profile remains a preserved adapter and
-configuration boundary rather than an executable runtime path in this
+For the first MVP, only the local/testing family must be executable end to end.
+That family includes the direct-local baseline and the preserved
+`local-overlay` configuration shape for overlay-backed local testing. The
+production and `production-v2` profiles remain preserved adapter and
+configuration boundaries rather than executable runtime paths in this
 increment.
 
 **Traces to:** RQ-MCP-006, RQ-MCP-007, RQ-MCP-007A, RQ-MCP-012
@@ -183,10 +187,11 @@ The MVP realizes this parity boundary by keeping the MCP contract and adapter
 selection model environment-neutral even though only the local/testing profile
 is required to execute in the first increment.
 
-Within that parity boundary, all MCP tools share the same two-mode storage
-contract: direct local filesystem access or the fixed non-local overlay of
-memory cache plus local filesystem cache plus Azure Blob SAS-backed storage. No
-tool defines a plain Azure-only targeting exception.
+Within that parity boundary, all MCP tools share the same approved storage
+family: direct local filesystem access, the preserved `local-overlay` testing
+shape, the fixed non-local overlay of memory cache plus local filesystem cache
+plus Azure Blob SAS-backed storage, and preserved `production-v2`
+compatibility. No tool defines a plain Azure-only targeting exception.
 
 **Traces to:** RQ-MCP-007, RQ-MCP-009, RQ-MCP-012
 

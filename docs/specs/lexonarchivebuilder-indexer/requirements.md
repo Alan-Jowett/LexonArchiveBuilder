@@ -1512,8 +1512,8 @@ LexonArchiveBuilder SHALL adapt the approved batch contract onto the replay-base
 
 #### RQ-INDEXER-003A1 - Fixed-memory replay orchestration
 
-LexonArchiveBuilder SHALL keep its repository-owned replay orchestration within a
-caller-configurable fixed memory budget even when the indexed corpus is larger
+LexonArchiveBuilder SHALL keep its repository-owned replay orchestration
+bounded with respect to corpus size even when the indexed corpus is larger
 than available system memory.
 
 - **Execution scope [KNOWN]:** This requirement applies to both full-pipeline
@@ -1526,15 +1526,20 @@ than available system memory.
   ordering, LexonArchiveBuilder MAY retain the unique raw block-id list in
   memory when that retained state is limited to hash identities rather than
   decoded blocks, embeddings, or equivalent per-block payload state.
-- **Budget semantics [INFERRED]:** The approved memory budget constrains
-  repository-owned orchestration behavior rather than redefining opaque
-  upstream-owned model state, but LexonArchiveBuilder SHALL treat any upstream
-  incompatibility with this contract as an explicit adaptation finding rather
-  than silently accepting unbounded growth.
+- **Boundedness semantics [INFERRED]:** The approved bounded-memory contract
+  constrains repository-owned orchestration behavior rather than redefining
+  opaque upstream-owned model state, but LexonArchiveBuilder SHALL treat any
+  upstream incompatibility with this contract as an explicit adaptation
+  finding rather than silently accepting unbounded growth.
 - **Prefetch boundary [KNOWN]:** If repository-owned replay preparation overlaps
   delegated batch ingestion or training, the live resident working set SHALL
   remain limited to the current replay batch plus a tightly bounded amount of
   prepared future state rather than an unbounded queue of prefetched batches.
+- **Surface boundary [KNOWN]:** This increment does not add a dedicated memory-
+  budget field on the CLI or `BatchRequest`; the current caller-visible tuning
+  controls remain `max_concurrency` and `replay_batch_size`, while spill
+  thresholds and equivalent replay-order residency controls remain
+  repository-owned implementation details.
 - **Isolation boundary [KNOWN]:** Prepared future-batch replay state SHALL NOT
   replace or invalidate the content or embedding state needed by the currently
   active delegated batch before that delegated batch has completed ingestion.
@@ -1585,7 +1590,7 @@ with total replay-input corpus size.
   by repository-owned orchestration rather than upstream planner work, the
   runtime SHOULD make materially better use of available CPU and/or storage
   throughput than a fully serialized journal-scan-plus-spill path, subject to
-  the existing bounded-memory constraint.
+  the existing bounded-memory contract.
 - **Optimization boundary [INFERRED]:** Approved optimizations MAY include
   bounded overlap between replay-journal scanning and compact run sorting/
   writing, earlier duplicate elimination within bounded replay-order scratch
@@ -2462,8 +2467,13 @@ LexonArchiveBuilder SHALL obtain embeddings through a provider that satisfies `l
 
 LexonArchiveBuilder SHALL select storage and embedding integrations according to environment without changing the delegated indexing contract or the batch input contract.
 
-- **Local/testing [KNOWN]:** local filesystem + local embedding service
-- **Production-oriented [KNOWN]:** either the existing production overlay block store (memory cache + local filesystem cache + Azure Blob SAS-backed storage) + Azure OpenAI, or the additive `production-v2` direct Azure-backed store profile + Azure OpenAI
+- **Local/testing [KNOWN]:** either direct local filesystem + local embedding
+  service, or the preserved `local-overlay` shape that reuses the approved
+  overlay-backed storage profile together with a local embedding service
+- **Production-oriented [KNOWN]:** either the existing production overlay block
+  store (memory cache + local filesystem cache + Azure Blob SAS-backed
+  storage) + Azure OpenAI, or the additive `production-v2` direct Azure-backed
+  store profile + Azure OpenAI
 - **Constraint [KNOWN]:** Environment-specific adapter selection for every indexer-owned tool must expose the same approved storage-profile set rather than allowing some tools to invent one-off direct production backends outside the repository-defined `production` and `production-v2` profiles.
 - **Traceability:** UR-6, UR-7, UR-12, UR-13, UR-153, UR-154, UR-155, UR-156, UR-189, UR-190, UR-191
 

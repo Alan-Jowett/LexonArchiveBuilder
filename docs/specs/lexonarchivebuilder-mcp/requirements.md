@@ -25,8 +25,8 @@
 - **UR-MCP-12 [KNOWN]:** Implement the minimal viable product of `lexonarchivebuilder-mcp` using `docs/specs/lexonarchivebuilder-mcp/*` as the source of truth.
 - **UR-MCP-13 [KNOWN]:** The first MVP must be testable against a local filesystem-backed block store and a Docker-containerized local embedding service using the same local embedding engine profile as the indexer.
 - **UR-MCP-14 [KNOWN]:** Production storage and embedding integrations should remain pluggable through stable trait or adapter boundaries, but do not need an executable production realization in the first MVP.
-- **UR-MCP-15 [KNOWN]:** All MCP tools must allow operators to target either a local filesystem block store or an overlay block store composed of an in-memory cache, a local filesystem cache, and an Azure Blob backing store addressed by SAS URL.
-- **UR-MCP-16 [KNOWN]:** For this increment, a plain Azure Blob block-store target without the required memory-plus-filesystem overlay is not an approved MCP tool-targeting mode.
+- **UR-MCP-15 [KNOWN]:** All MCP tools must allow operators to target the approved shared environment/profile family, including local filesystem-backed access, the preserved local-overlay shape, the overlay block store composed of an in-memory cache, a local filesystem cache, and an Azure Blob backing store addressed by SAS URL, and preserved direct-Azure `production-v2` compatibility where the shared indexer configuration family already exposes it.
+- **UR-MCP-16 [KNOWN]:** For this increment, a plain Azure Blob block-store target without the required memory-plus-filesystem overlay is not an approved MCP tool-targeting mode, and no MCP tool may invent an undocumented plain-Azure-only exception outside the approved shared family.
 - **UR-MCP-17 [INFERRED]:** The same storage-targeting contract should apply consistently across `search_chunks` and the named retrieval tools, even when a specific retrieval tool currently returns an explicit unsupported outcome rather than traversing stored content.
 
 ## Change Manifest
@@ -40,7 +40,7 @@
 | CM-MCP-005 | Add | Capture invariants around indexing/search separation, stable contracts, and future content-type extensibility | UR-MCP-6, UR-MCP-8, UR-MCP-10 |
 | CM-MCP-006 | Revise | Narrow the first in-repo MVP realization to an end-to-end local/testing profile while preserving production integration seams | UR-MCP-12, UR-MCP-14 |
 | CM-MCP-007 | Add | Require local MVP testability against filesystem-backed block access and the same Docker-containerized local embedding engine profile used by the indexer | UR-MCP-12, UR-MCP-13 |
-| CM-MCP-008 | Revise | Replace the current local-versus-plain-Azure dependency split with a repository-wide two-mode MCP storage contract: direct local filesystem or a fixed overlay of memory cache plus local filesystem cache plus Azure Blob SAS-backed storage | UR-MCP-15, UR-MCP-16, UR-MCP-17 |
+| CM-MCP-008 | Revise | Replace the current local-versus-plain-Azure dependency split with one repository-wide MCP storage family that keeps direct local filesystem, preserved local-overlay, overlay-backed production, and preserved direct-Azure `production-v2` shapes aligned under the same shared configuration boundary | UR-MCP-15, UR-MCP-16, UR-MCP-17 |
 
 ## Before / After
 
@@ -76,8 +76,8 @@
 
 ### BA-MCP-007
 
-- **Before [KNOWN]:** The requirements allowed MCP dependency integration to vary between local filesystem-backed block access and a plain Azure-backed production boundary, but they did not require every MCP tool to share a single overlay-capable storage-targeting contract.
-- **After [KNOWN]:** The requirements now constrain all MCP tools to a consistent two-mode block-store target model: direct local filesystem access or a fixed overlay block store composed of memory cache, local filesystem cache, and Azure Blob SAS-backed storage.
+- **Before [KNOWN]:** The requirements allowed MCP dependency integration to vary between local filesystem-backed block access and a plain Azure-backed production boundary, but they did not require every MCP tool to share one explicit configuration family aligned with the reused indexer environment model.
+- **After [KNOWN]:** The requirements now constrain all MCP tools to one approved shared configuration family: direct local filesystem access, the preserved local-overlay testing shape, the overlay-backed production shape, and preserved direct-Azure `production-v2` compatibility without introducing an ad hoc plain-Azure-only exception path.
 
 
 ## Requirements
@@ -139,9 +139,20 @@ repository-local metadata scanning or other fallback matching semantics.
 `lexonarchivebuilder-mcp` SHALL provide the concrete trait plugins, adapters, or equivalent integrations required for the delegated LexonGraph search APIs to access repository-managed dependencies.
 
 - **Required initial dependency class [KNOWN]:** block storage
-- **Approved tool-targeting modes [KNOWN]:** The MCP dependency integration surface SHALL support exactly two block-store target modes: direct local filesystem access or the approved overlay block store.
-- **Disallowed mode [KNOWN]:** A plain Azure Blob block-store target without the required overlay layers is not an approved MCP-facing storage mode in this increment.
-- **Current increment [KNOWN]:** The existing local/testing realization remains required, and this increment additionally requires the same MCP configuration family to use the approved overlay target without introducing per-tool storage variants.
+- **Approved tool-targeting modes [KNOWN]:** The MCP dependency integration
+  surface SHALL support the approved shared block-store configuration family:
+  direct local filesystem access, the preserved `local-overlay` shape for
+  overlay-backed local testing, the approved overlay-backed production shape,
+  and preserved `production-v2` compatibility where the shared indexer
+  configuration family already exposes it.
+- **Disallowed mode [KNOWN]:** A plain Azure Blob block-store target without
+  the required overlay layers is not an approved MCP-facing storage mode in
+  this increment, and no MCP tool may introduce an undocumented plain-Azure-
+  only exception.
+- **Current increment [KNOWN]:** The existing local/testing realization remains
+  required, and this increment additionally requires the same MCP configuration
+  family to preserve the approved non-local shapes without introducing per-tool
+  storage variants.
 - **MVP realization [KNOWN]:** The first in-repo implementation must include repository-local integrations sufficient for an executable local/testing profile using filesystem-backed block access.
 - **Extensibility [INFERRED]:** Additional delegated query-time dependencies should be integrated behind the same stable boundary rather than leaking backend-specific details into the MCP contract.
 - **Tool-surface consistency [INFERRED]:** `search_chunks` and the named retrieval tools SHALL share the same storage-targeting contract even when a specific tool currently returns an explicit unsupported outcome rather than dereferencing stored content.
@@ -151,9 +162,19 @@ repository-local metadata scanning or other fallback matching semantics.
 
 `lexonarchivebuilder-mcp` SHALL select its delegated dependency integrations according to environment without changing the MCP-facing search or retrieval contract.
 
-- **Local/testing [KNOWN]:** local filesystem-backed content or block access, plus a local embedding service using the same Docker-containerized embedding engine profile as the indexer where the delegated search APIs require embeddings
-- **Production-oriented [KNOWN]:** overlay block store (memory cache + local filesystem cache + Azure Blob SAS-backed storage) plus Azure OpenAI-backed embeddings where the delegated search APIs require embeddings
-- **Constraint [KNOWN]:** Every MCP tool SHALL preserve the same two-mode local-versus-overlay block-store selection contract rather than permitting some tools to target local filesystem while others target a plain Azure Blob backend directly.
+- **Local/testing [KNOWN]:** direct local filesystem-backed content or block
+  access, or the preserved `local-overlay` storage shape together with a local
+  embedding service using the same Docker-containerized embedding engine
+  profile as the indexer where the delegated search APIs require embeddings
+- **Production-oriented [KNOWN]:** either the approved overlay block store
+  (memory cache + local filesystem cache + Azure Blob SAS-backed storage) plus
+  Azure OpenAI-backed embeddings where the delegated search APIs require
+  embeddings, or the preserved direct-Azure `production-v2` shape where the
+  shared configuration family already exposes it
+- **Constraint [KNOWN]:** Every MCP tool SHALL preserve the same approved
+  shared block-store configuration family rather than permitting some tools to
+  target local filesystem while others target a plain Azure Blob backend
+  directly.
 - **Constraint [INFERRED]:** Environment-specific wiring must stay behind stable interfaces so clients do not need different MCP contracts per environment.
 - **Traceability:** UR-MCP-7, UR-MCP-9, UR-MCP-10, UR-MCP-13, UR-MCP-14, UR-MCP-15, UR-MCP-16, UR-MCP-17
 
