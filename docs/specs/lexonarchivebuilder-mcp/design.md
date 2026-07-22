@@ -143,7 +143,7 @@ profile:
 This selection is configuration-driven and preserves one delegated search flow
 independent of environment.
 
-The non-local MCP storage family intentionally excludes a plain Azure-only mode
+The non-local MCP storage family intentionally excludes a plain Azure Blob-only mode
 or a caller-assembled arbitrary storage stack. That keeps `search_chunks` and
 the named retrieval tools on one shared storage-targeting contract even when a
 given retrieval operation is currently specified to return an explicit
@@ -191,7 +191,7 @@ Within that parity boundary, all MCP tools share the same approved storage
 family: direct local filesystem access, the preserved `local-overlay` testing
 shape, the fixed non-local overlay of memory cache plus local filesystem cache
 plus Azure Blob SAS-backed storage, and preserved `production-v2`
-compatibility. No tool defines a plain Azure-only targeting exception.
+compatibility. No tool defines a plain Azure Blob-only targeting exception.
 
 **Traces to:** RQ-MCP-007, RQ-MCP-009, RQ-MCP-012
 

@@ -110,7 +110,7 @@ describe the approved overlay target of memory cache plus local filesystem
 cache plus Azure Blob SAS-backed access, while also remaining consistent with
 the preserved `local-overlay` and `production-v2` configuration shapes exposed
 through the shared indexer environment model rather than inventing a plain
-Azure-only mode.
+Azure Blob-only mode.
 
 **Traces to:** RQ-MCP-006, RQ-MCP-007, DSG-LFM-005, DSG-LFM-006, DSG-LFM-007
 
@@ -124,7 +124,7 @@ approved storage-targeting family: direct local filesystem access, the
 preserved `local-overlay` testing shape, the fixed overlay of memory cache
 plus local filesystem cache plus Azure Blob SAS-backed access, and preserved
 `production-v2` compatibility where the shared configuration family already
-exposes it. No MCP tool introduces a plain Azure-only block-store targeting
+exposes it. No MCP tool introduces a plain Azure Blob-only block-store targeting
 mode outside that approved family.
 
 **Traces to:** RQ-MCP-006, RQ-MCP-007, DSG-LFM-006, DSG-LFM-007, DSG-LFM-011

@@ -35,8 +35,8 @@
     indexer configuration family already exposes it
 - **UR-MCP-16 [KNOWN]:** For this increment, a plain Azure Blob block-store
   target without the required memory-plus-filesystem overlay is not an approved
-  MCP tool-targeting mode, and no MCP tool may invent an undocumented plain-
-  Azure-only exception outside the approved shared family.
+  MCP tool-targeting mode, and no MCP tool may invent an undocumented plain
+  Azure Blob-only exception outside the approved shared family.
 - **UR-MCP-17 [INFERRED]:** The same storage-targeting contract should apply consistently across `search_chunks` and the named retrieval tools, even when a specific retrieval tool currently returns an explicit unsupported outcome rather than traversing stored content.
 
 ## Change Manifest
@@ -87,7 +87,7 @@
 ### BA-MCP-007
 
 - **Before [KNOWN]:** The requirements allowed MCP dependency integration to vary between local filesystem-backed block access and a plain Azure-backed production boundary, but they did not require every MCP tool to share one explicit configuration family aligned with the reused indexer environment model.
-- **After [KNOWN]:** The requirements now constrain all MCP tools to one approved shared configuration family: direct local filesystem access, the preserved local-overlay testing shape, the overlay-backed production shape, and preserved direct-Azure `production-v2` compatibility without introducing an ad hoc plain-Azure-only exception path.
+- **After [KNOWN]:** The requirements now constrain all MCP tools to one approved shared configuration family: direct local filesystem access, the preserved local-overlay testing shape, the overlay-backed production shape, and preserved direct-Azure `production-v2` compatibility without introducing an ad hoc plain Azure Blob-only exception path.
 
 
 ## Requirements
