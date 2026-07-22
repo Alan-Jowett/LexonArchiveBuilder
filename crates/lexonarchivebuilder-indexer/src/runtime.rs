@@ -1159,22 +1159,22 @@ fn replay_batch_from_entries(
     store: &ConfiguredBlockStore,
     embedding_spec: &EmbeddingSpec,
 ) -> Result<ReplayBatchLoad, RuntimeError> {
-    let loaded_entries = if replay_batch_materialization_worker_count(entries.len()) <= 1 {
-        entries
-            .iter()
-            .copied()
-            .map(|entry| load_replay_batch_entry(entry, store, embedding_spec))
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        load_replay_batch_entries_in_parallel(entries, store, embedding_spec)?
-    };
     let mut items = Vec::with_capacity(entries.len());
     let mut audit_records = Vec::with_capacity(entries.len());
     let mut embeddings_by_input_hash = Vec::with_capacity(entries.len());
-    for loaded_entry in loaded_entries {
-        embeddings_by_input_hash.push((loaded_entry.input_hash, loaded_entry.embedding));
-        audit_records.push(loaded_entry.audit_record);
-        items.push(loaded_entry.item);
+    if replay_batch_materialization_worker_count(entries.len()) <= 1 {
+        for entry in entries.iter().copied() {
+            let loaded_entry = load_replay_batch_entry(entry, store, embedding_spec)?;
+            embeddings_by_input_hash.push((loaded_entry.input_hash, loaded_entry.embedding));
+            audit_records.push(loaded_entry.audit_record);
+            items.push(loaded_entry.item);
+        }
+    } else {
+        for loaded_entry in load_replay_batch_entries_in_parallel(entries, store, embedding_spec)? {
+            embeddings_by_input_hash.push((loaded_entry.input_hash, loaded_entry.embedding));
+            audit_records.push(loaded_entry.audit_record);
+            items.push(loaded_entry.item);
+        }
     }
     Ok(ReplayBatchLoad {
         batch: ReplayBatch {
