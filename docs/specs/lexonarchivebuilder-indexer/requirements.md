@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v2 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v2 intra-pass planning observability consumption, user-usable convergence-diagnosis surfacing, latest-LexonGraph planner-state-root adoption for bounded-residency out-of-core planning spill, and issue-83 replay-order memory decoupling from corpus size
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, intra-pass planning telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, bounded-residency deterministic replay ordering for deterministic replay submission, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v2 API when the selected published profile is `0.7.0`, and upstream planner-managed out-of-core planning-state spill for clustering-enabled v2 execution
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v2 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v2 intra-pass planning observability consumption, user-usable convergence-diagnosis surfacing, latest-LexonGraph planner-state-root adoption for bounded-residency out-of-core planning spill, issue-83 replay-order memory decoupling from corpus size, and bounded replay-batch preparation overlap exploration for issue #88
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, intra-pass planning telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, bounded-residency deterministic replay ordering for deterministic replay submission, bounded replay-batch preparation overlap behind the existing replay contract, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v2 API when the selected published profile is `0.7.0`, and upstream planner-managed out-of-core planning-state spill for clustering-enabled v2 execution
 
 ## USER-REQUEST
 
@@ -400,6 +400,29 @@
 - **UR-255 [INFERRED]:** Any repository-owned externalized replay-order state
   approved for issue #83 must remain semantically separate from the delegated
   planner-state root and from upstream-owned planner spill internals.
+- **UR-256 [KNOWN]:** Issue #88 asks LexonArchiveBuilder to explore whether
+  clustering-only replay can overlap bounded repository-owned replay-batch
+  preparation with delegated training or ingestion work to hide storage and
+  syscall latency.
+- **UR-257 [KNOWN]:** Any such overlap must remain subordinate to the upstream
+  `StreamingIndexingRunV2` lifecycle and must not require concurrent
+  `ingest_batch`, `finish_pass`, `mark_planning_complete`, or `finalize`
+  operations on the same delegated run.
+- **UR-258 [INFERRED]:** If LexonArchiveBuilder prepares replay batch `N+1`
+  while batch `N` is still being ingested upstream, the prepared-next-batch
+  content and embedding state must remain isolated until batch `N` completes so
+  the current delegated batch never observes replaced replay state.
+- **UR-259 [INFERRED]:** Replay-preparation overlap must preserve deterministic
+  replay order, replay-validation identity, stable fingerprints, and bounded
+  repository-owned memory independently of corpus size.
+- **UR-260 [KNOWN]:** The first approved increment for this idea should remain
+  an internal runtime optimization and should not add a new caller-visible
+  replay-prefetch selector unless the existing upstream/local contract proves
+  insufficient.
+- **UR-261 [INFERRED]:** Any approved overlap strategy must remain
+  content-type-neutral and environment-neutral so future content types and both
+  local/testing and production-oriented `BlockStore` profiles participate
+  through the same replay boundary.
 
 ## Change Manifest
 
@@ -516,6 +539,9 @@
 | CM-INDEXER-109 | Add | Require clustering-only replay to remain executable from the stored block-store snapshot once replayable leaf outputs are durable, without depending on original request-era source availability | UR-39, UR-160, UR-163, UR-166 |
 | CM-INDEXER-110 | Add | Preserve provenance and replay-validation identity metadata for clustering-only replay without making metadata-only refs the execution dependency for replayed content reconstruction | UR-16, UR-23, UR-45, UR-49 |
 | CM-INDEXER-111 | Add | Require validation coverage for source-independent document and email-derived clustering-only replay using stored leaf content rather than resolver-driven content rematerialization | UR-39, UR-160, UR-163, UR-166 |
+| CM-INDEXER-112 | Add | Permit bounded repository-owned overlap of replay-batch preparation with delegated replay ingestion while preserving the upstream sequential lifecycle | UR-256, UR-257, UR-259 |
+| CM-INDEXER-113 | Revise | Extend fixed-memory replay orchestration so any prefetched replay state remains tightly bounded and isolated from the live batch state | UR-214, UR-258, UR-259 |
+| CM-INDEXER-114 | Add | Keep replay-preparation overlap internal, content-type-neutral, and environment-neutral rather than broadening the caller-visible batch surface | UR-260, UR-261 |
 
 ## Before / After
 
@@ -1186,6 +1212,36 @@
   file reopening, normalized-email rechunking, or equivalent resolver-driven
   rematerialization.
 
+### BA-INDEXER-110
+
+- **Before [KNOWN]:** The requirements treated replay submission as deterministic
+  and bounded, but they did not explicitly say whether repository-owned
+  replay-batch preparation must be fully serialized with delegated
+  `ingest_batch(...)` or may overlap safely behind the same upstream lifecycle.
+- **After [KNOWN]:** The requirements now explicitly allow bounded replay-batch
+  preparation overlap as a repository-owned optimization, provided the delegated
+  streaming lifecycle itself remains sequential and unchanged.
+
+### BA-INDEXER-111
+
+- **Before [KNOWN]:** Fixed-memory replay requirements bounded replay-order
+  preparation and replay execution generally, but they did not explicitly
+  constrain any future prepared-next-batch cache or embedding handoff state.
+- **After [KNOWN]:** Fixed-memory replay requirements now explicitly bound any
+  prefetched replay state to a tightly capped live working set and require
+  prepared-next-batch state to remain isolated from the current batch until
+  handoff is safe.
+
+### BA-INDEXER-112
+
+- **Before [KNOWN]:** Stable abstraction requirements preserved replay
+  determinism and content-model neutrality, but they did not explicitly state
+  that replay-preparation overlap must remain an internal optimization rather
+  than a new caller-visible tuning surface.
+- **After [KNOWN]:** The requirements now explicitly keep replay-preparation
+  overlap behind the existing batch/runtime abstraction, preserving the current
+  CLI, `BatchRequest`, and MCP-facing contracts.
+
 ## Requirements
 
 ### Functional Requirements
@@ -1255,13 +1311,20 @@ than available system memory.
   upstream-owned model state, but LexonArchiveBuilder SHALL treat any upstream
   incompatibility with this contract as an explicit adaptation finding rather
   than silently accepting unbounded growth.
+- **Prefetch boundary [KNOWN]:** If repository-owned replay preparation overlaps
+  delegated batch ingestion or training, the live resident working set SHALL
+  remain limited to the current replay batch plus a tightly bounded amount of
+  prepared future state rather than an unbounded queue of prefetched batches.
+- **Isolation boundary [KNOWN]:** Prepared future-batch replay state SHALL NOT
+  replace or invalidate the content or embedding state needed by the currently
+  active delegated batch before that delegated batch has completed ingestion.
 - **Stage-contract boundary [KNOWN]:** Satisfying this requirement SHALL NOT
   change the caller-visible stage contract, `BatchSummary` contract, or MCP
   search-serving behavior for already-indexed content.
 - **Extensibility boundary [INFERRED]:** Future content types must participate
   through the same bounded-memory orchestration boundary rather than adding
   content-type-specific corpus-scale retention exceptions.
-- **Traceability:** UR-47, UR-48, UR-59, UR-160, UR-210, UR-211, UR-213, UR-214
+- **Traceability:** UR-47, UR-48, UR-59, UR-160, UR-210, UR-211, UR-213, UR-214, UR-258, UR-259
 
 #### RQ-INDEXER-003A2 - Bounded-residency deterministic replay ordering
 
@@ -1336,6 +1399,28 @@ out-of-core planning state beneath that root.
   profiles, while preserving the existing stage contract and unchanged MCP
   search-serving or retrieval behavior for already-indexed content.
 - **Traceability:** UR-63, UR-220, UR-223, UR-224, UR-225, UR-244, UR-245, UR-246, UR-247, UR-248, UR-249, UR-250
+
+#### RQ-INDEXER-003A4 - Contract-safe replay-batch preparation overlap
+
+LexonArchiveBuilder MAY overlap repository-owned replay-batch preparation for a
+later deterministic replay batch with delegated ingestion or training of the
+current batch when doing so remains subordinate to the approved upstream
+lifecycle.
+
+- **Lifecycle rule [KNOWN]:** The runtime SHALL NOT invoke concurrent
+  `ingest_batch`, `finish_pass`, `mark_planning_complete`, or `finalize`
+  operations on one delegated streaming run.
+- **Ordering rule [KNOWN]:** Overlap SHALL NOT change deterministic replay
+  submission order, pass boundaries, or finalization replay semantics.
+- **Identity rule [KNOWN]:** Overlap SHALL preserve replay-validation identity,
+  stable content fingerprints, and clustering-failure diagnosability for
+  replayed items.
+- **Abstraction rule [KNOWN]:** This optimization remains internal to
+  repository-owned orchestration and SHALL NOT add a new caller-visible stage,
+  request shape, or MCP surface in this increment.
+- **Extensibility rule [INFERRED]:** The overlap boundary SHALL remain generic
+  across approved content types and environment-selected storage profiles.
+- **Traceability:** UR-48, UR-49, UR-160, UR-214, UR-256, UR-257, UR-258, UR-259, UR-260, UR-261
 
 #### RQ-INDEXER-003B - Layer-parallel delegated block processing
 

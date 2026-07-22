@@ -35,7 +35,7 @@ use reqwest::Url;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::task::{JoinError, JoinSet};
+use tokio::task::{JoinError, JoinHandle, JoinSet};
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 
 use crate::block_store::{
@@ -759,6 +759,8 @@ pub enum RuntimeError {
     LeafTaskJoin(#[from] JoinError),
     #[error("blocking mutable-ref task failed: {0}")]
     BlockingMutableRefTaskJoin(JoinError),
+    #[error("blocking replay-prefetch task failed: {0}")]
+    BlockingReplayPrefetchTaskJoin(JoinError),
     #[error("failed to write batch summary {path}: {source}")]
     WriteSummary {
         path: String,
@@ -1076,22 +1078,48 @@ impl ExternalizedStoredLeafEmbeddingProvider {
 }
 
 impl ExternalizedReplayBatchIterator {
-    fn next_batch(&mut self) -> Result<Option<ReplayBatch>, RuntimeError> {
+    fn clear_current_batch_embeddings(&self) {
+        lock_unpoisoned(&self.current_batch_embeddings).clear();
+    }
+
+    fn publish_batch_embeddings(&self, embeddings_by_input_hash: &[([u8; 32], Vec<u8>)]) {
+        let mut cache = lock_unpoisoned(&self.current_batch_embeddings);
+        cache.clear();
+        cache.extend(embeddings_by_input_hash.iter().cloned());
+    }
+
+    fn load_next_batch(&mut self) -> Result<Option<ReplayBatchLoad>, RuntimeError> {
         let entries = self
             .replay_order_reader
             .read_next_entries(self.batch_size)?;
         if entries.is_empty() {
-            lock_unpoisoned(&self.current_batch_embeddings).clear();
             return Ok(None);
         }
-        let batch = replay_batch_from_entries(&entries, &self.block_store, &self.embedding_spec)?;
-        {
-            let mut cache = lock_unpoisoned(&self.current_batch_embeddings);
-            cache.clear();
-            cache.extend(batch.embeddings_by_input_hash.iter().cloned());
-        }
+        Ok(Some(replay_batch_from_entries(
+            &entries,
+            &self.block_store,
+            &self.embedding_spec,
+        )?))
+    }
+
+    fn next_batch(&mut self) -> Result<Option<ReplayBatch>, RuntimeError> {
+        let Some(batch) = self.load_next_batch()? else {
+            self.clear_current_batch_embeddings();
+            return Ok(None);
+        };
+        self.publish_batch_embeddings(&batch.embeddings_by_input_hash);
         Ok(Some(batch.batch))
     }
+}
+
+fn spawn_externalized_replay_batch_prefetch(
+    iterator: ExternalizedReplayBatchIterator,
+) -> JoinHandle<Result<(ExternalizedReplayBatchIterator, Option<ReplayBatchLoad>), RuntimeError>> {
+    tokio::task::spawn_blocking(move || {
+        let mut iterator = iterator;
+        let next = iterator.load_next_batch()?;
+        Ok((iterator, next))
+    })
 }
 
 impl IntoIterator for ExternalizedReplayFinalizeSource {
@@ -5069,12 +5097,15 @@ where
         let mut completed_items = 0usize;
         let mut iterator = replay_state.batch_iterator()?;
         let mut batch_number = 0usize;
-        while let Some(batch) = iterator.next_batch()? {
-            if batch.items.is_empty() {
+        let mut current_batch = iterator.load_next_batch()?;
+        while let Some(batch) = current_batch {
+            if batch.batch.items.is_empty() {
+                current_batch = iterator.load_next_batch()?;
                 continue;
             }
+            iterator.publish_batch_embeddings(&batch.embeddings_by_input_hash);
             batch_number += 1;
-            let batch_item_count = batch.items.len();
+            let batch_item_count = batch.batch.items.len();
             report_progress(
                 io.progress,
                 config.submission_progress_kind.started_message(
@@ -5085,8 +5116,9 @@ where
                     total_items,
                 ),
             );
+            let prefetch = spawn_externalized_replay_batch_prefetch(iterator);
             await_with_periodic_progress(
-                indexer.ingest_batch(&batch.items),
+                indexer.ingest_batch(&batch.batch.items),
                 io.progress,
                 PROGRESS_HEARTBEAT_INTERVAL,
                 |elapsed| {
@@ -5101,6 +5133,11 @@ where
                 },
             )
             .await?;
+            let (next_iterator, next_batch) = prefetch
+                .await
+                .map_err(RuntimeError::BlockingReplayPrefetchTaskJoin)??;
+            iterator = next_iterator;
+            current_batch = next_batch;
             completed_items += batch_item_count;
             report_progress(
                 io.progress,
@@ -5112,6 +5149,7 @@ where
                 ),
             );
         }
+        iterator.clear_current_batch_embeddings();
         report_progress(
             io.progress,
             config
@@ -10355,6 +10393,152 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(embedding, expected_embedding);
+    }
+
+    #[test]
+    fn externalized_replay_prefetch_keeps_active_batch_embeddings_published_until_handoff() {
+        let temp = tempdir().unwrap();
+        let block_store = ConfiguredBlockStore::from_environment(
+            temp.path(),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: String::new(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+        )
+        .unwrap();
+
+        let embedding_spec = EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        };
+        let alpha_embedding = vec![0, 0, 0, 0, 0, 0, 128, 63];
+        let beta_embedding = vec![0, 0, 0, 64, 0, 0, 128, 63];
+        let alpha_block = Block::Leaf(
+            build_leaf_block(
+                VERSION_1,
+                embedding_spec.clone(),
+                vec![LeafEntry {
+                    embedding: alpha_embedding.clone(),
+                    metadata: vec![
+                        (
+                            Value::Text("source_kind".into()),
+                            Value::Text("document".into()),
+                        ),
+                        (
+                            Value::Text("source_path".into()),
+                            Value::Text("C:/docs/alpha.txt".into()),
+                        ),
+                    ],
+                    content: Content {
+                        media_type: "text/plain".into(),
+                        body: b"alpha".to_vec(),
+                    },
+                }],
+                None,
+            )
+            .unwrap(),
+        );
+        let beta_block = Block::Leaf(
+            build_leaf_block(
+                VERSION_1,
+                embedding_spec.clone(),
+                vec![LeafEntry {
+                    embedding: beta_embedding.clone(),
+                    metadata: vec![
+                        (
+                            Value::Text("source_kind".into()),
+                            Value::Text("document".into()),
+                        ),
+                        (
+                            Value::Text("source_path".into()),
+                            Value::Text("C:/docs/beta.txt".into()),
+                        ),
+                    ],
+                    content: Content {
+                        media_type: "text/plain".into(),
+                        body: b"beta".to_vec(),
+                    },
+                }],
+                None,
+            )
+            .unwrap(),
+        );
+        let alpha_block_id = put_block(&block_store, &alpha_block);
+        let beta_block_id = put_block(&block_store, &beta_block);
+        let alpha_validated = get_block(&block_store, &alpha_block_id).unwrap();
+        let beta_validated = get_block(&block_store, &beta_block_id).unwrap();
+        let alpha_item = replay_item_from_validated_block(&alpha_validated, &embedding_spec)
+            .unwrap()
+            .unwrap()
+            .0;
+        let beta_item = replay_item_from_validated_block(&beta_validated, &embedding_spec)
+            .unwrap()
+            .unwrap()
+            .0;
+        let replay_order = replay_order_storage_for_entries(&[
+            ReplayOrderEntry::new(alpha_block_id, replay_sort_key_digest(&alpha_item)),
+            ReplayOrderEntry::new(beta_block_id, replay_sort_key_digest(&beta_item)),
+        ]);
+        let current_batch_embeddings = Arc::new(Mutex::new(HashMap::new()));
+        let mut iterator = ExternalizedReplayBatchIterator {
+            replay_order_reader: replay_order.open_reader().unwrap(),
+            batch_size: 1,
+            block_store: block_store.clone(),
+            embedding_spec: embedding_spec.clone(),
+            current_batch_embeddings: Arc::clone(&current_batch_embeddings),
+        };
+        let provider = ExternalizedStoredLeafEmbeddingProvider {
+            block_store,
+            embedding_spec,
+            replay_order,
+            current_batch_embeddings: Arc::clone(&current_batch_embeddings),
+            fallback_embeddings: Arc::new(Mutex::new(None)),
+        };
+
+        let first_batch = iterator.load_next_batch().unwrap().unwrap();
+        iterator.publish_batch_embeddings(&first_batch.embeddings_by_input_hash);
+        assert_eq!(
+            provider
+                .load_embedding_for_hash(
+                    &hash_embedding_content("text/plain", b"alpha").into_bytes()
+                )
+                .unwrap()
+                .unwrap(),
+            alpha_embedding
+        );
+
+        let second_batch = iterator.load_next_batch().unwrap().unwrap();
+        assert_eq!(
+            provider
+                .load_embedding_for_hash(
+                    &hash_embedding_content("text/plain", b"alpha").into_bytes()
+                )
+                .unwrap()
+                .unwrap(),
+            alpha_embedding
+        );
+        assert!(
+            !lock_unpoisoned(&current_batch_embeddings)
+                .contains_key(&hash_embedding_content("text/plain", b"beta").into_bytes())
+        );
+
+        iterator.publish_batch_embeddings(&second_batch.embeddings_by_input_hash);
+        assert_eq!(
+            provider
+                .load_embedding_for_hash(
+                    &hash_embedding_content("text/plain", b"beta").into_bytes()
+                )
+                .unwrap()
+                .unwrap(),
+            beta_embedding
+        );
     }
 
     #[test]

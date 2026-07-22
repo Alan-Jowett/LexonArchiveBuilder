@@ -23,14 +23,15 @@ wgpu-acceleration revision compatibility, 0.6.x published-profile
 evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
 experiment automation, upstream embedding-readback
 API adoption, LAB-owned replay-journaled split-stage recovery, bounded-residency
-deterministic replay ordering, and layer-parallel block-construction
-evolution, v2 custom-block adoption for
+deterministic replay ordering, bounded replay-batch preparation overlap, and
+layer-parallel block-construction evolution, v2 custom-block adoption for
 repository-owned non-search artifacts, and conditional streaming-indexer v2
 adoption with repository-default published profile `0.7.0`, plus derived
 planner-state-root support for delegated bounded-residency out-of-core planning
 spill, in
-`docs/specs/lexonarchivebuilder-indexer/requirements.md` and
-`docs/specs/lexonarchivebuilder-indexer/design.md`.
+`docs/specs/lexonarchivebuilder-indexer/requirements.md`,
+`docs/specs/lexonarchivebuilder-indexer/design.md`, and
+`docs/specs/lexonarchivebuilder-indexer/validation.md`.
 
 ## Validation Scope
 
@@ -312,6 +313,27 @@ deterministic fingerprints.
 
 **Traces to:** RQ-INDEXER-003E, RQ-INDEXER-003E1, RQ-INDEXER-003E4,
 RQ-INDEXER-004F, RQ-INDEXER-010A, DSG-LFI-001E, DSG-LFI-001F
+
+### VAL-LFI-002I5
+
+Run the clustering-plus-block-assembly stage against a replay-audit journal
+large enough to require multiple replay batches while instrumenting one future
+batch of repository-owned replay preparation to overlap with delegated
+`ingest_batch(...)` processing of the current batch.
+
+**Pass condition:** Validation evidence shows the runtime may prepare at most
+one tightly bounded successor replay batch while the current batch is inside the
+delegated ingestion path, but it never invokes concurrent upstream
+`ingest_batch(...)`, `finish_pass()`, `mark_planning_complete()`, or
+`finalize(...)` operations on the same delegated run. The active batch continues
+to observe the correct replay content and embedding state until it completes,
+the next batch is submitted in the same deterministic order that non-overlapped
+replay would use, and peak repository-owned resident memory remains bounded to
+the current batch plus the approved prefetched successor state rather than an
+unbounded replay queue.
+
+**Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A4, RQ-INDEXER-004F,
+RQ-INDEXER-010A, DSG-LFI-001A1, DSG-LFI-001A4
 
 ### VAL-LFI-002J
 

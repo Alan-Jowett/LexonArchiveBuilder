@@ -24,7 +24,7 @@ compatibility, 0.6.x published-profile evaluation, local testing sweep
 automation, v0.7.0 fixed-budget ladder experiment automation, rooted
 block-store copy tooling, upstream embedding-readback API adoption, LAB-owned
 replay-journaled split-stage recovery, bounded-residency deterministic replay
-ordering, and layer-parallel
+ordering, bounded replay-batch preparation overlap, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
 non-search artifacts, plus conditional streaming-indexer v2 adoption with
 repository-default published profile `0.7.0` and derived planner-state-root
@@ -276,6 +276,33 @@ repository-owned contract stable while satisfying the new upstream writable-root
 requirement without broadening the external batch surface.
 
 **Traces to:** RQ-INDEXER-003A3, RQ-INDEXER-010A
+
+### DSG-LFI-001A4 `Bounded replay-batch prefetch overlap`
+
+LexonArchiveBuilder may overlap repository-owned preparation of the next replay
+batch with delegated ingestion of the current replay batch, but it does so as a
+bounded one-batch-ahead pipeline rather than as concurrent delegated planning
+operations.
+
+The repository-owned side may read the next replay-order window, fetch the
+referenced stored leaf blocks, reconstruct replay items, and derive the
+embedding-cache state for that next batch while the current batch is inside
+`StreamingIndexingRunV2::ingest_batch(...)`.
+
+However, the prepared-next-batch state remains isolated until the current batch
+finishes delegated ingestion. The live embedding cache and replay content state
+visible to the active delegated batch are not replaced early, and the runtime
+does not call upstream `ingest_batch(...)`, `finish_pass()`,
+`mark_planning_complete()`, or `finalize(...)` concurrently on the same
+delegated run instance.
+
+This design preserves deterministic replay order, stable replay identity, and
+the fixed-memory boundary by capping prefetched state to the current batch plus
+one prepared successor batch. It is an internal repository-owned orchestration
+optimization only; it does not change the caller-visible batch contract, the
+delegated upstream lifecycle, or content-type/environment participation rules.
+
+**Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A4, RQ-INDEXER-010A
 
 ### DSG-LFI-001B `Leaf-layer scheduling discipline`
 
