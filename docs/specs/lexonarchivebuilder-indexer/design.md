@@ -24,12 +24,14 @@ compatibility, 0.6.x published-profile evaluation, local testing sweep
 automation, v0.7.0 fixed-budget ladder experiment automation, rooted
 block-store copy tooling, upstream embedding-readback API adoption, LAB-owned
 replay-journaled split-stage recovery, bounded-residency deterministic replay
-ordering, bounded replay-batch preparation overlap, and layer-parallel
+ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
 non-search artifacts, plus conditional streaming-indexer v2 adoption with
 repository-default published profile `0.7.0` and derived planner-state-root
 support for delegated bounded-residency out-of-core planning spill, in
-`docs/specs/lexonarchivebuilder-indexer/requirements.md`.
+`docs/specs/lexonarchivebuilder-indexer/requirements.md`,
+`docs/specs/lexonarchivebuilder-indexer/design.md`, and
+`docs/specs/lexonarchivebuilder-indexer/validation.md`.
 
 ## Scope
 
@@ -249,6 +251,32 @@ use that scratch root is an explicit runtime failure for workloads that require
 externalization.
 
 **Traces to:** RQ-INDEXER-003A2, RQ-INDEXER-003E, RQ-INDEXER-003E1, RQ-INDEXER-003E3
+
+### DSG-LFI-001A5 `Efficient replay-order preparation`
+
+LexonArchiveBuilder realizes replay-order preparation as a bounded repository-
+owned pipeline that may improve throughput without changing replay-order
+semantics.
+
+The design keeps the journal walk authoritative and deterministic, but it may
+reduce replay-order preparation overhead by deriving compact ordering digests
+directly from replay-journal input records, by removing duplicates earlier
+within bounded run-local stages, or by overlapping the serial journal scan with
+bounded background sort/spill work for already-filled compact-entry windows.
+
+Those optimizations remain subordinate to the existing replay-order contract:
+they continue to operate on replay-journal metadata, compact ordering
+identities, and fixed-size validation evidence only; they do not dereference
+replay payload blocks during replay-order generation; and they emit the same
+deduplicated deterministic final block-id order that the non-optimized external
+sort baseline would have produced.
+
+Any internal overlap stays tightly bounded by the approved memory budget and
+remains hidden behind the existing replay-order abstraction. This increment does
+not introduce a new caller-visible tuning selector or environment-specific
+replay-order semantics.
+
+**Traces to:** RQ-INDEXER-003A2, RQ-INDEXER-003A5, RQ-INDEXER-010A
 
 ### DSG-LFI-001A3 `Derived delegated planner-state root`
 

@@ -23,7 +23,7 @@ wgpu-acceleration revision compatibility, 0.6.x published-profile
 evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
 experiment automation, upstream embedding-readback
 API adoption, LAB-owned replay-journaled split-stage recovery, bounded-residency
-deterministic replay ordering, bounded replay-batch preparation overlap, and
+deterministic replay ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, and
 layer-parallel block-construction evolution, v2 custom-block adoption for
 repository-owned non-search artifacts, and conditional streaming-indexer v2
 adoption with repository-default published profile `0.7.0`, plus derived
@@ -334,6 +334,24 @@ unbounded replay queue.
 
 **Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A4, RQ-INDEXER-004F,
 RQ-INDEXER-010A, DSG-LFI-001A1, DSG-LFI-001A4
+
+### VAL-LFI-002I6
+
+Compare the current bounded-residency replay-order preparation baseline against
+the optimized replay-order path on a replay-audit journal large enough to force
+repository-owned externalization and at least one spill/merge cycle.
+
+**Pass condition:** The optimized path produces the same deduplicated
+deterministic replay block-id order and the same replay-validation integrity
+outcome as the baseline, while validation evidence shows materially improved
+replay-order preparation throughput and/or materially better CPU-disk
+utilization. Evidence also shows the optimized path remains bounded-memory,
+payload-free during replay-order generation, and compatible with both the
+existing request-adjacent scratch-root policy and the unchanged caller-visible
+stage contract.
+
+**Traces to:** RQ-INDEXER-003A2, RQ-INDEXER-003A5, DSG-LFI-001A2,
+DSG-LFI-001A5
 
 ### VAL-LFI-002J
 
