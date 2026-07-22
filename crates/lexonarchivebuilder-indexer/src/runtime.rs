@@ -3605,15 +3605,18 @@ fn append_metadata_sort_key(buffer: &mut Vec<u8>, metadata_key: &[(String, Strin
     }
 }
 
-fn canonical_replay_journal_metadata_sort_key(
+fn append_canonical_replay_journal_metadata_sort_key(
+    buffer: &mut Vec<u8>,
     metadata: &[(String, String)],
-) -> Vec<(String, String)> {
-    metadata
+) {
+    let metadata_key = metadata
         .iter()
-        .cloned()
-        .collect::<BTreeMap<_, _>>()
-        .into_iter()
-        .collect()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    for (key, value) in metadata_key {
+        append_comparable_sort_string(buffer, key);
+        append_comparable_sort_string(buffer, value);
+    }
 }
 
 #[cfg(test)]
@@ -3644,8 +3647,7 @@ fn replay_journal_record_sort_key_digest(record: &ReplayJournalRecord) -> Option
     };
     let mut encoded = Vec::new();
     append_replay_journal_content_sort_key_bytes(&mut encoded, content_ref);
-    let metadata_key = canonical_replay_journal_metadata_sort_key(metadata);
-    append_metadata_sort_key(&mut encoded, &metadata_key);
+    append_canonical_replay_journal_metadata_sort_key(&mut encoded, metadata);
     Some(hash_bytes(&encoded))
 }
 
@@ -8576,27 +8578,73 @@ mod tests {
 
     #[test]
     fn replay_journal_record_sort_key_digest_matches_item_digest() {
-        let item = IndexItem {
-            metadata: vec![
-                (Value::Text("title".into()), Value::Text("Alpha".into())),
-                (
-                    Value::Text("source_kind".into()),
-                    Value::Text("document".into()),
-                ),
-            ],
-            content_ref: ContentRef::StoredReplay {
-                media_type: "text/plain".into(),
-                body: b"alpha".to_vec(),
-                identity: ReplayIdentity::Document {
-                    source_path: "C:\\docs\\alpha.txt".into(),
+        let cases = [
+            IndexItem {
+                metadata: vec![
+                    (Value::Text("title".into()), Value::Text("Alpha".into())),
+                    (
+                        Value::Text("source_kind".into()),
+                        Value::Text("document".into()),
+                    ),
+                ],
+                content_ref: ContentRef::Document {
+                    path: "C:\\docs\\alpha.txt".into(),
                 },
             },
-        };
-        let record = replay_journal_record_from_item(BlockHash::from_bytes([7u8; 32]), &item);
-        assert_eq!(
-            replay_journal_record_sort_key_digest(&record),
-            Some(replay_sort_key_digest(&item))
-        );
+            IndexItem {
+                metadata: vec![
+                    (Value::Text("title".into()), Value::Text("Inline".into())),
+                    (
+                        Value::Text("source_kind".into()),
+                        Value::Text("inline".into()),
+                    ),
+                ],
+                content_ref: ContentRef::Inline {
+                    media_type: "text/plain".into(),
+                    body: b"alpha".to_vec(),
+                },
+            },
+            IndexItem {
+                metadata: vec![
+                    (Value::Text("title".into()), Value::Text("Email".into())),
+                    (
+                        Value::Text("source_kind".into()),
+                        Value::Text("email".into()),
+                    ),
+                ],
+                content_ref: ContentRef::EmailChunk {
+                    email_artifact_ref: "mail-123".into(),
+                    chunk_index: 7,
+                },
+            },
+            IndexItem {
+                metadata: vec![
+                    (Value::Text("title".into()), Value::Text("Stored".into())),
+                    (
+                        Value::Text("source_kind".into()),
+                        Value::Text("document".into()),
+                    ),
+                ],
+                content_ref: ContentRef::StoredReplay {
+                    media_type: "text/plain".into(),
+                    body: b"alpha".to_vec(),
+                    identity: ReplayIdentity::Document {
+                        source_path: "C:\\docs\\stored-alpha.txt".into(),
+                    },
+                },
+            },
+        ];
+
+        for (index, item) in cases.into_iter().enumerate() {
+            let record = replay_journal_record_from_item(
+                BlockHash::from_bytes([index as u8 + 7; 32]),
+                &item,
+            );
+            assert_eq!(
+                replay_journal_record_sort_key_digest(&record),
+                Some(replay_sort_key_digest(&item))
+            );
+        }
     }
 
     #[test]
