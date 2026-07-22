@@ -1155,7 +1155,7 @@ fn replay_batch_from_entries(
     store: &ConfiguredBlockStore,
     embedding_spec: &EmbeddingSpec,
 ) -> Result<ReplayBatchLoad, RuntimeError> {
-    let loaded_entries = if entries.len() <= 1 {
+    let loaded_entries = if replay_batch_materialization_worker_count(entries.len()) <= 1 {
         entries
             .iter()
             .copied()
@@ -1182,16 +1182,20 @@ fn replay_batch_from_entries(
     })
 }
 
+fn replay_batch_materialization_worker_count(entry_count: usize) -> usize {
+    entry_count.min(
+        std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1),
+    )
+}
+
 fn load_replay_batch_entries_in_parallel(
     entries: &[ReplayOrderEntry],
     store: &ConfiguredBlockStore,
     embedding_spec: &EmbeddingSpec,
 ) -> Result<Vec<ReplayBatchEntryLoad>, RuntimeError> {
-    let worker_count = entries.len().min(
-        std::thread::available_parallelism()
-            .map(std::num::NonZeroUsize::get)
-            .unwrap_or(1),
-    );
+    let worker_count = replay_batch_materialization_worker_count(entries.len());
     let next_index = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut completed = (0..entries.len()).map(|_| None).collect::<Vec<_>>();
     std::thread::scope(|scope| -> Result<(), RuntimeError> {
