@@ -553,6 +553,7 @@ struct ExternalizedReplayState {
     replay_order: ReplayOrderStorage,
     total_items: usize,
     batch_size: usize,
+    materialization_max_concurrency: usize,
     block_store: ConfiguredBlockStore,
     embedding_spec: EmbeddingSpec,
     current_batch_embeddings: Arc<Mutex<EmbeddingCache>>,
@@ -571,6 +572,7 @@ struct ExternalizedStoredLeafEmbeddingProvider {
 struct ExternalizedReplayBatchIterator {
     replay_order_reader: ReplayOrderReader,
     batch_size: usize,
+    materialization_max_concurrency: usize,
     block_store: ConfiguredBlockStore,
     embedding_spec: EmbeddingSpec,
     current_batch_embeddings: Arc<Mutex<EmbeddingCache>>,
@@ -984,6 +986,7 @@ impl ExternalizedReplayState {
         Ok(ExternalizedReplayBatchIterator {
             replay_order_reader: self.replay_order.open_reader()?,
             batch_size: self.batch_size,
+            materialization_max_concurrency: self.materialization_max_concurrency,
             block_store: self.block_store.clone(),
             embedding_spec: self.embedding_spec.clone(),
             current_batch_embeddings: Arc::clone(&self.current_batch_embeddings),
@@ -1111,6 +1114,7 @@ impl ExternalizedReplayBatchIterator {
             &entries,
             &self.block_store,
             &self.embedding_spec,
+            self.materialization_max_concurrency,
         )?))
     }
 
@@ -1158,11 +1162,14 @@ fn replay_batch_from_entries(
     entries: &[ReplayOrderEntry],
     store: &ConfiguredBlockStore,
     embedding_spec: &EmbeddingSpec,
+    materialization_max_concurrency: usize,
 ) -> Result<ReplayBatchLoad, RuntimeError> {
     let mut items = Vec::with_capacity(entries.len());
     let mut audit_records = Vec::with_capacity(entries.len());
     let mut embeddings_by_input_hash = Vec::with_capacity(entries.len());
-    if replay_batch_materialization_worker_count(entries.len()) <= 1 {
+    if replay_batch_materialization_worker_count(entries.len(), materialization_max_concurrency)
+        <= 1
+    {
         for entry in entries.iter().copied() {
             let loaded_entry = load_replay_batch_entry(entry, store, embedding_spec)?;
             embeddings_by_input_hash.push((loaded_entry.input_hash, loaded_entry.embedding));
@@ -1170,7 +1177,12 @@ fn replay_batch_from_entries(
             items.push(loaded_entry.item);
         }
     } else {
-        for loaded_entry in load_replay_batch_entries_in_parallel(entries, store, embedding_spec)? {
+        for loaded_entry in load_replay_batch_entries_in_parallel(
+            entries,
+            store,
+            embedding_spec,
+            materialization_max_concurrency,
+        )? {
             embeddings_by_input_hash.push((loaded_entry.input_hash, loaded_entry.embedding));
             audit_records.push(loaded_entry.audit_record);
             items.push(loaded_entry.item);
@@ -1186,8 +1198,11 @@ fn replay_batch_from_entries(
     })
 }
 
-fn replay_batch_materialization_worker_count(entry_count: usize) -> usize {
-    entry_count.min(
+fn replay_batch_materialization_worker_count(
+    entry_count: usize,
+    materialization_max_concurrency: usize,
+) -> usize {
+    entry_count.min(materialization_max_concurrency.max(1)).min(
         std::thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)
             .unwrap_or(1),
@@ -1198,8 +1213,10 @@ fn load_replay_batch_entries_in_parallel(
     entries: &[ReplayOrderEntry],
     store: &ConfiguredBlockStore,
     embedding_spec: &EmbeddingSpec,
+    materialization_max_concurrency: usize,
 ) -> Result<Vec<ReplayBatchEntryLoad>, RuntimeError> {
-    let worker_count = replay_batch_materialization_worker_count(entries.len());
+    let worker_count =
+        replay_batch_materialization_worker_count(entries.len(), materialization_max_concurrency);
     let next_index = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut completed = (0..entries.len()).map(|_| None).collect::<Vec<_>>();
     std::thread::scope(|scope| -> Result<(), RuntimeError> {
@@ -2982,6 +2999,7 @@ where
     let embedding_spec = request.to_embedding_spec();
     let resolver = LocalFilesystemContentResolver::new(block_store.clone());
     let max_concurrency = request.effective_max_concurrency();
+    let replay_batch_size = request.effective_replay_batch_size();
     if let Some(planning_telemetry) = planning_telemetry.as_ref() {
         report_progress(&progress, planning_telemetry.bootstrap_message());
     }
@@ -3042,6 +3060,7 @@ where
         let (replay_state, embedding_provider) = externalize_replay_batches_from_store_async(
             block_store.clone(),
             embedding_spec.clone(),
+            replay_batch_size,
             max_concurrency,
             mutable_ref_store,
             replay_order_scratch_root
@@ -3075,6 +3094,7 @@ where
         let (replay_state, embedding_provider) = externalize_replay_batches_from_store_async(
             block_store.clone(),
             embedding_spec.clone(),
+            replay_batch_size,
             max_concurrency,
             mutable_ref_store,
             replay_order_scratch_root
@@ -5611,7 +5631,8 @@ where
 fn load_replay_batches_from_store(
     store: &ConfiguredBlockStore,
     embedding_spec: &EmbeddingSpec,
-    max_concurrency: usize,
+    replay_batch_size: usize,
+    materialization_max_concurrency: usize,
     io: RuntimeIo<'_>,
 ) -> Result<(Vec<ReplayBatch>, StoredLeafEmbeddingProvider), RuntimeError> {
     let Some(mutable_ref_store) = io.mutable_ref_store else {
@@ -5622,7 +5643,8 @@ fn load_replay_batches_from_store(
     load_replay_batches_from_journal(
         store,
         embedding_spec,
-        max_concurrency,
+        replay_batch_size,
+        materialization_max_concurrency,
         mutable_ref_store,
         io.progress,
     )
@@ -5955,7 +5977,8 @@ fn merge_sorted_replay_order_run_group(
 fn externalize_replay_batches_from_journal(
     store: &ConfiguredBlockStore,
     embedding_spec: &EmbeddingSpec,
-    max_concurrency: usize,
+    replay_batch_size: usize,
+    materialization_max_concurrency: usize,
     mutable_ref_store: &MutableRefStoreLocation,
     replay_order_scratch_root: &Path,
     progress: &ProgressReporter,
@@ -5979,7 +6002,8 @@ fn externalize_replay_batches_from_journal(
         ExternalizedReplayState {
             replay_order: replay_order.clone(),
             total_items,
-            batch_size: max_concurrency.max(1),
+            batch_size: replay_batch_size.max(1),
+            materialization_max_concurrency: materialization_max_concurrency.max(1),
             block_store: store.clone(),
             embedding_spec: embedding_spec.clone(),
             current_batch_embeddings: Arc::clone(&current_batch_embeddings),
@@ -5997,7 +6021,8 @@ fn externalize_replay_batches_from_journal(
 async fn externalize_replay_batches_from_store_async(
     store: ConfiguredBlockStore,
     embedding_spec: EmbeddingSpec,
-    max_concurrency: usize,
+    replay_batch_size: usize,
+    materialization_max_concurrency: usize,
     mutable_ref_store: MutableRefStoreLocation,
     replay_order_scratch_root: PathBuf,
     progress: ProgressReporter,
@@ -6012,7 +6037,8 @@ async fn externalize_replay_batches_from_store_async(
         externalize_replay_batches_from_journal(
             &store,
             &embedding_spec,
-            max_concurrency,
+            replay_batch_size,
+            materialization_max_concurrency,
             &mutable_ref_store,
             &replay_order_scratch_root,
             &progress,
@@ -6026,7 +6052,8 @@ async fn externalize_replay_batches_from_store_async(
 async fn load_replay_batches_from_store_async(
     store: ConfiguredBlockStore,
     embedding_spec: EmbeddingSpec,
-    max_concurrency: usize,
+    replay_batch_size: usize,
+    materialization_max_concurrency: usize,
     mutable_ref_store: MutableRefStoreLocation,
     progress: ProgressReporter,
 ) -> Result<(Vec<ReplayBatch>, StoredLeafEmbeddingProvider), RuntimeError> {
@@ -6037,7 +6064,13 @@ async fn load_replay_batches_from_store_async(
             planning_telemetry: None,
             progress: &progress,
         };
-        load_replay_batches_from_store(&store, &embedding_spec, max_concurrency, io)
+        load_replay_batches_from_store(
+            &store,
+            &embedding_spec,
+            replay_batch_size,
+            materialization_max_concurrency,
+            io,
+        )
     })
     .await
     .map_err(RuntimeError::BlockingMutableRefTaskJoin)?
@@ -6047,7 +6080,8 @@ async fn load_replay_batches_from_store_async(
 fn load_replay_batches_from_journal(
     store: &ConfiguredBlockStore,
     embedding_spec: &EmbeddingSpec,
-    max_concurrency: usize,
+    replay_batch_size: usize,
+    materialization_max_concurrency: usize,
     mutable_ref_store: &MutableRefStoreLocation,
     progress: &ProgressReporter,
 ) -> Result<(Vec<ReplayBatch>, StoredLeafEmbeddingProvider), RuntimeError> {
@@ -6060,14 +6094,19 @@ fn load_replay_batches_from_journal(
     )?;
     let mut embeddings_by_input_hash = HashMap::new();
     let mut replay_batches = Vec::new();
-    let batch_size = max_concurrency.max(1);
+    let batch_size = replay_batch_size.max(1);
     let mut reader = replay_order.open_reader()?;
     loop {
         let entries = reader.read_next_entries(batch_size)?;
         if entries.is_empty() {
             break;
         }
-        let batch = replay_batch_from_entries(&entries, store, embedding_spec)?;
+        let batch = replay_batch_from_entries(
+            &entries,
+            store,
+            embedding_spec,
+            materialization_max_concurrency,
+        )?;
         for (input_hash, embedding) in &batch.embeddings_by_input_hash {
             embeddings_by_input_hash.insert(*input_hash, embedding.clone());
         }
@@ -6979,6 +7018,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Mailbox {
@@ -7034,6 +7074,7 @@ mod tests {
                 stage: ExecutionStage::ClusteringAndBlockAssembly,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: None,
+                replay_batch_size: None,
                 ref_name: TEST_REF_NAME.into(),
                 items: vec![],
             },
@@ -7070,6 +7111,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![BatchItemConfig::Document {
                 path: Path::new("doc.txt").to_path_buf(),
@@ -7120,6 +7162,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Mailbox {
@@ -7237,6 +7280,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Mailbox {
@@ -7323,6 +7367,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items,
         };
@@ -7348,6 +7393,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            replay_batch_size: Some(4),
             ref_name: TEST_REF_NAME.into(),
             items: vec![],
         };
@@ -7368,19 +7414,19 @@ mod tests {
 
         let progress = progress.lock().unwrap();
         assert!(progress.iter().any(|line| {
-            line.contains("Submitting replay batch 1 of 3")
+            line.contains("Submitting replay batch 1 of 2")
                 && line.contains("completed 0 of 5 delegated item(s)")
         }));
         assert!(progress.iter().any(|line| {
-            line.contains("Submitted replay batch 1 of 3")
-                && line.contains("completed 2 of 5 delegated item(s)")
+            line.contains("Submitted replay batch 1 of 2")
+                && line.contains("completed 4 of 5 delegated item(s)")
         }));
         assert!(progress.iter().any(|line| {
-            line.contains("Submitted replay batch 3 of 3")
+            line.contains("Submitted replay batch 2 of 2")
                 && line.contains("completed 5 of 5 delegated item(s)")
         }));
         assert!(progress.iter().any(|line| {
-            line.contains("Submitted all 3 replay batch(es); waiting for planning pass completion")
+            line.contains("Submitted all 2 replay batch(es); waiting for planning pass completion")
                 && line.contains("5 delegated item(s)")
         }));
         assert!(
@@ -7406,6 +7452,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![],
         }
@@ -7880,6 +7927,7 @@ mod tests {
             stage: ExecutionStage::IngestionAndEmbedding,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
@@ -7929,6 +7977,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
@@ -7965,6 +8014,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![],
         };
@@ -8013,6 +8063,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![BatchItemConfig::Mailbox {
                 path: mailbox_path
@@ -8080,6 +8131,7 @@ mod tests {
                 stage: ExecutionStage::ClusteringAndBlockAssembly,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: None,
+                replay_batch_size: None,
                 ref_name: TEST_REF_NAME.into(),
                 items: vec![],
             },
@@ -8122,6 +8174,7 @@ mod tests {
                 stage: ExecutionStage::FullPipeline,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: None,
+                replay_batch_size: None,
                 ref_name: TEST_REF_NAME.into(),
                 items: vec![
                     BatchItemConfig::Document {
@@ -10083,6 +10136,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(1),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
@@ -10162,6 +10216,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(1),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![BatchItemConfig::Mailbox {
                 path: mailbox_path
@@ -10221,6 +10276,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(3),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
@@ -10281,6 +10337,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(3),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items,
         };
@@ -10328,6 +10385,7 @@ mod tests {
             stage: ExecutionStage::IngestionAndEmbedding,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(3),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items,
         };
@@ -10368,6 +10426,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
@@ -10402,6 +10461,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![],
         };
@@ -10452,6 +10512,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items,
         };
@@ -10486,7 +10547,7 @@ mod tests {
             progress: &progress,
         };
         let (replay_batches, _) =
-            load_replay_batches_from_store(&block_store, &embedding_spec, 2, io).unwrap();
+            load_replay_batches_from_store(&block_store, &embedding_spec, 2, 2, io).unwrap();
 
         assert_eq!(replay_batches.len(), 3);
         assert_eq!(replay_batches[0].items.len(), 2);
@@ -10532,6 +10593,7 @@ mod tests {
             stage: ExecutionStage::IngestionAndEmbedding,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items,
         };
@@ -10584,13 +10646,13 @@ mod tests {
             progress: &progress,
         };
         let (replay_batches, _) =
-            load_replay_batches_from_store(&block_store, &embedding_spec, 8, io).unwrap();
+            load_replay_batches_from_store(&block_store, &embedding_spec, 8, 2, io).unwrap();
         let replay_item_count: usize = replay_batches.iter().map(|batch| batch.items.len()).sum();
         assert_eq!(replay_item_count, document_names.len());
 
         fs::remove_file(mutable_ref_store_path(&block_store_root, TEST_REF_NAME)).unwrap();
         let error =
-            load_replay_batches_from_store(&block_store, &embedding_spec, 8, io).unwrap_err();
+            load_replay_batches_from_store(&block_store, &embedding_spec, 8, 2, io).unwrap_err();
         assert!(matches!(
             error,
             RuntimeError::MissingReplayJournalHead { .. }
@@ -10765,6 +10827,7 @@ mod tests {
             &block_store,
             &embedding_spec,
             1,
+            1,
             &mutable_ref_store,
             temp.path(),
             &progress,
@@ -10781,6 +10844,13 @@ mod tests {
         assert!(
             matches!(error, RuntimeError::ReadReplayJournal { block_id, .. } if block_id == missing_block_id.to_string())
         );
+    }
+
+    #[test]
+    fn replay_batch_materialization_worker_count_respects_configured_cap() {
+        assert_eq!(replay_batch_materialization_worker_count(0, 4), 0);
+        assert!(replay_batch_materialization_worker_count(32, 2) <= 2);
+        assert!(replay_batch_materialization_worker_count(3, 8) <= 3);
     }
 
     #[test]
@@ -10854,6 +10924,7 @@ mod tests {
         let mut iterator = ExternalizedReplayBatchIterator {
             replay_order_reader: replay_order.open_reader().unwrap(),
             batch_size: 2,
+            materialization_max_concurrency: 2,
             block_store,
             embedding_spec,
             current_batch_embeddings: Arc::new(Mutex::new(HashMap::new())),
@@ -10952,6 +11023,7 @@ mod tests {
         let (replay_state, embedding_provider) = externalize_replay_batches_from_journal(
             &block_store,
             &embedding_spec,
+            1,
             1,
             &mutable_ref_store,
             temp.path(),
@@ -11066,6 +11138,7 @@ mod tests {
         let mut iterator = ExternalizedReplayBatchIterator {
             replay_order_reader: replay_order.open_reader().unwrap(),
             batch_size: 1,
+            materialization_max_concurrency: 1,
             block_store: block_store.clone(),
             embedding_spec: embedding_spec.clone(),
             current_batch_embeddings: Arc::clone(&current_batch_embeddings),
@@ -11213,6 +11286,7 @@ mod tests {
             &replay_order_reader.read_next_entries(3).unwrap(),
             &block_store,
             &embedding_spec,
+            2,
         )
         .unwrap();
         let observed_paths = loaded_entries
@@ -11481,6 +11555,7 @@ mod tests {
             stage: ExecutionStage::IngestionAndEmbedding,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(1),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![BatchItemConfig::Document {
                 path: document_path
@@ -11535,7 +11610,7 @@ mod tests {
             progress: &progress,
         };
         let error =
-            load_replay_batches_from_store(&block_store, &embedding_spec, 1, io).unwrap_err();
+            load_replay_batches_from_store(&block_store, &embedding_spec, 1, 1, io).unwrap_err();
         assert!(matches!(
             error,
             RuntimeError::InvalidReplayJournalHead { .. }
@@ -11656,7 +11731,7 @@ mod tests {
             progress: &progress,
         };
         let (replay_batches, _) =
-            load_replay_batches_from_store(&block_store, &embedding_spec, 8, io).unwrap();
+            load_replay_batches_from_store(&block_store, &embedding_spec, 8, 8, io).unwrap();
 
         let replay_item_count: usize = replay_batches.iter().map(|batch| batch.items.len()).sum();
         assert_eq!(replay_item_count, 2);
@@ -11729,6 +11804,7 @@ mod tests {
                 stage: ExecutionStage::FullPipeline,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: Some(2),
+                replay_batch_size: None,
                 ref_name: TEST_REF_NAME.into(),
                 items: vec![
                     BatchItemConfig::Document {
@@ -11771,6 +11847,7 @@ mod tests {
                 stage: ExecutionStage::ClusteringAndBlockAssembly,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: Some(2),
+                replay_batch_size: None,
                 ref_name: TEST_REF_NAME.into(),
                 items: vec![],
             },
@@ -11852,6 +11929,7 @@ mod tests {
                 stage: ExecutionStage::FullPipeline,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: Some(2),
+                replay_batch_size: None,
                 ref_name: TEST_REF_NAME.into(),
                 items: vec![
                     BatchItemConfig::Document {
@@ -11899,6 +11977,7 @@ mod tests {
                 stage: ExecutionStage::IngestionAndEmbedding,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: Some(1),
+                replay_batch_size: None,
                 ref_name: TEST_REF_NAME.into(),
                 items: vec![BatchItemConfig::Document {
                     path: document_c.strip_prefix(temp.path()).unwrap().to_path_buf(),

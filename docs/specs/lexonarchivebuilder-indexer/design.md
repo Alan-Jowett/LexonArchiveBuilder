@@ -24,7 +24,7 @@ compatibility, 0.6.x published-profile evaluation, local testing sweep
 automation, v0.7.0 fixed-budget ladder experiment automation, rooted
 block-store copy tooling, upstream embedding-readback API adoption, LAB-owned
 replay-journaled split-stage recovery, bounded-residency deterministic replay
-ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, and layer-parallel
+ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, replay batch-size decoupling from CPU concurrency, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
 non-search artifacts, plus conditional streaming-indexer v2 adoption with
 repository-default published profile `0.7.0` and derived planner-state-root
@@ -56,7 +56,8 @@ clustering-failure diagnostics, rooted block-tree quality assessment with
 rooted TNN-recall diagnostics, rooted query access-cost reporting,
 rooted CLI search over stored trees, replay-stable delegated item identity,
 LAB-owned replay-journaled split-stage recovery, bounded-residency deterministic
-replay ordering for clustering replay, derived planner-state-root
+replay ordering for clustering replay, independent replay batch-size versus
+replay-materialization concurrency tuning, derived planner-state-root
 support for delegated bounded-residency out-of-core planning spill, and
 layer-parallel delegated block construction for the local/testing profile.
 
@@ -362,6 +363,34 @@ abstraction and does not add a new caller-visible concurrency control or
 environment-specific behavior.
 
 **Traces to:** RQ-INDEXER-003A4, RQ-INDEXER-003A6, RQ-INDEXER-010A
+
+### DSG-LFI-001A7 `Decoupled replay batch-size tuning`
+
+LexonArchiveBuilder separates deterministic clustering-replay batch granularity
+from repository-owned replay-materialization worker concurrency.
+
+The design keeps the existing repository-owned concurrency budget responsible
+for worker-parallel replay materialization and same-layer delegated leaf
+scheduling, while replay batch granularity is resolved independently for the
+clustering-replay path. A larger replay batch therefore improves amortization
+of repository-owned batch handoff costs without implicitly widening worker
+concurrency or other unrelated runtime concurrency semantics.
+
+To preserve existing request compatibility, the design treats the current
+`max_concurrency`-derived replay batch size as the default when no explicit
+replay-batch override is present. When the caller supplies an approved explicit
+replay-batch-size override in the request file, the clustering-replay adapter
+uses that value for deterministic replay-window sizing while still deriving
+effective worker concurrency from the existing concurrency budget and local
+parallelism caps.
+
+This decoupling remains subordinate to the existing replay boundary. It does
+not change deterministic replay order, active-batch embedding-cache isolation,
+bounded one-batch-ahead residency, or the delegated sequential lifecycle, and
+it does not add a new CLI stage or tuning flag.
+
+**Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A4, RQ-INDEXER-003A6,
+RQ-INDEXER-003A7, RQ-INDEXER-010A
 
 ### DSG-LFI-001B `Leaf-layer scheduling discipline`
 
@@ -1715,6 +1744,10 @@ The design adds optional top-level request fields:
 
 - `max_concurrency`: maximum number of same-layer delegated leaf tasks allowed
   in flight at once
+- `replay_batch_size`: request-file-only override for deterministic clustering-
+  replay batch granularity; when omitted, clustering replay preserves the
+  current `max_concurrency`-derived batch-sizing behavior for backward
+  compatibility
 - `stage`: selected execution stage, defaulting to the full pipeline when
   omitted
 
@@ -1726,6 +1759,11 @@ For containerized or quota-constrained deployments where direct physical-core
 detection is unavailable or unreliable, the runtime may fall back to the best
 available host-visible CPU-count signal, provided the default remains bounded,
 documented, and never drops below one.
+
+No CLI flag is added for replay batch size in this increment. The replay-batch
+override remains request-file-only so the existing command-line surface keeps
+its current concurrency meaning while clustering-only experiments can opt into
+independent batch-granularity tuning through the request artifact.
 
 This configuration surface remains environment-neutral: local/testing and the
 preserved production-oriented profiles use the same request shape,

@@ -23,7 +23,7 @@ wgpu-acceleration revision compatibility, 0.6.x published-profile
 evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
 experiment automation, upstream embedding-readback
 API adoption, LAB-owned replay-journaled split-stage recovery, bounded-residency
-deterministic replay ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, and
+deterministic replay ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, replay batch-size decoupling from CPU concurrency, and
 layer-parallel block-construction evolution, v2 custom-block adoption for
 repository-owned non-search artifacts, and conditional streaming-indexer v2
 adoption with repository-default published profile `0.7.0`, plus derived
@@ -55,7 +55,8 @@ block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted CLI
 search over stored trees, rooted block-store copy tooling, replay-stable fingerprinting, LAB-owned replay-journaled
 split-stage recovery, bounded-residency deterministic replay ordering for
-clustering replay, derived planner-state-root support for delegated
+clustering replay, independent replay batch-size versus replay-materialization
+concurrency control for clustering replay, derived planner-state-root support for delegated
 bounded-residency out-of-core planning spill, and leaf-layer parallel block
 scheduling
 in the local/testing profile.
@@ -380,6 +381,26 @@ acceptable in its place.
 
 **Traces to:** RQ-INDEXER-003A4, RQ-INDEXER-003A6, DSG-LFI-001A4,
 DSG-LFI-001A6
+
+### VAL-LFI-002I8
+
+Inspect and exercise the clustering-replay tuning surface with one run that
+overrides deterministic replay batch size in the request file and one run that
+leaves that override unset.
+
+**Pass condition:** When `replay_batch_size` is omitted, clustering replay
+continues to derive effective replay batch granularity from the legacy
+`max_concurrency` behavior so existing request files retain their historical
+meaning. When `replay_batch_size` is set, validation shows deterministic replay
+batch submission uses the requested batch granularity while repository-owned
+worker concurrency remains bounded by `max_concurrency` and local parallelism
+rather than scaling proportionally with the larger batch size. In both cases,
+deterministic replay order, active-batch embedding-cache isolation, bounded
+prepared-future-state residency, and the unchanged delegated sequential
+lifecycle are preserved.
+
+**Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A6, RQ-INDEXER-003A7,
+DSG-LFI-001A1, DSG-LFI-001A6, DSG-LFI-001A7
 
 ### VAL-LFI-002J
 
@@ -720,9 +741,12 @@ preserved production profile boundary.
 `stage` request fields, an explicit `max_concurrency` value caps same-layer
 delegated leaf work, an omitted `max_concurrency` value defaults to one half of
 detected physical CPUs with a minimum of one worker slot, and an omitted
-`stage` value defaults to the full pipeline. Any fallback used when direct
-physical-core detection is not available remains documented and does not change
-the request shape.
+`stage` value defaults to the full pipeline. For clustering replay, the request
+file may also carry an optional `replay_batch_size` override without adding a
+new CLI flag; when omitted, replay batch sizing preserves the historical
+`max_concurrency`-derived behavior. Any fallback used when direct physical-core
+detection is not available remains documented and does not change the request
+shape.
 
 **Traces to:** RQ-INDEXER-003C, RQ-INDEXER-003D, RQ-INDEXER-007, DSG-LFI-007B,
 DSG-LFI-008

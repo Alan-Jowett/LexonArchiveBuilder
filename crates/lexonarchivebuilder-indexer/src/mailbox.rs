@@ -873,6 +873,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: lexongraph_streaming_indexer::PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: "test-branch".into(),
             items: vec![
                 BatchItemConfig::Mailbox {
@@ -936,6 +937,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: lexongraph_streaming_indexer::PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: "test-branch".into(),
             items: vec![
                 BatchItemConfig::Mailbox {
