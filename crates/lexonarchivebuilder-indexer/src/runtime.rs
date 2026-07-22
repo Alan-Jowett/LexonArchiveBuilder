@@ -1098,13 +1098,14 @@ impl ExternalizedStoredLeafEmbeddingProvider {
 
 impl ExternalizedReplayBatchIterator {
     fn clear_current_batch_embeddings(&self) {
-        lock_unpoisoned(&self.current_batch_embeddings).clear();
+        clear_externalized_replay_batch_embeddings(&self.current_batch_embeddings);
     }
 
     fn publish_batch_embeddings(&self, embeddings_by_input_hash: &[([u8; 32], Vec<u8>)]) {
-        let mut cache = lock_unpoisoned(&self.current_batch_embeddings);
-        cache.clear();
-        cache.extend(embeddings_by_input_hash.iter().cloned());
+        publish_externalized_replay_batch_embeddings(
+            &self.current_batch_embeddings,
+            embeddings_by_input_hash,
+        );
     }
 
     fn load_next_batch(&mut self) -> Result<Option<ReplayBatchLoad>, RuntimeError> {
@@ -1147,6 +1148,21 @@ fn spawn_externalized_replay_batch_prefetches(
         }
         Ok((iterator, prefetched_batches))
     })
+}
+
+fn clear_externalized_replay_batch_embeddings(
+    current_batch_embeddings: &Arc<Mutex<EmbeddingCache>>,
+) {
+    lock_unpoisoned(current_batch_embeddings).clear();
+}
+
+fn publish_externalized_replay_batch_embeddings(
+    current_batch_embeddings: &Arc<Mutex<EmbeddingCache>>,
+    embeddings_by_input_hash: &[([u8; 32], Vec<u8>)],
+) {
+    let mut cache = lock_unpoisoned(current_batch_embeddings);
+    cache.clear();
+    cache.extend(embeddings_by_input_hash.iter().cloned());
 }
 
 async fn await_externalized_replay_batch_prefetch(
@@ -5445,6 +5461,7 @@ where
     let clustering_failure_diagnostics = OnceLock::new();
     let diagnostics_resolver = resolver.clone();
     let diagnostics_embedding_provider = embedding_provider.clone();
+    let current_batch_embeddings = Arc::clone(&replay_state.current_batch_embeddings);
 
     let mut indexer = StreamingIndexingRunV2::with_published_profile(
         resolver,
@@ -5481,10 +5498,10 @@ where
                 .await?;
                 continue;
             }
-            iterator
-                .as_ref()
-                .expect("iterator must be available to publish current batch embeddings")
-                .publish_batch_embeddings(&batch.embeddings_by_input_hash);
+            publish_externalized_replay_batch_embeddings(
+                &current_batch_embeddings,
+                &batch.embeddings_by_input_hash,
+            );
             batch_number += 1;
             let batch_item_count = batch.batch.items.len();
             report_progress(
@@ -5547,10 +5564,7 @@ where
             &mut prefetched_batches,
         )
         .await?;
-        iterator
-            .as_ref()
-            .expect("iterator must be available when clearing active batch embeddings")
-            .clear_current_batch_embeddings();
+        clear_externalized_replay_batch_embeddings(&current_batch_embeddings);
         report_progress(
             io.progress,
             config
