@@ -237,19 +237,19 @@
 - **UR-210 [KNOWN]:** LexonArchiveBuilder should continue to index corpora whose
   total logical data size exceeds available system memory.
 - **UR-211 [KNOWN]:** Both full-pipeline execution and clustering-only replay
-  execution should stay within a caller-configurable fixed memory budget rather
+  execution should stay within a bounded-memory orchestration contract rather
   than retaining replay inputs, embeddings, or content-expansion state in
   proportion to total corpus size.
 - **UR-212 [KNOWN]:** LexonArchiveBuilder should strongly prefer a non-spilling
-  realization of that fixed-memory contract; spilling replay inputs,
+  realization of that bounded-memory contract; spilling replay inputs,
   embeddings, or equivalent repository-owned staging artifacts to local storage
   or `BlockStore` is acceptable only if downstream design can justify that a
   purely streaming realization is not feasible under the approved upstream
   lifecycle contract.
-- **UR-213 [INFERRED]:** Adding fixed-memory behavior must preserve the existing
+- **UR-213 [INFERRED]:** Adding bounded-memory behavior must preserve the existing
   stage contract, deterministic replay semantics, immutable-block idempotence,
   and unchanged MCP search-serving behavior for already-indexed content.
-- **UR-214 [INFERRED]:** The fixed-memory contract should remain content-type-
+- **UR-214 [INFERRED]:** The bounded-memory contract should remain content-type-
   neutral and environment-neutral so mailbox, document, and future content
   sources participate through the same bounded-memory orchestration boundary in
   local/testing and production-oriented profiles.
@@ -474,7 +474,7 @@
   identity, stable fingerprints, and the existing upstream sequential lifecycle
   contract.
 - **UR-275 [INFERRED]:** Independent replay batch sizing must remain subordinate
-  to the existing fixed-memory replay orchestration boundary; larger replay
+  to the existing bounded-memory replay orchestration boundary; larger replay
   batches or deeper amortization must not require unbounded prefetched payload
   state or invalidate the active-batch embedding-cache isolation rules.
 - **UR-276 [KNOWN]:** The replay tuning surface should provide backward-
@@ -504,7 +504,7 @@
   isolated until delegated handoff reaches that batch, so deeper buffering does
   not publish the wrong embedding set for the currently ingesting batch.
 - **UR-282 [INFERRED]:** Multi-batch replay prefetch must remain bounded by the
-  existing fixed-memory replay contract, stay neutral across approved content
+  existing bounded-memory replay contract, stay neutral across approved content
   types and storage environments, and avoid introducing a new caller-visible
   tuning surface unless an existing contract proves insufficient.
 - **UR-283 [KNOWN]:** Validation for this increment should show whether bounded
@@ -606,7 +606,7 @@
 | CM-INDEXER-089 | Revise | Add an opt-in rooted copy blind-write mode that skips destination existence reads, keeps the current read-before-write behavior as the default, and relaxes exact copied-versus-skipped accounting in the blind-write path | UR-184, UR-186, UR-196, UR-197 |
 | CM-INDEXER-090 | Revise | Add bounded asynchronous destination-write concurrency to rooted copy, expose an operator-selectable in-flight write limit defaulting to `64`, and apply that limit to both the default and blind-write paths whenever a destination write is required | UR-180, UR-184, UR-186, UR-196, UR-198, UR-199, UR-200, UR-201 |
 | CM-INDEXER-091 | Revise | Expand the approved block-store profile vocabulary with an additive `gateway-http3` read-only profile for immutable block fetches, while preserving the existing writable profiles for write-bearing and whole-store-traversal flows | UR-202, UR-203, UR-204, UR-205, UR-206, UR-207, UR-208, UR-209 |
-| CM-INDEXER-092 | Revise | Extend replay-based streaming indexing requirements so LexonArchiveBuilder's repository-owned orchestration remains within a caller-configurable fixed memory budget for both full-pipeline and clustering-only execution over corpora larger than RAM | UR-48, UR-59, UR-160, UR-210, UR-211, UR-213, UR-214 |
+| CM-INDEXER-092 | Revise | Extend replay-based streaming indexing requirements so LexonArchiveBuilder's repository-owned orchestration remains within a bounded-memory contract for both full-pipeline and clustering-only execution over corpora larger than RAM | UR-48, UR-59, UR-160, UR-210, UR-211, UR-213, UR-214 |
 | CM-INDEXER-093 | Revise | Realize replay-journal-driven deterministic ordering through an in-memory raw block-id list rather than SQLite or spill-based staging, while leaving block payload state in `BlockStore` until on-demand processing | UR-48, UR-160, UR-210, UR-211, UR-212, UR-213, UR-215, UR-216, UR-217, UR-218 |
 | CM-INDEXER-094 | Add | Require standalone clustering replay to derive its deterministic processing order by reading replay-journal block ids only, then sorting and deduping them before classification and finalization | UR-163, UR-215, UR-216, UR-218, UR-219 |
 | CM-INDEXER-095 | Revise | Advance the repository-default published profile from `0.1.0` to `0.7.0` while preserving the caller-visible profile selector surface and keeping low-level clustering controls retired | UR-52, UR-58, UR-139, UR-141, UR-142, UR-221, UR-222 |
@@ -627,7 +627,7 @@
 | CM-INDEXER-110 | Add | Preserve provenance and replay-validation identity metadata for clustering-only replay without making metadata-only refs the execution dependency for replayed content reconstruction | UR-16, UR-23, UR-45, UR-49 |
 | CM-INDEXER-111 | Add | Require validation coverage for source-independent document and email-derived clustering-only replay using stored leaf content rather than resolver-driven content rematerialization | UR-39, UR-160, UR-163, UR-166 |
 | CM-INDEXER-112 | Add | Permit bounded repository-owned overlap of replay-batch preparation with delegated replay ingestion while preserving the upstream sequential lifecycle | UR-256, UR-257, UR-259 |
-| CM-INDEXER-113 | Revise | Extend fixed-memory replay orchestration so any prefetched replay state remains tightly bounded and isolated from the live batch state | UR-214, UR-258, UR-259 |
+| CM-INDEXER-113 | Revise | Extend bounded-memory replay orchestration so any prefetched replay state remains tightly bounded and isolated from the live batch state | UR-214, UR-258, UR-259 |
 | CM-INDEXER-114 | Add | Keep replay-preparation overlap internal, content-type-neutral, and environment-neutral rather than broadening the caller-visible batch surface | UR-260, UR-261 |
 | CM-INDEXER-115 | Revise | Extend bounded-residency replay-order requirements so replay preparation must pursue materially better throughput and host-utilization behavior, not just bounded memory, while preserving deterministic deduped output | UR-262, UR-263, UR-264, UR-266 |
 | CM-INDEXER-116 | Add | Permit internal replay-order preparation optimizations such as bounded overlap between journal scanning and compact-run materialization, or reduced per-record replay-key derivation overhead, so long as replay-order preparation remains payload-free and bounded-memory | UR-262, UR-263, UR-265, UR-266 |
@@ -640,7 +640,7 @@
 | CM-INDEXER-123 | Add | Require backward-compatible behavior or an explicit migration path for existing `max_concurrency`-based request/config usage, while keeping replay-tuning changes internal to repository-owned orchestration and neutral across content types and environments | UR-276, UR-277 |
 | CM-INDEXER-124 | Revise | Extend replay-batch preparation overlap from an effectively single-successor handoff to a bounded multi-batch ready queue that may stay more than one deterministic replay batch ahead when repository-owned capacity allows | UR-278, UR-279, UR-280 |
 | CM-INDEXER-125 | Add | Require bounded multi-batch replay prefetch to preserve active-batch embedding-cache isolation, deterministic future-batch drain order, and unchanged delegated lifecycle sequencing | UR-280, UR-281 |
-| CM-INDEXER-126 | Add | Require deeper replay-prefetch buffering to remain within the existing fixed-memory replay boundary, stay content-type and environment neutral, and produce validation evidence about consumer-visible stall reduction rather than assuming benefit | UR-282, UR-283 |
+| CM-INDEXER-126 | Add | Require deeper replay-prefetch buffering to remain within the existing bounded-memory replay boundary, stay content-type and environment neutral, and produce validation evidence about consumer-visible stall reduction rather than assuming benefit | UR-282, UR-283 |
 
 ## Before / After
 
@@ -1118,8 +1118,10 @@
   when corpus size exceeded available RAM.
 - **After [KNOWN]:** The requirements now require both full-pipeline and
   clustering-only execution to keep repository-owned staging, replay, and
-  embedding-retention behavior within a caller-configurable fixed memory budget
-  instead of retaining corpus-scale state in memory.
+  embedding-retention behavior within a bounded-memory contract, with public
+  tuning remaining on replay batching and concurrency rather than on a
+  dedicated memory-budget field, instead of retaining corpus-scale state in
+  memory.
 
 ### BA-INDEXER-094
 
@@ -1323,10 +1325,10 @@
 
 ### BA-INDEXER-111
 
-- **Before [KNOWN]:** Fixed-memory replay requirements bounded replay-order
+- **Before [KNOWN]:** Bounded-memory replay requirements bounded replay-order
   preparation and replay execution generally, but they did not explicitly
   constrain any future prepared-next-batch cache or embedding handoff state.
-- **After [KNOWN]:** Fixed-memory replay requirements now explicitly bound any
+- **After [KNOWN]:** Bounded-memory replay requirements now explicitly bound any
   prefetched replay state to a tightly capped live working set and require
   prepared-next-batch state to remain isolated from the current batch until
   handoff is safe.
@@ -1510,10 +1512,10 @@ LexonArchiveBuilder SHALL adapt the approved batch contract onto the replay-base
 - **Idempotence constraint [INFERRED]:** Adapting to replay-based streaming indexing must preserve the existing immutable, hash-addressed rerun expectations for unchanged content.
 - **Traceability:** UR-3, UR-8, UR-31, UR-45, UR-46, UR-48, UR-49, UR-61, UR-62, UR-63
 
-#### RQ-INDEXER-003A1 - Fixed-memory replay orchestration
+#### RQ-INDEXER-003A1 - Bounded-memory replay orchestration
 
-LexonArchiveBuilder SHALL keep its repository-owned replay orchestration within a
-caller-configurable fixed memory budget even when the indexed corpus is larger
+LexonArchiveBuilder SHALL keep its repository-owned replay orchestration
+bounded with respect to corpus size even when the indexed corpus is larger
 than available system memory.
 
 - **Execution scope [KNOWN]:** This requirement applies to both full-pipeline
@@ -1526,15 +1528,20 @@ than available system memory.
   ordering, LexonArchiveBuilder MAY retain the unique raw block-id list in
   memory when that retained state is limited to hash identities rather than
   decoded blocks, embeddings, or equivalent per-block payload state.
-- **Budget semantics [INFERRED]:** The approved memory budget constrains
-  repository-owned orchestration behavior rather than redefining opaque
-  upstream-owned model state, but LexonArchiveBuilder SHALL treat any upstream
-  incompatibility with this contract as an explicit adaptation finding rather
-  than silently accepting unbounded growth.
+- **Boundedness semantics [INFERRED]:** The approved bounded-memory contract
+  constrains repository-owned orchestration behavior rather than redefining
+  opaque upstream-owned model state, but LexonArchiveBuilder SHALL treat any
+  upstream incompatibility with this contract as an explicit adaptation
+  finding rather than silently accepting unbounded growth.
 - **Prefetch boundary [KNOWN]:** If repository-owned replay preparation overlaps
   delegated batch ingestion or training, the live resident working set SHALL
   remain limited to the current replay batch plus a tightly bounded amount of
   prepared future state rather than an unbounded queue of prefetched batches.
+- **Surface boundary [KNOWN]:** This increment does not add a dedicated memory-
+  budget field on the CLI or `BatchRequest`; the current caller-visible tuning
+  controls remain `max_concurrency` and `replay_batch_size`, while spill
+  thresholds and equivalent replay-order residency controls remain
+  repository-owned implementation details.
 - **Isolation boundary [KNOWN]:** Prepared future-batch replay state SHALL NOT
   replace or invalidate the content or embedding state needed by the currently
   active delegated batch before that delegated batch has completed ingestion.
@@ -1585,7 +1592,7 @@ with total replay-input corpus size.
   by repository-owned orchestration rather than upstream planner work, the
   runtime SHOULD make materially better use of available CPU and/or storage
   throughput than a fully serialized journal-scan-plus-spill path, subject to
-  the existing bounded-memory constraint.
+  the existing bounded-memory contract.
 - **Optimization boundary [INFERRED]:** Approved optimizations MAY include
   bounded overlap between replay-journal scanning and compact run sorting/
   writing, earlier duplicate elimination within bounded replay-order scratch
@@ -1748,7 +1755,7 @@ violating the approved replay contract.
   concurrent delegated `ingest_batch`, `finish_pass`, `mark_planning_complete`,
   or `finalize` calls on one streaming run.
 - **Boundedness rule [INFERRED]:** A deeper ready queue SHALL remain inside the
-  existing fixed-memory replay boundary rather than becoming an unbounded
+  existing bounded-memory replay boundary rather than becoming an unbounded
   resident payload pipeline or weakening prepared-future-state isolation.
 - **Parity rule [INFERRED]:** This buffering strategy SHALL remain compatible
   with both local/testing and production-oriented storage profiles through the
@@ -2462,8 +2469,13 @@ LexonArchiveBuilder SHALL obtain embeddings through a provider that satisfies `l
 
 LexonArchiveBuilder SHALL select storage and embedding integrations according to environment without changing the delegated indexing contract or the batch input contract.
 
-- **Local/testing [KNOWN]:** local filesystem + local embedding service
-- **Production-oriented [KNOWN]:** either the existing production overlay block store (memory cache + local filesystem cache + Azure Blob SAS-backed storage) + Azure OpenAI, or the additive `production-v2` direct Azure-backed store profile + Azure OpenAI
+- **Local/testing [KNOWN]:** either direct local filesystem + local embedding
+  service, or the preserved `local-overlay` shape that reuses the approved
+  overlay-backed storage profile together with a local embedding service
+- **Production-oriented [KNOWN]:** either the existing production overlay block
+  store (memory cache + local filesystem cache + Azure Blob SAS-backed
+  storage) + Azure OpenAI, or the additive `production-v2` direct Azure-backed
+  store profile + Azure OpenAI
 - **Constraint [KNOWN]:** Environment-specific adapter selection for every indexer-owned tool must expose the same approved storage-profile set rather than allowing some tools to invent one-off direct production backends outside the repository-defined `production` and `production-v2` profiles.
 - **Traceability:** UR-6, UR-7, UR-12, UR-13, UR-153, UR-154, UR-155, UR-156, UR-189, UR-190, UR-191
 
@@ -3027,7 +3039,7 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 - **Q-INDEXER-068 [UNKNOWN]:** Should the rooted CLI search tool treat the caller-supplied embedding endpoint as the complete query-embedding configuration, or must it also accept repository-specific embedding-spec inputs such as dimensions or encoding overrides at the CLI boundary?
 - **Q-INDEXER-069 [UNKNOWN]:** For corpus-based TNN-recall histograms, should a future increment keep repository-owned default histogram buckets or expose bucket configuration as an operator-visible parameter?
 - **Q-INDEXER-070 [UNKNOWN]:** Does published profile `0.7.0` preserve
-  repository-acceptable tree-shape, retrieval-quality, and fixed-memory
+  repository-acceptable tree-shape, retrieval-quality, and bounded-memory
   behavior across the expected corpus sizes, or will a later increment need
   additional approved published profiles or broader v2 support for materially
   different workloads?
