@@ -358,7 +358,7 @@
   telemetry artifact surfaces and must not introduce a new control plane or
   MCP-visible diagnostics surface.
 - **UR-244 [KNOWN]:** Update LexonArchiveBuilder to the latest LexonGraph
-  revision represented by commit `e8dde151993f1b576ff64b0a551fc13df231414c`,
+  revision represented by commit `858ed455ea0828909aea38a0f2e677cca917ae76`,
   where the upstream streaming-indexer v2 path now supports planner-managed
   out-of-core planning state.
 - **UR-245 [KNOWN]:** When LexonArchiveBuilder routes clustering-enabled
@@ -507,7 +507,7 @@
 | CM-INDEXER-100 | Revise | Extend clustering-enabled observability from pass-end-only convergence summaries to operator-visible v2 intra-pass planning telemetry, including pass progress, pending partition detail, trainer subphase summaries, and suspected-stall indicators, while keeping that telemetry additive to the existing runtime progress and dedicated per-run sink surfaces | UR-235, UR-236, UR-237, UR-238 |
 | CM-INDEXER-101 | Revise | Extend clustering-enabled observability from raw pass and intra-pass projection to user-usable convergence diagnosis that combines per-pass trend evidence with latest blocked-on state while preserving explicit uncertainty when telemetry is insufficient | UR-239, UR-240, UR-241, UR-242, UR-243 |
 | CM-INDEXER-102 | Add | Require request-adjacent post-run convergence-diagnosis evidence for non-converged clustering-enabled runs using the existing per-run planning telemetry artifact family rather than a new control-plane or MCP surface | UR-240, UR-241, UR-243 |
-| CM-INDEXER-103 | Revise | Refresh the approved latest-LexonGraph upgrade target to include the upstream streaming-indexer v2 planner-state-root and out-of-core planning-state capability introduced by commit `e8dde151993f1b576ff64b0a551fc13df231414c` | UR-244, UR-246, UR-247 |
+| CM-INDEXER-103 | Revise | Refresh the approved latest-LexonGraph upgrade target to include the upstream streaming-indexer v2 planner-state-root and out-of-core planning-state capability introduced by commit `858ed455ea0828909aea38a0f2e677cca917ae76` | UR-244, UR-246, UR-247 |
 | CM-INDEXER-104 | Add | Require clustering-enabled v2 execution to derive a writable delegated planner-state root from existing request-adjacent artifact/output locations, treat the resulting out-of-core planning data as upstream-owned opaque state, and fail explicitly when that root is unusable without adding a new caller-visible selector | UR-245, UR-247, UR-249, UR-250 |
 | CM-INDEXER-105 | Revise | Clarify that upstream planner-managed out-of-core planning spill is approved for bounded-residency v2 planning while repository-owned deterministic replay ordering remains the existing in-memory raw block-id path with no new repository-owned spill catalog | UR-212, UR-217, UR-246, UR-248 |
 | CM-INDEXER-106 | Revise | Replace the mandatory in-memory-only replay-order catalog with a bounded-residency deterministic replay-ordering contract that may use repository-owned externalized state when needed to keep memory independent of corpus size | UR-251, UR-252, UR-253, UR-254 |
@@ -1107,7 +1107,7 @@
   upgrade for v2 planning telemetry and bounded-memory replay orchestration,
   but they did not account for the newer upstream planner-state-root contract
   or planner-managed out-of-core planning spill introduced in commit
-  `e8dde151993f1b576ff64b0a551fc13df231414c`.
+  `858ed455ea0828909aea38a0f2e677cca917ae76`.
 - **After [KNOWN]:** The requirements now treat that upstream planner-state-root
   and bounded-residency out-of-core planning-state capability as part of the
   approved latest-LexonGraph upgrade target for clustering-enabled v2 runs.
@@ -2825,7 +2825,7 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   - user request in this session: "update to latest lexongraph and adopt it's
     new feature for out of core spilling of planning data"
   - user clarification in this session: "see commit
-    e8dde151993f1b576ff64b0a551fc13df231414c"
+    858ed455ea0828909aea38a0f2e677cca917ae76"
   - user clarification in this session selecting: "Derive it automatically from existing request/output paths"
   - user request in this session: "fix #83. Goal is that memory usage should not scale with size of corpora"
   - user clarification in this session selecting: "Allow bounded repository-owned externalized state when needed (Recommended)"
