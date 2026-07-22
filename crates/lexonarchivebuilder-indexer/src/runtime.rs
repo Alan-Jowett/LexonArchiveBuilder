@@ -854,6 +854,10 @@ pub enum RuntimeError {
         #[source]
         source: io::Error,
     },
+    #[error("parallel replay batch materialization worker panicked: {message}")]
+    ParallelReplayBatchWorkerPanic { message: String },
+    #[error("parallel replay batch materialization did not complete entry {entry_index}")]
+    ParallelReplayBatchMaterializationIncomplete { entry_index: usize },
 }
 
 impl RuntimeError {
@@ -1200,12 +1204,13 @@ fn load_replay_batch_entries_in_parallel(
     let mut completed = (0..entries.len()).map(|_| None).collect::<Vec<_>>();
     std::thread::scope(|scope| -> Result<(), RuntimeError> {
         let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let mut worker_handles = Vec::with_capacity(worker_count);
         for _ in 0..worker_count {
             let result_tx = result_tx.clone();
             let store = store.clone();
             let embedding_spec = embedding_spec.clone();
             let next_index = Arc::clone(&next_index);
-            scope.spawn(move || {
+            worker_handles.push(scope.spawn(move || {
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
@@ -1223,22 +1228,40 @@ fn load_replay_batch_entries_in_parallel(
                     );
                     let _ = result_tx.send((index, result));
                 }
-            });
+            }));
         }
         drop(result_tx);
-        for _ in 0..entries.len() {
-            let (index, result) = result_rx
-                .recv()
-                .expect("parallel replay batch materialization worker terminated early");
+        for (index, result) in result_rx {
             completed[index] = Some(result);
+        }
+        for worker_handle in worker_handles {
+            if let Err(payload) = worker_handle.join() {
+                return Err(RuntimeError::ParallelReplayBatchWorkerPanic {
+                    message: thread_panic_message(payload),
+                });
+            }
         }
         Ok(())
     })?;
     let mut ordered = Vec::with_capacity(entries.len());
-    for entry in completed {
-        ordered.push(entry.expect("every replay batch entry should be materialized")?);
+    for (entry_index, entry) in completed.into_iter().enumerate() {
+        ordered.push(
+            entry.ok_or(RuntimeError::ParallelReplayBatchMaterializationIncomplete {
+                entry_index,
+            })??,
+        );
     }
     Ok(ordered)
+}
+
+fn thread_panic_message(payload: Box<dyn std::any::Any + Send + 'static>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".to_string()
+    }
 }
 
 fn load_replay_batch_entry(
@@ -11095,7 +11118,7 @@ mod tests {
     }
 
     #[test]
-    fn externalized_replay_batch_materialization_preserves_entry_order() {
+    fn parallel_replay_batch_materialization_preserves_entry_order() {
         let temp = tempdir().unwrap();
         let block_store = ConfiguredBlockStore::from_environment(
             temp.path(),
@@ -11185,20 +11208,16 @@ mod tests {
             ReplayOrderEntry::new(alpha_block_id, replay_sort_key_digest(&alpha_item)),
             ReplayOrderEntry::new(gamma_block_id, replay_sort_key_digest(&gamma_item)),
         ]);
-        let mut iterator = ExternalizedReplayBatchIterator {
-            replay_order_reader: replay_order.open_reader().unwrap(),
-            batch_size: 3,
-            block_store,
-            embedding_spec,
-            current_batch_embeddings: Arc::new(Mutex::new(HashMap::new())),
-        };
-
-        let batch = iterator.load_next_batch().unwrap().unwrap();
-        let observed_paths = batch
-            .batch
-            .items
+        let mut replay_order_reader = replay_order.open_reader().unwrap();
+        let loaded_entries = load_replay_batch_entries_in_parallel(
+            &replay_order_reader.read_next_entries(3).unwrap(),
+            &block_store,
+            &embedding_spec,
+        )
+        .unwrap();
+        let observed_paths = loaded_entries
             .iter()
-            .map(|item| match &item.content_ref {
+            .map(|entry| match &entry.item.content_ref {
                 ContentRef::StoredReplay {
                     identity: ReplayIdentity::Document { source_path },
                     ..

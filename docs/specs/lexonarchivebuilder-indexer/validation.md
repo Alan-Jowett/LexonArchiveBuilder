@@ -361,12 +361,13 @@ large enough to require many replay batches during an `analyze-pca` planning
 pass or equivalent replay-heavy delegated phase.
 
 **Pass condition:** Validation evidence shows the optimized path may fetch,
-decode, and reconstruct replay entries concurrently within one future replay
-batch, but delegated `ingest_batch(...)` still receives only fully materialized
-batches in the exact deterministic replay-entry order the serial baseline would
-have produced. The active-batch embedding-cache state remains aligned with the
-submitted batch, replay-validation identity and failure attribution remain
-deterministic, and no concurrent delegated lifecycle calls are introduced.
+decode, and reconstruct replay entries concurrently while materializing a
+single replay batch before handoff, but delegated `ingest_batch(...)` still
+receives only fully materialized batches in the exact deterministic
+replay-entry order the serial baseline would have produced. The active-batch
+embedding-cache state remains aligned with the submitted batch,
+replay-validation identity and failure attribution remain deterministic, and
+no concurrent delegated lifecycle calls are introduced.
 
 The validation record MUST also show that replay-batch materialization was the
 dominant repository-owned waiting seam targeted by the optimization. When a
