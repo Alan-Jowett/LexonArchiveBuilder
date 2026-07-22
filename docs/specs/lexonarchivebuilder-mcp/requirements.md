@@ -25,8 +25,18 @@
 - **UR-MCP-12 [KNOWN]:** Implement the minimal viable product of `lexonarchivebuilder-mcp` using `docs/specs/lexonarchivebuilder-mcp/*` as the source of truth.
 - **UR-MCP-13 [KNOWN]:** The first MVP must be testable against a local filesystem-backed block store and a Docker-containerized local embedding service using the same local embedding engine profile as the indexer.
 - **UR-MCP-14 [KNOWN]:** Production storage and embedding integrations should remain pluggable through stable trait or adapter boundaries, but do not need an executable production realization in the first MVP.
-- **UR-MCP-15 [KNOWN]:** All MCP tools must allow operators to target the approved shared environment/profile family, including local filesystem-backed access, the preserved `local-overlay` shape, the overlay block store composed of an in-memory cache, a local filesystem cache, and an Azure Blob backing store addressed by SAS URL, and preserved direct-Azure `production-v2` compatibility where the shared indexer configuration family already exposes it.
-- **UR-MCP-16 [KNOWN]:** For this increment, a plain Azure Blob block-store target without the required memory-plus-filesystem overlay is not an approved MCP tool-targeting mode, and no MCP tool may invent an undocumented plain-Azure-only exception outside the approved shared family.
+- **UR-MCP-15 [KNOWN]:** All MCP tools must allow operators to target the
+  approved shared environment/profile family, including:
+  - local filesystem-backed access
+  - the preserved `local-overlay` shape
+  - the overlay block store composed of an in-memory cache, a local filesystem
+    cache, and an Azure Blob backing store addressed by SAS URL
+  - preserved direct-Azure `production-v2` compatibility where the shared
+    indexer configuration family already exposes it
+- **UR-MCP-16 [KNOWN]:** For this increment, a plain Azure Blob block-store
+  target without the required memory-plus-filesystem overlay is not an approved
+  MCP tool-targeting mode, and no MCP tool may invent an undocumented plain-
+  Azure-only exception outside the approved shared family.
 - **UR-MCP-17 [INFERRED]:** The same storage-targeting contract should apply consistently across `search_chunks` and the named retrieval tools, even when a specific retrieval tool currently returns an explicit unsupported outcome rather than traversing stored content.
 
 ## Change Manifest
