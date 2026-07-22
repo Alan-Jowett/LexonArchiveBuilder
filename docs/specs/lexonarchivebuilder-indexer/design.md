@@ -319,10 +319,11 @@ embedding-cache state for that next batch while the current batch is inside
 
 However, the prepared-next-batch state remains isolated until the current batch
 finishes delegated ingestion. The live embedding cache and replay content state
-visible to the active delegated batch are not replaced early, and the runtime
-does not call upstream `ingest_batch(...)`, `finish_pass()`,
-`mark_planning_complete()`, or `finalize(...)` concurrently on the same
-delegated run instance.
+visible to the active delegated batch are not replaced early, the runtime
+submits delegated `ingest_batch(...)` only after one successor batch is fully
+materialized, and it does not call upstream `ingest_batch(...)`,
+`finish_pass()`, `mark_planning_complete()`, or `finalize(...)` concurrently on
+the same delegated run instance.
 
 This design preserves deterministic replay order, stable replay identity, and
 the fixed-memory boundary by capping prefetched state to the current batch plus
@@ -330,7 +331,37 @@ one prepared successor batch. It is an internal repository-owned orchestration
 optimization only; it does not change the caller-visible batch contract, the
 delegated upstream lifecycle, or content-type/environment participation rules.
 
-**Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A4, RQ-INDEXER-010A
+**Traces to:** RQ-INDEXER-003A1, RQ-INDEXER-003A4, RQ-INDEXER-003A6,
+RQ-INDEXER-010A
+
+### DSG-LFI-001A6 `Deterministic parallel replay-batch materialization`
+
+LexonArchiveBuilder may realize repository-owned replay-batch materialization
+for one deterministic replay window through bounded internal parallel fetch and
+decode work, but it reassembles the finished batch into the same deterministic
+result the serial loader would have emitted before delegated planning sees it.
+
+The repository-owned side may dispatch per-entry block fetch, decode, replay-
+item reconstruction, and embedding-cache contribution work concurrently within a
+single batch window. Completion order of those internal tasks is not externally
+observable and does not define replay order.
+
+Instead, the runtime retains the authoritative replay-entry sequence for that
+batch, collects each per-entry materialization result into a position-stable
+structure keyed by the original replay-window order, and publishes the finished
+batch plus active-batch embedding-cache state only after every required entry
+for that batch has completed successfully. Any failure remains attributable to
+the deterministic replay entry being materialized rather than to scheduler race
+order.
+
+This design preserves the existing delegated lifecycle, active-batch cache
+isolation, bounded one-batch-ahead residency, and deterministic replay
+submission semantics while allowing repository-owned batch materialization to
+use more host CPU and storage concurrency. It remains internal to the replay
+abstraction and does not add a new caller-visible concurrency control or
+environment-specific behavior.
+
+**Traces to:** RQ-INDEXER-003A4, RQ-INDEXER-003A6, RQ-INDEXER-010A
 
 ### DSG-LFI-001B `Leaf-layer scheduling discipline`
 

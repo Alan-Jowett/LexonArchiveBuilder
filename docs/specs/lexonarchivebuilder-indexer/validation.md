@@ -353,6 +353,33 @@ stage contract.
 **Traces to:** RQ-INDEXER-003A2, RQ-INDEXER-003A5, DSG-LFI-001A2,
 DSG-LFI-001A5
 
+### VAL-LFI-002I7
+
+Compare the current serial replay-batch materialization path against the
+optimized bounded-parallel materialization path on a clustering replay workload
+large enough to require many replay batches during an `analyze-pca` planning
+pass or equivalent replay-heavy delegated phase.
+
+**Pass condition:** Validation evidence shows the optimized path may fetch,
+decode, and reconstruct replay entries concurrently within one future replay
+batch, but delegated `ingest_batch(...)` still receives only fully materialized
+batches in the exact deterministic replay-entry order the serial baseline would
+have produced. The active-batch embedding-cache state remains aligned with the
+submitted batch, replay-validation identity and failure attribution remain
+deterministic, and no concurrent delegated lifecycle calls are introduced.
+
+The validation record MUST also show that replay-batch materialization was the
+dominant repository-owned waiting seam targeted by the optimization. When a
+like-for-like rerun on the updated build is practical, comparative evidence
+SHALL show materially reduced repository-owned waiting and/or materially better
+CPU-disk utilization during replayed clustering passes. When such a rerun is
+not practical, representative profiler evidence from the current seam plus the
+deterministic-correctness regressions for the updated implementation are
+acceptable in its place.
+
+**Traces to:** RQ-INDEXER-003A4, RQ-INDEXER-003A6, DSG-LFI-001A4,
+DSG-LFI-001A6
+
 ### VAL-LFI-002J
 
 Compare a representative full-pipeline run with an equivalent split-stage run.

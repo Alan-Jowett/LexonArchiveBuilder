@@ -623,6 +623,14 @@ struct ReplayBatchLoad {
     embeddings_by_input_hash: Vec<([u8; 32], Vec<u8>)>,
 }
 
+#[derive(Debug)]
+struct ReplayBatchEntryLoad {
+    item: IndexItem<ContentRef>,
+    audit_record: ReplayJournalRecord,
+    input_hash: [u8; 32],
+    embedding: Vec<u8>,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct ValidateOnlyResolver;
 
@@ -1147,40 +1155,22 @@ fn replay_batch_from_entries(
     store: &ConfiguredBlockStore,
     embedding_spec: &EmbeddingSpec,
 ) -> Result<ReplayBatchLoad, RuntimeError> {
+    let loaded_entries = if entries.len() <= 1 {
+        entries
+            .iter()
+            .copied()
+            .map(|entry| load_replay_batch_entry(entry, store, embedding_spec))
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        load_replay_batch_entries_in_parallel(entries, store, embedding_spec)?
+    };
     let mut items = Vec::with_capacity(entries.len());
     let mut audit_records = Vec::with_capacity(entries.len());
     let mut embeddings_by_input_hash = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let block_id = entry.block_hash();
-        let Some(validated) = block_on_block_store_future(store.get(&block_id))? else {
-            return Err(RuntimeError::ReadReplayJournal {
-                block_id: block_id.to_string(),
-                source: io::Error::new(
-                    ErrorKind::NotFound,
-                    "journal entry references missing block",
-                ),
-            });
-        };
-        let Some(input_hash) = replay_embedding_input_hash(&validated, embedding_spec)? else {
-            return Err(RuntimeError::MissingReplayMetadata {
-                block_id: block_id.to_string(),
-            });
-        };
-        let Some((item, embedding)) = replay_item_from_validated_block(&validated, embedding_spec)?
-        else {
-            return Err(RuntimeError::MissingReplayMetadata {
-                block_id: block_id.to_string(),
-            });
-        };
-        if replay_sort_key_digest(&item) != entry.digest_hash() {
-            return Err(RuntimeError::InvalidReplayJournalHead {
-                block_id: validated.hash.to_string(),
-                message: "journal entry does not match referenced block replay metadata".into(),
-            });
-        }
-        embeddings_by_input_hash.push((input_hash.into_bytes(), embedding));
-        audit_records.push(replay_journal_record_from_item(validated.hash, &item));
-        items.push(item);
+    for loaded_entry in loaded_entries {
+        embeddings_by_input_hash.push((loaded_entry.input_hash, loaded_entry.embedding));
+        audit_records.push(loaded_entry.audit_record);
+        items.push(loaded_entry.item);
     }
     Ok(ReplayBatchLoad {
         batch: ReplayBatch {
@@ -1189,6 +1179,78 @@ fn replay_batch_from_entries(
             completion_message: None,
         },
         embeddings_by_input_hash,
+    })
+}
+
+fn load_replay_batch_entries_in_parallel(
+    entries: &[ReplayOrderEntry],
+    store: &ConfiguredBlockStore,
+    embedding_spec: &EmbeddingSpec,
+) -> Result<Vec<ReplayBatchEntryLoad>, RuntimeError> {
+    let mut completed = (0..entries.len()).map(|_| None).collect::<Vec<_>>();
+    std::thread::scope(|scope| -> Result<(), RuntimeError> {
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        for (index, entry) in entries.iter().copied().enumerate() {
+            let result_tx = result_tx.clone();
+            let store = store.clone();
+            let embedding_spec = embedding_spec.clone();
+            scope.spawn(move || {
+                let result = load_replay_batch_entry(entry, &store, &embedding_spec);
+                let _ = result_tx.send((index, result));
+            });
+        }
+        drop(result_tx);
+        for _ in 0..entries.len() {
+            let (index, result) = result_rx
+                .recv()
+                .expect("parallel replay batch materialization worker terminated early");
+            completed[index] = Some(result?);
+        }
+        Ok(())
+    })?;
+    Ok(completed
+        .into_iter()
+        .map(|entry| entry.expect("every replay batch entry should be materialized"))
+        .collect())
+}
+
+fn load_replay_batch_entry(
+    entry: ReplayOrderEntry,
+    store: &ConfiguredBlockStore,
+    embedding_spec: &EmbeddingSpec,
+) -> Result<ReplayBatchEntryLoad, RuntimeError> {
+    let block_id = entry.block_hash();
+    let Some(validated) = block_on_block_store_future(store.get(&block_id))? else {
+        return Err(RuntimeError::ReadReplayJournal {
+            block_id: block_id.to_string(),
+            source: io::Error::new(
+                ErrorKind::NotFound,
+                "journal entry references missing block",
+            ),
+        });
+    };
+    let Some(input_hash) = replay_embedding_input_hash(&validated, embedding_spec)? else {
+        return Err(RuntimeError::MissingReplayMetadata {
+            block_id: block_id.to_string(),
+        });
+    };
+    let Some((item, embedding)) = replay_item_from_validated_block(&validated, embedding_spec)?
+    else {
+        return Err(RuntimeError::MissingReplayMetadata {
+            block_id: block_id.to_string(),
+        });
+    };
+    if replay_sort_key_digest(&item) != entry.digest_hash() {
+        return Err(RuntimeError::InvalidReplayJournalHead {
+            block_id: validated.hash.to_string(),
+            message: "journal entry does not match referenced block replay metadata".into(),
+        });
+    }
+    Ok(ReplayBatchEntryLoad {
+        audit_record: replay_journal_record_from_item(validated.hash, &item),
+        item,
+        input_hash: input_hash.into_bytes(),
+        embedding,
     })
 }
 
@@ -10892,6 +10954,129 @@ mod tests {
                 .unwrap()
                 .unwrap(),
             beta_embedding
+        );
+    }
+
+    #[test]
+    fn externalized_replay_batch_materialization_preserves_entry_order() {
+        let temp = tempdir().unwrap();
+        let block_store = ConfiguredBlockStore::from_environment(
+            temp.path(),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: String::new(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+        )
+        .unwrap();
+
+        let embedding_spec = EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        };
+        let make_block = |path: &str, body: &[u8], embedding: Vec<u8>| {
+            Block::Leaf(
+                build_leaf_block(
+                    VERSION_1,
+                    embedding_spec.clone(),
+                    vec![LeafEntry {
+                        embedding,
+                        metadata: vec![
+                            (
+                                Value::Text("source_kind".into()),
+                                Value::Text("document".into()),
+                            ),
+                            (Value::Text("source_path".into()), Value::Text(path.into())),
+                        ],
+                        content: Content {
+                            media_type: "text/plain".into(),
+                            body: body.to_vec(),
+                        },
+                    }],
+                    None,
+                )
+                .unwrap(),
+            )
+        };
+        let alpha_block = make_block(
+            "C:/docs/alpha.txt",
+            b"alpha",
+            vec![0, 0, 0, 0, 0, 0, 128, 63],
+        );
+        let beta_block = make_block(
+            "C:/docs/beta.txt",
+            b"beta",
+            vec![0, 0, 0, 64, 0, 0, 128, 63],
+        );
+        let gamma_block = make_block(
+            "C:/docs/gamma.txt",
+            b"gamma",
+            vec![0, 0, 64, 64, 0, 0, 128, 63],
+        );
+        let alpha_block_id = put_block(&block_store, &alpha_block);
+        let beta_block_id = put_block(&block_store, &beta_block);
+        let gamma_block_id = put_block(&block_store, &gamma_block);
+        let alpha_item = replay_item_from_validated_block(
+            &get_block(&block_store, &alpha_block_id).unwrap(),
+            &embedding_spec,
+        )
+        .unwrap()
+        .unwrap()
+        .0;
+        let beta_item = replay_item_from_validated_block(
+            &get_block(&block_store, &beta_block_id).unwrap(),
+            &embedding_spec,
+        )
+        .unwrap()
+        .unwrap()
+        .0;
+        let gamma_item = replay_item_from_validated_block(
+            &get_block(&block_store, &gamma_block_id).unwrap(),
+            &embedding_spec,
+        )
+        .unwrap()
+        .unwrap()
+        .0;
+        let replay_order = replay_order_storage_for_entries(&[
+            ReplayOrderEntry::new(beta_block_id, replay_sort_key_digest(&beta_item)),
+            ReplayOrderEntry::new(alpha_block_id, replay_sort_key_digest(&alpha_item)),
+            ReplayOrderEntry::new(gamma_block_id, replay_sort_key_digest(&gamma_item)),
+        ]);
+        let mut iterator = ExternalizedReplayBatchIterator {
+            replay_order_reader: replay_order.open_reader().unwrap(),
+            batch_size: 3,
+            block_store,
+            embedding_spec,
+            current_batch_embeddings: Arc::new(Mutex::new(HashMap::new())),
+        };
+
+        let batch = iterator.load_next_batch().unwrap().unwrap();
+        let observed_paths = batch
+            .batch
+            .items
+            .iter()
+            .map(|item| match &item.content_ref {
+                ContentRef::StoredReplay {
+                    identity: ReplayIdentity::Document { source_path },
+                    ..
+                } => source_path.clone(),
+                other => panic!("expected stored replay document, got {other:?}"),
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            observed_paths,
+            vec![
+                "C:/docs/beta.txt".to_string(),
+                "C:/docs/alpha.txt".to_string(),
+                "C:/docs/gamma.txt".to_string()
+            ]
         );
     }
 

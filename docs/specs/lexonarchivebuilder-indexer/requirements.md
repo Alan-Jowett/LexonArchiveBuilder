@@ -445,6 +445,21 @@
   local/testing and production-oriented storage profiles through the same
   replay-journal and block-store abstractions rather than introducing
   environment-specific replay-order semantics.
+- **UR-268 [KNOWN]:** Speed up repository-owned replay-batch materialization for
+  clustering replay by allowing block fetch and replay-item reconstruction work
+  within one deterministic batch to proceed in parallel before the delegated
+  trainer ingests that batch.
+- **UR-269 [KNOWN]:** Any replay-batch materialization speedup must preserve the
+  exact deterministic replay batch membership and item order that the current
+  serial batch loader would have produced.
+- **UR-270 [INFERRED]:** Replay-batch materialization concurrency must remain
+  internal to repository-owned orchestration, bounded by existing memory and
+  staging constraints, and must not introduce a new caller-visible concurrency
+  selector unless an existing contract proves insufficient.
+- **UR-271 [INFERRED]:** Parallel replay-batch materialization must preserve
+  replay-validation identity, active-batch embedding-cache correctness, and
+  deterministic failure diagnosability even when block fetch or decode
+  completion order differs from final batch order.
 
 ## Change Manifest
 
@@ -567,6 +582,9 @@
 | CM-INDEXER-115 | Revise | Extend bounded-residency replay-order requirements so replay preparation must pursue materially better throughput and host-utilization behavior, not just bounded memory, while preserving deterministic deduped output | UR-262, UR-263, UR-264, UR-266 |
 | CM-INDEXER-116 | Add | Permit internal replay-order preparation optimizations such as bounded overlap between journal scanning and compact-run materialization, or reduced per-record replay-key derivation overhead, so long as replay-order preparation remains payload-free and bounded-memory | UR-262, UR-263, UR-265, UR-266 |
 | CM-INDEXER-117 | Add | Require comparative validation evidence that replay-order preparation improves throughput and/or CPU-disk utilization without changing caller-visible behavior or environment parity | UR-263, UR-264, UR-267 |
+| CM-INDEXER-118 | Revise | Extend contract-safe replay-batch overlap so the repository-owned next-batch preparation phase may fetch and decode the referenced blocks in bounded parallelism while still handing the delegated trainer only fully materialized batches in deterministic replay order | UR-268, UR-269, UR-270, UR-271 |
+| CM-INDEXER-119 | Add | Require deterministic replay-batch materialization to keep completion order internal, reassemble results into the serial baseline batch order, and preserve active-batch embedding-cache and replay-validation identity semantics | UR-269, UR-271 |
+| CM-INDEXER-120 | Add | Require validation evidence that deterministic parallel replay-batch materialization targets the dominant repository-owned waiting seam and, where like-for-like reruns are practical, demonstrates reduced waiting and/or better CPU-disk utilization without changing deterministic batch contents or caller-visible lifecycle behavior | UR-268, UR-269, UR-270, UR-271 |
 
 ## Before / After
 
@@ -1300,6 +1318,40 @@
   preserving deterministic deduped output, invariant behavior, and environment
   parity.
 
+### BA-INDEXER-116
+
+- **Before [KNOWN]:** The repository-owned replay-batch seam allowed one-batch-
+  ahead preparation overlap, but each prefetched batch still loaded its
+  referenced blocks and reconstructed replay items through a serial internal
+  materialization path before delegated planning could consume that batch.
+- **After [KNOWN]:** The requirements now permit bounded internal parallel block
+  fetch and replay-item reconstruction within one replay batch, provided the
+  completed batch is handed to delegated planning only after deterministic
+  baseline order has been fully reassembled.
+
+### BA-INDEXER-117
+
+- **Before [KNOWN]:** The replay-batch overlap contract preserved sequential
+  delegated lifecycle calls, but it did not explicitly say whether internal
+  parallel block fetch/decode completion order could differ from final replay
+  batch order while remaining deterministic.
+- **After [KNOWN]:** The requirements now explicitly require internal parallel
+  replay-batch materialization to keep completion order hidden, preserve exact
+  deterministic batch membership and order, and maintain replay-validation and
+  embedding-cache correctness.
+
+### BA-INDEXER-118
+
+- **Before [KNOWN]:** Validation and profiling evidence could show that replayed
+  clustering spent substantial time waiting for next-batch materialization, but
+  the requirements did not yet call for comparative evidence that repository-
+  owned batch-load waiting was reduced without changing lifecycle behavior.
+- **After [KNOWN]:** Validation now requires evidence that the optimized replay-
+  batch materialization path targets the dominant repository-owned waiting seam
+  and, where a like-for-like rerun is practical, demonstrates reduced waiting
+  and/or improved CPU-disk utilization while preserving deterministic batch
+  handoff semantics and the existing caller-visible lifecycle.
+
 ## Requirements
 
 ### Functional Requirements
@@ -1487,6 +1539,9 @@ lifecycle.
   operations on one delegated streaming run.
 - **Ordering rule [KNOWN]:** Overlap SHALL NOT change deterministic replay
   submission order, pass boundaries, or finalization replay semantics.
+- **Batch-handoff rule [KNOWN]:** LexonArchiveBuilder SHALL invoke delegated
+  `ingest_batch(...)` only with a fully materialized replay batch whose item
+  membership, order, and embedding-cache state are complete for that batch.
 - **Identity rule [KNOWN]:** Overlap SHALL preserve replay-validation identity,
   stable content fingerprints, and clustering-failure diagnosability for
   replayed items.
@@ -1495,7 +1550,38 @@ lifecycle.
   request shape, or MCP surface in this increment.
 - **Extensibility rule [INFERRED]:** The overlap boundary SHALL remain generic
   across approved content types and environment-selected storage profiles.
-- **Traceability:** UR-48, UR-49, UR-160, UR-214, UR-256, UR-257, UR-258, UR-259, UR-260, UR-261
+- **Traceability:** UR-48, UR-49, UR-160, UR-214, UR-256, UR-257, UR-258, UR-259, UR-260, UR-261, UR-268, UR-269, UR-271
+
+#### RQ-INDEXER-003A6 - Deterministic parallel replay-batch materialization
+
+LexonArchiveBuilder MAY realize repository-owned replay-batch materialization
+through bounded internal parallelism, provided that delegated planning still
+sees the same deterministic completed batch the serial baseline would have
+produced.
+
+- **Applicability rule [KNOWN]:** This requirement applies only to the
+  repository-owned step that reads a deterministic replay-order window, fetches
+  the referenced stored blocks, reconstructs replay items, and prepares the
+  active-batch embedding-cache state before delegated `ingest_batch(...)`.
+- **Order-preservation rule [KNOWN]:** Internal block fetch, decode, and replay-
+  item reconstruction MAY complete in a different order, but the finished batch
+  SHALL be reassembled into the exact replay-entry order that the current serial
+  implementation would have emitted.
+- **Lifecycle rule [KNOWN]:** Internal materialization parallelism SHALL NOT
+  introduce concurrent delegated `ingest_batch`, `finish_pass`,
+  `mark_planning_complete`, or `finalize` calls, and SHALL NOT allow delegated
+  ingestion to observe a partially materialized batch.
+- **Cache-correctness rule [KNOWN]:** Any active-batch embedding-cache or
+  equivalent repository-owned lookup state derived during batch materialization
+  SHALL remain aligned with the final deterministic item order and SHALL NOT be
+  published for a later batch before handoff.
+- **Boundedness rule [INFERRED]:** This optimization SHALL remain bounded by the
+  existing replay-batch and memory-residency contract rather than turning replay
+  preparation into an unbounded payload cache or multi-batch resident pipeline.
+- **Parity rule [INFERRED]:** The parallel materialization path SHALL remain
+  compatible with both local/testing and production-oriented storage profiles
+  through the same `BlockStore` and replay abstraction boundaries.
+- **Traceability:** UR-268, UR-269, UR-270, UR-271
 
 #### RQ-INDEXER-003A5 - Efficient replay-order preparation
 
