@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v2 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v2 intra-pass planning observability consumption, user-usable convergence-diagnosis surfacing, latest-LexonGraph planner-state-root adoption for bounded-residency out-of-core planning spill, issue-83 replay-order memory decoupling from corpus size, and bounded replay-batch preparation overlap exploration for issue #88
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, intra-pass planning telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, bounded-residency deterministic replay ordering for deterministic replay submission, bounded replay-batch preparation overlap behind the existing replay contract, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v2 API when the selected published profile is `0.7.0`, and upstream planner-managed out-of-core planning-state spill for clustering-enabled v2 execution
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, replay-order preparation efficiency, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v2 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v2 intra-pass planning observability consumption, user-usable convergence-diagnosis surfacing, latest-LexonGraph planner-state-root adoption for bounded-residency out-of-core planning spill, issue-83 replay-order memory decoupling from corpus size, and bounded replay-batch preparation overlap exploration for issue #88
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, intra-pass planning telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, bounded-residency deterministic replay ordering for deterministic replay submission, efficient replay-order preparation behind the existing replay contract, bounded replay-batch preparation overlap behind the existing replay contract, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v2 API when the selected published profile is `0.7.0`, and upstream planner-managed out-of-core planning-state spill for clustering-enabled v2 execution
 
 ## USER-REQUEST
 
@@ -423,6 +423,28 @@
   content-type-neutral and environment-neutral so future content types and both
   local/testing and production-oriented `BlockStore` profiles participate
   through the same replay boundary.
+- **UR-262 [KNOWN]:** Speed up the replay step, specifically the repository-owned
+  replay-order preparation and deduplication path that runs before delegated
+  clustering replay.
+- **UR-263 [KNOWN]:** Improve utilization of available host CPU and disk during
+  replay-order preparation when the replay journal is large, rather than leaving
+  replay prep substantially underutilized while preserving the current stage
+  contract.
+- **UR-264 [INFERRED]:** Any replay-step speedup must preserve the existing
+  deterministic unique replay order, replay-validation integrity checks, and
+  unchanged clustering/finalization behavior for already-indexed content.
+- **UR-265 [INFERRED]:** This increment should remain internal to repository-
+  owned replay orchestration and should not add a new caller-visible tuning
+  selector unless an existing contract proves insufficient.
+- **UR-266 [INFERRED]:** Replay-step speedups must preserve the current bounded-
+  memory and payload-free replay-ordering boundary: optimization may improve
+  preparation concurrency or reduce per-record overhead, but must not turn
+  replay-order preparation into a payload cache or require corpus-scale resident
+  state.
+- **UR-267 [INFERRED]:** Replay-step speedups must remain compatible with both
+  local/testing and production-oriented storage profiles through the same
+  replay-journal and block-store abstractions rather than introducing
+  environment-specific replay-order semantics.
 
 ## Change Manifest
 
@@ -542,6 +564,9 @@
 | CM-INDEXER-112 | Add | Permit bounded repository-owned overlap of replay-batch preparation with delegated replay ingestion while preserving the upstream sequential lifecycle | UR-256, UR-257, UR-259 |
 | CM-INDEXER-113 | Revise | Extend fixed-memory replay orchestration so any prefetched replay state remains tightly bounded and isolated from the live batch state | UR-214, UR-258, UR-259 |
 | CM-INDEXER-114 | Add | Keep replay-preparation overlap internal, content-type-neutral, and environment-neutral rather than broadening the caller-visible batch surface | UR-260, UR-261 |
+| CM-INDEXER-115 | Revise | Extend bounded-residency replay-order requirements so replay preparation must pursue materially better throughput and host-utilization behavior, not just bounded memory, while preserving deterministic deduped output | UR-262, UR-263, UR-264, UR-266 |
+| CM-INDEXER-116 | Add | Permit internal replay-order preparation optimizations such as bounded overlap between journal scanning and compact-run materialization, or reduced per-record replay-key derivation overhead, so long as replay-order preparation remains payload-free and bounded-memory | UR-262, UR-263, UR-265, UR-266 |
+| CM-INDEXER-117 | Add | Require comparative validation evidence that replay-order preparation improves throughput and/or CPU-disk utilization without changing caller-visible behavior or environment parity | UR-263, UR-264, UR-267 |
 
 ## Before / After
 
@@ -1242,6 +1267,39 @@
   overlap behind the existing batch/runtime abstraction, preserving the current
   CLI, `BatchRequest`, and MCP-facing contracts.
 
+### BA-INDEXER-113
+
+- **Before [KNOWN]:** Replay-order requirements constrained memory growth and
+  deterministic correctness, but they did not explicitly require repository-
+  owned replay preparation to make effective use of available CPU or disk
+  bandwidth when processing large replay journals.
+- **After [KNOWN]:** The requirements now explicitly call for materially better
+  replay-order preparation throughput and host utilization, while keeping
+  deterministic output and the existing stage contract unchanged.
+
+### BA-INDEXER-114
+
+- **Before [KNOWN]:** The requirements allowed bounded externalized replay
+  ordering but did not explicitly state whether repository-owned replay-order
+  preparation could overlap journal scanning with bounded background run
+  materialization or reduce avoidable per-record replay-key reconstruction
+  overhead.
+- **After [KNOWN]:** The requirements now explicitly permit internal replay-
+  order preparation optimizations that improve throughput, provided they stay
+  bounded-memory, payload-free, deterministic, and hidden behind the existing
+  replay abstraction.
+
+### BA-INDEXER-115
+
+- **Before [KNOWN]:** Validation for replay-order externalization focused on
+  correctness and bounded residency, without requiring comparative evidence that
+  the optimized replay-order path actually improves replay-step throughput or
+  resource utilization.
+- **After [KNOWN]:** Validation now requires comparative evidence that replay-
+  order preparation improves throughput and/or CPU-disk utilization while
+  preserving deterministic deduped output, invariant behavior, and environment
+  parity.
+
 ## Requirements
 
 ### Functional Requirements
@@ -1357,6 +1415,23 @@ with total replay-input corpus size.
   that the externalized representation remains deterministic, derives only from
   replay-audit ordering inputs, and does not become a payload cache or a new
   MCP-facing artifact family.
+- **Performance objective [KNOWN]:** Replay-order preparation SHALL materially
+  improve repository-owned replay-step throughput versus the current bounded-
+  residency external sort baseline when processing large replay journals, while
+  preserving the same deterministic unique block-id order.
+- **Utilization objective [KNOWN]:** Where replay-order preparation is limited
+  by repository-owned orchestration rather than upstream planner work, the
+  runtime SHOULD make materially better use of available CPU and/or storage
+  throughput than a fully serialized journal-scan-plus-spill path, subject to
+  the existing bounded-memory constraint.
+- **Optimization boundary [INFERRED]:** Approved optimizations MAY include
+  bounded overlap between replay-journal scanning and compact run sorting/
+  writing, earlier duplicate elimination within bounded replay-order scratch
+  stages, or lower-overhead replay-key/digest derivation from replay-journal
+  inputs, provided those changes do not alter replay-order semantics.
+- **Validation boundary [INFERRED]:** Replay-order performance optimizations
+  SHALL be justified by comparative validation evidence rather than by assumed
+  benefit alone.
 - **Separation rule [INFERRED]:** Any repository-owned externalized replay-order
   state SHALL remain semantically separate from the delegated planner-state
   root and SHALL NOT depend on upstream-owned planner spill formats,
@@ -1364,7 +1439,7 @@ with total replay-input corpus size.
 - **Parity rule [INFERRED]:** This ordering rule SHALL apply consistently
   across local/testing and production-oriented profiles rather than creating
   environment-specific replay-order behavior.
-- **Traceability:** UR-48, UR-160, UR-210, UR-211, UR-212, UR-213, UR-214, UR-215, UR-216, UR-218, UR-219, UR-251, UR-252, UR-253, UR-254, UR-255
+- **Traceability:** UR-48, UR-160, UR-210, UR-211, UR-212, UR-213, UR-214, UR-215, UR-216, UR-218, UR-219, UR-251, UR-252, UR-253, UR-254, UR-255, UR-262, UR-263, UR-264, UR-266
 
 #### RQ-INDEXER-003A3 - Delegated planner-state-root and out-of-core planning spill
 
@@ -1421,6 +1496,32 @@ lifecycle.
 - **Extensibility rule [INFERRED]:** The overlap boundary SHALL remain generic
   across approved content types and environment-selected storage profiles.
 - **Traceability:** UR-48, UR-49, UR-160, UR-214, UR-256, UR-257, UR-258, UR-259, UR-260, UR-261
+
+#### RQ-INDEXER-003A5 - Efficient replay-order preparation
+
+LexonArchiveBuilder SHALL realize replay-order preparation as an efficient
+repository-owned preprocessing stage whose optimizations remain subordinate to
+the existing deterministic replay contract.
+
+- **Internality rule [KNOWN]:** This increment SHALL NOT add a new caller-
+  visible replay-order performance selector on the CLI, `BatchRequest`, or MCP
+  surface.
+- **Correctness rule [KNOWN]:** Optimizations to replay-order preparation SHALL
+  preserve the same deduplicated deterministic replay order and the same
+  replay-validation integrity outcomes that the non-optimized bounded-residency
+  path would produce.
+- **Payload rule [KNOWN]:** Replay-order preparation optimizations SHALL
+  continue to operate on replay-journal metadata, compact ordering identities,
+  and fixed-size validation evidence only; they SHALL NOT require replay
+  payload dereference during replay-order generation.
+- **Concurrency rule [INFERRED]:** If replay-order preparation overlaps journal
+  scanning with background sort, spill, or merge work, the overlap SHALL remain
+  tightly bounded and SHALL NOT introduce environment-specific correctness
+  differences.
+- **Parity rule [INFERRED]:** The optimized replay-order path SHALL remain
+  compatible with both local/testing and production-oriented storage profiles
+  through the same repository-owned abstraction boundary.
+- **Traceability:** UR-262, UR-263, UR-264, UR-265, UR-266, UR-267
 
 #### RQ-INDEXER-003B - Layer-parallel delegated block processing
 

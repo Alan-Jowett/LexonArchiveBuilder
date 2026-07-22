@@ -3468,32 +3468,173 @@ fn replay_sort_key(item: &IndexItem<ContentRef>) -> (String, Vec<(String, String
     (content_key, metadata_key)
 }
 
-fn append_comparable_sort_string(buffer: &mut Vec<u8>, value: &str) {
-    for byte in value.as_bytes() {
+fn append_comparable_sort_bytes(buffer: &mut Vec<u8>, bytes: &[u8]) {
+    for byte in bytes {
         if *byte == 0 {
             buffer.extend_from_slice(&[0, 1]);
         } else {
             buffer.push(*byte);
         }
     }
+}
+
+fn append_comparable_sort_string(buffer: &mut Vec<u8>, value: &str) {
+    append_comparable_sort_bytes(buffer, value.as_bytes());
     buffer.extend_from_slice(&[0, 0]);
 }
 
+fn append_usize_decimal(buffer: &mut Vec<u8>, value: usize) {
+    let mut digits = [0u8; 20];
+    let mut remaining = value;
+    let mut index = digits.len();
+    loop {
+        index -= 1;
+        digits[index] = b'0' + (remaining % 10) as u8;
+        remaining /= 10;
+        if remaining == 0 {
+            break;
+        }
+    }
+    buffer.extend_from_slice(&digits[index..]);
+}
+
+fn append_zero_padded_usize_decimal(buffer: &mut Vec<u8>, value: usize, width: usize) {
+    let mut digits = [0u8; 20];
+    let mut remaining = value;
+    let mut index = digits.len();
+    loop {
+        index -= 1;
+        digits[index] = b'0' + (remaining % 10) as u8;
+        remaining /= 10;
+        if remaining == 0 {
+            break;
+        }
+    }
+    let digit_len = digits.len() - index;
+    for _ in digit_len..width {
+        buffer.push(b'0');
+    }
+    buffer.extend_from_slice(&digits[index..]);
+}
+
+fn append_inline_debug_body(buffer: &mut Vec<u8>, body: &[u8]) {
+    buffer.push(b'[');
+    for (index, byte) in body.iter().enumerate() {
+        if index > 0 {
+            buffer.extend_from_slice(b", ");
+        }
+        append_usize_decimal(buffer, usize::from(*byte));
+    }
+    buffer.push(b']');
+}
+
+fn append_replay_content_sort_key_bytes(buffer: &mut Vec<u8>, content_ref: &ContentRef) {
+    match content_ref {
+        ContentRef::Document { path } => {
+            append_comparable_sort_bytes(buffer, b"document:");
+            let normalized = normalize_document_identity_path(&path.to_string_lossy());
+            append_comparable_sort_bytes(buffer, normalized.as_bytes());
+        }
+        ContentRef::Inline { media_type, body } => {
+            append_comparable_sort_bytes(buffer, b"inline:");
+            append_comparable_sort_bytes(buffer, media_type.as_bytes());
+            append_comparable_sort_bytes(buffer, b":");
+            append_inline_debug_body(buffer, body);
+        }
+        ContentRef::StoredReplay { identity, .. } => match identity {
+            ReplayIdentity::Document { source_path } => {
+                append_comparable_sort_bytes(buffer, b"document:");
+                let normalized = normalize_document_identity_path(source_path);
+                append_comparable_sort_bytes(buffer, normalized.as_bytes());
+            }
+            ReplayIdentity::EmailChunk {
+                email_artifact_ref,
+                chunk_index,
+            } => {
+                append_comparable_sort_bytes(buffer, b"email:");
+                append_comparable_sort_bytes(buffer, email_artifact_ref.as_bytes());
+                append_comparable_sort_bytes(buffer, b":");
+                append_zero_padded_usize_decimal(buffer, *chunk_index, 20);
+            }
+        },
+        ContentRef::EmailChunk {
+            email_artifact_ref,
+            chunk_index,
+        } => {
+            append_comparable_sort_bytes(buffer, b"email:");
+            append_comparable_sort_bytes(buffer, email_artifact_ref.as_bytes());
+            append_comparable_sort_bytes(buffer, b":");
+            append_zero_padded_usize_decimal(buffer, *chunk_index, 20);
+        }
+    }
+    buffer.extend_from_slice(&[0, 0]);
+}
+
+fn append_replay_journal_content_sort_key_bytes(
+    buffer: &mut Vec<u8>,
+    content_ref: &ReplayJournalContentRef,
+) {
+    match content_ref {
+        ReplayJournalContentRef::Document { path } => {
+            append_comparable_sort_bytes(buffer, b"document:");
+            append_comparable_sort_bytes(buffer, path.as_bytes());
+        }
+        ReplayJournalContentRef::Inline { media_type, body } => {
+            append_comparable_sort_bytes(buffer, b"inline:");
+            append_comparable_sort_bytes(buffer, media_type.as_bytes());
+            append_comparable_sort_bytes(buffer, b":");
+            append_inline_debug_body(buffer, body);
+        }
+        ReplayJournalContentRef::EmailChunk {
+            email_artifact_ref,
+            chunk_index,
+        } => {
+            append_comparable_sort_bytes(buffer, b"email:");
+            append_comparable_sort_bytes(buffer, email_artifact_ref.as_bytes());
+            append_comparable_sort_bytes(buffer, b":");
+            append_zero_padded_usize_decimal(buffer, *chunk_index, 20);
+        }
+    }
+    buffer.extend_from_slice(&[0, 0]);
+}
+
+fn append_metadata_sort_key(buffer: &mut Vec<u8>, metadata_key: &[(String, String)]) {
+    for (key, value) in metadata_key {
+        append_comparable_sort_string(buffer, key);
+        append_comparable_sort_string(buffer, value);
+    }
+}
+
+#[cfg(test)]
 fn encode_metadata_sort_key(metadata_key: &[(String, String)]) -> Vec<u8> {
     let mut encoded = Vec::new();
-    for (key, value) in metadata_key {
-        append_comparable_sort_string(&mut encoded, key);
-        append_comparable_sort_string(&mut encoded, value);
-    }
+    append_metadata_sort_key(&mut encoded, metadata_key);
     encoded
 }
 
 fn replay_sort_key_digest(item: &IndexItem<ContentRef>) -> BlockHash {
-    let (content_key, metadata_key) = replay_sort_key(item);
     let mut encoded = Vec::new();
-    append_comparable_sort_string(&mut encoded, &content_key);
-    encoded.extend_from_slice(&encode_metadata_sort_key(&metadata_key));
+    append_replay_content_sort_key_bytes(&mut encoded, &item.content_ref);
+    let metadata_key = metadata_to_text_map(&item.metadata)
+        .into_iter()
+        .collect::<Vec<_>>();
+    append_metadata_sort_key(&mut encoded, &metadata_key);
     hash_bytes(&encoded)
+}
+
+fn replay_journal_record_sort_key_digest(record: &ReplayJournalRecord) -> Option<BlockHash> {
+    let ReplayJournalRecord::ReplayInput {
+        metadata,
+        content_ref,
+        ..
+    } = record
+    else {
+        return None;
+    };
+    let mut encoded = Vec::new();
+    append_replay_journal_content_sort_key_bytes(&mut encoded, content_ref);
+    append_metadata_sort_key(&mut encoded, metadata);
+    Some(hash_bytes(&encoded))
 }
 
 #[cfg(test)]
@@ -5414,9 +5555,8 @@ fn collect_ordered_replay_block_ids_from_journal_with_limit(
                 block_id: block_id.clone(),
                 message: error.to_string(),
             })?;
-        let journal_item = replay_journal_record_to_item(record)
-            .expect("replay input records should convert back into replay items");
-        let digest = replay_sort_key_digest(&journal_item);
+        let digest = replay_journal_record_sort_key_digest(record)
+            .expect("replay input records should compute a replay ordering digest");
         ordered_entries.push(ReplayOrderEntry::new(block_id, digest));
         if ordered_entries.len() >= flush_entry_limit.max(1) {
             let run_index = run_paths.len();
@@ -5486,8 +5626,32 @@ fn flush_sorted_replay_order_run(
         source,
     })?;
     let mut writer = BufWriter::new(file);
+    let mut previous_entry: Option<ReplayOrderEntry> = None;
     for entry in entries.iter().copied() {
-        entry
+        match previous_entry {
+            Some(previous) if previous.block_id == entry.block_id => {
+                if previous.digest != entry.digest {
+                    return Err(RuntimeError::InvalidReplayJournalHead {
+                        block_id: BlockHash::from_bytes(entry.block_id).to_string(),
+                        message: "conflicting replay journal metadata references the same block id"
+                            .into(),
+                    });
+                }
+            }
+            Some(previous) => {
+                previous.write_to(&mut writer).map_err(|source| {
+                    RuntimeError::WriteReplayOrderScratch {
+                        path: path.display().to_string(),
+                        source,
+                    }
+                })?;
+                previous_entry = Some(entry);
+            }
+            None => previous_entry = Some(entry),
+        }
+    }
+    if let Some(previous) = previous_entry {
+        previous
             .write_to(&mut writer)
             .map_err(|source| RuntimeError::WriteReplayOrderScratch {
                 path: path.display().to_string(),
@@ -8396,6 +8560,74 @@ mod tests {
         let entries = storage.read_all_entries().unwrap();
         assert_eq!(entries.len(), REPLAY_ORDER_MERGE_FAN_IN + 1);
         assert!(entries.windows(2).all(|pair| pair[0] <= pair[1]));
+    }
+
+    #[test]
+    fn replay_journal_record_sort_key_digest_matches_item_digest() {
+        let item = IndexItem {
+            metadata: vec![
+                (Value::Text("title".into()), Value::Text("Alpha".into())),
+                (
+                    Value::Text("source_kind".into()),
+                    Value::Text("document".into()),
+                ),
+            ],
+            content_ref: ContentRef::StoredReplay {
+                media_type: "text/plain".into(),
+                body: b"alpha".to_vec(),
+                identity: ReplayIdentity::Document {
+                    source_path: "C:\\docs\\alpha.txt".into(),
+                },
+            },
+        };
+        let record = replay_journal_record_from_item(BlockHash::from_bytes([7u8; 32]), &item);
+        assert_eq!(
+            replay_journal_record_sort_key_digest(&record),
+            Some(replay_sort_key_digest(&item))
+        );
+    }
+
+    #[test]
+    fn flush_sorted_replay_order_run_deduplicates_entries_within_run() {
+        let scratch = tempdir().unwrap();
+        let block_a = BlockHash::from_bytes([1u8; 32]);
+        let block_b = BlockHash::from_bytes([2u8; 32]);
+        let digest_a = BlockHash::from_bytes([11u8; 32]);
+        let digest_b = BlockHash::from_bytes([12u8; 32]);
+        let mut entries = vec![
+            ReplayOrderEntry::new(block_b, digest_b),
+            ReplayOrderEntry::new(block_a, digest_a),
+            ReplayOrderEntry::new(block_a, digest_a),
+        ];
+
+        let path = flush_sorted_replay_order_run(scratch.path(), 0, &mut entries).unwrap();
+        let storage = ReplayOrderStorage::new(scratch, path, 2);
+        let loaded = storage.read_all_entries().unwrap();
+        assert_eq!(
+            loaded
+                .iter()
+                .copied()
+                .map(ReplayOrderEntry::block_hash)
+                .collect::<Vec<_>>(),
+            vec![block_a, block_b]
+        );
+    }
+
+    #[test]
+    fn flush_sorted_replay_order_run_rejects_conflicting_duplicate_digests() {
+        let scratch = tempdir().unwrap();
+        let block_a = BlockHash::from_bytes([1u8; 32]);
+        let mut entries = vec![
+            ReplayOrderEntry::new(block_a, BlockHash::from_bytes([11u8; 32])),
+            ReplayOrderEntry::new(block_a, BlockHash::from_bytes([12u8; 32])),
+        ];
+
+        let error = flush_sorted_replay_order_run(scratch.path(), 0, &mut entries).unwrap_err();
+        assert!(matches!(
+            error,
+            RuntimeError::InvalidReplayJournalHead { block_id, .. }
+                if block_id == block_a.to_string()
+        ));
     }
 
     #[test]
