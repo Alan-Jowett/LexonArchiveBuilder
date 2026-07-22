@@ -138,7 +138,7 @@ profile:
 |---|---|---|
 | local/testing | direct local filesystem-backed access, or the preserved `local-overlay` storage shape for overlay-backed local testing | local embedding service using the same Docker-containerized embedding engine profile as the indexer |
 | production | overlay block store: memory cache + local filesystem cache + Azure Blob SAS-backed access | Azure OpenAI |
-| production-v2 | preserved direct-Azure shared-configuration shape | Azure OpenAI |
+| production-v2 | preserved direct Azure-backed LexonGraph block-store shared-configuration shape | Azure OpenAI |
 
 This selection is configuration-driven and preserves one delegated search flow
 independent of environment.

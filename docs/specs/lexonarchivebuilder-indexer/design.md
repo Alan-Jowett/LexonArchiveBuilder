@@ -190,7 +190,7 @@ modes rather than introducing a separate stage-specific summary schema.
 **Traces to:** RQ-INDEXER-003A, RQ-INDEXER-003D, RQ-INDEXER-008,
 RQ-INDEXER-010A
 
-### DSG-LFI-001A1 `Fixed-memory replay adapter`
+### DSG-LFI-001A1 `Bounded-memory replay adapter`
 
 LexonArchiveBuilder realizes the repository-owned replay adapter so resident
 memory stays bounded with respect to corpus size even when the indexed corpus
@@ -233,8 +233,8 @@ That replay walk reads replay-audit blocks and recorded ids only; it does not
 dereference referenced payload blocks while preparing replay order.
 
 When the working set approaches the approved internal spill threshold, the
-runtime sorts
-the current compact-entry window in memory and flushes it as one sorted flat
+runtime sorts the current compact-entry window in memory and flushes it as one
+sorted flat
 run file beneath a repository-owned run-scoped replay-order scratch root. After
 the journal scan completes, the runtime performs a deterministic k-way merge of
 those sorted runs, removes duplicate block ids while validating any aligned

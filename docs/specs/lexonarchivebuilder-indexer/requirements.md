@@ -1510,7 +1510,7 @@ LexonArchiveBuilder SHALL adapt the approved batch contract onto the replay-base
 - **Idempotence constraint [INFERRED]:** Adapting to replay-based streaming indexing must preserve the existing immutable, hash-addressed rerun expectations for unchanged content.
 - **Traceability:** UR-3, UR-8, UR-31, UR-45, UR-46, UR-48, UR-49, UR-61, UR-62, UR-63
 
-#### RQ-INDEXER-003A1 - Fixed-memory replay orchestration
+#### RQ-INDEXER-003A1 - Bounded-memory replay orchestration
 
 LexonArchiveBuilder SHALL keep its repository-owned replay orchestration
 bounded with respect to corpus size even when the indexed corpus is larger
