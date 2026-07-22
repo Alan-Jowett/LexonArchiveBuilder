@@ -5117,7 +5117,7 @@ where
                 ),
             );
             let prefetch = spawn_externalized_replay_batch_prefetch(iterator);
-            await_with_periodic_progress(
+            let ingest_result = await_with_periodic_progress(
                 indexer.ingest_batch(&batch.batch.items),
                 io.progress,
                 PROGRESS_HEARTBEAT_INTERVAL,
@@ -5132,10 +5132,12 @@ where
                     )
                 },
             )
-            .await?;
-            let (next_iterator, next_batch) = prefetch
+            .await;
+            let prefetched_batch = prefetch
                 .await
                 .map_err(RuntimeError::BlockingReplayPrefetchTaskJoin)??;
+            ingest_result?;
+            let (next_iterator, next_batch) = prefetched_batch;
             iterator = next_iterator;
             current_batch = next_batch;
             completed_items += batch_item_count;
