@@ -634,6 +634,9 @@ struct ReplayBatchEntryLoad {
     embedding: Vec<u8>,
 }
 
+type ExternalizedReplayBatchPrefetchHandle =
+    JoinHandle<Result<(ExternalizedReplayBatchIterator, VecDeque<ReplayBatchLoad>), RuntimeError>>;
+
 #[derive(Clone, Copy, Debug)]
 struct ValidateOnlyResolver;
 
@@ -1132,8 +1135,7 @@ impl ExternalizedReplayBatchIterator {
 fn spawn_externalized_replay_batch_prefetches(
     iterator: ExternalizedReplayBatchIterator,
     batch_count: usize,
-) -> JoinHandle<Result<(ExternalizedReplayBatchIterator, VecDeque<ReplayBatchLoad>), RuntimeError>>
-{
+) -> ExternalizedReplayBatchPrefetchHandle {
     tokio::task::spawn_blocking(move || {
         let mut iterator = iterator;
         let mut prefetched_batches = VecDeque::with_capacity(batch_count);
@@ -1145,6 +1147,43 @@ fn spawn_externalized_replay_batch_prefetches(
         }
         Ok((iterator, prefetched_batches))
     })
+}
+
+async fn await_externalized_replay_batch_prefetch(
+    pending_prefetch: &mut Option<ExternalizedReplayBatchPrefetchHandle>,
+    iterator: &mut Option<ExternalizedReplayBatchIterator>,
+    prefetched_batches: &mut VecDeque<ReplayBatchLoad>,
+) -> Result<(), RuntimeError> {
+    let Some(prefetch) = pending_prefetch.take() else {
+        return Ok(());
+    };
+    let (next_iterator, mut newly_prefetched_batches) = prefetch
+        .await
+        .map_err(RuntimeError::BlockingReplayPrefetchTaskJoin)??;
+    *iterator = Some(next_iterator);
+    prefetched_batches.append(&mut newly_prefetched_batches);
+    Ok(())
+}
+
+async fn take_next_externalized_replay_batch(
+    iterator: &mut Option<ExternalizedReplayBatchIterator>,
+    prefetched_batches: &mut VecDeque<ReplayBatchLoad>,
+    pending_prefetch: &mut Option<ExternalizedReplayBatchPrefetchHandle>,
+) -> Result<Option<ReplayBatchLoad>, RuntimeError> {
+    if let Some(next_batch) = prefetched_batches.pop_front() {
+        return Ok(Some(next_batch));
+    }
+    if iterator.is_none() {
+        await_externalized_replay_batch_prefetch(pending_prefetch, iterator, prefetched_batches)
+            .await?;
+    }
+    if let Some(next_batch) = prefetched_batches.pop_front() {
+        return Ok(Some(next_batch));
+    }
+    match iterator.as_mut() {
+        Some(iterator) => iterator.load_next_batch(),
+        None => Ok(None),
+    }
 }
 
 impl IntoIterator for ExternalizedReplayFinalizeSource {
@@ -5424,19 +5463,28 @@ where
 
     loop {
         let mut completed_items = 0usize;
-        let mut iterator = replay_state.batch_iterator()?;
+        let mut iterator = Some(replay_state.batch_iterator()?);
         let mut batch_number = 0usize;
-        let mut current_batch = iterator.load_next_batch()?;
+        let mut current_batch = iterator
+            .as_mut()
+            .expect("iterator must be available before replay starts")
+            .load_next_batch()?;
         let mut prefetched_batches = VecDeque::new();
+        let mut pending_prefetch = None;
         while let Some(batch) = current_batch {
             if batch.batch.items.is_empty() {
-                current_batch = match prefetched_batches.pop_front() {
-                    Some(next_batch) => Some(next_batch),
-                    None => iterator.load_next_batch()?,
-                };
+                current_batch = take_next_externalized_replay_batch(
+                    &mut iterator,
+                    &mut prefetched_batches,
+                    &mut pending_prefetch,
+                )
+                .await?;
                 continue;
             }
-            iterator.publish_batch_embeddings(&batch.embeddings_by_input_hash);
+            iterator
+                .as_ref()
+                .expect("iterator must be available to publish current batch embeddings")
+                .publish_batch_embeddings(&batch.embeddings_by_input_hash);
             batch_number += 1;
             let batch_item_count = batch.batch.items.len();
             report_progress(
@@ -5451,15 +5499,14 @@ where
             );
             let requested_prefetch_count = EXTERNALIZED_REPLAY_PREFETCH_FUTURE_BATCHES
                 .saturating_sub(prefetched_batches.len());
-            let mut iterator_slot = Some(iterator);
-            let prefetch = if requested_prefetch_count > 0 {
-                Some(spawn_externalized_replay_batch_prefetches(
-                    iterator_slot.take().unwrap(),
+            if pending_prefetch.is_none() && requested_prefetch_count > 0 {
+                pending_prefetch = Some(spawn_externalized_replay_batch_prefetches(
+                    iterator
+                        .take()
+                        .expect("iterator must be available when spawning prefetch"),
                     requested_prefetch_count,
-                ))
-            } else {
-                None
-            };
+                ));
+            }
             let ingest_result = await_with_periodic_progress(
                 indexer.ingest_batch(&batch.batch.items),
                 io.progress,
@@ -5476,25 +5523,13 @@ where
                 },
             )
             .await;
-            let prefetched_batches_result = match prefetch {
-                Some(prefetch) => Some(
-                    prefetch
-                        .await
-                        .map_err(RuntimeError::BlockingReplayPrefetchTaskJoin)??,
-                ),
-                None => None,
-            };
             ingest_result?;
-            if let Some((next_iterator, mut newly_prefetched_batches)) = prefetched_batches_result {
-                iterator = next_iterator;
-                prefetched_batches.append(&mut newly_prefetched_batches);
-            } else {
-                iterator = iterator_slot.take().unwrap();
-            }
-            current_batch = match prefetched_batches.pop_front() {
-                Some(next_batch) => Some(next_batch),
-                None => iterator.load_next_batch()?,
-            };
+            current_batch = take_next_externalized_replay_batch(
+                &mut iterator,
+                &mut prefetched_batches,
+                &mut pending_prefetch,
+            )
+            .await?;
             completed_items += batch_item_count;
             report_progress(
                 io.progress,
@@ -5506,7 +5541,16 @@ where
                 ),
             );
         }
-        iterator.clear_current_batch_embeddings();
+        await_externalized_replay_batch_prefetch(
+            &mut pending_prefetch,
+            &mut iterator,
+            &mut prefetched_batches,
+        )
+        .await?;
+        iterator
+            .as_ref()
+            .expect("iterator must be available when clearing active batch embeddings")
+            .clear_current_batch_embeddings();
         report_progress(
             io.progress,
             config
@@ -11247,6 +11291,47 @@ mod tests {
                 .unwrap(),
             gamma_embedding
         );
+    }
+
+    #[test]
+    fn externalized_replay_ready_batch_does_not_wait_for_top_up() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut iterator = None;
+            let mut prefetched_batches = VecDeque::from([ReplayBatchLoad {
+                batch: ReplayBatch {
+                    items: Vec::new(),
+                    audit_records: Vec::new(),
+                    completion_message: None,
+                },
+                embeddings_by_input_hash: Vec::new(),
+            }]);
+            let mut pending_prefetch: Option<ExternalizedReplayBatchPrefetchHandle> =
+                Some(tokio::spawn(async {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    unreachable!()
+                }));
+
+            let next_batch = tokio::time::timeout(
+                Duration::from_millis(50),
+                take_next_externalized_replay_batch(
+                    &mut iterator,
+                    &mut prefetched_batches,
+                    &mut pending_prefetch,
+                ),
+            )
+            .await
+            .expect("ready batch should not wait for top-up prefetch")
+            .unwrap()
+            .expect("expected queued replay batch");
+
+            assert!(next_batch.batch.items.is_empty());
+            assert!(pending_prefetch.is_some());
+            pending_prefetch.take().unwrap().abort();
+        });
     }
 
     #[test]
