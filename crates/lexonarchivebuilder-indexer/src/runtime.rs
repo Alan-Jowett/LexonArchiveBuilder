@@ -3528,12 +3528,18 @@ fn append_inline_debug_body(buffer: &mut Vec<u8>, body: &[u8]) {
     buffer.push(b']');
 }
 
+fn append_normalized_document_identity_path_bytes(buffer: &mut Vec<u8>, path: &str) {
+    for byte in path.as_bytes() {
+        let normalized = if *byte == b'\\' { b'/' } else { *byte };
+        append_comparable_sort_bytes(buffer, &[normalized]);
+    }
+}
+
 fn append_replay_content_sort_key_bytes(buffer: &mut Vec<u8>, content_ref: &ContentRef) {
     match content_ref {
         ContentRef::Document { path } => {
             append_comparable_sort_bytes(buffer, b"document:");
-            let normalized = normalize_document_identity_path(&path.to_string_lossy());
-            append_comparable_sort_bytes(buffer, normalized.as_bytes());
+            append_normalized_document_identity_path_bytes(buffer, &path.to_string_lossy());
         }
         ContentRef::Inline { media_type, body } => {
             append_comparable_sort_bytes(buffer, b"inline:");
@@ -3544,8 +3550,7 @@ fn append_replay_content_sort_key_bytes(buffer: &mut Vec<u8>, content_ref: &Cont
         ContentRef::StoredReplay { identity, .. } => match identity {
             ReplayIdentity::Document { source_path } => {
                 append_comparable_sort_bytes(buffer, b"document:");
-                let normalized = normalize_document_identity_path(source_path);
-                append_comparable_sort_bytes(buffer, normalized.as_bytes());
+                append_normalized_document_identity_path_bytes(buffer, source_path);
             }
             ReplayIdentity::EmailChunk {
                 email_artifact_ref,
@@ -3577,7 +3582,7 @@ fn append_replay_journal_content_sort_key_bytes(
     match content_ref {
         ReplayJournalContentRef::Document { path } => {
             append_comparable_sort_bytes(buffer, b"document:");
-            append_comparable_sort_bytes(buffer, path.as_bytes());
+            append_normalized_document_identity_path_bytes(buffer, path);
         }
         ReplayJournalContentRef::Inline { media_type, body } => {
             append_comparable_sort_bytes(buffer, b"inline:");
@@ -8667,6 +8672,34 @@ mod tests {
             unreachable!();
         };
         metadata.reverse();
+
+        assert_eq!(
+            replay_journal_record_sort_key_digest(&record),
+            Some(replay_sort_key_digest(&item))
+        );
+    }
+
+    #[test]
+    fn replay_journal_record_sort_key_digest_normalizes_document_paths() {
+        let item = IndexItem {
+            metadata: vec![
+                (Value::Text("title".into()), Value::Text("Alpha".into())),
+                (
+                    Value::Text("source_kind".into()),
+                    Value::Text("document".into()),
+                ),
+            ],
+            content_ref: ContentRef::Document {
+                path: "C:\\docs\\alpha.txt".into(),
+            },
+        };
+        let mut record = replay_journal_record_from_item(BlockHash::from_bytes([7u8; 32]), &item);
+        let ReplayJournalRecord::ReplayInput { content_ref, .. } = &mut record else {
+            unreachable!();
+        };
+        *content_ref = ReplayJournalContentRef::Document {
+            path: "C:\\docs\\alpha.txt".into(),
+        };
 
         assert_eq!(
             replay_journal_record_sort_key_digest(&record),
