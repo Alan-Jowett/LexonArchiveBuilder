@@ -1187,16 +1187,38 @@ fn load_replay_batch_entries_in_parallel(
     store: &ConfiguredBlockStore,
     embedding_spec: &EmbeddingSpec,
 ) -> Result<Vec<ReplayBatchEntryLoad>, RuntimeError> {
+    let worker_count = entries.len().min(
+        std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1),
+    );
+    let next_index = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut completed = (0..entries.len()).map(|_| None).collect::<Vec<_>>();
     std::thread::scope(|scope| -> Result<(), RuntimeError> {
         let (result_tx, result_rx) = std::sync::mpsc::channel();
-        for (index, entry) in entries.iter().copied().enumerate() {
+        for _ in 0..worker_count {
             let result_tx = result_tx.clone();
             let store = store.clone();
             let embedding_spec = embedding_spec.clone();
+            let next_index = Arc::clone(&next_index);
             scope.spawn(move || {
-                let result = load_replay_batch_entry(entry, &store, &embedding_spec);
-                let _ = result_tx.send((index, result));
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build tokio runtime for replay batch materialization");
+                loop {
+                    let index = next_index.fetch_add(1, Ordering::Relaxed);
+                    if index >= entries.len() {
+                        break;
+                    }
+                    let result = load_replay_batch_entry_with_runtime(
+                        entries[index],
+                        &store,
+                        &embedding_spec,
+                        &runtime,
+                    );
+                    let _ = result_tx.send((index, result));
+                }
             });
         }
         drop(result_tx);
@@ -1204,14 +1226,15 @@ fn load_replay_batch_entries_in_parallel(
             let (index, result) = result_rx
                 .recv()
                 .expect("parallel replay batch materialization worker terminated early");
-            completed[index] = Some(result?);
+            completed[index] = Some(result);
         }
         Ok(())
     })?;
-    Ok(completed
-        .into_iter()
-        .map(|entry| entry.expect("every replay batch entry should be materialized"))
-        .collect())
+    let mut ordered = Vec::with_capacity(entries.len());
+    for entry in completed {
+        ordered.push(entry.expect("every replay batch entry should be materialized")?);
+    }
+    Ok(ordered)
 }
 
 fn load_replay_batch_entry(
@@ -1229,6 +1252,34 @@ fn load_replay_batch_entry(
             ),
         });
     };
+    load_replay_batch_entry_from_validated(entry, validated, embedding_spec)
+}
+
+fn load_replay_batch_entry_with_runtime(
+    entry: ReplayOrderEntry,
+    store: &ConfiguredBlockStore,
+    embedding_spec: &EmbeddingSpec,
+    runtime: &tokio::runtime::Runtime,
+) -> Result<ReplayBatchEntryLoad, RuntimeError> {
+    let block_id = entry.block_hash();
+    let Some(validated) = runtime.block_on(store.get(&block_id))? else {
+        return Err(RuntimeError::ReadReplayJournal {
+            block_id: block_id.to_string(),
+            source: io::Error::new(
+                ErrorKind::NotFound,
+                "journal entry references missing block",
+            ),
+        });
+    };
+    load_replay_batch_entry_from_validated(entry, validated, embedding_spec)
+}
+
+fn load_replay_batch_entry_from_validated(
+    entry: ReplayOrderEntry,
+    validated: lexongraph_block::ValidatedBlock,
+    embedding_spec: &EmbeddingSpec,
+) -> Result<ReplayBatchEntryLoad, RuntimeError> {
+    let block_id = validated.hash;
     let Some(input_hash) = replay_embedding_input_hash(&validated, embedding_spec)? else {
         return Err(RuntimeError::MissingReplayMetadata {
             block_id: block_id.to_string(),
@@ -10702,6 +10753,88 @@ mod tests {
         let error = iterator.next_batch().unwrap_err();
         assert!(
             matches!(error, RuntimeError::ReadReplayJournal { block_id, .. } if block_id == missing_block_id.to_string())
+        );
+    }
+
+    #[test]
+    fn externalized_replay_batch_materialization_reports_first_batch_order_error() {
+        let temp = tempdir().unwrap();
+        let block_store = ConfiguredBlockStore::from_environment(
+            temp.path(),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: String::new(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+        )
+        .unwrap();
+        let embedding_spec = EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        };
+        let make_block = |path: &str, body: &[u8]| {
+            Block::Leaf(
+                build_leaf_block(
+                    VERSION_1,
+                    embedding_spec.clone(),
+                    vec![LeafEntry {
+                        embedding: vec![0, 0, 0, 0, 0, 0, 128, 63],
+                        metadata: vec![
+                            (
+                                Value::Text("source_kind".into()),
+                                Value::Text("document".into()),
+                            ),
+                            (Value::Text("source_path".into()), Value::Text(path.into())),
+                        ],
+                        content: Content {
+                            media_type: "text/plain".into(),
+                            body: body.to_vec(),
+                        },
+                    }],
+                    None,
+                )
+                .unwrap(),
+            )
+        };
+        let first_block = make_block("C:/docs/first.txt", b"first");
+        let second_block = make_block("C:/docs/second.txt", b"second");
+        let first_block_id = put_block(&block_store, &first_block);
+        let second_block_id = put_block(&block_store, &second_block);
+        let first_item = replay_item_from_validated_block(
+            &get_block(&block_store, &first_block_id).unwrap(),
+            &embedding_spec,
+        )
+        .unwrap()
+        .unwrap()
+        .0;
+        let second_item = replay_item_from_validated_block(
+            &get_block(&block_store, &second_block_id).unwrap(),
+            &embedding_spec,
+        )
+        .unwrap()
+        .unwrap()
+        .0;
+        let replay_order = replay_order_storage_for_entries(&[
+            ReplayOrderEntry::new(first_block_id, replay_sort_key_digest(&second_item)),
+            ReplayOrderEntry::new(second_block_id, replay_sort_key_digest(&first_item)),
+        ]);
+        let mut iterator = ExternalizedReplayBatchIterator {
+            replay_order_reader: replay_order.open_reader().unwrap(),
+            batch_size: 2,
+            block_store,
+            embedding_spec,
+            current_batch_embeddings: Arc::new(Mutex::new(HashMap::new())),
+        };
+
+        let error = iterator.load_next_batch().unwrap_err();
+        assert!(
+            matches!(error, RuntimeError::InvalidReplayJournalHead { block_id, .. } if block_id == first_block_id.to_string())
         );
     }
 
