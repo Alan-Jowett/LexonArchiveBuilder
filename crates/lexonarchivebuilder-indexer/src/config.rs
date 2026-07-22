@@ -116,6 +116,8 @@ pub struct BatchRequest {
     #[serde(default)]
     pub max_concurrency: Option<usize>,
     #[serde(default)]
+    pub replay_batch_size: Option<usize>,
+    #[serde(default)]
     pub ref_name: String,
     #[serde(default)]
     pub items: Vec<BatchItemConfig>,
@@ -229,6 +231,8 @@ pub enum ConfigError {
     EmptyItems,
     #[error("max_concurrency must be at least 1 when specified")]
     InvalidMaxConcurrency,
+    #[error("replay_batch_size must be at least 1 when specified")]
+    InvalidReplayBatchSize,
     #[error("batch request ref_name must not be empty")]
     MissingRefName,
     #[error(
@@ -283,6 +287,9 @@ impl BatchRequest {
         if matches!(self.max_concurrency, Some(0)) {
             return Err(ConfigError::InvalidMaxConcurrency);
         }
+        if matches!(self.replay_batch_size, Some(0)) {
+            return Err(ConfigError::InvalidReplayBatchSize);
+        }
         normalized_ref_name_segments(&self.ref_name)?;
         self.environment.validate_for_stage(self.stage)?;
         Ok(())
@@ -301,6 +308,11 @@ impl BatchRequest {
 
     pub fn effective_max_concurrency(&self) -> usize {
         self.max_concurrency.unwrap_or_else(default_max_concurrency)
+    }
+
+    pub fn effective_replay_batch_size(&self) -> usize {
+        self.replay_batch_size
+            .unwrap_or_else(|| self.max_concurrency.unwrap_or_else(default_max_concurrency))
     }
 }
 
@@ -707,6 +719,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: default_profile_version(),
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Document {
                 path: relative_document_path.clone(),
@@ -748,6 +761,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: default_profile_version(),
             max_concurrency: Some(0),
+            replay_batch_size: None,
             ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
@@ -783,6 +797,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: default_profile_version(),
             max_concurrency: Some(7),
+            replay_batch_size: None,
             ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
@@ -791,6 +806,108 @@ mod tests {
         };
 
         assert_eq!(request.effective_max_concurrency(), 7);
+    }
+
+    #[test]
+    fn explicit_replay_batch_size_must_be_positive() {
+        let request = BatchRequest {
+            environment: EnvironmentConfig::Local {
+                block_store_root: PathBuf::from("blocks"),
+                embedding: LocalEmbeddingConfig {
+                    base_url: "http://localhost:8080".into(),
+                    model: default_local_model(),
+                    api_key_env: None,
+                    request_timeout_secs: default_request_timeout_secs(),
+                    max_retries: default_max_retries(),
+                    retry_delay_ms: default_retry_delay_ms(),
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 384,
+                encoding: "f32le".into(),
+            },
+            block_size_target: default_block_size_target(),
+            stage: ExecutionStage::FullPipeline,
+            profile_version: default_profile_version(),
+            max_concurrency: Some(7),
+            replay_batch_size: Some(0),
+            ref_name: "test-branch".into(),
+            items: vec![BatchItemConfig::Document {
+                path: PathBuf::from("docs").join("sample.txt"),
+                metadata: BTreeMap::new(),
+            }],
+        };
+
+        assert!(matches!(
+            request.validate(),
+            Err(ConfigError::InvalidReplayBatchSize)
+        ));
+    }
+
+    #[test]
+    fn explicit_replay_batch_size_overrides_max_concurrency_fallback() {
+        let request = BatchRequest {
+            environment: EnvironmentConfig::Local {
+                block_store_root: PathBuf::from("blocks"),
+                embedding: LocalEmbeddingConfig {
+                    base_url: "http://localhost:8080".into(),
+                    model: default_local_model(),
+                    api_key_env: None,
+                    request_timeout_secs: default_request_timeout_secs(),
+                    max_retries: default_max_retries(),
+                    retry_delay_ms: default_retry_delay_ms(),
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 384,
+                encoding: "f32le".into(),
+            },
+            block_size_target: default_block_size_target(),
+            stage: ExecutionStage::FullPipeline,
+            profile_version: default_profile_version(),
+            max_concurrency: Some(7),
+            replay_batch_size: Some(11),
+            ref_name: "test-branch".into(),
+            items: vec![BatchItemConfig::Document {
+                path: PathBuf::from("docs").join("sample.txt"),
+                metadata: BTreeMap::new(),
+            }],
+        };
+
+        assert_eq!(request.effective_replay_batch_size(), 11);
+    }
+
+    #[test]
+    fn omitted_replay_batch_size_falls_back_to_max_concurrency() {
+        let request = BatchRequest {
+            environment: EnvironmentConfig::Local {
+                block_store_root: PathBuf::from("blocks"),
+                embedding: LocalEmbeddingConfig {
+                    base_url: "http://localhost:8080".into(),
+                    model: default_local_model(),
+                    api_key_env: None,
+                    request_timeout_secs: default_request_timeout_secs(),
+                    max_retries: default_max_retries(),
+                    retry_delay_ms: default_retry_delay_ms(),
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 384,
+                encoding: "f32le".into(),
+            },
+            block_size_target: default_block_size_target(),
+            stage: ExecutionStage::FullPipeline,
+            profile_version: default_profile_version(),
+            max_concurrency: Some(7),
+            replay_batch_size: None,
+            ref_name: "test-branch".into(),
+            items: vec![BatchItemConfig::Document {
+                path: PathBuf::from("docs").join("sample.txt"),
+                metadata: BTreeMap::new(),
+            }],
+        };
+
+        assert_eq!(request.effective_replay_batch_size(), 7);
     }
 
     #[test]
@@ -827,6 +944,34 @@ mod tests {
 
         assert_eq!(request.stage, ExecutionStage::FullPipeline);
         assert_eq!(request.profile_version, PUBLISHED_PROFILE_V0_7_0);
+        assert_eq!(request.replay_batch_size, None);
+    }
+
+    #[test]
+    fn replay_batch_size_round_trips_from_request_json() {
+        let request: BatchRequest = serde_json::from_value(json!({
+            "environment": {
+                "kind": "local",
+                "block_store_root": "blocks",
+                "embedding": {
+                    "base_url": "http://localhost:8080"
+                }
+            },
+            "embedding_spec": {
+                "dims": 384,
+                "encoding": "f32le"
+            },
+            "replay_batch_size": 9,
+            "ref_name": "test-branch",
+            "items": [{
+                "kind": "document",
+                "path": "docs/sample.txt"
+            }]
+        }))
+        .unwrap();
+
+        assert_eq!(request.replay_batch_size, Some(9));
+        assert_eq!(request.effective_replay_batch_size(), 9);
     }
 
     #[test]
@@ -851,6 +996,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: default_profile_version(),
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: "test-branch".into(),
             items: vec![],
         };
@@ -880,6 +1026,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: default_profile_version(),
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
@@ -915,6 +1062,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: default_profile_version(),
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
@@ -954,6 +1102,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: default_profile_version(),
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
@@ -1114,6 +1263,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: default_profile_version(),
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
@@ -1348,6 +1498,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: default_profile_version(),
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),
@@ -1387,6 +1538,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: default_profile_version(),
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Document {
                 path: PathBuf::from("docs").join("sample.txt"),

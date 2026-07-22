@@ -2982,6 +2982,7 @@ where
     let embedding_spec = request.to_embedding_spec();
     let resolver = LocalFilesystemContentResolver::new(block_store.clone());
     let max_concurrency = request.effective_max_concurrency();
+    let replay_batch_size = request.effective_replay_batch_size();
     if let Some(planning_telemetry) = planning_telemetry.as_ref() {
         report_progress(&progress, planning_telemetry.bootstrap_message());
     }
@@ -3042,7 +3043,7 @@ where
         let (replay_state, embedding_provider) = externalize_replay_batches_from_store_async(
             block_store.clone(),
             embedding_spec.clone(),
-            max_concurrency,
+            replay_batch_size,
             mutable_ref_store,
             replay_order_scratch_root
                 .clone()
@@ -3075,7 +3076,7 @@ where
         let (replay_state, embedding_provider) = externalize_replay_batches_from_store_async(
             block_store.clone(),
             embedding_spec.clone(),
-            max_concurrency,
+            replay_batch_size,
             mutable_ref_store,
             replay_order_scratch_root
                 .clone()
@@ -5611,7 +5612,7 @@ where
 fn load_replay_batches_from_store(
     store: &ConfiguredBlockStore,
     embedding_spec: &EmbeddingSpec,
-    max_concurrency: usize,
+    replay_batch_size: usize,
     io: RuntimeIo<'_>,
 ) -> Result<(Vec<ReplayBatch>, StoredLeafEmbeddingProvider), RuntimeError> {
     let Some(mutable_ref_store) = io.mutable_ref_store else {
@@ -5622,7 +5623,7 @@ fn load_replay_batches_from_store(
     load_replay_batches_from_journal(
         store,
         embedding_spec,
-        max_concurrency,
+        replay_batch_size,
         mutable_ref_store,
         io.progress,
     )
@@ -5955,7 +5956,7 @@ fn merge_sorted_replay_order_run_group(
 fn externalize_replay_batches_from_journal(
     store: &ConfiguredBlockStore,
     embedding_spec: &EmbeddingSpec,
-    max_concurrency: usize,
+    replay_batch_size: usize,
     mutable_ref_store: &MutableRefStoreLocation,
     replay_order_scratch_root: &Path,
     progress: &ProgressReporter,
@@ -5979,7 +5980,7 @@ fn externalize_replay_batches_from_journal(
         ExternalizedReplayState {
             replay_order: replay_order.clone(),
             total_items,
-            batch_size: max_concurrency.max(1),
+            batch_size: replay_batch_size.max(1),
             block_store: store.clone(),
             embedding_spec: embedding_spec.clone(),
             current_batch_embeddings: Arc::clone(&current_batch_embeddings),
@@ -5997,7 +5998,7 @@ fn externalize_replay_batches_from_journal(
 async fn externalize_replay_batches_from_store_async(
     store: ConfiguredBlockStore,
     embedding_spec: EmbeddingSpec,
-    max_concurrency: usize,
+    replay_batch_size: usize,
     mutable_ref_store: MutableRefStoreLocation,
     replay_order_scratch_root: PathBuf,
     progress: ProgressReporter,
@@ -6012,7 +6013,7 @@ async fn externalize_replay_batches_from_store_async(
         externalize_replay_batches_from_journal(
             &store,
             &embedding_spec,
-            max_concurrency,
+            replay_batch_size,
             &mutable_ref_store,
             &replay_order_scratch_root,
             &progress,
@@ -6026,7 +6027,7 @@ async fn externalize_replay_batches_from_store_async(
 async fn load_replay_batches_from_store_async(
     store: ConfiguredBlockStore,
     embedding_spec: EmbeddingSpec,
-    max_concurrency: usize,
+    replay_batch_size: usize,
     mutable_ref_store: MutableRefStoreLocation,
     progress: ProgressReporter,
 ) -> Result<(Vec<ReplayBatch>, StoredLeafEmbeddingProvider), RuntimeError> {
@@ -6037,7 +6038,7 @@ async fn load_replay_batches_from_store_async(
             planning_telemetry: None,
             progress: &progress,
         };
-        load_replay_batches_from_store(&store, &embedding_spec, max_concurrency, io)
+        load_replay_batches_from_store(&store, &embedding_spec, replay_batch_size, io)
     })
     .await
     .map_err(RuntimeError::BlockingMutableRefTaskJoin)?
@@ -6047,7 +6048,7 @@ async fn load_replay_batches_from_store_async(
 fn load_replay_batches_from_journal(
     store: &ConfiguredBlockStore,
     embedding_spec: &EmbeddingSpec,
-    max_concurrency: usize,
+    replay_batch_size: usize,
     mutable_ref_store: &MutableRefStoreLocation,
     progress: &ProgressReporter,
 ) -> Result<(Vec<ReplayBatch>, StoredLeafEmbeddingProvider), RuntimeError> {
@@ -6060,7 +6061,7 @@ fn load_replay_batches_from_journal(
     )?;
     let mut embeddings_by_input_hash = HashMap::new();
     let mut replay_batches = Vec::new();
-    let batch_size = max_concurrency.max(1);
+    let batch_size = replay_batch_size.max(1);
     let mut reader = replay_order.open_reader()?;
     loop {
         let entries = reader.read_next_entries(batch_size)?;
@@ -6979,6 +6980,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Mailbox {
@@ -7034,6 +7036,7 @@ mod tests {
                 stage: ExecutionStage::ClusteringAndBlockAssembly,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: None,
+                replay_batch_size: None,
                 ref_name: TEST_REF_NAME.into(),
                 items: vec![],
             },
@@ -7070,6 +7073,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![BatchItemConfig::Document {
                 path: Path::new("doc.txt").to_path_buf(),
@@ -7120,6 +7124,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Mailbox {
@@ -7237,6 +7242,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Mailbox {
@@ -7323,6 +7329,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items,
         };
@@ -7348,6 +7355,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            replay_batch_size: Some(4),
             ref_name: TEST_REF_NAME.into(),
             items: vec![],
         };
@@ -7368,19 +7376,19 @@ mod tests {
 
         let progress = progress.lock().unwrap();
         assert!(progress.iter().any(|line| {
-            line.contains("Submitting replay batch 1 of 3")
+            line.contains("Submitting replay batch 1 of 2")
                 && line.contains("completed 0 of 5 delegated item(s)")
         }));
         assert!(progress.iter().any(|line| {
-            line.contains("Submitted replay batch 1 of 3")
-                && line.contains("completed 2 of 5 delegated item(s)")
+            line.contains("Submitted replay batch 1 of 2")
+                && line.contains("completed 4 of 5 delegated item(s)")
         }));
         assert!(progress.iter().any(|line| {
-            line.contains("Submitted replay batch 3 of 3")
+            line.contains("Submitted replay batch 2 of 2")
                 && line.contains("completed 5 of 5 delegated item(s)")
         }));
         assert!(progress.iter().any(|line| {
-            line.contains("Submitted all 3 replay batch(es); waiting for planning pass completion")
+            line.contains("Submitted all 2 replay batch(es); waiting for planning pass completion")
                 && line.contains("5 delegated item(s)")
         }));
         assert!(
@@ -7406,6 +7414,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![],
         }
@@ -7880,6 +7889,7 @@ mod tests {
             stage: ExecutionStage::IngestionAndEmbedding,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
@@ -7929,6 +7939,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
@@ -7965,6 +7976,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![],
         };
@@ -8013,6 +8025,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![BatchItemConfig::Mailbox {
                 path: mailbox_path
@@ -8080,6 +8093,7 @@ mod tests {
                 stage: ExecutionStage::ClusteringAndBlockAssembly,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: None,
+                replay_batch_size: None,
                 ref_name: TEST_REF_NAME.into(),
                 items: vec![],
             },
@@ -8122,6 +8136,7 @@ mod tests {
                 stage: ExecutionStage::FullPipeline,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: None,
+                replay_batch_size: None,
                 ref_name: TEST_REF_NAME.into(),
                 items: vec![
                     BatchItemConfig::Document {
@@ -10083,6 +10098,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(1),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
@@ -10162,6 +10178,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(1),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![BatchItemConfig::Mailbox {
                 path: mailbox_path
@@ -10221,6 +10238,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(3),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
@@ -10281,6 +10299,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(3),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items,
         };
@@ -10328,6 +10347,7 @@ mod tests {
             stage: ExecutionStage::IngestionAndEmbedding,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(3),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items,
         };
@@ -10368,6 +10388,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![
                 BatchItemConfig::Document {
@@ -10402,6 +10423,7 @@ mod tests {
             stage: ExecutionStage::ClusteringAndBlockAssembly,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![],
         };
@@ -10452,6 +10474,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items,
         };
@@ -10532,6 +10555,7 @@ mod tests {
             stage: ExecutionStage::IngestionAndEmbedding,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(2),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items,
         };
@@ -11481,6 +11505,7 @@ mod tests {
             stage: ExecutionStage::IngestionAndEmbedding,
             profile_version: PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: Some(1),
+            replay_batch_size: None,
             ref_name: TEST_REF_NAME.into(),
             items: vec![BatchItemConfig::Document {
                 path: document_path
@@ -11729,6 +11754,7 @@ mod tests {
                 stage: ExecutionStage::FullPipeline,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: Some(2),
+                replay_batch_size: None,
                 ref_name: TEST_REF_NAME.into(),
                 items: vec![
                     BatchItemConfig::Document {
@@ -11771,6 +11797,7 @@ mod tests {
                 stage: ExecutionStage::ClusteringAndBlockAssembly,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: Some(2),
+                replay_batch_size: None,
                 ref_name: TEST_REF_NAME.into(),
                 items: vec![],
             },
@@ -11852,6 +11879,7 @@ mod tests {
                 stage: ExecutionStage::FullPipeline,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: Some(2),
+                replay_batch_size: None,
                 ref_name: TEST_REF_NAME.into(),
                 items: vec![
                     BatchItemConfig::Document {
@@ -11899,6 +11927,7 @@ mod tests {
                 stage: ExecutionStage::IngestionAndEmbedding,
                 profile_version: PUBLISHED_PROFILE_V0_1_0,
                 max_concurrency: Some(1),
+                replay_batch_size: None,
                 ref_name: TEST_REF_NAME.into(),
                 items: vec![BatchItemConfig::Document {
                     path: document_c.strip_prefix(temp.path()).unwrap().to_path_buf(),

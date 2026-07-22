@@ -392,6 +392,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: lexonarchivebuilder_indexer::config::PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Document {
                 path: document_path
@@ -495,6 +496,7 @@ mod tests {
             stage: ExecutionStage::FullPipeline,
             profile_version: lexonarchivebuilder_indexer::config::PUBLISHED_PROFILE_V0_1_0,
             max_concurrency: None,
+            replay_batch_size: None,
             ref_name: "test-branch".into(),
             items: vec![BatchItemConfig::Mailbox {
                 path: mailbox_path
