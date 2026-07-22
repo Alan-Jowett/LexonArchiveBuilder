@@ -609,8 +609,8 @@ representative local/testing corpus.
 
 **Pass condition:** as a repository-local manual/operator procedure, the
 runnable `test.ps1` workflow reuses the approved batch and rooted-quality
-operator surfaces, can target the active `0.6.x`
-published-profile series without per-profile code edits, emits per-profile
+operator surfaces, can target the active `0.6.x` published-profile series
+without per-profile code edits, emits per-profile
 artifacts plus comparable summary output, and keeps any optional `0.5.x`
 baseline comparison in the same local/testing-only automation surface rather
 than changing the batch request contract or MCP behavior.
