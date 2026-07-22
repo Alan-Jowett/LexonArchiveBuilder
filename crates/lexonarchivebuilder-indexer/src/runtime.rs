@@ -3605,6 +3605,17 @@ fn append_metadata_sort_key(buffer: &mut Vec<u8>, metadata_key: &[(String, Strin
     }
 }
 
+fn canonical_replay_journal_metadata_sort_key(
+    metadata: &[(String, String)],
+) -> Vec<(String, String)> {
+    metadata
+        .iter()
+        .cloned()
+        .collect::<BTreeMap<_, _>>()
+        .into_iter()
+        .collect()
+}
+
 #[cfg(test)]
 fn encode_metadata_sort_key(metadata_key: &[(String, String)]) -> Vec<u8> {
     let mut encoded = Vec::new();
@@ -3633,7 +3644,8 @@ fn replay_journal_record_sort_key_digest(record: &ReplayJournalRecord) -> Option
     };
     let mut encoded = Vec::new();
     append_replay_journal_content_sort_key_bytes(&mut encoded, content_ref);
-    append_metadata_sort_key(&mut encoded, metadata);
+    let metadata_key = canonical_replay_journal_metadata_sort_key(metadata);
+    append_metadata_sort_key(&mut encoded, &metadata_key);
     Some(hash_bytes(&encoded))
 }
 
@@ -8581,6 +8593,33 @@ mod tests {
             },
         };
         let record = replay_journal_record_from_item(BlockHash::from_bytes([7u8; 32]), &item);
+        assert_eq!(
+            replay_journal_record_sort_key_digest(&record),
+            Some(replay_sort_key_digest(&item))
+        );
+    }
+
+    #[test]
+    fn replay_journal_record_sort_key_digest_ignores_metadata_pair_order() {
+        let item = IndexItem {
+            metadata: vec![
+                (Value::Text("zeta".into()), Value::Text("last".into())),
+                (Value::Text("alpha".into()), Value::Text("first".into())),
+            ],
+            content_ref: ContentRef::StoredReplay {
+                media_type: "text/plain".into(),
+                body: b"alpha".to_vec(),
+                identity: ReplayIdentity::Document {
+                    source_path: "C:\\docs\\alpha.txt".into(),
+                },
+            },
+        };
+        let mut record = replay_journal_record_from_item(BlockHash::from_bytes([7u8; 32]), &item);
+        let ReplayJournalRecord::ReplayInput { metadata, .. } = &mut record else {
+            unreachable!();
+        };
+        metadata.reverse();
+
         assert_eq!(
             replay_journal_record_sort_key_digest(&record),
             Some(replay_sort_key_digest(&item))
