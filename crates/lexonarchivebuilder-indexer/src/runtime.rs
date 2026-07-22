@@ -1202,6 +1202,36 @@ async fn take_next_externalized_replay_batch(
     }
 }
 
+async fn finish_externalized_replay_ingest(
+    ingest_result: Result<(), StreamingIndexerError>,
+    pending_prefetch: &mut Option<ExternalizedReplayBatchPrefetchHandle>,
+    iterator: &mut Option<ExternalizedReplayBatchIterator>,
+    prefetched_batches: &mut VecDeque<ReplayBatchLoad>,
+    progress: &ProgressReporter,
+) -> Result<(), RuntimeError> {
+    match ingest_result {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if let Err(cleanup_error) = await_externalized_replay_batch_prefetch(
+                pending_prefetch,
+                iterator,
+                prefetched_batches,
+            )
+            .await
+            {
+                report_progress(
+                    progress,
+                    format!(
+                        "Replay prefetch cleanup failed after clustering ingestion error: {}",
+                        cleanup_error
+                    ),
+                );
+            }
+            Err(error.into())
+        }
+    }
+}
+
 impl IntoIterator for ExternalizedReplayFinalizeSource {
     type Item = Vec<IndexItem<ContentRef>>;
     type IntoIter = ExternalizedReplayFinalizeIterator;
@@ -5540,7 +5570,14 @@ where
                 },
             )
             .await;
-            ingest_result?;
+            finish_externalized_replay_ingest(
+                ingest_result,
+                &mut pending_prefetch,
+                &mut iterator,
+                &mut prefetched_batches,
+                io.progress,
+            )
+            .await?;
             current_batch = take_next_externalized_replay_batch(
                 &mut iterator,
                 &mut prefetched_batches,
@@ -11345,6 +11382,76 @@ mod tests {
             assert!(next_batch.batch.items.is_empty());
             assert!(pending_prefetch.is_some());
             pending_prefetch.take().unwrap().abort();
+        });
+    }
+
+    #[test]
+    fn externalized_replay_ingest_failure_awaits_pending_prefetch_cleanup() {
+        let temp = tempdir().unwrap();
+        let block_store = ConfiguredBlockStore::from_environment(
+            temp.path(),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: String::new(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+        )
+        .unwrap();
+        let embedding_spec = EmbeddingSpec {
+            dims: 2,
+            encoding: "f32le".into(),
+        };
+        let replay_order = replay_order_storage_for_entries(&[]);
+        let iterator_for_cleanup = ExternalizedReplayBatchIterator {
+            replay_order_reader: replay_order.open_reader().unwrap(),
+            batch_size: 1,
+            materialization_max_concurrency: 1,
+            block_store,
+            embedding_spec,
+            current_batch_embeddings: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let cleanup_observed = Arc::new(tokio::sync::Notify::new());
+            let cleanup_observed_for_task = Arc::clone(&cleanup_observed);
+            let mut pending_prefetch: Option<ExternalizedReplayBatchPrefetchHandle> =
+                Some(tokio::spawn(async move {
+                    cleanup_observed_for_task.notify_one();
+                    Ok((iterator_for_cleanup, VecDeque::new()))
+                }));
+            let mut iterator = None;
+            let mut prefetched_batches = VecDeque::new();
+            let progress: ProgressReporter = Arc::new(|_| {});
+
+            let result = finish_externalized_replay_ingest(
+                Err(StreamingIndexerError::InvalidLifecycleTransition(
+                    "synthetic ingest failure".into(),
+                )),
+                &mut pending_prefetch,
+                &mut iterator,
+                &mut prefetched_batches,
+                &progress,
+            )
+            .await;
+
+            cleanup_observed.notified().await;
+            assert!(matches!(
+                result,
+                Err(RuntimeError::StreamingIndexer(
+                    StreamingIndexerError::InvalidLifecycleTransition(_)
+                ))
+            ));
+            assert!(pending_prefetch.is_none());
+            assert!(iterator.is_some());
         });
     }
 
