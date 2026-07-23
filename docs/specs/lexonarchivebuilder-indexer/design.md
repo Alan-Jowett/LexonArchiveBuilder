@@ -12,7 +12,7 @@ clustering input discovery, mutable current-root publication, published-profile 
 published-profile version selection, latest published-profile and
 telemetry compatibility, upstream regression assessment,
 replay-submission and streaming-status observability,
-pass-end convergence telemetry, v2 intra-pass planning telemetry,
+pass-end convergence telemetry, v3-compatible clustering telemetry,
 user-usable convergence diagnosis,
 explicit delegated-contract and
 effective-profile identity signaling, clustering-failure diagnostics,
@@ -26,9 +26,9 @@ block-store copy tooling, upstream embedding-readback API adoption, LAB-owned
 replay-journaled split-stage recovery, bounded-residency deterministic replay
 ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, replay batch-size decoupling from CPU concurrency, bounded multi-batch replay-prefetch buffering, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
-non-search artifacts, plus conditional streaming-indexer v2 adoption with
-repository-default published profile `0.7.0` and derived planner-state-root
-support for delegated bounded-residency out-of-core planning spill, in
+non-search artifacts, plus conditional streaming-indexer v3 adoption with
+repository-default published profile `0.7.0` and derived request-adjacent
+delegated v3 working-root support, in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md`,
 `docs/specs/lexonarchivebuilder-indexer/design.md`, and
 `docs/specs/lexonarchivebuilder-indexer/validation.md`.
@@ -58,8 +58,8 @@ rooted CLI search over stored trees, replay-stable delegated item identity,
 LAB-owned replay-journaled split-stage recovery, bounded-residency deterministic
 replay ordering for clustering replay, independent replay batch-size versus
 replay-materialization concurrency tuning, bounded multi-batch replay-prefetch
-buffering, derived planner-state-root
-support for delegated bounded-residency out-of-core planning spill, and
+buffering, derived request-adjacent delegated v3 working-root
+support, and
 layer-parallel delegated block construction for the local/testing profile.
 
 This document is layered on top of:
@@ -166,13 +166,16 @@ LexonArchiveBuilder realizes delegated indexing as a repository-owned replay ada
 `lexongraph-streaming-indexer` rather than as a single terminal indexing call.
 
 That adapter preserves the approved repository stages while internally driving
-the upstream lifecycle in order:
+the upstream lifecycle appropriate to the selected delegated surface:
 
-1. establish a deterministic delegated item stream for the selected logical
+1. establish a deterministic delegated input stream for the selected logical
    input set
-2. drive one or more planning passes over that stream
-3. mark planning complete
-4. drive the final materialization replay
+2. on non-v3 paths, drive one or more planning passes, mark planning complete,
+   and drive final materialization replay
+3. on the approved effective-`0.7.0` constrained v3 path, ingest the
+   deterministic replayable leaf block-id stream and then drive one delegated
+   finalize transition that performs hierarchy refinement and final
+   materialization
 
 The caller-visible `full pipeline`, `ingestion plus embedding generation only`,
 and `clustering plus block assembly only` modes remain repository contracts.
@@ -249,7 +252,7 @@ requiring the full ordered corpus catalog to be resident in memory at once.
 
 The replay-order scratch root follows the existing request-adjacent artifact
 policy but remains a separate repository-owned artifact family from the
-delegated planner-state root. Its contents are opaque implementation scratch
+delegated v3 working root. Its contents are opaque implementation scratch
 state rather than a caller-visible manifest contract, and inability to create or
 use that scratch root is an explicit runtime failure for workloads that require
 externalization.
@@ -282,16 +285,16 @@ replay-order semantics.
 
 **Traces to:** RQ-INDEXER-003A2, RQ-INDEXER-003A5, RQ-INDEXER-010A
 
-### DSG-LFI-001A3 `Derived delegated planner-state root`
+### DSG-LFI-001A3 `Derived delegated v3 working root`
 
 For effective-`0.7.0` clustering-enabled runs that route through
-`StreamingIndexingRunV2`, LexonArchiveBuilder derives the required delegated
-planner-state root from the same request-adjacent artifact policy already used
-for repository-owned diagnostics and planning telemetry.
+`StreamingIndexingRunV3`, LexonArchiveBuilder derives the required delegated v3
+working root from the same request-adjacent artifact policy already used for
+repository-owned diagnostics and planning telemetry.
 
 The derivation rule is:
 
-- when `--summary-out` is present, place the delegated planner-state root under
+- when `--summary-out` is present, place the delegated v3 working root under
   that directory
 - otherwise, place it under the `--request` file directory
 - materialize one run-scoped child directory so delegated planner scratch state
@@ -299,10 +302,10 @@ The derivation rule is:
 
 LexonArchiveBuilder does not expose a new CLI flag or `BatchRequest` field for
 this path in this increment. It treats the contents beneath the derived root as
-opaque upstream-owned planner state rather than as repository-owned artifacts or
-an interpretable spill format.
+opaque upstream-owned temporary partition artifacts rather than as repository-
+owned artifacts or an interpretable spill format.
 
-If the runtime cannot create or use the derived root, the v2 run fails
+If the runtime cannot create or use the derived root, the v3 run fails
 explicitly before claiming a success-shaped clustering outcome. This keeps the
 repository-owned contract stable while satisfying the new upstream writable-root
 requirement without broadening the external batch surface.
@@ -319,7 +322,7 @@ operations.
 The repository-owned side may read the next replay-order window, fetch the
 referenced stored leaf blocks, reconstruct replay items, and derive the
 embedding-cache state for that next batch while the current batch is inside
-`StreamingIndexingRunV2::ingest_batch(...)`.
+the active delegated ingestion boundary.
 
 However, the prepared-next-batch state remains isolated until the current batch
 finishes delegated ingestion. The live embedding cache and replay content state
@@ -645,15 +648,15 @@ equivalent repository-local planning-policy configuration from retired
 low-level controls.
 
 The selected published profile version remains fixed for the lifetime of one
-batch invocation so replay passes, planning completion, and final
-materialization do not observe intra-run clustering-configuration drift.
+batch invocation so no delegated clustering lifecycle stage observes
+intra-run clustering-configuration drift.
 
 For clustering-enabled execution, LexonArchiveBuilder also materializes one
 run-identity tuple pairing the effective selected published profile version with
 the delegated contract family actually chosen for the invocation
-(`legacy/non-v2` versus `v2`). That tuple is emitted at clustering-enabled
+(`non-v3` versus `v3`). That tuple is emitted at clustering-enabled
 startup and reused by later progress and pass-end telemetry so operators do not
-have to infer old-versus-v2 routing from omitted defaults or source code.
+have to infer non-v3-versus-v3 routing from omitted defaults or source code.
 
 **[KNOWN]:** The upstream published-profile surface exposes this increment's
 approved contract through `PublishedProfileVersion`, the current default
@@ -727,8 +730,10 @@ upgrade whenever the latest upstream contract still supports them semantically:
 - adoption of the published-profile API for clustering-enabled execution
 - defaulting to published profile `0.7.0` while permitting explicit selection
   of another upstream-published profile version for evaluation
-- conditional use of the upstream streaming-indexer v2 API only when the
+- conditional use of the upstream streaming-indexer v3 API only when the
   effective selected profile version is `0.7.0`
+- preserving explicit non-`0.7.0` published-profile selections on the existing
+  non-v3 delegated path until broader v3 adoption is approved
 - refreshing the adopted upstream dependency state so newly published versions
   in the active `0.6.x` series become selectable without redefining the
   repository default, while retaining earlier `0.5.x` alignment as prior
@@ -741,18 +746,18 @@ upgrade whenever the latest upstream contract still supports them semantically:
 - repository-owned progress projection over upstream lifecycle events
 - projection of richer live hierarchy-stage telemetry and heartbeat events onto
   that same repository-owned progress surface
-- projection of delegated v2 intra-pass planning telemetry, including pass
-  progress, pending partition detail, trainer subphase summaries, and
-  suspected-stall indicators, onto repository-owned observability surfaces
+- projection of delegated v3 hierarchy-planning, partition-load, and bottom-up
+  assembly telemetry onto repository-owned observability surfaces without
+  inventing missing v2-only pending-partition detail
 - additive pass-end telemetry that identifies the effective profile plus
   delegated contract family and exposes enough planning summary detail to judge
   whether repeated planning passes are converging
-- derived provision of the upstream-required planner-state root from the
+- derived provision of the upstream-required v3 working root from the
   existing request-adjacent artifact/output policy, without introducing a new
   caller-visible selector
-- bounded-residency delegated out-of-core planning spill beneath that derived
-  root while preserving a separate repository-owned bounded-residency replay-
-  ordering strategy
+- temporary delegated v3 partition-working artifacts beneath that derived root
+  while preserving a separate repository-owned bounded-residency replay-ordering
+  strategy
 - unchanged MCP search-serving behavior for already-indexed content
 - temporary explicit tracking of upstream `main` to pick up new published
   profiles and wgpu acceleration quickly
@@ -764,7 +769,7 @@ behavior.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003I, RQ-INDEXER-003A3, RQ-INDEXER-009, RQ-INDEXER-010A
 
-### DSG-LFI-001I1 `Conditional streaming-indexer v2 selection`
+### DSG-LFI-001I1 `Conditional streaming-indexer v3 selection`
 
 LexonArchiveBuilder chooses the delegated upstream streaming-indexer surface
 from the effective selected published profile version rather than from a
@@ -773,32 +778,32 @@ repository-local clustering-mode switch.
 In this increment:
 
 - effective profile `0.7.0` routes clustering-enabled execution through
-  `StreamingIndexingRunV2`
+  `StreamingIndexingRunV3`
 - explicitly selected non-`0.7.0` profiles continue to use the existing
-  non-v2 streaming-indexer integration path
+  non-v3 streaming-indexer integration path
 - the effective profile is resolved from the existing CLI-override,
   request-file, then repository-default precedence before delegated surface
-  selection, so a CLI-selected non-`0.7.0` profile remains non-v2 and a
-  CLI-selected `0.7.0` profile remains v2
-- once effective profile `0.7.0` selects the v2 surface, repository-owned
-  orchestration keeps replaying full planning passes until
-  `mark_planning_complete()` succeeds or an upstream/runtime error occurs,
-  rather than assuming one completed pass is always sufficient
+  selection, so a CLI-selected non-`0.7.0` profile remains non-v3 and a
+  CLI-selected `0.7.0` profile remains v3
+- once effective profile `0.7.0` selects the v3 surface, repository-owned
+  orchestration feeds deterministic replayable leaf block ids into the
+  delegated v3 ingestion boundary and then completes clustering plus block
+  assembly through the delegated `finalize(...)` transition
 - the request and CLI selector surface stays unchanged across both paths, with
-  no new caller-visible planner-state-root field
-- the v2 path derives the upstream-required planner-state root from the same
+  no new caller-visible delegated working-root field
+- the v3 path derives the upstream-required delegated working root from the same
   request-adjacent artifact policy already used for summary and telemetry
   outputs
 - the selection decision is made once per invocation and remains fixed for all
-  replay passes, planning completion, and final materialization
+  delegated clustering work and final materialization
 - that one-time routing decision is surfaced through the run-identity tuple used
   by progress and pass-end telemetry so operators can tell why one invocation
-  used the legacy path while another used `StreamingIndexingRunV2`
+  used the non-v3 path while another used `StreamingIndexingRunV3`
 
 This preserves the caller-visible published-profile contract while letting the
-repository adopt the upstream true-streaming v2 surface only where the upstream
-contract currently supports it, without imposing a repository-local one-pass
-planning assumption onto large-corpus v2 runs.
+repository adopt the upstream constrained v3 surface only where the upstream
+contract currently supports it, without silently narrowing non-`0.7.0`
+evaluation or adding a new caller-visible working-root selector.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003I, RQ-INDEXER-003A3, RQ-INDEXER-010A
 
@@ -918,11 +923,13 @@ assembly updates, and heartbeat-style in-progress telemetry onto
 repository-visible progress categories without leaking the raw upstream enum
 names into the external CLI or `BatchRequest` contract.
 
-For effective-`0.7.0` v2 runs, that translation layer also consumes the newer
-intra-pass observer surface when it is emitted. The repository-owned rendering
-may expose pass-progress updates, pending-partition detail, trainer subphase
-summaries, and suspected-stall indicators, but it must preserve the distinction
-between live within-pass observations and later pass-completion summaries.
+For effective-`0.7.0` v3 runs, that translation layer consumes the delegated
+hierarchy-planning, partition-load, and bottom-up assembly observer surface when
+it is emitted. The repository-owned rendering may expose active partition or
+layer identity together with stage-local progress, but it must preserve the
+distinction between live in-phase observations and later pass-completion or
+terminal summaries, and it must not invent missing v2-only pending-partition
+detail.
 
 The translation layer also preserves count-semantics clarity when the newest
 upstream telemetry mixes multiple count shapes:
@@ -940,14 +947,14 @@ shape across multiple telemetry contexts.
 
 **Traces to:** RQ-INDEXER-008B, RQ-INDEXER-010A
 
-### DSG-LFI-002B1 `Pass-end convergence telemetry`
+### DSG-LFI-002B1 `Completed-pass convergence telemetry when exposed`
 
-LexonArchiveBuilder realizes pass-end convergence telemetry as one repository-
-owned summary record for each completed clustering planning pass.
+LexonArchiveBuilder realizes pass-end convergence telemetry only on delegated
+paths that actually expose completed planning-pass summaries.
 
 That record is populated from the delegated pass-completion surface rather than
-from ad hoc log scraping. When the delegated API exposes them, the projected
-fields include:
+from ad hoc log scraping. When the delegated API exposes such summaries, the
+projected fields include:
 
 - the effective selected published profile version
 - the delegated contract family actually used for the run
@@ -960,61 +967,63 @@ fields include:
 
 The runtime renders a concise textual summary on the normal batch-progress
 stream and mirrors the same logical record to one operator-discoverable
-dedicated planning-telemetry sink. The sink binding is repository-owned and may be
-realized either as a request-adjacent file artifact or as a distinct process
-output stream, but in either case the normal progress stream announces which
-binding is active for the invocation.
+dedicated planning-telemetry sink. The sink binding is repository-owned and may
+be realized either as a request-adjacent file artifact or as a distinct
+process output stream, but in either case the normal progress stream announces
+which binding is active for the invocation.
 
-This design keeps live observer telemetry on the existing batch-log surface
-while making completed-pass convergence evidence easy to locate without forcing
-operators to scan every ordinary progress line.
+When the selected delegated path does not expose completed-pass summaries, this
+design does not fabricate synthetic pass boundaries. In that case the same
+planning-telemetry family carries only the live phase evidence and explicit
+uncertainty available from the delegated observer.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003I, RQ-INDEXER-008B, RQ-INDEXER-010A
 
-### DSG-LFI-002B2 `V2 intra-pass planning telemetry`
+### DSG-LFI-002B2 `V3 live clustering telemetry`
 
-For clustering-enabled runs that route through `StreamingIndexingRunV2`,
+For clustering-enabled runs that route through `StreamingIndexingRunV3`,
 LexonArchiveBuilder reuses the existing planning-telemetry surfaces for
-delegated within-pass planning observations as well as pass-completion
-summaries.
+delegated live clustering observations.
 
 The normal batch-progress stream remains the primary live surface. When the
-delegated observer emits intra-pass progress, the runtime translates that data
-into repository-owned messages that distinguish:
+delegated observer emits hierarchy-planning, partition-load, or bottom-up
+assembly progress, the runtime translates that data into repository-owned
+messages that distinguish:
 
-- current planning-pass progress from completed-pass convergence summaries
-- pending-partition detail from repository-owned replay-batch totals
-- trainer subphase summaries from higher-level planning-stage transitions
-- suspected-stall indicators from ordinary elapsed-time heartbeats
+- live hierarchy-planning activity from completed-pass convergence summaries
+- phase-local partition or layer progress from repository-owned replay-batch
+  totals
+- delegated v3 phase identity from higher-level repository stage transitions
 
 When a dedicated request-adjacent planning telemetry sink is active, the same
-run writes additive per-run intra-pass records there rather than creating a
+run writes additive per-run live clustering records there rather than creating a
 second observability artifact for the same invocation. Those records remain
 best-effort and additive: failure to render or persist them does not redefine
 the batch contract or create a separate control plane.
 
-The translation layer does not invent repository-local completion, partition,
-or stall semantics that the delegated observer did not expose. It projects the
-observer-visible information in repository-owned wording so operators can judge
-within-pass activity without needing raw upstream enum names or source-code
-knowledge.
+The translation layer does not invent repository-local pending-partition,
+trainer-subphase, or suspected-stall semantics that the delegated v3 observer
+did not expose. It projects the observer-visible information in repository-
+owned wording so operators can judge live clustering activity without needing
+raw upstream enum names or source-code knowledge.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003I, RQ-INDEXER-008B, RQ-INDEXER-010A
 
 ### DSG-LFI-002B3 `User-usable convergence diagnosis`
 
-LexonArchiveBuilder derives one repository-owned convergence-diagnosis view from
-the same per-run planning telemetry family used for pass-end summaries and
-delegated intra-pass records.
+LexonArchiveBuilder derives one repository-owned diagnosis view from the same
+per-run planning telemetry family used for any exposed completed-pass summaries
+and delegated live clustering records.
 
 That diagnosis view stays keyed to the effective run identity already surfaced
-for clustering-enabled execution so multiple completed-pass summaries and the
-latest delegated within-pass status can be correlated without requiring users to
-infer whether records came from different profile or contract selections.
+for clustering-enabled execution so any completed-pass summaries and the latest
+delegated live status can be correlated without requiring users to infer
+whether records came from different profile or contract selections.
 
-The diagnosis view is evidence-first. It relates the latest completed-pass
-summary to prior completed-pass summaries from the same run identity using only
-telemetry the delegated API actually exposed, such as:
+The diagnosis view is evidence-first. On delegated paths that expose completed-
+pass summaries, it relates the latest completed-pass summary to prior
+completed-pass summaries from the same run identity using only telemetry the
+delegated API actually exposed, such as:
 
 - completed-pass number progression
 - planned-versus-terminal partition counts
@@ -1022,29 +1031,38 @@ telemetry the delegated API actually exposed, such as:
 - requested-versus-realized planning cluster counts
 - planning-quality or planning-balance metrics when available
 
-The same diagnosis view also carries the latest available blocked-on evidence
-from delegated within-pass telemetry when that telemetry exists, including
-pending-partition detail, trainer subphase, suspected-stall indicators, or an
-explicit repository-owned `unknown` blocked-on state when the delegated surface
-did not expose enough evidence.
+On delegated paths that do not expose comparable completed-pass summaries, the
+diagnosis view instead centers the latest live delegated phase identity,
+phase-local counts, and active partition or layer identifiers when available.
 
-Because the delegated telemetry may still be incomplete, the diagnosis view must
-preserve evidence provenance. Repository-owned summaries may say that the run
-appears to be converging, appears stalled, or remains inconclusive only to the
-extent justified by the exposed telemetry, and they must distinguish:
+The same diagnosis view also carries the latest available waiting-state
+evidence from delegated live telemetry when that telemetry exists, including
+pending-partition detail, trainer subphase, suspected-stall indicators, active
+hierarchy-planning partition identity, partition-load phase, bottom-up assembly
+layer identity, or an explicit repository-owned `unknown` waiting state when
+the delegated surface did not expose enough evidence.
 
-- conclusions drawn from completed-pass trend evidence
-- last-known blocked-on state from live or latest intra-pass observations
+Because the delegated telemetry may still be incomplete, the diagnosis view
+must preserve evidence provenance. Repository-owned summaries may say that the
+run appears to be converging, appears stalled, is still actively advancing in a
+known delegated phase, or remains inconclusive only to the extent justified by
+the exposed telemetry, and they must distinguish:
+
+- conclusions drawn from completed-pass trend evidence when available
+- last-known waiting state from live or latest in-phase observations
 - uncertainty caused by missing or non-comparable delegated fields
 
-For post-run analysis of non-converged executions, the runtime reuses the same
-request-adjacent planning-telemetry artifact family to persist one deterministic
-diagnosis artifact or terminal diagnosis record containing:
+For post-run analysis of unsuccessful or otherwise non-confirmed delegated
+completion, the runtime reuses the same request-adjacent planning-telemetry
+artifact family to persist one deterministic diagnosis artifact or terminal
+diagnosis record containing:
 
 - the effective run identity
-- the latest completed-pass trend evidence available
-- the latest blocked-on evidence available
-- an explicit indication when the diagnosis remained inconclusive
+- the latest completed-pass trend evidence available when the delegated path
+  exposed it
+- the latest live waiting-state evidence available
+- an explicit indication when the diagnosis remained inconclusive or when
+  comparable pass-trend evidence was unavailable
 
 This design keeps the richer diagnosis additive to the existing runtime progress
 and request-adjacent planning-telemetry surfaces. It does not require a new MCP
@@ -1945,12 +1963,12 @@ is repository-owned and deterministic rather than an open-ended low-level
 clustering-control API.
 
 While effective profile `0.7.0` is required to stay on
-`StreamingIndexingRunV2`, the current upstream v2 constructor still accepts
-only the published profile version and not a resolved profile with adjusted
-local/testing ladder cardinality. Until that upstream gap is closed,
+`StreamingIndexingRunV3`, the current upstream v3 constructor still accepts
+only the published profile version plus the delegated working-root path and not
+a resolved profile with adjusted local/testing ladder cardinality. Until that upstream gap is closed,
 LexonArchiveBuilder may keep the same repository-local ladder surface but fail
 it explicitly during preflight when a rung requires clustering-cardinality
-selection that the active v2 surface cannot represent.
+selection that the active v3 surface cannot represent.
 
 **Traces to:** RQ-INDEXER-003J1
 
