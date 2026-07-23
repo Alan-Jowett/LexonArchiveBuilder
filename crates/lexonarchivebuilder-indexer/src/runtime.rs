@@ -2,7 +2,9 @@
 // Copyright (c) 2026 LexonArchiveBuilder contributors
 
 use std::cmp::Ordering as CmpOrdering;
-use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
+#[cfg(test)]
+use std::collections::VecDeque;
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::future::Future;
 use std::io::{self, BufReader, BufWriter, Cursor, ErrorKind, Read, Write};
@@ -25,7 +27,7 @@ use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_streaming_indexer::{
     BuiltInPlanningDirection, ContentResolver, IndexItem, PlanningStage, PublishedIndexingProfile,
     PublishedPlanningStrategy, StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingRun,
-    StreamingIndexingRunV2, StreamingIndexingStatus, StreamingIndexingStatusObserver,
+    StreamingIndexingRunV3, StreamingIndexingStatus, StreamingIndexingStatusObserver,
     StreamingIndexingStatusState, StreamingIndexingSuspectedStallReason,
     StreamingIndexingTrainerSubphase, StreamingV2PendingPartitionStatus,
     published_indexing_profile,
@@ -35,7 +37,9 @@ use reqwest::Url;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::task::{JoinError, JoinHandle, JoinSet};
+#[cfg(test)]
+use tokio::task::JoinHandle;
+use tokio::task::{JoinError, JoinSet};
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 
 use crate::block_store::{
@@ -65,6 +69,7 @@ type ProgressReporter = Arc<dyn Fn(String) + Send + Sync + 'static>;
 pub const INGESTION_ONLY_ROOT_ID_PLACEHOLDER: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
 const PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+#[cfg(test)]
 const EXTERNALIZED_REPLAY_PREFETCH_FUTURE_BATCHES: usize = 2;
 const REPLAY_JOURNAL_SCHEMA_VERSION: u64 = 1;
 const REPLAY_JOURNAL_BLOCK_MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -287,6 +292,7 @@ struct FailingSubsetDiagnostics {
 enum FailingSubsetPhaseDiagnostics {
     PlanningPass { pass_number: usize },
     HierarchyPlanning { stage: String },
+    V3PartitionLoad { layer_index: usize },
     FinalMaterializationReplay,
     BottomUpAssembly { layer_index: usize },
 }
@@ -537,7 +543,7 @@ struct StreamingStageConfig {
     clustering: ConfiguredClustering,
     block_size_target: usize,
     submission_progress_kind: SubmissionProgressKind,
-    planner_state_root: Option<PathBuf>,
+    v3_working_root: Option<PathBuf>,
 }
 
 type ReplayedLeaf = (IndexItem<ContentRef>, Vec<u8>);
@@ -634,6 +640,7 @@ struct ReplayBatchEntryLoad {
     embedding: Vec<u8>,
 }
 
+#[cfg(test)]
 type ExternalizedReplayBatchPrefetchHandle =
     JoinHandle<Result<(ExternalizedReplayBatchIterator, VecDeque<ReplayBatchLoad>), RuntimeError>>;
 
@@ -800,8 +807,8 @@ pub enum RuntimeError {
         #[source]
         source: io::Error,
     },
-    #[error("failed to prepare planner state root {path}: {source}")]
-    PreparePlannerStateRoot {
+    #[error("failed to prepare delegated v3 working root {path}: {source}")]
+    PrepareV3WorkingRoot {
         path: String,
         #[source]
         source: io::Error,
@@ -814,8 +821,8 @@ pub enum RuntimeError {
     },
     #[error("clustering run is missing the prepared replay-order scratch root")]
     MissingReplayOrderScratchRoot,
-    #[error("v2 clustering run is missing the prepared planner-state root")]
-    MissingPlannerStateRoot,
+    #[error("v3 clustering run is missing the prepared delegated working root")]
+    MissingV3WorkingRoot,
     #[error("failed to write replay-order scratch file {path}: {source}")]
     WriteReplayOrderScratch {
         path: String,
@@ -1133,6 +1140,7 @@ impl ExternalizedReplayBatchIterator {
     }
 }
 
+#[cfg(test)]
 fn spawn_externalized_replay_batch_prefetches(
     iterator: ExternalizedReplayBatchIterator,
     batch_count: usize,
@@ -1165,6 +1173,7 @@ fn publish_externalized_replay_batch_embeddings(
     cache.extend(embeddings_by_input_hash.iter().cloned());
 }
 
+#[cfg(test)]
 async fn await_externalized_replay_batch_prefetch(
     pending_prefetch: &mut Option<ExternalizedReplayBatchPrefetchHandle>,
     iterator: &mut Option<ExternalizedReplayBatchIterator>,
@@ -1181,6 +1190,7 @@ async fn await_externalized_replay_batch_prefetch(
     Ok(())
 }
 
+#[cfg(test)]
 async fn take_next_externalized_replay_batch(
     iterator: &mut Option<ExternalizedReplayBatchIterator>,
     prefetched_batches: &mut VecDeque<ReplayBatchLoad>,
@@ -1202,6 +1212,7 @@ async fn take_next_externalized_replay_batch(
     }
 }
 
+#[cfg(test)]
 async fn finish_externalized_replay_ingest(
     ingest_result: Result<(), StreamingIndexerError>,
     pending_prefetch: &mut Option<ExternalizedReplayBatchPrefetchHandle>,
@@ -1524,15 +1535,18 @@ fn resolved_published_profile(
     Ok(profile)
 }
 
-fn uses_streaming_indexer_v2(clustering: &ConfiguredClustering) -> bool {
+fn uses_streaming_indexer_v3(clustering: &ConfiguredClustering) -> bool {
     clustering.profile_version == PUBLISHED_PROFILE_V0_7_0
 }
 
+#[cfg(test)]
 const V2_PLANNING_NEEDS_ROUTED_OR_TERMINAL_PREFIX: &str =
     "planning completion requires every v2 partition to be terminal or routed";
+#[cfg(test)]
 const V2_PLANNING_NEEDS_CHILDREN_PREFIX: &str =
     "planning completion requires every routed v2 partition to install child partitions";
 
+#[cfg(test)]
 fn is_incomplete_v2_planning_transition(error: &StreamingIndexerError) -> bool {
     matches!(
         error,
@@ -1542,6 +1556,7 @@ fn is_incomplete_v2_planning_transition(error: &StreamingIndexerError) -> bool {
     )
 }
 
+#[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq)]
 enum PlanningCompletionAction {
     Complete,
@@ -1594,19 +1609,23 @@ struct PlanningTelemetryState {
     latest_blocked_on_summary: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 enum DelegatedContractFamily {
-    #[serde(rename = "legacy/non-v2")]
-    LegacyNonV2,
+    #[serde(rename = "non-v3")]
+    NonV3,
     #[serde(rename = "v2")]
     V2,
+    #[serde(rename = "v3")]
+    V3,
 }
 
 impl DelegatedContractFamily {
     fn as_str(self) -> &'static str {
         match self {
-            Self::LegacyNonV2 => "legacy/non-v2",
+            Self::NonV3 => "non-v3",
             Self::V2 => "v2",
+            Self::V3 => "v3",
         }
     }
 }
@@ -1669,6 +1688,36 @@ struct PlanningIntraPassTelemetryRecord {
     blocked_on_summary: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct PlanningLiveStatusTelemetryRecord {
+    telemetry_kind: &'static str,
+    effective_profile_version: String,
+    delegated_contract_family: DelegatedContractFamily,
+    phase_kind: &'static str,
+    phase_label: String,
+    planning_status_state: &'static str,
+    observed_item_count: usize,
+    phase_total_unit_count: Option<usize>,
+    completed_unit_count: usize,
+    remaining_unit_count: Option<usize>,
+    elapsed_ms: u128,
+    last_progress_ms: Option<u128>,
+    blocked_on_summary: Option<String>,
+    current_partition_path: Option<String>,
+    current_partition_size: Option<usize>,
+    current_recursion_depth: Option<usize>,
+    started_subproblem_count: Option<usize>,
+    completed_subproblem_count: Option<usize>,
+    visited_partition_count: Option<usize>,
+    finalized_partition_count: Option<usize>,
+    terminal_partition_count: Option<usize>,
+    completed_planner_invocation_count: Option<usize>,
+    fallback_count: Option<usize>,
+    layer_index: Option<usize>,
+    convergence_verdict: PlanningConvergenceVerdict,
+    convergence_evidence_summary: String,
+}
+
 #[derive(Clone, Debug)]
 struct PlanningTelemetryContext {
     run_identity: PlanningRunIdentity,
@@ -1678,6 +1727,7 @@ struct PlanningTelemetryContext {
     diagnosis_state: Arc<Mutex<PlanningTelemetryState>>,
 }
 
+#[cfg(test)]
 fn v2_planning_completion_action(
     completed_pass_count: usize,
     result: Result<(), StreamingIndexerError>,
@@ -1697,10 +1747,10 @@ fn v2_planning_completion_action(
 fn planning_run_identity(clustering: &ConfiguredClustering) -> PlanningRunIdentity {
     PlanningRunIdentity {
         effective_profile_version: clustering.profile_version.to_string(),
-        delegated_contract_family: if uses_streaming_indexer_v2(clustering) {
-            DelegatedContractFamily::V2
+        delegated_contract_family: if uses_streaming_indexer_v3(clustering) {
+            DelegatedContractFamily::V3
         } else {
-            DelegatedContractFamily::LegacyNonV2
+            DelegatedContractFamily::NonV3
         },
     }
 }
@@ -1797,9 +1847,9 @@ impl PlanningTelemetryContext {
     fn project_planning_status(
         &self,
         status: &StreamingIndexingStatus,
-    ) -> (Option<PlanningIntraPassTelemetryRecord>, Option<String>) {
+    ) -> (Option<serde_json::Value>, Option<String>) {
         let mut state = lock_unpoisoned(&self.diagnosis_state);
-        let blocked_on_summary = planning_blocked_on_summary(status);
+        let blocked_on_summary = clustering_blocked_on_summary(status);
         if let Some(blocked_on_summary) = blocked_on_summary.as_ref()
             && (blocked_on_summary != UNKNOWN_BLOCKED_ON_SUMMARY
                 || state.latest_blocked_on_summary.is_none())
@@ -1819,51 +1869,22 @@ impl PlanningTelemetryContext {
             status,
             blocked_on_summary.as_deref(),
         );
-        if self.run_identity.delegated_contract_family != DelegatedContractFamily::V2 {
-            return (None, progress_message);
-        }
-        let StreamingIndexingPhase::PlanningPass { pass_number } = status.phase else {
-            return (None, progress_message);
+        let record = match self.run_identity.delegated_contract_family {
+            DelegatedContractFamily::V2 => planning_intra_pass_telemetry_record(
+                &self.run_identity,
+                status,
+                &latest_pass_diagnosis,
+                blocked_on_summary,
+            ),
+            DelegatedContractFamily::V3 => planning_live_status_telemetry_record(
+                &self.run_identity,
+                status,
+                &latest_pass_diagnosis,
+                blocked_on_summary,
+            ),
+            DelegatedContractFamily::NonV3 => None,
         };
-        if matches!(status.state, StreamingIndexingStatusState::Completed) {
-            return (None, progress_message);
-        }
-        let pending_partitions = status.v2_pending_partitions.as_ref().map(|partitions| {
-            partitions
-                .iter()
-                .take(2)
-                .map(planning_pending_partition_telemetry_record)
-                .collect::<Vec<_>>()
-        });
-        let record = PlanningIntraPassTelemetryRecord {
-            telemetry_kind: "intra-pass",
-            effective_profile_version: self.run_identity.effective_profile_version.clone(),
-            delegated_contract_family: self.run_identity.delegated_contract_family,
-            pass_number,
-            planning_status_state: planning_status_state_label(status.state),
-            observed_item_count: status.item_count,
-            completed_unit_count: status.completed_unit_count,
-            phase_total_unit_count: status.phase_total_unit_count,
-            elapsed_ms: status.elapsed.as_millis(),
-            last_progress_ms: status.last_progress_at.map(|duration| duration.as_millis()),
-            pending_partition_count: status
-                .pending_partition_count
-                .or_else(|| status.v2_pending_partitions.as_ref().map(Vec::len)),
-            pending_partition_preview_count: pending_partitions.as_ref().map(Vec::len),
-            pending_partitions,
-            suspected_stall_reason: status
-                .suspected_stall
-                .as_ref()
-                .map(|stall| suspected_stall_reason_label(stall.reason)),
-            suspected_stall_duration_without_progress_ms: status
-                .suspected_stall
-                .as_ref()
-                .map(|stall| stall.duration_without_progress.as_millis()),
-            convergence_verdict: latest_pass_diagnosis.verdict,
-            convergence_evidence_summary: latest_pass_diagnosis.evidence_summary,
-            blocked_on_summary,
-        };
-        (Some(record), progress_message)
+        (record, progress_message)
     }
 
     fn write_json_record<T: Serialize>(&self, record: &T) -> Result<(), String> {
@@ -2035,40 +2056,187 @@ fn planning_pass_diagnosis(
     }
 }
 
-fn planning_blocked_on_summary(status: &StreamingIndexingStatus) -> Option<String> {
-    if !matches!(status.phase, StreamingIndexingPhase::PlanningPass { .. }) {
+fn planning_intra_pass_telemetry_record(
+    run_identity: &PlanningRunIdentity,
+    status: &StreamingIndexingStatus,
+    latest_pass_diagnosis: &PlanningPassDiagnosis,
+    blocked_on_summary: Option<String>,
+) -> Option<serde_json::Value> {
+    let StreamingIndexingPhase::PlanningPass { pass_number } = status.phase else {
+        return None;
+    };
+    if matches!(status.state, StreamingIndexingStatusState::Completed) {
         return None;
     }
-    let mut parts = Vec::new();
-    let pending_partition_count = status
-        .pending_partition_count
-        .or_else(|| status.v2_pending_partitions.as_ref().map(Vec::len));
-    if let Some(count) = pending_partition_count {
-        parts.push(format!("{count} pending partition(s)"));
-    }
-    if let Some(partitions) = status.v2_pending_partitions.as_ref()
-        && !partitions.is_empty()
-    {
-        let preview = partitions
+    let pending_partitions = status.v2_pending_partitions.as_ref().map(|partitions| {
+        partitions
             .iter()
             .take(2)
-            .map(format_pending_partition_message)
+            .map(planning_pending_partition_telemetry_record)
             .collect::<Vec<_>>()
-            .join(" | ");
-        parts.push(format!("pending detail {preview}"));
-        if partitions.len() > 2 {
-            parts.push(format!(
-                "+{} more pending partition(s)",
-                partitions.len() - 2
-            ));
+    });
+    Some(
+        serde_json::to_value(PlanningIntraPassTelemetryRecord {
+            telemetry_kind: "intra-pass",
+            effective_profile_version: run_identity.effective_profile_version.clone(),
+            delegated_contract_family: run_identity.delegated_contract_family,
+            pass_number,
+            planning_status_state: planning_status_state_label(status.state),
+            observed_item_count: status.item_count,
+            completed_unit_count: status.completed_unit_count,
+            phase_total_unit_count: status.phase_total_unit_count,
+            elapsed_ms: status.elapsed.as_millis(),
+            last_progress_ms: status.last_progress_at.map(|duration| duration.as_millis()),
+            pending_partition_count: status
+                .pending_partition_count
+                .or_else(|| status.v2_pending_partitions.as_ref().map(Vec::len)),
+            pending_partition_preview_count: pending_partitions.as_ref().map(Vec::len),
+            pending_partitions,
+            suspected_stall_reason: status
+                .suspected_stall
+                .as_ref()
+                .map(|stall| suspected_stall_reason_label(stall.reason)),
+            suspected_stall_duration_without_progress_ms: status
+                .suspected_stall
+                .as_ref()
+                .map(|stall| stall.duration_without_progress.as_millis()),
+            convergence_verdict: latest_pass_diagnosis.verdict,
+            convergence_evidence_summary: latest_pass_diagnosis.evidence_summary.clone(),
+            blocked_on_summary,
+        })
+        .expect("planning intra-pass telemetry should serialize"),
+    )
+}
+
+fn planning_live_status_telemetry_record(
+    run_identity: &PlanningRunIdentity,
+    status: &StreamingIndexingStatus,
+    latest_pass_diagnosis: &PlanningPassDiagnosis,
+    blocked_on_summary: Option<String>,
+) -> Option<serde_json::Value> {
+    let (phase_kind, layer_index) = match status.phase {
+        StreamingIndexingPhase::HierarchyPlanning { .. } => ("hierarchy-planning", None),
+        StreamingIndexingPhase::V3PartitionLoad { layer_index } => {
+            ("partition-load", Some(layer_index))
         }
-    }
-    if let Some(stall) = status.suspected_stall.as_ref() {
-        parts.push(format!(
-            "suspected stall {} for {} ms",
-            suspected_stall_reason_label(stall.reason),
-            stall.duration_without_progress.as_millis()
-        ));
+        StreamingIndexingPhase::BottomUpAssembly { layer_index } => {
+            ("bottom-up-assembly", Some(layer_index))
+        }
+        _ => return None,
+    };
+    Some(
+        serde_json::to_value(PlanningLiveStatusTelemetryRecord {
+            telemetry_kind: "live-status",
+            effective_profile_version: run_identity.effective_profile_version.clone(),
+            delegated_contract_family: run_identity.delegated_contract_family,
+            phase_kind,
+            phase_label: delegated_phase_label(&status.phase),
+            planning_status_state: planning_status_state_label(status.state),
+            observed_item_count: status.item_count,
+            phase_total_unit_count: status.phase_total_unit_count,
+            completed_unit_count: status.completed_unit_count,
+            remaining_unit_count: status.remaining_unit_count,
+            elapsed_ms: status.elapsed.as_millis(),
+            last_progress_ms: status.last_progress_at.map(|duration| duration.as_millis()),
+            blocked_on_summary,
+            current_partition_path: status.current_partition_path.clone(),
+            current_partition_size: status.current_partition_size,
+            current_recursion_depth: status.current_recursion_depth,
+            started_subproblem_count: status.started_subproblem_count,
+            completed_subproblem_count: status.completed_subproblem_count,
+            visited_partition_count: status.visited_partition_count,
+            finalized_partition_count: status.finalized_partition_count,
+            terminal_partition_count: status.terminal_partition_count,
+            completed_planner_invocation_count: status.completed_planner_invocation_count,
+            fallback_count: status.fallback_count,
+            layer_index,
+            convergence_verdict: latest_pass_diagnosis.verdict,
+            convergence_evidence_summary: latest_pass_diagnosis.evidence_summary.clone(),
+        })
+        .expect("planning live telemetry should serialize"),
+    )
+}
+
+fn clustering_blocked_on_summary(status: &StreamingIndexingStatus) -> Option<String> {
+    let mut parts = Vec::new();
+    match &status.phase {
+        StreamingIndexingPhase::PlanningPass { .. } => {
+            let pending_partition_count = status
+                .pending_partition_count
+                .or_else(|| status.v2_pending_partitions.as_ref().map(Vec::len));
+            if let Some(count) = pending_partition_count {
+                parts.push(format!("{count} pending partition(s)"));
+            }
+            if let Some(partitions) = status.v2_pending_partitions.as_ref()
+                && !partitions.is_empty()
+            {
+                let preview = partitions
+                    .iter()
+                    .take(2)
+                    .map(format_pending_partition_message)
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                parts.push(format!("pending detail {preview}"));
+                if partitions.len() > 2 {
+                    parts.push(format!(
+                        "+{} more pending partition(s)",
+                        partitions.len() - 2
+                    ));
+                }
+            }
+            if let Some(stall) = status.suspected_stall.as_ref() {
+                parts.push(format!(
+                    "suspected stall {} for {} ms",
+                    suspected_stall_reason_label(stall.reason),
+                    stall.duration_without_progress.as_millis()
+                ));
+            }
+        }
+        StreamingIndexingPhase::HierarchyPlanning { .. } => {
+            if let Some(path) = status.current_partition_path.as_ref() {
+                parts.push(format!("active partition {path}"));
+            }
+            if let Some(size) = status.current_partition_size {
+                parts.push(format!("partition size {size}"));
+            }
+            if let Some(depth) = status.current_recursion_depth {
+                parts.push(format!("recursion depth {depth}"));
+            }
+        }
+        StreamingIndexingPhase::V3PartitionLoad { layer_index } => {
+            if let Some(total) = status.phase_total_unit_count {
+                parts.push(format!(
+                    "loading layer {layer_index} block(s) {} of {total}",
+                    status.completed_unit_count
+                ));
+            } else {
+                parts.push(format!(
+                    "loading layer {layer_index} block(s); completed {}",
+                    status.completed_unit_count
+                ));
+            }
+        }
+        StreamingIndexingPhase::BottomUpAssembly { layer_index } => {
+            if let Some(total) = status.phase_total_unit_count {
+                parts.push(format!(
+                    "assembling layer {layer_index} group(s) {} of {total}",
+                    status.completed_unit_count
+                ));
+            } else {
+                parts.push(format!(
+                    "assembling layer {layer_index} group(s); completed {}",
+                    status.completed_unit_count
+                ));
+            }
+        }
+        StreamingIndexingPhase::FinalMaterializationReplay => {
+            if let Some(total) = status.phase_total_unit_count {
+                parts.push(format!(
+                    "replaying final materialization item(s) {} of {total}",
+                    status.completed_unit_count
+                ));
+            }
+        }
     }
     if parts.is_empty() {
         Some(UNKNOWN_BLOCKED_ON_SUMMARY.to_string())
@@ -2082,20 +2250,28 @@ fn planning_status_diagnosis_message(
     status: &StreamingIndexingStatus,
     blocked_on_summary: Option<&str>,
 ) -> Option<String> {
-    let StreamingIndexingPhase::PlanningPass { pass_number } = status.phase else {
-        return None;
-    };
     let blocked_on_summary = blocked_on_summary?;
-    Some(format!(
-        "Planning diagnosis for pass {pass_number}: verdict {} ({}){}; blocked on {blocked_on_summary}",
-        diagnosis.verdict.as_str(),
-        diagnosis.evidence_summary,
-        status
-            .error
-            .as_ref()
-            .map(|error| format!("; delegated status error {error}"))
-            .unwrap_or_default(),
-    ))
+    let error_suffix = status
+        .error
+        .as_ref()
+        .map(|error| format!("; delegated status error {error}"))
+        .unwrap_or_default();
+    Some(match status.phase {
+        StreamingIndexingPhase::PlanningPass { pass_number } => format!(
+            "Planning diagnosis for pass {pass_number}: verdict {} ({}){}; blocked on {blocked_on_summary}",
+            diagnosis.verdict.as_str(),
+            diagnosis.evidence_summary,
+            error_suffix,
+        ),
+        _ => format!(
+            "Clustering diagnosis: latest delegated phase {} is {}; convergence-trend {} ({}){}; blocked on {blocked_on_summary}",
+            delegated_phase_label(&status.phase),
+            planning_status_state_label(status.state),
+            diagnosis.verdict.as_str(),
+            diagnosis.evidence_summary,
+            error_suffix,
+        ),
+    })
 }
 
 fn planning_pending_partition_telemetry_record(
@@ -2137,6 +2313,7 @@ fn report_planning_pass_completion(
     Ok(())
 }
 
+#[cfg(test)]
 fn handle_v2_planning_pass_completion(
     progress: &ProgressReporter,
     planning_telemetry: Option<&PlanningTelemetryContext>,
@@ -2554,6 +2731,11 @@ fn failing_subset_phase_diagnostics(
                 stage: format_planning_stage(*stage).to_string(),
             }
         }
+        StreamingIndexingPhase::V3PartitionLoad { layer_index } => {
+            FailingSubsetPhaseDiagnostics::V3PartitionLoad {
+                layer_index: *layer_index,
+            }
+        }
         StreamingIndexingPhase::FinalMaterializationReplay => {
             FailingSubsetPhaseDiagnostics::FinalMaterializationReplay
         }
@@ -2887,7 +3069,7 @@ pub async fn run_request_file_with_outputs(
     let diagnostics_path = clustering_failure_diagnostics_path(request_path, summary_out);
     let planning_pass_path = planning_pass_telemetry_path(request_path, summary_out);
     let replay_order_scratch_root = replay_order_scratch_root_path(request_path, summary_out);
-    let planner_state_root = planner_state_root_path(request_path, summary_out);
+    let v3_working_root = v3_working_root_path(request_path, summary_out);
 
     run_request_with_progress(
         request_dir,
@@ -2897,7 +3079,7 @@ pub async fn run_request_file_with_outputs(
             diagnostics_path: Some(diagnostics_path.as_path()),
             planning_pass_telemetry_path: Some(planning_pass_path.as_path()),
             replay_order_scratch_root: Some(replay_order_scratch_root.as_path()),
-            planner_state_root: Some(planner_state_root.as_path()),
+            v3_working_root: Some(v3_working_root.as_path()),
         },
         |message| {
             eprintln!("{message}");
@@ -2929,14 +3111,14 @@ pub async fn validate_request_file_with_overrides(
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
     let replay_order_scratch_root = replay_order_scratch_root_path(request_path, summary_out);
-    let planner_state_root = planner_state_root_path(request_path, summary_out);
+    let v3_working_root = v3_working_root_path(request_path, summary_out);
     tokio::task::spawn_blocking(move || {
         validate_request_with_overrides(
             &request_dir,
             request,
             clustering_overrides,
             Some(replay_order_scratch_root.as_path()),
-            Some(planner_state_root.as_path()),
+            Some(v3_working_root.as_path()),
         )
     })
     .await
@@ -2970,7 +3152,7 @@ struct RunRequestArtifactPaths<'a> {
     diagnostics_path: Option<&'a Path>,
     planning_pass_telemetry_path: Option<&'a Path>,
     replay_order_scratch_root: Option<&'a Path>,
-    planner_state_root: Option<&'a Path>,
+    v3_working_root: Option<&'a Path>,
 }
 
 fn validate_request_with_overrides(
@@ -2978,7 +3160,7 @@ fn validate_request_with_overrides(
     request: BatchRequest,
     clustering_overrides: ClusteringConfigOverrides,
     replay_order_scratch_root: Option<&Path>,
-    planner_state_root: Option<&Path>,
+    v3_working_root: Option<&Path>,
 ) -> Result<(), RuntimeError> {
     request.validate()?;
     let clustering = clustering_overrides
@@ -2994,20 +3176,17 @@ fn validate_request_with_overrides(
             .map(Path::to_path_buf)
             .unwrap_or_else(|| replay_order_scratch_root_for_request_dir(request_dir));
         prepare_replay_order_scratch_root(&replay_order_scratch_root)?;
-        if uses_streaming_indexer_v2(&clustering) {
-            let planner_state_root = planner_state_root
+        if uses_streaming_indexer_v3(&clustering) {
+            let v3_working_root = v3_working_root
                 .map(Path::to_path_buf)
-                .unwrap_or_else(|| planner_state_root_for_request_dir(request_dir));
-            prepare_planner_state_root(&planner_state_root)?;
-            let _: StreamingIndexingRunV2<ContentRef, _, _> =
-                StreamingIndexingRunV2::with_published_profile(
-                    ValidateOnlyResolver,
-                    ValidateOnlyEmbeddingProvider,
-                    clustering.profile_version,
-                    request.to_embedding_spec(),
-                    request.block_size_target,
-                    planner_state_root.as_path(),
-                )?;
+                .unwrap_or_else(|| v3_working_root_for_request_dir(request_dir));
+            prepare_v3_working_root(&v3_working_root)?;
+            let _: StreamingIndexingRunV3 = StreamingIndexingRunV3::with_published_profile(
+                clustering.profile_version,
+                request.to_embedding_spec(),
+                request.block_size_target,
+                v3_working_root.as_path(),
+            )?;
         } else {
             let profile = resolved_published_profile(&clustering)?;
             let _: StreamingIndexingRun<ContentRef, _, _, _, _> =
@@ -3068,17 +3247,16 @@ where
     } else {
         None
     };
-    let planner_state_root =
-        if stage.includes_clustering() && uses_streaming_indexer_v2(&clustering) {
-            let path = artifact_paths
-                .planner_state_root
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| planner_state_root_for_request_dir(request_dir));
-            prepare_planner_state_root(&path)?;
-            Some(path)
-        } else {
-            None
-        };
+    let v3_working_root = if stage.includes_clustering() && uses_streaming_indexer_v3(&clustering) {
+        let path = artifact_paths
+            .v3_working_root
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| v3_working_root_for_request_dir(request_dir));
+        prepare_v3_working_root(&path)?;
+        Some(path)
+    } else {
+        None
+    };
     let planning_telemetry = stage
         .includes_clustering()
         .then(|| PlanningTelemetryContext {
@@ -3171,7 +3349,7 @@ where
                 clustering,
                 block_size_target: request.block_size_target,
                 submission_progress_kind: SubmissionProgressKind::Replay,
-                planner_state_root: planner_state_root.clone(),
+                v3_working_root: v3_working_root.clone(),
             },
             replay_state,
             &block_store,
@@ -3205,7 +3383,7 @@ where
                 clustering,
                 block_size_target: request.block_size_target,
                 submission_progress_kind: SubmissionProgressKind::Replay,
-                planner_state_root: planner_state_root.clone(),
+                v3_working_root: v3_working_root.clone(),
             },
             replay_state,
             &block_store,
@@ -5235,8 +5413,8 @@ async fn run_streaming_stage_externalized<EP>(
 where
     EP: EmbeddingProvider + ClusteringFailureEmbeddingSource + Clone,
 {
-    if uses_streaming_indexer_v2(&config.clustering) {
-        return run_streaming_stage_externalized_v2(
+    if uses_streaming_indexer_v3(&config.clustering) {
+        return run_streaming_stage_externalized_v3(
             resolver,
             embedding_provider,
             config,
@@ -5468,7 +5646,7 @@ where
     })
 }
 
-async fn run_streaming_stage_externalized_v2<EP>(
+async fn run_streaming_stage_externalized_v3<EP>(
     resolver: LocalFilesystemContentResolver,
     embedding_provider: EP,
     config: StreamingStageConfig,
@@ -5491,124 +5669,62 @@ where
     let clustering_failure_diagnostics = OnceLock::new();
     let diagnostics_resolver = resolver.clone();
     let diagnostics_embedding_provider = embedding_provider.clone();
-    let current_batch_embeddings = Arc::clone(&replay_state.current_batch_embeddings);
-
-    let mut indexer = StreamingIndexingRunV2::with_published_profile(
-        resolver,
-        embedding_provider,
+    let mut indexer = StreamingIndexingRunV3::with_published_profile(
         config.clustering.profile_version,
         embedding_spec.clone(),
         config.block_size_target,
         config
-            .planner_state_root
+            .v3_working_root
             .as_deref()
-            .ok_or(RuntimeError::MissingPlannerStateRoot)?,
+            .ok_or(RuntimeError::MissingV3WorkingRoot)?,
     )?;
     if let Some(observer) = observer {
         indexer = indexer.with_observer(observer);
     }
 
+    let mut completed_items = 0usize;
+    let mut reader = replay_state.replay_order.open_reader()?;
+    let batch_size = replay_state.batch_size.max(1);
+    let mut batch_number = 0usize;
     loop {
-        let mut completed_items = 0usize;
-        let mut iterator = Some(replay_state.batch_iterator()?);
-        let mut batch_number = 0usize;
-        let mut current_batch = iterator
-            .as_mut()
-            .expect("iterator must be available before replay starts")
-            .load_next_batch()?;
-        let mut prefetched_batches = VecDeque::new();
-        let mut pending_prefetch = None;
-        while let Some(batch) = current_batch {
-            if batch.batch.items.is_empty() {
-                current_batch = take_next_externalized_replay_batch(
-                    &mut iterator,
-                    &mut prefetched_batches,
-                    &mut pending_prefetch,
-                )
-                .await?;
-                continue;
-            }
-            publish_externalized_replay_batch_embeddings(
-                &current_batch_embeddings,
-                &batch.embeddings_by_input_hash,
-            );
-            batch_number += 1;
-            let batch_item_count = batch.batch.items.len();
-            report_progress(
-                io.progress,
-                config.submission_progress_kind.started_message(
+        let entries = reader.read_next_entries(batch_size)?;
+        if entries.is_empty() {
+            break;
+        }
+        batch_number += 1;
+        let block_ids = entries
+            .iter()
+            .copied()
+            .map(ReplayOrderEntry::block_hash)
+            .collect::<Vec<_>>();
+        let batch_item_count = block_ids.len();
+        report_progress(
+            io.progress,
+            config.submission_progress_kind.started_message(
+                batch_number,
+                total_batches,
+                batch_item_count,
+                completed_items,
+                total_items,
+            ),
+        );
+        await_with_periodic_progress(
+            indexer.ingest_block_id_batch(&block_ids),
+            io.progress,
+            PROGRESS_HEARTBEAT_INTERVAL,
+            |elapsed| {
+                config.submission_progress_kind.heartbeat_message(
                     batch_number,
                     total_batches,
                     batch_item_count,
                     completed_items,
                     total_items,
-                ),
-            );
-            let requested_prefetch_count = EXTERNALIZED_REPLAY_PREFETCH_FUTURE_BATCHES
-                .saturating_sub(prefetched_batches.len());
-            if pending_prefetch.is_none() && requested_prefetch_count > 0 {
-                pending_prefetch = Some(spawn_externalized_replay_batch_prefetches(
-                    iterator
-                        .take()
-                        .expect("iterator must be available when spawning prefetch"),
-                    requested_prefetch_count,
-                ));
-            }
-            let ingest_result = await_with_periodic_progress(
-                indexer.ingest_batch(&batch.batch.items),
-                io.progress,
-                PROGRESS_HEARTBEAT_INTERVAL,
-                |elapsed| {
-                    config.submission_progress_kind.heartbeat_message(
-                        batch_number,
-                        total_batches,
-                        batch_item_count,
-                        completed_items,
-                        total_items,
-                        elapsed.as_millis(),
-                    )
-                },
-            )
-            .await;
-            finish_externalized_replay_ingest(
-                ingest_result,
-                &mut pending_prefetch,
-                &mut iterator,
-                &mut prefetched_batches,
-                io.progress,
-            )
-            .await?;
-            current_batch = take_next_externalized_replay_batch(
-                &mut iterator,
-                &mut prefetched_batches,
-                &mut pending_prefetch,
-            )
-            .await?;
-            completed_items += batch_item_count;
-            report_progress(
-                io.progress,
-                config.submission_progress_kind.completion_message(
-                    batch_number,
-                    total_batches,
-                    completed_items,
-                    total_items,
-                ),
-            );
-        }
-        await_externalized_replay_batch_prefetch(
-            &mut pending_prefetch,
-            &mut iterator,
-            &mut prefetched_batches,
+                    elapsed.as_millis(),
+                )
+            },
         )
-        .await?;
-        clear_externalized_replay_batch_embeddings(&current_batch_embeddings);
-        report_progress(
-            io.progress,
-            config
-                .submission_progress_kind
-                .handoff_message(total_batches, total_items),
-        );
-        let pass_report = indexer.finish_pass().map_err(|error| {
+        .await
+        .map_err(|error| {
             clustering_failure_error(
                 error,
                 clustering_failure_diagnostics
@@ -5626,51 +5742,25 @@ where
                 io.progress,
             )
         })?;
-        let should_replay = handle_v2_planning_pass_completion(
+        completed_items += batch_item_count;
+        report_progress(
             io.progress,
-            io.planning_telemetry,
-            PlanningPassReport {
-                completed_pass_count: pass_report.completed_pass_count,
-                observed_item_count: pass_report.observed_item_count,
-                requested_planning_cluster_count: pass_report.requested_planning_cluster_count,
-                realized_planning_cluster_count: pass_report.realized_planning_cluster_count,
-                planning_quality_metric: pass_report.planning_quality_metric,
-                planning_balance_metric: pass_report.planning_balance_metric,
-                planned_partition_count: pass_report.planned_partition_count,
-                terminal_partition_count: pass_report.terminal_partition_count,
-                hierarchy_depth: pass_report.hierarchy_depth,
-            },
-            indexer.mark_planning_complete(),
-        )
-        .map_err(|error| match error {
-            RuntimeError::StreamingIndexer(source) => clustering_failure_error(
-                source,
-                clustering_failure_diagnostics
-                    .get_or_init(|| {
-                        build_externalized_clustering_failure_diagnostics(
-                            &diagnostics_resolver,
-                            &diagnostics_embedding_provider,
-                            lock_unpoisoned(&latest_failed_status).as_ref(),
-                            &config,
-                            &replay_state,
-                            embedding_spec,
-                        )
-                    })
-                    .as_ref(),
-                io.progress,
+            config.submission_progress_kind.completion_message(
+                batch_number,
+                total_batches,
+                completed_items,
+                total_items,
             ),
-            other => other,
-        })?;
-        if !should_replay {
-            break;
-        }
+        );
     }
     report_progress(
         io.progress,
-        "Streaming planning complete; starting final materialization".into(),
+        format!(
+            "Submitted all {total_batches} replay batch(es); waiting for delegated v3 finalize progress over {total_items} leaf block id(s)"
+        ),
     );
     let result = indexer
-        .finalize(replay_state.finalize_source()?, block_store)
+        .finalize(block_store, block_store)
         .await
         .map_err(|error| {
             clustering_failure_error(
@@ -6387,6 +6477,7 @@ fn failed_status_specificity(status: &StreamingIndexingStatus) -> usize {
         StreamingIndexingPhase::PlanningPass { .. } => 0,
         StreamingIndexingPhase::FinalMaterializationReplay => 1,
         StreamingIndexingPhase::HierarchyPlanning { .. } => 2,
+        StreamingIndexingPhase::V3PartitionLoad { .. } => 2,
         StreamingIndexingPhase::BottomUpAssembly { .. } => 2,
     }
 }
@@ -6408,6 +6499,24 @@ fn format_planning_stage(stage: PlanningStage) -> &'static str {
         PlanningStage::Coarse => "coarse planning",
         PlanningStage::Fine => "fine planning",
         PlanningStage::Custom => "custom planning",
+    }
+}
+
+fn delegated_phase_label(phase: &StreamingIndexingPhase) -> String {
+    match phase {
+        StreamingIndexingPhase::PlanningPass { pass_number } => {
+            format!("planning pass {pass_number}")
+        }
+        StreamingIndexingPhase::HierarchyPlanning { stage } => format_planning_stage(*stage).into(),
+        StreamingIndexingPhase::V3PartitionLoad { layer_index } => {
+            format!("partition load for layer {layer_index}")
+        }
+        StreamingIndexingPhase::FinalMaterializationReplay => {
+            "final materialization replay".to_string()
+        }
+        StreamingIndexingPhase::BottomUpAssembly { layer_index } => {
+            format!("bottom-up assembly for layer {layer_index}")
+        }
     }
 }
 
@@ -6567,6 +6676,58 @@ fn format_indexing_status(status: StreamingIndexingStatus) -> String {
                 status.error.unwrap_or_else(|| "unknown error".into())
             )
         }
+        (
+            StreamingIndexingPhase::V3PartitionLoad { layer_index },
+            StreamingIndexingStatusState::Started,
+        ) => match status.phase_total_unit_count {
+            Some(total) => {
+                format!("Partition load for layer {layer_index} started for {total} leaf block(s)")
+            }
+            None => format!(
+                "Partition load for layer {layer_index} started with an unknown leaf block total"
+            ),
+        },
+        (
+            StreamingIndexingPhase::V3PartitionLoad { layer_index },
+            StreamingIndexingStatusState::InProgress,
+        ) => match status.phase_total_unit_count {
+            Some(total) => format!(
+                "Partition load for layer {layer_index} still running after {elapsed_ms} ms; completed {} of {total} leaf block(s)",
+                status.completed_unit_count
+            ),
+            None => format!(
+                "Partition load for layer {layer_index} still running after {elapsed_ms} ms; completed {} leaf block(s)",
+                status.completed_unit_count
+            ),
+        },
+        (
+            StreamingIndexingPhase::V3PartitionLoad { layer_index },
+            StreamingIndexingStatusState::Completed,
+        ) => match status.phase_total_unit_count {
+            Some(total) => format!(
+                "Partition load for layer {layer_index} completed in {elapsed_ms} ms; loaded {} of {total} leaf block(s)",
+                status.completed_unit_count
+            ),
+            None => format!(
+                "Partition load for layer {layer_index} completed in {elapsed_ms} ms; loaded {} leaf block(s)",
+                status.completed_unit_count
+            ),
+        },
+        (
+            StreamingIndexingPhase::V3PartitionLoad { layer_index },
+            StreamingIndexingStatusState::Failed,
+        ) => match status.phase_total_unit_count {
+            Some(total) => format!(
+                "Partition load for layer {layer_index} failed after {elapsed_ms} ms; completed {} of {total} leaf block(s): {}",
+                status.completed_unit_count,
+                status.error.unwrap_or_else(|| "unknown error".into())
+            ),
+            None => format!(
+                "Partition load for layer {layer_index} failed after {elapsed_ms} ms; completed {} leaf block(s): {}",
+                status.completed_unit_count,
+                status.error.unwrap_or_else(|| "unknown error".into())
+            ),
+        },
         (
             StreamingIndexingPhase::FinalMaterializationReplay,
             StreamingIndexingStatusState::Started,
@@ -6787,14 +6948,14 @@ pub fn replay_order_scratch_root_path(request_path: &Path, summary_out: Option<&
     adjacent_output_directory(anchor_path).join(base_name)
 }
 
-pub fn planner_state_root_path(request_path: &Path, summary_out: Option<&Path>) -> PathBuf {
+pub fn v3_working_root_path(request_path: &Path, summary_out: Option<&Path>) -> PathBuf {
     let anchor_path = output_anchor_path(request_path, summary_out);
     let base_name = anchor_path
         .file_stem()
         .and_then(|stem| stem.to_str())
         .filter(|stem| !stem.is_empty())
-        .map(|stem| format!("{stem}.planner-state"))
-        .unwrap_or_else(|| "planner-state".to_string());
+        .map(|stem| format!("{stem}.working-root"))
+        .unwrap_or_else(|| "working-root".to_string());
     adjacent_output_directory(anchor_path).join(base_name)
 }
 
@@ -6802,8 +6963,8 @@ fn replay_order_scratch_root_for_request_dir(request_dir: &Path) -> PathBuf {
     request_dir.join("replay-order")
 }
 
-fn planner_state_root_for_request_dir(request_dir: &Path) -> PathBuf {
-    request_dir.join("planner-state")
+fn v3_working_root_for_request_dir(request_dir: &Path) -> PathBuf {
+    request_dir.join("working-root")
 }
 
 fn prepare_writable_directory(path: &Path, probe_prefix: &str) -> io::Result<()> {
@@ -6814,9 +6975,9 @@ fn prepare_writable_directory(path: &Path, probe_prefix: &str) -> io::Result<()>
     probe.write_all(&[0]).and_then(|_| probe.flush())
 }
 
-fn prepare_planner_state_root(path: &Path) -> Result<(), RuntimeError> {
-    prepare_writable_directory(path, ".planner-state-write-probe-").map_err(|source| {
-        RuntimeError::PreparePlannerStateRoot {
+fn prepare_v3_working_root(path: &Path) -> Result<(), RuntimeError> {
+    prepare_writable_directory(path, ".v3-working-root-write-probe-").map_err(|source| {
+        RuntimeError::PrepareV3WorkingRoot {
             path: path.display().to_string(),
             source,
         }
@@ -7817,7 +7978,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_file_v2_run_writes_planning_pass_telemetry_beside_summary_output() {
+    async fn request_file_v3_run_writes_live_planning_telemetry_beside_summary_output() {
         let temp = tempdir().unwrap();
         let alpha_path = temp.path().join("alpha.txt");
         let beta_path = temp.path().join("beta.txt");
@@ -7870,20 +8031,19 @@ mod tests {
             .path()
             .join("output")
             .join("summary.planning-pass-telemetry.jsonl");
-        let planner_state_root = temp.path().join("output").join("summary.planner-state");
+        let v3_working_root = temp.path().join("output").join("summary.working-root");
         let written = fs::read_to_string(&telemetry_path).unwrap();
         assert!(written.contains("\"effective_profile_version\":\"0.7.0\""));
-        assert!(written.contains("\"delegated_contract_family\":\"v2\""));
-        assert!(written.contains("\"telemetry_kind\":\"intra-pass\""));
-        assert!(written.contains("\"telemetry_kind\":\"pass-summary\""));
-        assert!(written.contains("\"planning_completion_state\":\"complete\""));
-        assert!(written.contains("\"completed_pass_count\":1"));
-        assert!(planner_state_root.is_dir());
+        assert!(written.contains("\"delegated_contract_family\":\"v3\""));
+        assert!(written.contains("\"telemetry_kind\":\"live-status\""));
+        assert!(written.contains("\"phase_kind\":"));
+        assert!(!written.contains("\"planning_completion_state\""));
+        assert!(v3_working_root.is_dir());
         server.join();
     }
 
     #[tokio::test]
-    async fn request_file_v2_run_fails_when_derived_planner_state_root_is_unusable() {
+    async fn request_file_v3_run_fails_when_derived_working_root_is_unusable() {
         let temp = tempdir().unwrap();
         let alpha_path = temp.path().join("alpha.txt");
         let beta_path = temp.path().join("beta.txt");
@@ -7921,7 +8081,7 @@ mod tests {
         .unwrap();
         let output_dir = temp.path().join("output");
         fs::create_dir_all(&output_dir).unwrap();
-        fs::write(output_dir.join("summary.planner-state"), b"not a directory").unwrap();
+        fs::write(output_dir.join("summary.working-root"), b"not a directory").unwrap();
         let summary_out = output_dir.join("summary.json");
 
         let error = run_request_file_with_outputs(
@@ -7933,10 +8093,10 @@ mod tests {
         .await
         .unwrap_err();
 
-        let RuntimeError::PreparePlannerStateRoot { path, .. } = error else {
-            panic!("expected planner-state-root preparation error");
+        let RuntimeError::PrepareV3WorkingRoot { path, .. } = error else {
+            panic!("expected delegated v3 working-root preparation error");
         };
-        assert!(path.ends_with("summary.planner-state"));
+        assert!(path.ends_with("summary.working-root"));
     }
 
     #[tokio::test]
@@ -8629,7 +8789,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn validate_only_uses_summary_output_for_planner_state_root() {
+    async fn validate_only_uses_summary_output_for_v3_working_root() {
         let temp = tempdir().unwrap();
         fs::write(temp.path().join("alpha.txt"), b"alpha body\n").unwrap();
         let request_path = temp.path().join("request.json");
@@ -8663,7 +8823,7 @@ mod tests {
         .unwrap();
         let output_dir = temp.path().join("output");
         fs::create_dir_all(&output_dir).unwrap();
-        fs::write(output_dir.join("summary.planner-state"), b"not a directory").unwrap();
+        fs::write(output_dir.join("summary.working-root"), b"not a directory").unwrap();
         let summary_out = output_dir.join("summary.json");
 
         let error = validate_request_file_with_overrides(
@@ -8675,10 +8835,10 @@ mod tests {
         .await
         .unwrap_err();
 
-        let RuntimeError::PreparePlannerStateRoot { path, .. } = error else {
-            panic!("expected planner-state-root preparation error");
+        let RuntimeError::PrepareV3WorkingRoot { path, .. } = error else {
+            panic!("expected delegated v3 working-root preparation error");
         };
-        assert!(path.ends_with("summary.planner-state"));
+        assert!(path.ends_with("summary.working-root"));
     }
 
     #[tokio::test]
@@ -8785,20 +8945,20 @@ mod tests {
     }
 
     #[test]
-    fn planner_state_root_path_prefers_summary_output_directory() {
+    fn v3_working_root_path_prefers_summary_output_directory() {
         let request_path = Path::new("data").join("request.json");
         let summary_path = Path::new("output").join("summary.json");
-        let path = planner_state_root_path(request_path.as_path(), Some(summary_path.as_path()));
+        let path = v3_working_root_path(request_path.as_path(), Some(summary_path.as_path()));
 
-        assert_eq!(path, Path::new("output").join("summary.planner-state"));
+        assert_eq!(path, Path::new("output").join("summary.working-root"));
     }
 
     #[test]
-    fn planner_state_root_path_falls_back_to_request_directory() {
+    fn v3_working_root_path_falls_back_to_request_directory() {
         let request_path = Path::new("data").join("request.json");
-        let path = planner_state_root_path(request_path.as_path(), None);
+        let path = v3_working_root_path(request_path.as_path(), None);
 
-        assert_eq!(path, Path::new("data").join("request.planner-state"));
+        assert_eq!(path, Path::new("data").join("request.working-root"));
     }
 
     #[test]
@@ -8820,14 +8980,14 @@ mod tests {
     }
 
     #[test]
-    fn prepare_planner_state_root_probes_and_cleans_up_existing_directory() {
+    fn prepare_v3_working_root_probes_and_cleans_up_existing_directory() {
         let temp = tempdir().unwrap();
-        let planner_state_root = temp.path().join("planner-state");
-        fs::create_dir_all(&planner_state_root).unwrap();
+        let v3_working_root = temp.path().join("working-root");
+        fs::create_dir_all(&v3_working_root).unwrap();
 
-        prepare_planner_state_root(&planner_state_root).unwrap();
+        prepare_v3_working_root(&v3_working_root).unwrap();
 
-        let remaining_entries = fs::read_dir(&planner_state_root).unwrap().count();
+        let remaining_entries = fs::read_dir(&v3_working_root).unwrap().count();
         assert_eq!(remaining_entries, 0);
     }
 
@@ -9215,6 +9375,53 @@ mod tests {
     }
 
     #[test]
+    fn planning_pass_telemetry_writes_v3_live_status_records() {
+        let temp = tempdir().unwrap();
+        let telemetry_path = temp.path().join("planning-pass-telemetry.jsonl");
+        let telemetry = PlanningTelemetryContext {
+            run_identity: PlanningRunIdentity {
+                effective_profile_version: "0.7.0".into(),
+                delegated_contract_family: DelegatedContractFamily::V3,
+            },
+            sink_path: Some(telemetry_path.clone()),
+            sink_initialized: Arc::new(AtomicBool::new(false)),
+            sink_write_lock: Arc::new(Mutex::new(())),
+            diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
+        };
+        let status = StreamingIndexingStatus {
+            current_partition_path: Some("root".into()),
+            current_partition_size: Some(12),
+            current_recursion_depth: Some(0),
+            last_progress_at: Some(Duration::from_millis(120)),
+            ..test_streaming_status(
+                StreamingIndexingPhase::HierarchyPlanning {
+                    stage: PlanningStage::Custom,
+                },
+                StreamingIndexingStatusState::InProgress,
+                12,
+                Some(1),
+                0,
+                Some(1),
+                Duration::from_millis(250),
+                None,
+            )
+        };
+
+        let (record, diagnosis_message) = telemetry.project_planning_status(&status);
+        telemetry.write_json_record(&record.unwrap()).unwrap();
+
+        let written = fs::read_to_string(&telemetry_path).unwrap();
+        assert!(written.contains("\"telemetry_kind\":\"live-status\""));
+        assert!(written.contains("\"phase_kind\":\"hierarchy-planning\""));
+        assert!(written.contains("\"delegated_contract_family\":\"v3\""));
+        assert!(written.contains("\"current_partition_path\":\"root\""));
+        assert!(written.contains("\"blocked_on_summary\":\"active partition root"));
+        assert!(diagnosis_message.unwrap().contains(
+            "Clustering diagnosis: latest delegated phase custom planning is in-progress"
+        ));
+    }
+
+    #[test]
     fn planning_pass_telemetry_first_intra_pass_record_replaces_prior_run_file_contents() {
         let temp = tempdir().unwrap();
         let telemetry_path = temp.path().join("planning-pass-telemetry.jsonl");
@@ -9493,12 +9700,16 @@ mod tests {
     #[test]
     fn delegated_contract_family_serialization_matches_operator_visible_strings() {
         assert_eq!(
-            serde_json::to_string(&DelegatedContractFamily::LegacyNonV2).unwrap(),
-            "\"legacy/non-v2\""
+            serde_json::to_string(&DelegatedContractFamily::NonV3).unwrap(),
+            "\"non-v3\""
         );
         assert_eq!(
             serde_json::to_string(&DelegatedContractFamily::V2).unwrap(),
             "\"v2\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DelegatedContractFamily::V3).unwrap(),
+            "\"v3\""
         );
     }
 
@@ -9924,19 +10135,19 @@ mod tests {
 
     #[test]
     fn streaming_indexer_v2_selection_follows_effective_profile_precedence() {
-        let default_v2 = ClusteringConfigOverrides::default()
+        let default_v3 = ClusteringConfigOverrides::default()
             .to_configured_clustering(
                 PUBLISHED_PROFILE_V0_7_0,
                 &local_test_environment(String::new()),
             )
-            .expect("v2 published profile config");
-        let default_legacy = ClusteringConfigOverrides::default()
+            .expect("v3 published profile config");
+        let default_non_v3 = ClusteringConfigOverrides::default()
             .to_configured_clustering(
                 PUBLISHED_PROFILE_V0_1_0,
                 &local_test_environment(String::new()),
             )
-            .expect("legacy published profile config");
-        let cli_to_v2 = ClusteringConfigOverrides {
+            .expect("non-v3 published profile config");
+        let cli_to_v3 = ClusteringConfigOverrides {
             profile_version: Some(PUBLISHED_PROFILE_V0_7_0),
             local_testing_cluster_count: None,
         }
@@ -9944,8 +10155,8 @@ mod tests {
             PUBLISHED_PROFILE_V0_1_0,
             &local_test_environment(String::new()),
         )
-        .expect("cli-selected v2 published profile config");
-        let cli_to_legacy = ClusteringConfigOverrides {
+        .expect("cli-selected v3 published profile config");
+        let cli_to_non_v3 = ClusteringConfigOverrides {
             profile_version: Some(PUBLISHED_PROFILE_V0_1_0),
             local_testing_cluster_count: None,
         }
@@ -9953,12 +10164,12 @@ mod tests {
             PUBLISHED_PROFILE_V0_7_0,
             &local_test_environment(String::new()),
         )
-        .expect("cli-selected legacy published profile config");
+        .expect("cli-selected non-v3 published profile config");
 
-        assert!(uses_streaming_indexer_v2(&default_v2));
-        assert!(!uses_streaming_indexer_v2(&default_legacy));
-        assert!(uses_streaming_indexer_v2(&cli_to_v2));
-        assert!(!uses_streaming_indexer_v2(&cli_to_legacy));
+        assert!(uses_streaming_indexer_v3(&default_v3));
+        assert!(!uses_streaming_indexer_v3(&default_non_v3));
+        assert!(uses_streaming_indexer_v3(&cli_to_v3));
+        assert!(!uses_streaming_indexer_v3(&cli_to_non_v3));
     }
 
     #[test]
@@ -10052,6 +10263,25 @@ mod tests {
         assert_eq!(
             format_indexing_status(status),
             "custom planning still running after 125 ms; processed 7 stage-local item(s)"
+        );
+    }
+
+    #[test]
+    fn v3_partition_load_progress_distinguishes_leaf_blocks_from_layers() {
+        let status = test_streaming_status(
+            StreamingIndexingPhase::V3PartitionLoad { layer_index: 2 },
+            StreamingIndexingStatusState::InProgress,
+            9,
+            Some(9),
+            4,
+            Some(5),
+            Duration::from_millis(250),
+            None,
+        );
+
+        assert_eq!(
+            format_indexing_status(status),
+            "Partition load for layer 2 still running after 250 ms; completed 4 of 9 leaf block(s)"
         );
     }
 

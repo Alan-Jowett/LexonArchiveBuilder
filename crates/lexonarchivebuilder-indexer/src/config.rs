@@ -274,7 +274,7 @@ pub enum ConfigError {
     )]
     LocalTestingClusterCountRequiresLocalEnvironment,
     #[error(
-        "local testing cluster_count override is not supported for published profile 0.7.0 because that profile now runs through the streaming-indexer v2 path"
+        "local testing cluster_count override is not supported for published profile 0.7.0 because that profile now runs through the constrained streaming-indexer v3 path"
     )]
     LocalTestingClusterCountUnsupportedForPublishedProfileV0_7_0,
 }
