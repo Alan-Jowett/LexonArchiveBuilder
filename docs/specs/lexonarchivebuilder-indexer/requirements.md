@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, replay-order preparation efficiency, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v3 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v3-compatible clustering observability projection, user-usable convergence-diagnosis surfacing, latest-LexonGraph constrained v3 working-root adoption at commit `7c8f375137375709bb608ee2609b38cb80e5422c`, issue-83 replay-order memory decoupling from corpus size, bounded replay-batch preparation overlap exploration for issue #88, issue #93 replay batch-size decoupling from CPU concurrency, issue #95 bounded multi-batch replay-prefetch buffering, renewed latest-upstream-main compatibility after post-`7c8f375137375709bb608ee2609b38cb80e5422c` breaking LexonGraph changes, repo-wide redb block-store targeting support after refreshing to a newer LexonGraph `main` revision, and rooted block-copy live progress counters on the default heartbeat surface
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, v3-compatible clustering telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, live rooted-copy progress reporting, bounded-residency deterministic replay ordering for deterministic replay submission, efficient replay-order preparation behind the existing replay contract, bounded replay-batch preparation overlap behind the existing replay contract, independent replay batch-sizing versus replay-materialization concurrency control for clustering replay, bounded multi-batch replay-prefetch buffering for clustering replay, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v3 API when the selected published profile is `0.7.0`, upstream-managed request-adjacent v3 working-root derivation for clustering-enabled v3 execution, repeatable adaptation to later upstream-main breaking changes without weakening the current external stage or observability contracts, and first-class redb block-store targeting across archive-sync, block-gateway, indexer, MCP, and repo-owned copy/sync surfaces
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, replay-order preparation efficiency, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v3 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v3-compatible clustering observability projection, user-usable convergence-diagnosis surfacing, latest-LexonGraph constrained v3 working-root adoption at commit `7c8f375137375709bb608ee2609b38cb80e5422c`, issue-83 replay-order memory decoupling from corpus size, bounded replay-batch preparation overlap exploration for issue #88, issue #93 replay batch-size decoupling from CPU concurrency, issue #95 bounded multi-batch replay-prefetch buffering, renewed latest-upstream-main compatibility after post-`7c8f375137375709bb608ee2609b38cb80e5422c` breaking LexonGraph changes, repo-wide redb block-store targeting support after refreshing to a newer LexonGraph `main` revision, rooted block-copy live progress counters on the default heartbeat surface, and CLI-only block-store maintenance with local-redb compaction
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, v3-compatible clustering telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, live rooted-copy progress reporting, CLI-only one-store block-store maintenance with initial local-redb compaction, bounded-residency deterministic replay ordering for deterministic replay submission, efficient replay-order preparation behind the existing replay contract, bounded replay-batch preparation overlap behind the existing replay contract, independent replay batch-sizing versus replay-materialization concurrency control for clustering replay, bounded multi-batch replay-prefetch buffering for clustering replay, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v3 API when the selected published profile is `0.7.0`, upstream-managed request-adjacent v3 working-root derivation for clustering-enabled v3 execution, repeatable adaptation to later upstream-main breaking changes without weakening the current external stage or observability contracts, and first-class redb block-store targeting across archive-sync, block-gateway, indexer, MCP, and repo-owned copy/sync surfaces
 
 ## USER-REQUEST
 
@@ -596,6 +596,39 @@
   copied and skipped-already-present progress, while blind-write may report
   attempted writes and failures without implying destination-state knowledge it
   did not read.
+- **UR-305 [KNOWN]:** Expose the new local redb compaction capability through
+  the existing indexer CLI rather than through an MCP API or a separate
+  repository binary.
+- **UR-306 [KNOWN]:** The operator-facing command family should use a generic
+  `maintenance` namespace rather than a top-level `compact` verb because
+  compaction is backend-specific and future one-store maintenance actions may
+  follow the same shape.
+- **UR-307 [KNOWN]:** The first maintenance action should compact one existing
+  local redb immutable block store by invoking the upstream LexonGraph redb
+  block-store `compact_now` capability.
+- **UR-308 [INFERRED]:** Unlike rooted copy, the maintenance action should
+  target exactly one configured block store and should not require
+  source/destination pairs or rooted block identifiers.
+- **UR-309 [INFERRED]:** `maintenance compact` should remain CLI-only and must
+  not become a `BatchRequest` field, indexing stage, archive-sync side effect,
+  or MCP-visible API in this increment.
+- **UR-310 [INFERRED]:** In this increment the `compact` maintenance action
+  should be supported only for the `local-redb` immutable block-store profile
+  and should fail explicitly on unsupported profiles rather than broadening
+  behavior or silently no-oping.
+- **UR-311 [INFERRED]:** Because local mutable refs remain filesystem-hosted
+  outside redb, maintenance compaction must preserve immutable block identities
+  and readability without rewriting current-root, replay-journal-head, or other
+  mutable refs.
+- **UR-312 [INFERRED]:** The first maintenance increment may emit concise
+  human-readable success or failure output only and does not require a
+  machine-readable artifact if the subordinate upstream compaction contract
+  communicates success or failure only.
+- **UR-313 [KNOWN]:** This PR should also refresh LexonArchiveBuilder from its
+  current LexonGraph dependency pin `01c9908256278d7d075e0abc856ef7bd3679fe6c`
+  to merged LexonGraph `main` commit
+  `385c07fff4adbe5574b9ae605eaae0679647b9dd`, which carries the new redb
+  `compact_now` API required by the maintenance surface.
 
 ## Change Manifest
 
@@ -735,6 +768,8 @@
 | CM-INDEXER-132 | Revise | Refresh the approved latest-LexonGraph integration target from commit `7c8f375137375709bb608ee2609b38cb80e5422c` to LexonGraph `main` commit `031b1a1061bebfcccdac91169335b92693039e8f` and require LexonArchiveBuilder to absorb any breaking delegated API changes without weakening the approved external stage or clustering-observability contracts | UR-292, UR-293, UR-294, UR-295 |
 | CM-INDEXER-133 | Revise | Refresh the approved LexonGraph integration target from commit `031b1a1061bebfcccdac91169335b92693039e8f` to LexonGraph `main` commit `9f845b5f1ff6e13cb7e51d5ca23bde11b8ff8f31`, add explicit redb block-store targeting across archive-sync, block-gateway, indexer, MCP, and repo-owned copy/sync workflows, keep mutable refs on the filesystem, preserve fs-to-redb migration/copy workflows, and leave existing Azure-backed profile meanings intact | UR-296, UR-297, UR-297A, UR-298, UR-299, UR-300, UR-301, UR-302 |
 | CM-INDEXER-134 | Revise | Strengthen rooted block-copy observability from elapsed-time-only liveness to mode-truthful live progress counters on the default heartbeat surface without changing rooted reachability, write concurrency, or copy-mode semantics | UR-192, UR-193, UR-198, UR-303, UR-304 |
+| CM-INDEXER-135 | Add | Add a CLI-only one-store `maintenance` namespace with an initial `compact` action that targets local redb immutable block stores through the upstream Redb compaction capability while preserving mutable-ref boundaries and explicit unsupported-profile failures | UR-305, UR-306, UR-307, UR-308, UR-309, UR-310, UR-311, UR-312 |
+| CM-INDEXER-136 | Revise | Refresh the approved LexonGraph integration target from the repository's current dependency pin `01c9908256278d7d075e0abc856ef7bd3679fe6c` to merged `main` commit `385c07fff4adbe5574b9ae605eaae0679647b9dd` so the indexer can consume the upstream redb `compact_now` API required by the new maintenance surface | UR-313 |
 
 ## Before / After
 
@@ -2430,11 +2465,12 @@ LexonArchiveBuilder SHALL provide a concrete implementation of `lexongraph_block
 - **Architectural target storage profiles [KNOWN]:**
   - gateway-backed `gateway-http3` read-only immutable-block fetch profile addressed by DNS host name with implied HTTPS-over-QUIC authority on port `443`
   - local filesystem for local/testing operation
+  - direct local redb for local/testing operation, limited to immutable blocks
   - overlay block store for production-oriented operation, composed of memory cache + local filesystem cache + Azure Blob Storage backing addressed by SAS URL
   - additive `production-v2` direct Azure-backed store profile for production-oriented operation
 - **Approved tool-targeting modes [KNOWN]:** Every indexer-owned tool that reads
   from or writes to the shared `BlockStore` boundary SHALL support one approved
-  shared profile vocabulary: direct local filesystem, the existing
+  shared profile vocabulary: direct local filesystem, direct local redb, the existing
   `production` overlay profile, the additive `production-v2` direct
   Azure-backed profile, and where the tool surface can operate correctly through
   read-only immutable block fetches, the additive `gateway-http3` profile.
@@ -2442,6 +2478,10 @@ LexonArchiveBuilder SHALL provide a concrete implementation of `lexongraph_block
   through one of the approved repository-defined profiles is not an approved
   operator-facing mode in this increment.
 - **Current increment [KNOWN]:** The existing local/testing realization remains required, and this increment additionally requires both approved non-local target profiles to be usable on the same repository-owned tool surfaces rather than being introduced tool-by-tool.
+- **Local-redb boundary [KNOWN]:** The direct local redb profile stores
+  immutable blocks only; mutable refs such as current-root and replay-journal-
+  head remain outside redb on the filesystem in the repository-owned human-
+  readable form.
 - **Gateway addressing [KNOWN]:** The additive `gateway-http3` profile accepts a
   gateway DNS host name and derives HTTPS-over-QUIC authority from that host on
   port `443` rather than accepting an arbitrary scheme or base URL in this
@@ -2459,10 +2499,14 @@ LexonArchiveBuilder SHALL provide a concrete implementation of `lexongraph_block
   contract without introducing repository-owned translation of block identities
   or payload bytes.
 - **Artifact reuse [KNOWN]:** The same environment-selected `BlockStore` abstraction family SHALL also be used for normalized email artifacts and mailbox provenance artifacts, provided indexing contracts and retrieval references remain explicit.
-- **Tool-surface consistency [INFERRED]:** Batch indexing, standalone clustering discovery, rooted quality assessment, rooted CLI search, and future indexer-owned operator tools SHALL share the same block-store target-selection contract instead of inventing per-tool storage mode variants.
+- **Tool-surface consistency [INFERRED]:** Batch indexing, standalone
+  clustering discovery, rooted quality assessment, rooted CLI search, rooted
+  block copy, one-store maintenance, and future indexer-owned operator tools
+  SHALL share the same block-store target-selection contract instead of
+  inventing per-tool storage mode variants.
 - **Assessment-tool implication [INFERRED]:** Post-index rooted block-tree quality assessment SHALL also read blocks through the same environment-selected `BlockStore` boundary rather than bypassing it with a repository-specific storage reader.
 - **Mailbox retention [KNOWN]:** Mailbox provenance artifacts SHALL be retained so the original source material remains available for re-normalization, re-chunking, and re-ingestion flows.
-- **Traceability:** UR-3, UR-6, UR-9, UR-12, UR-13, UR-18, UR-22, UR-25, UR-26, UR-27, UR-28, UR-80, UR-86, UR-153, UR-154, UR-155, UR-156, UR-189, UR-190, UR-191, UR-202, UR-203, UR-204, UR-205, UR-206, UR-207, UR-209
+- **Traceability:** UR-3, UR-6, UR-9, UR-12, UR-13, UR-18, UR-22, UR-25, UR-26, UR-27, UR-28, UR-80, UR-86, UR-153, UR-154, UR-155, UR-156, UR-189, UR-190, UR-191, UR-202, UR-203, UR-204, UR-205, UR-206, UR-207, UR-209, UR-297, UR-297A, UR-298, UR-299, UR-300, UR-301, UR-302
 
 #### RQ-INDEXER-005A - LexonGraph v2 custom-block adoption for repository-owned artifacts
 
@@ -2487,7 +2531,7 @@ to another configured block store.
   default.
 - **Source and destination targeting [KNOWN]:** The tool SHALL reuse the same
   approved block-store target profiles on both source and destination sides:
-  direct local filesystem, the existing `production` overlay block store
+  direct local filesystem, direct local redb, the existing `production` overlay block store
   composed of memory cache + local filesystem cache + Azure Blob
   SAS-backed storage, or the additive `production-v2` direct Azure-backed
   store profile; the additive `gateway-http3` profile is additionally approved
@@ -2565,7 +2609,7 @@ to another configured block store.
 - **Surface boundary [KNOWN]:** The tool is additive to existing indexing,
   quality, search, and MCP surfaces and SHALL NOT become an indexing stage, a
   `BatchRequest` feature, or an MCP-visible API in this increment.
-- **Traceability:** UR-153, UR-154, UR-155, UR-156, UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188, UR-189, UR-190, UR-191, UR-192, UR-193, UR-196, UR-197, UR-198, UR-202, UR-205, UR-206, UR-207, UR-209, UR-303, UR-304
+- **Traceability:** UR-153, UR-154, UR-155, UR-156, UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188, UR-189, UR-190, UR-191, UR-192, UR-193, UR-196, UR-197, UR-198, UR-202, UR-205, UR-206, UR-207, UR-209, UR-297, UR-298, UR-299, UR-303, UR-304
 
 #### RQ-INDEXER-005C - Opt-in SDK diagnostic logging on existing CLI surfaces
 
@@ -2587,6 +2631,39 @@ the standard Rust environment-driven logging path.
   daemon, control plane, or MCP-visible diagnostics surface.
 - **Traceability:** UR-33, UR-194, UR-195
 
+#### RQ-INDEXER-005D - CLI-only one-store maintenance over approved targets
+
+LexonArchiveBuilder SHALL provide a CLI-only operator maintenance surface for
+one configured block store.
+
+- **Command-shape rule [KNOWN]:** The operator surface SHALL be organized under
+  a generic `maintenance` CLI namespace rather than exposing backend-specific
+  verbs such as top-level `compact`.
+- **First approved action [KNOWN]:** The first maintenance action SHALL be
+  `compact`, which requests immediate compaction of one caller-selected direct
+  `local-redb` immutable block store through the subordinate LexonGraph redb
+  compaction capability.
+- **Targeting rule [KNOWN]:** The maintenance surface SHALL accept one selected
+  block-store target and SHALL NOT require source/destination pairs or rooted
+  block identifiers.
+- **Unsupported-profile rule [KNOWN]:** In this increment, `maintenance compact`
+  SHALL fail explicitly for approved profiles other than direct `local-redb`
+  rather than silently succeeding, silently no-oping, or broadening behavior
+  into backend-neutral compaction.
+- **Mutable-ref boundary [KNOWN]:** Because local mutable refs remain outside
+  redb on the filesystem, the maintenance action SHALL NOT rewrite or publish
+  current-root, replay-journal-head, or other repository-owned mutable refs.
+- **Integrity boundary [INFERRED]:** Successful compaction SHALL preserve
+  immutable block readability and hash identity for the targeted store.
+- **Output boundary [INFERRED]:** The first maintenance increment MAY limit its
+  operator-visible result to concise human-readable success or failure output
+  and does not require a machine-readable artifact.
+- **Surface boundary [KNOWN]:** This maintenance surface is additive to
+  indexing, rooted quality, rooted search, rooted copy, archive sync, and MCP
+  surfaces and SHALL NOT become a `BatchRequest` feature, indexing stage, or
+  MCP-visible API in this increment.
+- **Traceability:** UR-297, UR-298, UR-299, UR-300, UR-301, UR-305, UR-306, UR-307, UR-308, UR-309, UR-310, UR-311, UR-312
+
 #### RQ-INDEXER-006 - Embedding provider integration
 
 LexonArchiveBuilder SHALL obtain embeddings through a provider that satisfies `lexongraph_embeddings_trait::EmbeddingProvider` and is reached through an OpenAI-compatible HTTP embedding interface.
@@ -2605,8 +2682,9 @@ LexonArchiveBuilder SHALL obtain embeddings through a provider that satisfies `l
 LexonArchiveBuilder SHALL select storage and embedding integrations according to environment without changing the delegated indexing contract or the batch input contract.
 
 - **Local/testing [KNOWN]:** either direct local filesystem + local embedding
-  service, or the preserved `local-overlay` shape that reuses the approved
-  overlay-backed storage profile together with a local embedding service
+  service, direct local redb + local embedding service, or the preserved
+  `local-overlay` shape that reuses the approved overlay-backed storage profile
+  together with a local embedding service
 - **Production-oriented [KNOWN]:** either the existing production overlay block
   store (memory cache + local filesystem cache + Azure Blob SAS-backed
   storage) + Azure OpenAI, or the additive `production-v2` direct Azure-backed
@@ -3523,22 +3601,48 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   truthful to read-before-write versus blind-write mode semantics rather than
   introducing a separate verbose-only progress interface.
 
+### BA-INDEXER-135
+
+- **Before [KNOWN]:** The indexer requirements approved direct local redb
+  targeting and rooted block-copy workflows, but they did not yet define a
+  CLI-only one-store maintenance surface for invoking the upstream redb
+  compaction capability.
+- **After [KNOWN]:** The requirements now add a generic `maintenance` CLI
+  namespace with an initial `compact` action that targets exactly one approved
+  direct `local-redb` immutable block store, keeps mutable refs on the
+  filesystem, preserves immutable block identity and readability, remains
+  additive to existing indexing and MCP surfaces, and fails explicitly for
+  unsupported profiles instead of pretending compaction is backend-neutral.
+
+### BA-INDEXER-136
+
+- **Before [KNOWN]:** The repository currently pins LexonGraph dependencies to
+  commit `01c9908256278d7d075e0abc856ef7bd3679fe6c`, which predates the merged
+  upstream redb `compact_now` API required by the new maintenance surface.
+- **After [KNOWN]:** The requirements now also call for refreshing the approved
+  LexonGraph dependency target to merged `main` commit
+  `385c07fff4adbe5574b9ae605eaae0679647b9dd` so the maintenance increment
+  depends on a concrete upstream revision that contains the required compaction
+  capability.
+
 ### Invariant Impact Assessment
 
-- **Content-model abstraction boundaries:** Preserved. The increment changes
-  only operator-visible rooted-copy progress reporting; it does not add or
-  reshape content-resolution, embedding, or block-store abstraction families.
-- **Local/prod environment parity:** Preserved. The heartbeat refinement applies
-  to the shared rooted-copy CLI surface regardless of whether the selected
-  stores are local filesystem, local redb, gateway, or approved Azure-backed
-  profiles.
-- **Search contract stability:** Preserved. The increment changes only copy-task
-  observability and does not alter indexing, MCP, or rooted search semantics.
-- **Indexing safety, idempotence, recoverability:** Preserved. Hash-addressed
-  immutable blocks, rooted reachability, and existing copy-mode boundaries stay
-  unchanged; the increment only surfaces already-tracked progress more clearly.
-- **Operator observability:** Preserved and tightened. The increment extends the
-  existing no-silent-gap principle for long-running operator workflows from
-  elapsed-time liveness to live counter progress on rooted copy, without
-  creating a second progress surface or weakening truthful mode-specific copy
-  accounting.
+- **Content-model abstraction boundaries:** Preserved. The increment adds only a
+  CLI-only maintenance workflow over the existing immutable block-store
+  boundary; it does not reshape content resolution, embedding, or search corpus
+  semantics.
+- **Local/prod environment parity:** Preserved with explicit capability
+  boundaries. The generic `maintenance` namespace remains an indexer-owned tool
+  surface, but the first `compact` action is intentionally supported only for
+  direct local redb and must fail explicitly elsewhere rather than changing the
+  meaning of approved non-local profiles.
+- **Search contract stability:** Preserved. The increment does not alter MCP
+  search, rooted search, ranking, retrieval, or indexing-stage behavior.
+- **Indexing safety, idempotence, recoverability:** Preserved. Immutable
+  hash-addressed block identity remains unchanged, mutable refs stay on the
+  filesystem outside redb, and maintenance compaction is additive rather than a
+  hidden side effect of indexing or copy workflows.
+- **Operator workflow clarity:** Preserved and extended. The new generic
+  `maintenance` namespace gives operators an explicit one-store maintenance
+  entry point without implying a backend-neutral compaction contract or
+  inventing a second administration surface.

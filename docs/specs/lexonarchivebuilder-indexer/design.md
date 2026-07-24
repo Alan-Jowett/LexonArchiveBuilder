@@ -22,7 +22,8 @@ replay-stable fingerprinting, temporary upstream `main` tracking for
 rapid profile validation, upstream wgpu-acceleration revision
 compatibility, 0.6.x published-profile evaluation, local testing sweep
 automation, v0.7.0 fixed-budget ladder experiment automation, rooted
-block-store copy tooling with live default heartbeat counters, upstream embedding-readback API adoption, LAB-owned
+block-store copy tooling with live default heartbeat counters, CLI-only
+local-redb maintenance compaction, upstream embedding-readback API adoption, LAB-owned
 replay-journaled split-stage recovery, bounded-residency deterministic replay
 ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, replay batch-size decoupling from CPU concurrency, bounded multi-batch replay-prefetch buffering, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
@@ -843,10 +844,12 @@ contracts.
 ### DSG-LFI-001I3 `Latest upstream-main refresh plus redb backend adoption`
 
 When LexonArchiveBuilder refreshes the approved LexonGraph dependency target
-from commit `031b1a1061bebfcccdac91169335b92693039e8f` to commit
-`9f845b5f1ff6e13cb7e51d5ca23bde11b8ff8f31`, the repository may adopt new
-upstream block-store implementations, including redb, but must preserve the
-existing repository-owned storage-profile meanings and mutable-ref contract.
+from the repository's current dependency pin
+`01c9908256278d7d075e0abc856ef7bd3679fe6c` to merged LexonGraph `main` commit
+`385c07fff4adbe5574b9ae605eaae0679647b9dd`, the repository may adopt new
+upstream block-store implementations, including redb and its concrete
+`compact_now` maintenance capability, but must preserve the existing
+repository-owned storage-profile meanings and mutable-ref contract.
 
 In this increment:
 
@@ -1801,6 +1804,30 @@ whole-store iteration remain on the existing writable profiles.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-005B
 
+### DSG-LFI-005F `One-store maintenance through the approved storage boundary`
+
+The `maintenance compact` workflow constructs exactly one configured block-store
+target through the same repository-owned storage-profile vocabulary used by
+other indexer tools, then applies an action-specific capability check above
+that common targeting layer.
+
+In this increment, the first approved maintenance action is local-redb
+compaction. When the selected target is direct `local-redb`, LexonArchiveBuilder
+dispatches from the generic CLI maintenance surface to the subordinate
+LexonGraph redb compaction capability on the concrete Redb-backed store without
+redefining compaction as a backend-neutral `BlockStore` operation.
+
+When the selected target uses any other approved profile, the maintenance
+surface fails explicitly rather than silently no-oping, silently succeeding, or
+inventing repository-owned backend-specific fallback behavior.
+
+Because local mutable references such as current-root and replay-journal-head
+remain outside redb on the filesystem, successful maintenance compaction affects
+only the immutable redb-backed block file and does not rewrite, republish, or
+relocate repository-owned mutable refs.
+
+**Traces to:** RQ-INDEXER-005, RQ-INDEXER-005D, RQ-INDEXER-007
+
 ### DSG-LFI-006 `Embedding provider adapter boundary`
 
 LexonArchiveBuilder provides environment-selected implementations or adapters that
@@ -2164,14 +2191,43 @@ knowledge that the invocation deliberately avoided reading.
 
 **Traces to:** RQ-INDEXER-005B, RQ-INDEXER-009
 
+### DSG-LFI-007H `Maintenance CLI surface`
+
+LexonArchiveBuilder exposes one-store maintenance through a dedicated CLI-only
+operator namespace named `maintenance`.
+
+That namespace accepts one configured block-store target using the same shared
+storage-profile contract as other indexer-owned tools, but it does not accept
+source/destination pairs or rooted block identities because maintenance acts on
+one already-existing store rather than traversing a rooted graph between two
+stores.
+
+The first approved subcommand is `maintenance compact`. Its operator contract is
+generic at the namespace level and backend-specific at the action level: the
+namespace leaves room for future one-store maintenance actions, while the
+initial `compact` action is explicitly limited to direct `local-redb`.
+
+The surface is intentionally separate from the batch `run` request-file
+contract, rooted block copy, archive sync, and MCP because it performs operator
+maintenance on one existing immutable block store rather than orchestrating a
+new indexing batch or mutating repository-visible search surfaces.
+
+For this increment the maintenance CLI may render concise human-readable
+success-or-failure output only. The design does not require a machine-readable
+artifact because the subordinate compaction contract communicates success or
+failure without richer stable result detail.
+
+**Traces to:** RQ-INDEXER-005D, RQ-INDEXER-009
+
 ### DSG-LFI-008 `Local and production parity boundary`
 
 Local/testing and production environments differ only in adapter realization and
 provider configuration, not in the container's batch contract, the staged email
 artifact model, content item shape, the stage-selection and concurrency-
 configuration surfaces, the clustering-selection and clustering-option CLI
-surface, the rooted block-tree quality CLI surface, or the delegated
-rooted block-copy CLI surface, or the delegated `lexongraph-streaming-indexer`
+surface, the rooted block-tree quality CLI surface, the rooted block-copy CLI
+surface, the maintenance CLI surface, or the delegated
+`lexongraph-streaming-indexer`
 orchestration contract. The same parity boundary
 also covers the rooted CLI search surface's use of configured storage plus one
 operator-supplied embedding endpoint.
@@ -2214,6 +2270,10 @@ semantics.
 The same separation applies to the rooted block-copy tool: it remains a CLI
 operator workflow over approved block-store targets and does not become an MCP
 mutation, replication, or storage-administration surface in this increment.
+
+The same separation applies to the maintenance CLI surface: it remains a CLI
+operator workflow over one selected block-store target and does not become an
+MCP maintenance or storage-administration API in this increment.
 
 **Traces to:** RQ-INDEXER-009
 

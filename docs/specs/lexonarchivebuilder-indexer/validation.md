@@ -17,7 +17,7 @@ effective-profile identity signaling,
 clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted
-CLI search over stored trees, rooted block-store copy tooling with live default heartbeat counters, replay-stable fingerprinting, temporary
+CLI search over stored trees, rooted block-store copy tooling with live default heartbeat counters, CLI-only local-redb maintenance compaction, replay-stable fingerprinting, temporary
 upstream `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, 0.6.x published-profile
 evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
@@ -619,17 +619,19 @@ diagnosis behavior.
 
 ### VAL-LFI-002N8
 
-Inspect one refresh from LexonGraph `main` commit
-`031b1a1061bebfcccdac91169335b92693039e8f` to commit
-`9f845b5f1ff6e13cb7e51d5ca23bde11b8ff8f31` that introduces or enables a redb
-block-store implementation.
+Inspect one refresh from the repository's current LexonGraph dependency pin
+`01c9908256278d7d075e0abc856ef7bd3679fe6c` to merged LexonGraph `main` commit
+`385c07fff4adbe5574b9ae605eaae0679647b9dd` that introduces the redb
+`compact_now` capability needed by the maintenance increment.
 
 **Pass condition:** LexonArchiveBuilder updates its adapter/configuration
 boundary so the refreshed upstream block-store surface can be targeted across
-archive-sync, block-gateway, indexer, MCP, and repo-owned copy workflows
-without weakening the caller-visible stage contract, search semantics, or the
-meaning of already-approved Azure-backed profiles. If the refreshed upstream
-surface lacks a repository-required seam for one of those components, the gap is
+archive-sync, block-gateway, indexer, MCP, and repo-owned copy workflows, and
+so the indexer maintenance increment can reach the upstream redb
+`compact_now` capability, without weakening the caller-visible stage contract,
+search semantics, or the meaning of already-approved Azure-backed profiles. If
+the refreshed upstream surface lacks a repository-required seam for one of
+those components, the gap is
 surfaced explicitly rather than masked by silently narrowing the repo-wide redb
 targeting scope.
 
@@ -1046,6 +1048,26 @@ destination side still uses one of the writable approved profiles.
 
 **Traces to:** RQ-INDEXER-005B, DSG-LFI-005D, DSG-LFI-005E, DSG-LFI-007G
 
+### VAL-LFI-005E
+
+Run the maintenance compact tool against one representative direct `local-redb`
+store that already contains readable immutable blocks and representative
+filesystem-hosted mutable refs, then run the same maintenance action against at
+least one other approved profile that is not direct `local-redb`.
+
+**Pass condition:** the CLI accepts exactly one configured block-store target
+for the maintenance action and does not require source/destination pairs or
+root block identifiers. When the selected target is direct `local-redb`, the
+tool requests compaction successfully through the subordinate redb capability,
+the previously readable immutable blocks remain readable under the same hash
+identities afterward, and the filesystem-hosted mutable refs remain unchanged.
+When the selected target uses any other approved profile, the tool fails
+explicitly rather than silently succeeding, silently no-oping, or broadening
+compaction into a backend-neutral repository contract. The operator-visible
+result may remain concise human-readable success or failure output only.
+
+**Traces to:** RQ-INDEXER-005D, DSG-LFI-005F, DSG-LFI-007H
+
 ### VAL-LFI-006
 
 Inspect the preserved production environment profile boundary.
@@ -1369,6 +1391,22 @@ required.
 
 **Traces to:** RQ-INDEXER-005B, RQ-INDEXER-009, RQ-INDEXER-010A, DSG-LFI-005D,
 DSG-LFI-007G, DSG-LFI-009, DSG-LFI-011
+
+### VAL-LFI-009E
+
+Inspect the specification package for the maintenance compact increment against
+shared block-store-boundary, mutable-ref, and MCP-surface constraints.
+
+**Pass condition:** the package keeps maintenance on a CLI-only operator
+surface, uses a generic `maintenance` namespace with an initial backend-specific
+`compact` action instead of inventing a backend-neutral compaction trait,
+targets exactly one configured block store rather than a rooted
+source/destination transfer, limits supported execution in this increment to
+direct `local-redb` with explicit failure elsewhere, and preserves the rule
+that repository-owned mutable refs remain outside redb on the filesystem.
+
+**Traces to:** RQ-INDEXER-005D, RQ-INDEXER-009, DSG-LFI-005F, DSG-LFI-007H,
+DSG-LFI-009
 
 ### VAL-LFI-009A
 
