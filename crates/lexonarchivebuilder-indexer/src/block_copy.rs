@@ -89,6 +89,18 @@ struct CopyMetrics {
     progress: Option<RootedBlockCopyProgress>,
 }
 
+struct CopyExecutionConfig<F> {
+    max_in_flight_destination_writes: usize,
+    max_in_flight_destination_write_bytes: usize,
+    progress: Option<RootedBlockCopyProgress>,
+    blind_write_checkpoint: Option<BlindWriteCheckpoint<F>>,
+}
+
+pub struct BlindWriteCheckpoint<F> {
+    pub interval: usize,
+    pub action: F,
+}
+
 impl RootedBlockCopyProgress {
     pub fn new(destination_mode: CopyDestinationMode) -> Self {
         Self {
@@ -321,8 +333,7 @@ pub async fn copy_rooted_blocks_with_mode_and_limit_and_checkpoint<S, D, F>(
     destination_mode: CopyDestinationMode,
     max_in_flight_destination_writes: usize,
     progress: Option<RootedBlockCopyProgress>,
-    blind_write_checkpoint_interval: usize,
-    checkpoint_action: F,
+    blind_write_checkpoint: BlindWriteCheckpoint<F>,
 ) -> RootedBlockCopyReport
 where
     S: BlockStore,
@@ -334,11 +345,12 @@ where
         destination,
         root_ids,
         destination_mode,
-        max_in_flight_destination_writes,
-        DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITE_BYTES,
-        progress,
-        Some(blind_write_checkpoint_interval),
-        Some(checkpoint_action),
+        CopyExecutionConfig {
+            max_in_flight_destination_writes,
+            max_in_flight_destination_write_bytes: DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITE_BYTES,
+            progress,
+            blind_write_checkpoint: Some(blind_write_checkpoint),
+        },
     )
     .await
 }
@@ -356,16 +368,21 @@ where
     S: BlockStore,
     D: BlockStore,
 {
-    copy_rooted_blocks_with_mode_and_limits_and_checkpoint::<S, D, fn(&mut D) -> Result<(), BlockStoreError>>(
+    copy_rooted_blocks_with_mode_and_limits_and_checkpoint::<
+        S,
+        D,
+        fn(&mut D) -> Result<(), BlockStoreError>,
+    >(
         source,
         destination,
         root_ids,
         destination_mode,
-        max_in_flight_destination_writes,
-        max_in_flight_destination_write_bytes,
-        progress,
-        None,
-        None,
+        CopyExecutionConfig {
+            max_in_flight_destination_writes,
+            max_in_flight_destination_write_bytes,
+            progress,
+            blind_write_checkpoint: None,
+        },
     )
     .await
 }
@@ -375,11 +392,7 @@ async fn copy_rooted_blocks_with_mode_and_limits_and_checkpoint<S, D, F>(
     destination: &mut D,
     root_ids: &[BlockHash],
     destination_mode: CopyDestinationMode,
-    max_in_flight_destination_writes: usize,
-    max_in_flight_destination_write_bytes: usize,
-    progress: Option<RootedBlockCopyProgress>,
-    blind_write_checkpoint_interval: Option<usize>,
-    mut checkpoint_action: Option<F>,
+    execution_config: CopyExecutionConfig<F>,
 ) -> RootedBlockCopyReport
 where
     S: BlockStore,
@@ -393,11 +406,18 @@ where
         .map(|root_id| (root_id, root_id))
         .collect::<VecDeque<_>>();
     let mut visited = HashSet::new();
+    let CopyExecutionConfig {
+        max_in_flight_destination_writes,
+        max_in_flight_destination_write_bytes,
+        progress,
+        blind_write_checkpoint,
+    } = execution_config;
     let effective_write_limit = max_in_flight_destination_writes.max(1);
     let mut metrics = CopyMetrics::new(progress.clone());
     let mut failures = CopyFailureTracker::new(progress.clone());
     let mut pending_writes = FuturesUnordered::<PendingDestinationWrite<'_>>::new();
     let mut in_flight_destination_write_bytes = 0usize;
+    let mut blind_write_checkpoint = blind_write_checkpoint;
 
     while let Some((request_root_id, block_id)) = queue.pop_front() {
         failures.note_block_root(request_root_id, block_id);
@@ -471,7 +491,9 @@ where
                 if should_run_blind_write_checkpoint(
                     destination_mode,
                     metrics.attempted_write_block_count,
-                    blind_write_checkpoint_interval,
+                    blind_write_checkpoint
+                        .as_ref()
+                        .map(|checkpoint| checkpoint.interval),
                 ) {
                     flush_pending_writes(
                         &mut pending_writes,
@@ -480,8 +502,8 @@ where
                         &mut failures,
                     )
                     .await;
-                    if let Some(checkpoint_action) = checkpoint_action.as_mut()
-                        && let Err(error) = checkpoint_action(destination)
+                    if let Some(checkpoint) = blind_write_checkpoint.as_mut()
+                        && let Err(error) = (checkpoint.action)(destination)
                     {
                         failures.record(
                             block_id,
@@ -659,7 +681,11 @@ fn enqueue_destination_write<'a, D>(
         // copy invocation. The copy loop does not mutate that store while writes are
         // in flight: checkpoint compaction first flushes `pending_writes`, and the
         // function drains all remaining writes before returning.
-        let result = unsafe { (&*destination).put_block_bytes(&block_id, &block_bytes).await };
+        let result = unsafe {
+            (&*destination)
+                .put_block_bytes(&block_id, &block_bytes)
+                .await
+        };
         DestinationWriteCompletion {
             block_id,
             block_bytes_len,
@@ -722,7 +748,7 @@ fn should_run_blind_write_checkpoint(
         && blind_write_checkpoint_interval.is_some_and(|interval| {
             interval > 0
                 && attempted_write_block_count > 0
-                && attempted_write_block_count % interval == 0
+                && attempted_write_block_count.is_multiple_of(interval)
         })
 }
 
@@ -1645,6 +1671,7 @@ mod tests {
         let beta = source.put(&leaf_block("beta")).await.unwrap();
         let root = source.put(&branch_block(&[alpha, beta])).await.unwrap();
         let checkpoint_count = Arc::new(AtomicUsize::new(0));
+        let checkpoint_count_for_action = Arc::clone(&checkpoint_count);
 
         let report = copy_rooted_blocks_with_mode_and_limit_and_checkpoint(
             &source,
@@ -1653,13 +1680,12 @@ mod tests {
             CopyDestinationMode::BlindWrite,
             DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
             None,
-            2,
-            {
-                let checkpoint_count = Arc::clone(&checkpoint_count);
-                move |_destination: &mut MemoryBlockStore| {
-                    checkpoint_count.fetch_add(1, Ordering::SeqCst);
+            BlindWriteCheckpoint {
+                interval: 2,
+                action: move |_destination: &mut MemoryBlockStore| {
+                    checkpoint_count_for_action.fetch_add(1, Ordering::SeqCst);
                     Ok(())
-                }
+                },
             },
         )
         .await;
@@ -1684,11 +1710,13 @@ mod tests {
             CopyDestinationMode::BlindWrite,
             DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
             None,
-            2,
-            |_destination: &mut MemoryBlockStore| {
-                Err(BlockStoreError::BackendFailure(
-                    TestStoreError("simulated checkpoint compaction failure").to_string(),
-                ))
+            BlindWriteCheckpoint {
+                interval: 2,
+                action: |_destination: &mut MemoryBlockStore| {
+                    Err(BlockStoreError::BackendFailure(
+                        TestStoreError("simulated checkpoint compaction failure").to_string(),
+                    ))
+                },
             },
         )
         .await;
