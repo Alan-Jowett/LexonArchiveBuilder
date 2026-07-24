@@ -143,6 +143,7 @@ enum Command {
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
 enum ReadableBlockStoreProfile {
     Local,
+    LocalRedb,
     Production,
     ProductionV2,
     GatewayHttp3,
@@ -151,6 +152,7 @@ enum ReadableBlockStoreProfile {
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
 enum WritableBlockStoreProfile {
     Local,
+    LocalRedb,
     Production,
     ProductionV2,
 }
@@ -159,7 +161,13 @@ enum WritableBlockStoreProfile {
 struct BlockStoreArgs {
     #[arg(long, value_enum, default_value_t = ReadableBlockStoreProfile::Local)]
     block_store_profile: ReadableBlockStoreProfile,
-    #[arg(long, required_if_eq("block_store_profile", "local"))]
+    #[arg(
+        long,
+        required_if_eq_any([
+            ("block_store_profile", "local"),
+            ("block_store_profile", "local-redb"),
+        ])
+    )]
     block_store_root: Option<PathBuf>,
     #[arg(
         long,
@@ -199,7 +207,13 @@ impl BlockStoreArgs {
 struct SourceBlockStoreArgs {
     #[arg(long, value_enum, default_value_t = ReadableBlockStoreProfile::Local)]
     source_block_store_profile: ReadableBlockStoreProfile,
-    #[arg(long, required_if_eq("source_block_store_profile", "local"))]
+    #[arg(
+        long,
+        required_if_eq_any([
+            ("source_block_store_profile", "local"),
+            ("source_block_store_profile", "local-redb"),
+        ])
+    )]
     source_block_store_root: Option<PathBuf>,
     #[arg(
         long,
@@ -239,7 +253,13 @@ impl SourceBlockStoreArgs {
 struct DestinationBlockStoreArgs {
     #[arg(long, value_enum, default_value_t = WritableBlockStoreProfile::Local)]
     destination_block_store_profile: WritableBlockStoreProfile,
-    #[arg(long, required_if_eq("destination_block_store_profile", "local"))]
+    #[arg(
+        long,
+        required_if_eq_any([
+            ("destination_block_store_profile", "local"),
+            ("destination_block_store_profile", "local-redb"),
+        ])
+    )]
     destination_block_store_root: Option<PathBuf>,
     #[arg(
         long,
@@ -284,6 +304,11 @@ fn block_store_environment_config(
     let environment = match block_store_profile {
         ReadableBlockStoreProfile::Local => EnvironmentConfig::Local {
             block_store_root: block_store_root.expect("local block_store_root is required by clap"),
+            embedding: unused_local_embedding(),
+        },
+        ReadableBlockStoreProfile::LocalRedb => EnvironmentConfig::LocalRedb {
+            block_store_root: block_store_root
+                .expect("local-redb block_store_root is required by clap"),
             embedding: unused_local_embedding(),
         },
         ReadableBlockStoreProfile::Production => EnvironmentConfig::Production {
@@ -335,6 +360,7 @@ fn destination_block_store_environment_config(
 ) -> EnvironmentConfig {
     let readable_profile = match block_store_profile {
         WritableBlockStoreProfile::Local => ReadableBlockStoreProfile::Local,
+        WritableBlockStoreProfile::LocalRedb => ReadableBlockStoreProfile::LocalRedb,
         WritableBlockStoreProfile::Production => ReadableBlockStoreProfile::Production,
         WritableBlockStoreProfile::ProductionV2 => ReadableBlockStoreProfile::ProductionV2,
     };
@@ -764,6 +790,40 @@ mod tests {
     }
 
     #[test]
+    fn quality_command_parses_local_redb_block_store_args() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "quality",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--block-store-profile",
+            "local-redb",
+            "--block-store-root",
+            "blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Quality { block_store, .. } => {
+                assert_eq!(
+                    block_store.block_store_profile,
+                    ReadableBlockStoreProfile::LocalRedb
+                );
+                let environment = block_store.try_environment_config().unwrap();
+                match environment {
+                    EnvironmentConfig::LocalRedb {
+                        block_store_root, ..
+                    } => {
+                        assert_eq!(block_store_root, PathBuf::from("blocks"));
+                    }
+                    _ => panic!("expected local-redb environment"),
+                }
+            }
+            _ => panic!("expected quality command"),
+        }
+    }
+
+    #[test]
     fn quality_command_parses_fast_random_walk_flag() {
         let cli = Cli::try_parse_from([
             "lexonarchivebuilder-indexer",
@@ -856,6 +916,7 @@ mod tests {
                         assert_eq!(block_store.prefix, None);
                     }
                     EnvironmentConfig::Local { .. }
+                    | EnvironmentConfig::LocalRedb { .. }
                     | EnvironmentConfig::LocalOverlay { .. }
                     | EnvironmentConfig::ProductionV2 { .. } => {
                         panic!("expected production environment")
@@ -897,6 +958,7 @@ mod tests {
                         assert_eq!(block_store.memory_cache_max_resident_blocks, None);
                     }
                     EnvironmentConfig::Local { .. }
+                    | EnvironmentConfig::LocalRedb { .. }
                     | EnvironmentConfig::LocalOverlay { .. }
                     | EnvironmentConfig::Production { .. } => {
                         panic!("expected production-v2 environment")
@@ -1028,6 +1090,7 @@ mod tests {
                         assert_eq!(block_store.memory_cache_max_resident_blocks, None);
                     }
                     EnvironmentConfig::Local { .. }
+                    | EnvironmentConfig::LocalRedb { .. }
                     | EnvironmentConfig::LocalOverlay { .. }
                     | EnvironmentConfig::Production { .. } => {
                         panic!("expected production-v2 environment")
@@ -1121,6 +1184,63 @@ mod tests {
     }
 
     #[test]
+    fn copy_command_parses_local_redb_source_and_destination_args() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--source-block-store-profile",
+            "local-redb",
+            "--source-block-store-root",
+            "source-blocks",
+            "--destination-block-store-profile",
+            "local-redb",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Copy {
+                source_block_store,
+                destination_block_store,
+                ..
+            } => {
+                assert_eq!(
+                    source_block_store.source_block_store_profile,
+                    ReadableBlockStoreProfile::LocalRedb
+                );
+                assert_eq!(
+                    destination_block_store.destination_block_store_profile,
+                    WritableBlockStoreProfile::LocalRedb
+                );
+                assert_eq!(
+                    source_block_store.source_block_store_root,
+                    Some(PathBuf::from("source-blocks"))
+                );
+                match source_block_store.try_environment_config().unwrap() {
+                    EnvironmentConfig::LocalRedb {
+                        block_store_root, ..
+                    } => {
+                        assert_eq!(block_store_root, PathBuf::from("source-blocks"));
+                    }
+                    _ => panic!("expected local-redb source environment"),
+                }
+                match destination_block_store.to_environment_config() {
+                    EnvironmentConfig::LocalRedb {
+                        block_store_root, ..
+                    } => {
+                        assert_eq!(block_store_root, PathBuf::from("destination-blocks"));
+                    }
+                    _ => panic!("expected local-redb destination environment"),
+                }
+            }
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
     fn copy_command_rejects_production_profile_without_overlay_args() {
         let error = Cli::try_parse_from([
             "lexonarchivebuilder-indexer",
@@ -1182,6 +1302,7 @@ mod tests {
                         assert_eq!(block_store.memory_cache_max_resident_blocks, None);
                     }
                     EnvironmentConfig::Local { .. }
+                    | EnvironmentConfig::LocalRedb { .. }
                     | EnvironmentConfig::LocalOverlay { .. }
                     | EnvironmentConfig::Production { .. } => {
                         panic!("expected production-v2 environment")

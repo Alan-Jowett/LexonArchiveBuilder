@@ -20,3 +20,4 @@ tokio.workspace = true
 
 [dev-dependencies]
 lexongraph-block-store-fs.workspace = true
+lexongraph-block-store-redb.workspace = true

@@ -130,6 +130,10 @@ pub enum EnvironmentConfig {
         block_store_root: PathBuf,
         embedding: LocalEmbeddingConfig,
     },
+    LocalRedb {
+        block_store_root: PathBuf,
+        embedding: LocalEmbeddingConfig,
+    },
     LocalOverlay {
         block_store: ProductionBlockStoreConfig,
         embedding: LocalEmbeddingConfig,
@@ -323,7 +327,7 @@ impl EnvironmentConfig {
 
     pub fn validate_for_stage(&self, stage: ExecutionStage) -> Result<(), ConfigError> {
         match self {
-            Self::Local { .. } => {
+            Self::Local { .. } | Self::LocalRedb { .. } => {
                 if stage.includes_ingestion() {
                     self.local_embedding()?;
                 }
@@ -355,6 +359,9 @@ impl EnvironmentConfig {
             .expect("ref_name must be validated before resolving mutable ref storage");
         match self {
             Self::Local {
+                block_store_root, ..
+            }
+            | Self::LocalRedb {
                 block_store_root, ..
             } => {
                 let block_store_root = resolve_path(request_dir, block_store_root);
@@ -388,7 +395,9 @@ impl EnvironmentConfig {
 
     pub fn local_embedding(&self) -> Result<Option<LocalEmbeddingConfig>, ConfigError> {
         match self {
-            Self::Local { embedding, .. } | Self::LocalOverlay { embedding, .. } => {
+            Self::Local { embedding, .. }
+            | Self::LocalRedb { embedding, .. }
+            | Self::LocalOverlay { embedding, .. } => {
                 if embedding.base_url.trim().is_empty() {
                     Err(ConfigError::MissingLocalEmbeddingBaseUrl)
                 } else {
@@ -1186,6 +1195,7 @@ mod tests {
                 assert_eq!(block_store.memory_cache_max_resident_blocks, Some(64));
             }
             EnvironmentConfig::Local { .. }
+            | EnvironmentConfig::LocalRedb { .. }
             | EnvironmentConfig::LocalOverlay { .. }
             | EnvironmentConfig::ProductionV2 { .. } => {
                 panic!("expected production environment")
@@ -1230,6 +1240,7 @@ mod tests {
                 assert_eq!(block_store.memory_cache_max_resident_blocks, None);
             }
             EnvironmentConfig::Local { .. }
+            | EnvironmentConfig::LocalRedb { .. }
             | EnvironmentConfig::LocalOverlay { .. }
             | EnvironmentConfig::Production { .. } => {
                 panic!("expected production-v2 environment")
@@ -1318,6 +1329,7 @@ mod tests {
                 assert_eq!(embedding.base_url, "http://localhost:8080");
             }
             EnvironmentConfig::Local { .. }
+            | EnvironmentConfig::LocalRedb { .. }
             | EnvironmentConfig::Production { .. }
             | EnvironmentConfig::ProductionV2 { .. } => {
                 panic!("expected local-overlay environment")
@@ -1354,6 +1366,73 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "overlay block_store.filesystem_cache_root is required for the overlay-backed block store"
+        );
+    }
+
+    #[test]
+    fn local_redb_request_accepts_local_embedding_and_store_root() {
+        let request: BatchRequest = serde_json::from_value(json!({
+            "environment": {
+                "kind": "local-redb",
+                "block_store_root": "blocks",
+                "embedding": {
+                    "base_url": "http://localhost:8080"
+                }
+            },
+            "embedding_spec": {
+                "dims": 384,
+                "encoding": "f32le"
+            },
+            "stage": "ingestion-and-embedding",
+            "ref_name": "test-branch",
+            "items": [{
+                "kind": "document",
+                "path": "docs/sample.txt"
+            }]
+        }))
+        .unwrap();
+
+        assert!(request.validate().is_ok());
+        match request.environment {
+            EnvironmentConfig::LocalRedb {
+                block_store_root,
+                embedding,
+            } => {
+                assert_eq!(block_store_root, PathBuf::from("blocks"));
+                assert_eq!(embedding.base_url, "http://localhost:8080");
+            }
+            EnvironmentConfig::Local { .. }
+            | EnvironmentConfig::LocalOverlay { .. }
+            | EnvironmentConfig::Production { .. }
+            | EnvironmentConfig::ProductionV2 { .. } => {
+                panic!("expected local-redb environment")
+            }
+        }
+    }
+
+    #[test]
+    fn local_redb_resolve_mutable_ref_store_uses_sibling_filesystem_ref() {
+        let environment = EnvironmentConfig::LocalRedb {
+            block_store_root: PathBuf::from("cache").join("blocks"),
+            embedding: LocalEmbeddingConfig {
+                base_url: "http://localhost:8080".into(),
+                model: "all-MiniLM-L6-v2".into(),
+                api_key_env: None,
+                request_timeout_secs: 30,
+                max_retries: 5,
+                retry_delay_ms: 1_000,
+            },
+        };
+
+        assert_eq!(
+            environment.resolve_mutable_ref_store(Path::new("request-root"), "feature/test"),
+            Some(MutableRefStoreLocation::LocalFile {
+                path: Path::new("request-root")
+                    .join("cache")
+                    .join(MUTABLE_REF_ROOT_DIR)
+                    .join("feature")
+                    .join("test"),
+            })
         );
     }
 

@@ -4,7 +4,6 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use anyhow::anyhow;
 use clap::{Parser, Subcommand};
 use lexonarchivebuilder_block_gateway::{GatewayConfig, GatewayStorageProfile, serve};
 use tracing_subscriber::EnvFilter;
@@ -23,6 +22,8 @@ enum Command {
         listen_addr: SocketAddr,
         #[arg(long, value_enum)]
         storage_profile: GatewayStorageProfile,
+        #[arg(long, required_if_eq("storage_profile", "local-redb"))]
+        block_store_root: Option<PathBuf>,
         #[arg(
             long,
             env = "LEXONARCHIVEBUILDER_BLOCK_GATEWAY_SAS_URL",
@@ -70,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Serve {
             listen_addr,
             storage_profile,
+            block_store_root,
             block_store_container_sas_url,
             block_store_filesystem_cache_root,
             block_store_memory_cache_max_resident_blocks,
@@ -80,12 +82,8 @@ async fn main() -> anyhow::Result<()> {
             serve(GatewayConfig {
                 listen_addr,
                 storage_profile,
-                block_store_container_sas_url: block_store_container_sas_url.ok_or_else(|| {
-                    anyhow!(
-                        "block_store_container_sas_url is required for gateway storage profile {}",
-                        storage_profile
-                    )
-                })?,
+                block_store_root,
+                block_store_container_sas_url: block_store_container_sas_url.unwrap_or_default(),
                 block_store_filesystem_cache_root,
                 block_store_memory_cache_max_resident_blocks,
                 block_store_prefix,
@@ -181,5 +179,30 @@ mod tests {
             storage_profile, ..
         } = cli.command;
         assert_eq!(storage_profile, GatewayStorageProfile::ProductionV2);
+    }
+
+    #[test]
+    fn serve_command_accepts_local_redb_profile_with_block_store_root() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-block-gateway",
+            "serve",
+            "--storage-profile",
+            "local-redb",
+            "--block-store-root",
+            "blocks",
+            "--certificate",
+            "cert.pem",
+            "--private-key",
+            "key.pem",
+        ])
+        .expect("local-redb profile arguments should parse");
+
+        let Command::Serve {
+            storage_profile,
+            block_store_root,
+            ..
+        } = cli.command;
+        assert_eq!(storage_profile, GatewayStorageProfile::LocalRedb);
+        assert_eq!(block_store_root, Some(PathBuf::from("blocks")));
     }
 }

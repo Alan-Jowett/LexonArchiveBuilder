@@ -88,7 +88,7 @@ impl ServerHandler for LexonArchiveBuilderMcpServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::from_build_env())
             .with_instructions(
-                "LexonArchiveBuilder MCP server for chunk search over a filesystem-backed block store using the local embedding profile.",
+                "LexonArchiveBuilder MCP server for chunk search over the configured block store using the local embedding profile.",
             )
     }
 }

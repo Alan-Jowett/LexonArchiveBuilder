@@ -73,6 +73,7 @@ impl ConfiguredEmbeddingProvider {
     ) -> Result<Self, ConfiguredEmbeddingProviderError> {
         match environment {
             EnvironmentConfig::Local { embedding, .. }
+            | EnvironmentConfig::LocalRedb { embedding, .. }
             | EnvironmentConfig::LocalOverlay { embedding, .. } => Ok(Self::Local(
                 LocalOpenAiEmbeddingProvider::from_config(embedding)?,
             )),

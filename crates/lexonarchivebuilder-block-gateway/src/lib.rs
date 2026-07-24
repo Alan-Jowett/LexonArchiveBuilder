@@ -26,6 +26,7 @@ use lexongraph_block_store_azure_table_v2::AzureTableBlockStoreV2;
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_block_store_memory::MemoryBlockStore;
 use lexongraph_block_store_overlay::{OverlayBlockStore, OverlayStoreLayer, PassiveLayer};
+use lexongraph_block_store_redb::RedbBlockStore;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::sync::Semaphore;
 use tracing::{debug, error, info, warn};
@@ -42,6 +43,7 @@ static RUSTLS_PROVIDER: OnceLock<()> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
 pub enum GatewayStorageProfile {
+    LocalRedb,
     Production,
     ProductionV2,
 }
@@ -49,6 +51,7 @@ pub enum GatewayStorageProfile {
 impl fmt::Display for GatewayStorageProfile {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Self::LocalRedb => f.write_str("local-redb"),
             Self::Production => f.write_str("production"),
             Self::ProductionV2 => f.write_str("production-v2"),
         }
@@ -59,6 +62,7 @@ impl fmt::Display for GatewayStorageProfile {
 pub struct GatewayConfig {
     pub listen_addr: SocketAddr,
     pub storage_profile: GatewayStorageProfile,
+    pub block_store_root: Option<PathBuf>,
     pub block_store_container_sas_url: String,
     pub block_store_filesystem_cache_root: Option<PathBuf>,
     pub block_store_memory_cache_max_resident_blocks: Option<usize>,
@@ -121,6 +125,7 @@ fn build_store(config: &GatewayConfig) -> anyhow::Result<Arc<dyn BlockStore + Se
     validate_storage_profile_config(config)?;
 
     let store: Arc<dyn BlockStore + Send + Sync> = match config.storage_profile {
+        GatewayStorageProfile::LocalRedb => Arc::new(build_local_redb_store(config)?),
         GatewayStorageProfile::Production => Arc::new(build_overlay_store(config)?),
         GatewayStorageProfile::ProductionV2 => {
             Arc::new(build_direct_azure_table_store(config).with_context(|| {
@@ -132,6 +137,14 @@ fn build_store(config: &GatewayConfig) -> anyhow::Result<Arc<dyn BlockStore + Se
         }
     };
     Ok(store)
+}
+
+fn build_local_redb_store(config: &GatewayConfig) -> anyhow::Result<RedbBlockStore> {
+    let store_root = config
+        .block_store_root
+        .as_ref()
+        .expect("local-redb validation should require a block store root");
+    RedbBlockStore::new(store_root).map_err(|error| anyhow!(error.to_string()))
 }
 
 fn build_overlay_store(config: &GatewayConfig) -> anyhow::Result<OverlayBlockStore> {
@@ -169,7 +182,11 @@ fn build_direct_azure_table_store(
 }
 
 fn validate_storage_profile_config(config: &GatewayConfig) -> anyhow::Result<()> {
-    if config.block_store_container_sas_url.trim().is_empty() {
+    if matches!(
+        config.storage_profile,
+        GatewayStorageProfile::Production | GatewayStorageProfile::ProductionV2
+    ) && config.block_store_container_sas_url.trim().is_empty()
+    {
         bail!("block_store_container_sas_url must not be empty");
     }
     if config
@@ -183,6 +200,35 @@ fn validate_storage_profile_config(config: &GatewayConfig) -> anyhow::Result<()>
     }
 
     match config.storage_profile {
+        GatewayStorageProfile::LocalRedb => {
+            if config
+                .block_store_root
+                .as_ref()
+                .is_none_or(|path| path.as_os_str().is_empty())
+            {
+                bail!(
+                    "local-redb block_store_root is required for the redb-backed gateway profile"
+                );
+            }
+            if config.block_store_filesystem_cache_root.is_some() {
+                bail!(
+                    "local-redb block_store_filesystem_cache_root is not supported for the redb-backed gateway profile"
+                );
+            }
+            if config
+                .block_store_memory_cache_max_resident_blocks
+                .is_some()
+            {
+                bail!(
+                    "local-redb block_store_memory_cache_max_resident_blocks is not supported for the redb-backed gateway profile"
+                );
+            }
+            if !config.block_store_container_sas_url.trim().is_empty() {
+                bail!(
+                    "local-redb block_store_container_sas_url is not supported for the redb-backed gateway profile"
+                );
+            }
+        }
         GatewayStorageProfile::Production => {
             if config
                 .block_store_filesystem_cache_root
@@ -208,6 +254,11 @@ fn validate_storage_profile_config(config: &GatewayConfig) -> anyhow::Result<()>
             }
         }
         GatewayStorageProfile::ProductionV2 => {
+            if config.block_store_root.is_some() {
+                bail!(
+                    "production-v2 block_store_root is not supported for the direct Azure Table gateway profile"
+                );
+            }
             if config.block_store_filesystem_cache_root.is_some() {
                 bail!(
                     "production-v2 block_store_filesystem_cache_root is not supported for the direct Azure Table gateway profile"
@@ -553,6 +604,7 @@ mod tests {
                 .parse()
                 .expect("socket address should parse"),
             storage_profile,
+            block_store_root: None,
             block_store_container_sas_url: "https://example.table.core.windows.net/table?sig=test"
                 .into(),
             block_store_filesystem_cache_root: None,
@@ -640,5 +692,26 @@ mod tests {
 
         validate_storage_profile_config(&config)
             .expect("direct profile should accept container_sas_url without cache arguments");
+    }
+
+    #[test]
+    fn local_redb_profile_requires_block_store_root() {
+        let mut config = test_gateway_config(GatewayStorageProfile::LocalRedb);
+        config.block_store_container_sas_url.clear();
+
+        let error = validate_storage_profile_config(&config)
+            .expect_err("local-redb profile should require a block store root");
+
+        assert!(error.to_string().contains("block_store_root is required"));
+    }
+
+    #[test]
+    fn local_redb_profile_accepts_block_store_root_without_azure_args() {
+        let mut config = test_gateway_config(GatewayStorageProfile::LocalRedb);
+        config.block_store_root = Some(PathBuf::from("blocks"));
+        config.block_store_container_sas_url.clear();
+
+        validate_storage_profile_config(&config)
+            .expect("local-redb profile should accept block_store_root without Azure arguments");
     }
 }

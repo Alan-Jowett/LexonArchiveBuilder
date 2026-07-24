@@ -27,8 +27,9 @@ deterministic replay ordering, efficient replay-order preparation, bounded repla
 layer-parallel block-construction evolution, v2 custom-block adoption for
 repository-owned non-search artifacts, and conditional streaming-indexer v3
 adoption with repository-default published profile `0.7.0`, plus derived
-delegated v3 working-root support and renewed compatibility with later
-upstream-`main` constrained-v3 breaking changes, in
+delegated v3 working-root support, renewed compatibility with later
+upstream-`main` constrained-v3 breaking changes, and repo-wide redb
+block-store targeting support, in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md`,
 `docs/specs/lexonarchivebuilder-indexer/design.md`, and
 `docs/specs/lexonarchivebuilder-indexer/validation.md`.
@@ -37,7 +38,7 @@ upstream-`main` constrained-v3 breaking changes, in
 
 These validation entries define the expected conformance surface for the
 LexonArchiveBuilder-owned indexer boundary, including local filesystem
-block-store interoperability, replay-based streaming delegated indexing,
+and local redb block-store interoperability, replay-based streaming delegated indexing,
 stage-selectable execution, standalone clustering input discovery,
 published-profile API adoption, caller-selectable published-profile
 configuration with default `0.7.0`, latest published-profile and telemetry
@@ -58,9 +59,9 @@ split-stage recovery, bounded-residency deterministic replay ordering for
 clustering replay, independent replay batch-size versus replay-materialization
 concurrency control for clustering replay, bounded multi-batch replay-prefetch
 buffering for clustering replay, derived delegated v3 working-root support,
-repeatable adaptation to later upstream-`main` constrained-v3 API breakage, and leaf-layer parallel block
-scheduling
-in the local/testing profile.
+repeatable adaptation to later upstream-`main` constrained-v3 API breakage,
+repo-wide redb block-store targeting support, and leaf-layer parallel block
+scheduling in the local/testing profile.
 
 This package validates LexonArchiveBuilder's batch contract, adapter selection, and
 delegated use of LexonGraph interfaces. It does not redefine validation already
@@ -616,6 +617,24 @@ diagnosis behavior.
 
 **Traces to:** RQ-INDEXER-003G, RQ-INDEXER-003I, DSG-LFI-001I1, DSG-LFI-001I2
 
+### VAL-LFI-002N8
+
+Inspect one refresh from LexonGraph `main` commit
+`031b1a1061bebfcccdac91169335b92693039e8f` to commit
+`9f845b5f1ff6e13cb7e51d5ca23bde11b8ff8f31` that introduces or enables a redb
+block-store implementation.
+
+**Pass condition:** LexonArchiveBuilder updates its adapter/configuration
+boundary so the refreshed upstream block-store surface can be targeted across
+archive-sync, block-gateway, indexer, MCP, and repo-owned copy workflows
+without weakening the caller-visible stage contract, search semantics, or the
+meaning of already-approved Azure-backed profiles. If the refreshed upstream
+surface lacks a repository-required seam for one of those components, the gap is
+surfaced explicitly rather than masked by silently narrowing the repo-wide redb
+targeting scope.
+
+**Traces to:** RQ-INDEXER-003G, RQ-INDEXER-005, RQ-INDEXER-007, RQ-INDEXER-009, DSG-LFI-001I3, DSG-LFI-007H
+
 ### VAL-LFI-002N1
 
 Run the repository-local published-profile sweep automation against a
@@ -797,10 +816,12 @@ DSG-LFI-008
 Run the local/testing environment profile.
 
 **Pass condition:** as a manual/operator end-to-end validation procedure,
-LexonArchiveBuilder selects a filesystem-backed `BlockStore` for delegated
-index blocks, normalized email artifacts, and mailbox provenance artifacts
-plus a local STAPI-compatible embedding provider without changing the
-collection input contract or the delegated indexer contract.
+LexonArchiveBuilder selects one approved direct-local `BlockStore`
+realization for delegated index blocks, normalized email artifacts, and
+mailbox provenance artifacts plus a local STAPI-compatible embedding provider
+without changing the collection input contract or the delegated indexer
+contract. The exercised local realization may be either the filesystem-backed
+or redb-backed local target.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-007, DSG-LFI-005,
 DSG-LFI-006, DSG-LFI-007
@@ -820,23 +841,53 @@ requiring reads from the superseded custom filesystem layout.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-010B, DSG-LFI-005, DSG-LFI-005A
 
+### VAL-LFI-005A3
+
+Inspect the additive local redb block-store target and its mutable-ref
+relationship.
+
+**Pass condition:** the redb target is exposed as an explicit additive choice
+alongside the existing local filesystem-backed profile rather than redefining
+that filesystem option in place; immutable blocks are stored through the
+upstream redb `BlockStore` realization; and repository-owned mutable refs remain
+outside redb on the filesystem in the same human-readable contract family used
+for local refs today.
+
+**Traces to:** RQ-INDEXER-005, RQ-INDEXER-007, RQ-INDEXER-010A, DSG-LFI-005F, DSG-LFI-007
+
 ### VAL-LFI-005A1
 
 Inspect the non-local tool-targeting profiles for representative indexer-owned
 tool surfaces that traverse the shared `BlockStore` boundary.
 
-**Pass condition:** the approved non-local profile set is specified as the
-existing `production` overlay profile, the additive `production-v2` direct
-Azure-backed profile, and for read-only tool surfaces only the additive
-`gateway-http3` profile; batch indexing, standalone clustering, rooted quality
-assessment, rooted CLI search, and rooted block copy all reuse that same
-targeting contract with the documented read-only restriction for
-`gateway-http3`; and no operator-facing tool introduces a plain Azure-only
-block-store mode outside the approved repository-defined profile set.
+**Pass condition:** the approved shared profile set is specified as direct local
+filesystem, direct local redb, the existing `production` overlay profile, the
+additive `production-v2` direct Azure-backed profile, and for read-only tool
+surfaces only the additive `gateway-http3` profile; batch indexing, standalone
+clustering, rooted quality assessment, rooted CLI search, and rooted block copy
+all reuse that same targeting contract with the documented read-only
+restriction for `gateway-http3`; and no operator-facing tool introduces a
+plain Azure-only block-store mode outside the approved repository-defined
+profile set.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-005B, RQ-INDEXER-007, DSG-LFI-005,
 DSG-LFI-005B, DSG-LFI-005C, DSG-LFI-005D, DSG-LFI-005E, DSG-LFI-007,
 DSG-LFI-007G, DSG-LFI-008
+
+### VAL-LFI-005A4
+
+Inspect repo-wide redb targeting parity across archive-sync, block-gateway,
+indexer, and MCP.
+
+**Pass condition:** each of those components can target or serve immutable
+blocks through a redb-backed path without redefining existing Azure-backed
+profiles or query/indexing semantics; indexer and MCP keep the same
+configuration family for local fs versus local redb selection; block-gateway
+adds redb as an additive immutable-block serving target rather than a new Azure
+profile meaning; and archive-sync plus repo-owned copy workflows can
+instantiate redb when storing or migrating immutable blocks.
+
+**Traces to:** RQ-INDEXER-005, RQ-INDEXER-005B, RQ-INDEXER-007, RQ-INDEXER-009, DSG-LFI-001I3, DSG-LFI-007H
 
 ### VAL-LFI-005A2
 
@@ -1002,7 +1053,9 @@ identifier family must describe exactly the approved production profile set:
 the existing overlay-backed `production` target, the additive direct
 Azure-backed `production-v2` target, and for read-only surfaces the additive
 `gateway-http3` target, rather than one-off plain Azure-only tool modes or a
-write-bearing reinterpretation of the gateway-backed profile.
+write-bearing reinterpretation of the gateway-backed profile. Any additive redb
+targeting introduced in this increment must leave those non-local profile
+meanings unchanged.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-006, RQ-INDEXER-007, DSG-LFI-005,
 DSG-LFI-006, DSG-LFI-007
