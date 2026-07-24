@@ -27,6 +27,7 @@ use crate::tree_tools::parse_block_hash;
 pub const DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES: usize = 64;
 pub const BLIND_WRITE_REDB_COMPACTION_INTERVAL_BLOCKS: usize = 500_000;
 const DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITE_BYTES: usize = 64 * 1024 * 1024;
+const DESTINATION_STORE_FAILURE_ID: &str = "destination-store";
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -505,8 +506,8 @@ where
                     if let Some(checkpoint) = blind_write_checkpoint.as_mut()
                         && let Err(error) = (checkpoint.action)(destination)
                     {
-                        failures.record(
-                            block_id,
+                        failures.record_store_failure(
+                            root_ids,
                             CopyFailureOperation::CompactDestinationStore,
                             error.to_string(),
                         );
@@ -556,7 +557,7 @@ struct CopyFailureTracker {
     block_roots: HashMap<BlockHash, HashSet<BlockHash>>,
     discovered_children: HashMap<BlockHash, Vec<BlockHash>>,
     failure_templates: HashMap<BlockHash, Vec<FailureTemplate>>,
-    failed_block_ids: HashSet<BlockHash>,
+    failed_failure_ids: HashSet<String>,
     failures: Vec<CopyFailure>,
     progress: Option<RootedBlockCopyProgress>,
 }
@@ -567,7 +568,7 @@ impl CopyFailureTracker {
             block_roots: HashMap::new(),
             discovered_children: HashMap::new(),
             failure_templates: HashMap::new(),
-            failed_block_ids: HashSet::new(),
+            failed_failure_ids: HashSet::new(),
             failures: Vec::new(),
             progress,
         }
@@ -597,11 +598,7 @@ impl CopyFailureTracker {
         message: impl Into<String>,
     ) {
         let message = message.into();
-        if self.failed_block_ids.insert(block_id)
-            && let Some(progress) = self.progress.as_ref()
-        {
-            progress.note_failed_block();
-        }
+        self.note_failed_id(&block_id.to_string());
         self.failure_templates
             .entry(block_id)
             .or_default()
@@ -621,12 +618,38 @@ impl CopyFailureTracker {
         }
     }
 
+    fn record_store_failure(
+        &mut self,
+        requested_root_ids: &[BlockHash],
+        operation: CopyFailureOperation,
+        message: impl Into<String>,
+    ) {
+        let message = message.into();
+        self.note_failed_id(DESTINATION_STORE_FAILURE_ID);
+        for root_id in requested_root_ids {
+            self.failures.push(CopyFailure {
+                root_id: root_id.to_string(),
+                block_id: DESTINATION_STORE_FAILURE_ID.to_string(),
+                operation,
+                message: message.clone(),
+            });
+        }
+    }
+
     fn failures(&self) -> &[CopyFailure] {
         &self.failures
     }
 
     fn into_failures(self) -> Vec<CopyFailure> {
         self.failures
+    }
+
+    fn note_failed_id(&mut self, failed_id: &str) {
+        if self.failed_failure_ids.insert(failed_id.to_string())
+            && let Some(progress) = self.progress.as_ref()
+        {
+            progress.note_failed_block();
+        }
     }
 
     fn associate_root_with_known_subgraph(
@@ -1728,10 +1751,63 @@ mod tests {
             report.failures[0].operation,
             CopyFailureOperation::CompactDestinationStore
         );
+        assert_eq!(report.failures[0].block_id, DESTINATION_STORE_FAILURE_ID);
         assert!(destination.get_block_bytes(&root).await.unwrap().is_some());
         let alpha_present = destination.get_block_bytes(&alpha).await.unwrap().is_some();
         let beta_present = destination.get_block_bytes(&beta).await.unwrap().is_some();
         assert_ne!(alpha_present, beta_present);
+    }
+
+    #[tokio::test]
+    async fn rooted_block_copy_reports_checkpoint_failures_for_all_requested_roots() {
+        let source = MemoryBlockStore::new(16).unwrap();
+        let mut destination = MemoryBlockStore::new(16).unwrap();
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let root_a = source.put(&branch_block(&[alpha])).await.unwrap();
+        let root_b = source.put(&branch_block(&[beta])).await.unwrap();
+
+        let report = copy_rooted_blocks_with_mode_and_limit_and_checkpoint(
+            &source,
+            &mut destination,
+            &[root_a, root_b],
+            CopyDestinationMode::BlindWrite,
+            DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            None,
+            BlindWriteCheckpoint {
+                interval: 1,
+                action: |_destination: &mut MemoryBlockStore| {
+                    Err(BlockStoreError::BackendFailure(
+                        TestStoreError("simulated checkpoint compaction failure").to_string(),
+                    ))
+                },
+            },
+        )
+        .await;
+
+        assert_eq!(report.attempted_write_block_count, Some(1));
+        assert_eq!(report.failed_block_count, 1);
+        assert_eq!(report.failures.len(), 2);
+        assert!(
+            report
+                .failures
+                .iter()
+                .all(|failure| failure.operation == CopyFailureOperation::CompactDestinationStore)
+        );
+        assert!(
+            report
+                .failures
+                .iter()
+                .all(|failure| failure.block_id == DESTINATION_STORE_FAILURE_ID)
+        );
+        assert_eq!(
+            report
+                .failures
+                .iter()
+                .map(|failure| failure.root_id.clone())
+                .collect::<HashSet<_>>(),
+            HashSet::from([root_a.to_string(), root_b.to_string()])
+        );
     }
 
     #[tokio::test]
