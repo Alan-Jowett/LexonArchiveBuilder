@@ -27,7 +27,8 @@ deterministic replay ordering, efficient replay-order preparation, bounded repla
 layer-parallel block-construction evolution, v2 custom-block adoption for
 repository-owned non-search artifacts, and conditional streaming-indexer v3
 adoption with repository-default published profile `0.7.0`, plus derived
-delegated v3 working-root support, in
+delegated v3 working-root support and renewed compatibility with later
+upstream-`main` constrained-v3 breaking changes, in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md`,
 `docs/specs/lexonarchivebuilder-indexer/design.md`, and
 `docs/specs/lexonarchivebuilder-indexer/validation.md`.
@@ -57,7 +58,7 @@ split-stage recovery, bounded-residency deterministic replay ordering for
 clustering replay, independent replay batch-size versus replay-materialization
 concurrency control for clustering replay, bounded multi-batch replay-prefetch
 buffering for clustering replay, derived delegated v3 working-root support,
-and leaf-layer parallel block
+repeatable adaptation to later upstream-`main` constrained-v3 API breakage, and leaf-layer parallel block
 scheduling
 in the local/testing profile.
 
@@ -597,6 +598,23 @@ delegated contract family or a new ad hoc scratch location outside the
 approved request-adjacent artifact policy.
 
 **Traces to:** RQ-INDEXER-003A3, DSG-LFI-001A3, DSG-LFI-001I
+
+### VAL-LFI-002N7
+
+Inspect one refresh from commit `7c8f375137375709bb608ee2609b38cb80e5422c`
+to LexonGraph `main` commit `031b1a1061bebfcccdac91169335b92693039e8f`
+that changes the constrained-v3 delegated API shape.
+
+**Pass condition:** LexonArchiveBuilder updates its adapter boundary so the
+latest upstream constrained-v3 construction, lifecycle, or observer surfaces
+remain compatible without changing the caller-visible stage contract or
+already-indexed MCP search/retrieval behavior. If the refreshed upstream
+surface no longer exposes a repository-required capability, the resulting gap
+is surfaced explicitly as a compatibility finding or upstream regression rather
+than being masked by silently dropping existing progress, telemetry, or
+diagnosis behavior.
+
+**Traces to:** RQ-INDEXER-003G, RQ-INDEXER-003I, DSG-LFI-001I1, DSG-LFI-001I2
 
 ### VAL-LFI-002N1
 
