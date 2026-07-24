@@ -2169,6 +2169,20 @@ completions may arrive out of traversal order, the design constrains reporting
 to remain mode-truthful and rooted-reachability-preserving rather than tying
 summary semantics to serialized write completion order.
 
+When that opt-in blind-write path targets a direct `local-redb` destination,
+the same rooted-copy invocation also performs periodic space-recovery
+checkpoints. After every `500,000` attempted destination writes, the copy loop
+stops issuing additional blind-write publications, requests immediate
+compaction of the already-targeted redb store, and then resumes the same
+logical rooted-copy run. This reuses the subordinate redb compaction capability
+as an internal copy-time safeguard against unbounded file growth rather than as
+a separate operator-selected maintenance workflow.
+
+That checkpoint compaction rule is intentionally narrow. It does not change the
+default read-before-write mode, does not broaden compaction to non-redb
+destination profiles, and does not alter source-side traversal semantics,
+machine-readable transfer reporting, or the mutable-ref exclusion boundary.
+
 Because rooted block copy can spend a long time traversing reachable block
 graphs or waiting on destination persistence without any intermediate final
 artifact to inspect, the same CLI surface also emits basic in-flight liveness on
@@ -2378,8 +2392,10 @@ LexonArchiveBuilder-owned verification artifacts validate:
   read-before-write classification path, the opt-in blind-write path with
   reduced copied-versus-skipped accounting, bounded asynchronous destination-
   write concurrency with one operator-selectable limit defaulting to `64`,
-  failure reporting, default in-flight liveness on the normal CLI surface, and
-  preservation of mutable-reference exclusion
+  blind-write checkpoint compaction every `500,000` attempted writes when the
+  destination is direct local redb, failure reporting, default in-flight
+  liveness on the normal CLI surface, and preservation of mutable-reference
+  exclusion
 - correct application and defaulting of the administrator-defined concurrency
   budget
 - preservation of stable batch contracts across environments

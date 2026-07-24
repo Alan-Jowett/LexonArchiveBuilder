@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, replay-order preparation efficiency, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v3 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v3-compatible clustering observability projection, user-usable convergence-diagnosis surfacing, latest-LexonGraph constrained v3 working-root adoption at commit `7c8f375137375709bb608ee2609b38cb80e5422c`, issue-83 replay-order memory decoupling from corpus size, bounded replay-batch preparation overlap exploration for issue #88, issue #93 replay batch-size decoupling from CPU concurrency, issue #95 bounded multi-batch replay-prefetch buffering, renewed latest-upstream-main compatibility after post-`7c8f375137375709bb608ee2609b38cb80e5422c` breaking LexonGraph changes, repo-wide redb block-store targeting support after refreshing to a newer LexonGraph `main` revision, rooted block-copy live progress counters on the default heartbeat surface, and CLI-only block-store maintenance with local-redb compaction
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, v3-compatible clustering telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, live rooted-copy progress reporting, CLI-only one-store block-store maintenance with initial local-redb compaction, bounded-residency deterministic replay ordering for deterministic replay submission, efficient replay-order preparation behind the existing replay contract, bounded replay-batch preparation overlap behind the existing replay contract, independent replay batch-sizing versus replay-materialization concurrency control for clustering replay, bounded multi-batch replay-prefetch buffering for clustering replay, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v3 API when the selected published profile is `0.7.0`, upstream-managed request-adjacent v3 working-root derivation for clustering-enabled v3 execution, repeatable adaptation to later upstream-main breaking changes without weakening the current external stage or observability contracts, and first-class redb block-store targeting across archive-sync, block-gateway, indexer, MCP, and repo-owned copy/sync surfaces
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, replay-order preparation efficiency, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v3 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v3-compatible clustering observability projection, user-usable convergence-diagnosis surfacing, latest-LexonGraph constrained v3 working-root adoption at commit `7c8f375137375709bb608ee2609b38cb80e5422c`, issue-83 replay-order memory decoupling from corpus size, bounded replay-batch preparation overlap exploration for issue #88, issue #93 replay batch-size decoupling from CPU concurrency, issue #95 bounded multi-batch replay-prefetch buffering, renewed latest-upstream-main compatibility after post-`7c8f375137375709bb608ee2609b38cb80e5422c` breaking LexonGraph changes, repo-wide redb block-store targeting support after refreshing to a newer LexonGraph `main` revision, rooted block-copy live progress counters on the default heartbeat surface, CLI-only block-store maintenance with local-redb compaction, and blind-write rooted-copy checkpoint compaction for direct local-redb destinations
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, v3-compatible clustering telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, live rooted-copy progress reporting, CLI-only one-store block-store maintenance with initial local-redb compaction, blind-write copy-time checkpoint compaction for direct local-redb destinations, bounded-residency deterministic replay ordering for deterministic replay submission, efficient replay-order preparation behind the existing replay contract, bounded replay-batch preparation overlap behind the existing replay contract, independent replay batch-sizing versus replay-materialization concurrency control for clustering replay, bounded multi-batch replay-prefetch buffering for clustering replay, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v3 API when the selected published profile is `0.7.0`, upstream-managed request-adjacent v3 working-root derivation for clustering-enabled v3 execution, repeatable adaptation to later upstream-main breaking changes without weakening the current external stage or observability contracts, and first-class redb block-store targeting across archive-sync, block-gateway, indexer, MCP, and repo-owned copy/sync surfaces
 
 ## USER-REQUEST
 
@@ -629,6 +629,20 @@
   to merged LexonGraph `main` commit
   `385c07fff4adbe5574b9ae605eaae0679647b9dd`, which carries the new redb
   `compact_now` API required by the maintenance surface.
+- **UR-314 [KNOWN]:** When rooted block copy runs in the explicit blind-write
+  mode and the destination profile is direct `local-redb`, the invocation
+  should pause after every `500,000` attempted destination writes and request
+  immediate redb compaction before resuming additional blind-write
+  publication, so transient destination growth stays bounded during large copy
+  runs.
+- **UR-315 [KNOWN]:** This copy-time checkpoint compaction should apply only to
+  direct `local-redb` destinations in blind-write mode; it must not widen to
+  read-before-write copy mode, non-redb destination profiles, source-side
+  stores, or MCP-visible search behavior.
+- **UR-316 [INFERRED]:** Periodic blind-write checkpoint compaction should
+  remain internal to one logical rooted-copy invocation, preserving rooted
+  reachability, immutable block identity, readable destination state, and safe
+  operator re-run behavior across checkpoint boundaries.
 
 ## Change Manifest
 
@@ -770,6 +784,7 @@
 | CM-INDEXER-134 | Revise | Strengthen rooted block-copy observability from elapsed-time-only liveness to mode-truthful live progress counters on the default heartbeat surface without changing rooted reachability, write concurrency, or copy-mode semantics | UR-192, UR-193, UR-198, UR-303, UR-304 |
 | CM-INDEXER-135 | Add | Add a CLI-only one-store `maintenance` namespace with an initial `compact` action that targets local redb immutable block stores through the upstream Redb compaction capability while preserving mutable-ref boundaries and explicit unsupported-profile failures | UR-305, UR-306, UR-307, UR-308, UR-309, UR-310, UR-311, UR-312 |
 | CM-INDEXER-136 | Revise | Refresh the approved LexonGraph integration target from the repository's current dependency pin `01c9908256278d7d075e0abc856ef7bd3679fe6c` to merged `main` commit `385c07fff4adbe5574b9ae605eaae0679647b9dd` so the indexer can consume the upstream redb `compact_now` API required by the new maintenance surface | UR-313 |
+| CM-INDEXER-137 | Revise | Add automatic checkpoint compaction every `500,000` attempted writes for rooted-copy blind-write runs that target direct local redb destinations, so large transfers do not grow the redb file without bound while preserving existing behavior for other copy modes and profiles | UR-197, UR-200, UR-310, UR-314, UR-315, UR-316 |
 
 ## Before / After
 
@@ -2558,6 +2573,20 @@ to another configured block store.
   limit applies to the opt-in blind-write path and also to the default
   read-before-write path for blocks that have already been classified as absent
   and therefore require publication.
+- **Blind-write redb checkpoint rule [KNOWN]:** When the rooted-copy tool runs
+  in opt-in blind-write mode and the destination profile is direct
+  `local-redb`, it SHALL pause after every `500,000` attempted destination
+  writes and request immediate compaction of that destination store before
+  resuming additional blind-write publication.
+- **Checkpoint scope rule [KNOWN]:** This automatic checkpoint compaction
+  applies only to direct `local-redb` destinations in blind-write mode; it
+  SHALL NOT change read-before-write copy behavior, non-redb destination
+  behavior, or source-side store semantics.
+- **Checkpoint continuity rule [INFERRED]:** These periodic checkpoint
+  compactions SHALL remain internal to one logical rooted-copy invocation and
+  SHALL preserve rooted reachability, immutable block identity, readable
+  destination state, and safe operator re-run behavior across checkpoint
+  boundaries.
 - **Boundary [INFERRED]:** The tool SHALL traverse and persist blocks through
   the shared `BlockStore` abstraction boundary rather than through a separate
   storage-backend-specific transfer path.
@@ -3625,6 +3654,18 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   depends on a concrete upstream revision that contains the required compaction
   capability.
 
+### BA-INDEXER-137
+
+- **Before [KNOWN]:** The rooted block-copy requirements allowed opt-in
+  blind-write transfer into direct local redb destinations, but they did not
+  yet require the copy workflow to compact the destination redb file during
+  very large blind-write runs.
+- **After [KNOWN]:** The requirements now require rooted-copy blind-write runs
+  that target direct `local-redb` destinations to pause after every `500,000`
+  attempted destination writes, invoke immediate redb compaction, then resume
+  the same logical rooted-copy invocation without widening that checkpoint
+  behavior to read-before-write or non-redb targets.
+
 ### Invariant Impact Assessment
 
 - **Content-model abstraction boundaries:** Preserved. The increment adds only a
@@ -3632,16 +3673,18 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   boundary; it does not reshape content resolution, embedding, or search corpus
   semantics.
 - **Local/prod environment parity:** Preserved with explicit capability
-  boundaries. The generic `maintenance` namespace remains an indexer-owned tool
-  surface, but the first `compact` action is intentionally supported only for
-  direct local redb and must fail explicitly elsewhere rather than changing the
-  meaning of approved non-local profiles.
+  boundaries. The generic `maintenance` namespace and the new blind-write
+  checkpoint compaction behavior remain indexer-owned local-redb capabilities;
+  both stay explicitly limited to direct local redb rather than changing the
+  meaning of approved non-local profiles or the default read-before-write copy
+  path.
 - **Search contract stability:** Preserved. The increment does not alter MCP
   search, rooted search, ranking, retrieval, or indexing-stage behavior.
 - **Indexing safety, idempotence, recoverability:** Preserved. Immutable
   hash-addressed block identity remains unchanged, mutable refs stay on the
-  filesystem outside redb, and maintenance compaction is additive rather than a
-  hidden side effect of indexing or copy workflows.
+  filesystem outside redb, and both maintenance compaction plus blind-write
+  checkpoint compaction remain additive redb-specific behaviors rather than
+  hidden side effects of indexing or default copy workflows.
 - **Operator workflow clarity:** Preserved and extended. The new generic
   `maintenance` namespace gives operators an explicit one-store maintenance
   entry point without implying a backend-neutral compaction contract or
