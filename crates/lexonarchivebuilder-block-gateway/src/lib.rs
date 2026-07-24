@@ -230,6 +230,11 @@ fn validate_storage_profile_config(config: &GatewayConfig) -> anyhow::Result<()>
             }
         }
         GatewayStorageProfile::Production => {
+            if config.block_store_root.is_some() {
+                bail!(
+                    "production block_store_root is not supported for the overlay-backed gateway profile"
+                );
+            }
             if config
                 .block_store_filesystem_cache_root
                 .as_ref()
@@ -657,6 +662,23 @@ mod tests {
             error
                 .to_string()
                 .contains("block_store_memory_cache_max_resident_blocks must be at least 1")
+        );
+    }
+
+    #[test]
+    fn overlay_profile_rejects_block_store_root_argument() {
+        let mut config = test_gateway_config(GatewayStorageProfile::Production);
+        config.block_store_root = Some(PathBuf::from("blocks"));
+        config.block_store_filesystem_cache_root = Some(PathBuf::from("cache"));
+        config.block_store_memory_cache_max_resident_blocks = Some(64);
+
+        let error = validate_storage_profile_config(&config)
+            .expect_err("overlay profile should reject block_store_root");
+
+        assert!(
+            error
+                .to_string()
+                .contains("block_store_root is not supported")
         );
     }
 
