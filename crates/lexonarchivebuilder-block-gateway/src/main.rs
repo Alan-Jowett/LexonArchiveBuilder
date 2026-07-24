@@ -41,7 +41,7 @@ enum Command {
         block_store_memory_cache_max_resident_blocks: Option<usize>,
         #[arg(
             long,
-            help = "Reserved for non-Azure block store backends. The approved Azure Table-backed gateway profiles reject non-empty prefixes."
+            help = "Reserved for future gateway block store backends. All currently approved gateway profiles reject non-empty prefixes."
         )]
         block_store_prefix: Option<String>,
         #[arg(long)]
@@ -173,6 +173,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use clap::CommandFactory;
+
     use super::*;
 
     #[test]
@@ -325,5 +327,20 @@ mod tests {
         } = cli.command;
         assert_eq!(storage_profile, GatewayStorageProfile::LocalRedb);
         assert_eq!(block_store_root, Some(PathBuf::from("blocks")));
+    }
+
+    #[test]
+    fn serve_command_help_describes_prefix_as_currently_unsupported() {
+        let mut command = Cli::command()
+            .find_subcommand_mut("serve")
+            .unwrap()
+            .to_owned();
+        let mut help = Vec::new();
+        command.write_long_help(&mut help).unwrap();
+        let help = String::from_utf8(help).unwrap();
+
+        assert!(
+            help.contains("All currently approved gateway profiles reject non-empty prefixes.")
+        );
     }
 }
