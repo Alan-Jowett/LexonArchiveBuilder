@@ -332,6 +332,7 @@ where
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn copy_rooted_blocks_with_mode_and_limit_and_checkpoint<S, D, F>(
     source: &S,
     destination: &mut D,
@@ -363,6 +364,7 @@ where
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn copy_rooted_blocks_with_mode_and_limits<S, D>(
     source: &S,
     destination: &mut D,
@@ -622,26 +624,25 @@ where
     let checkpoint = Mutex::new(blind_write_checkpoint);
     let destination_ptr = ThreadedDestinationPtr(destination as *mut D);
     let destination_ref: &D = destination;
+    let worker_context = ThreadedCopyWorkerContext {
+        source,
+        destination: destination_ref,
+        destination_ptr,
+        root_ids,
+        destination_mode,
+        work_queue: &work_queue,
+        visited: &visited,
+        metrics: &metrics,
+        failures: &failures,
+        write_coordinator: &write_coordinator,
+        checkpoint: &checkpoint,
+        progress: progress.as_ref(),
+        stop_requested: &stop_requested,
+    };
 
     std::thread::scope(|scope| {
         for _ in 0..worker_thread_count.max(1) {
-            scope.spawn(|| {
-                run_threaded_copy_worker(
-                    source,
-                    destination_ref,
-                    destination_ptr,
-                    root_ids,
-                    destination_mode,
-                    &work_queue,
-                    &visited,
-                    &metrics,
-                    &failures,
-                    &write_coordinator,
-                    &checkpoint,
-                    progress.as_ref(),
-                    &stop_requested,
-                );
-            });
+            scope.spawn(|| run_threaded_copy_worker(&worker_context));
         }
     });
 
@@ -668,52 +669,43 @@ where
     }
 }
 
-fn run_threaded_copy_worker<S, D, F>(
-    source: &S,
-    destination: &D,
-    destination_ptr: ThreadedDestinationPtr<D>,
-    root_ids: &[BlockHash],
-    destination_mode: CopyDestinationMode,
-    work_queue: &ThreadedWorkQueue,
-    visited: &Mutex<HashSet<BlockHash>>,
-    metrics: &Mutex<CopyMetrics>,
-    failures: &Mutex<CopyFailureTracker>,
-    write_coordinator: &ThreadedWriteCoordinator,
-    checkpoint: &Mutex<Option<BlindWriteCheckpoint<F>>>,
-    progress: Option<&RootedBlockCopyProgress>,
-    stop_requested: &AtomicBool,
-) where
+fn run_threaded_copy_worker<S, D, F>(worker: &ThreadedCopyWorkerContext<'_, S, D, F>)
+where
     S: BlockStore + Sync,
     D: BlockStore + Sync,
     F: FnMut(&mut D) -> Result<(), BlockStoreError> + Send,
 {
-    while let Some((request_root_id, block_id)) = work_queue.pop(stop_requested) {
+    while let Some((request_root_id, block_id)) = worker.work_queue.pop(worker.stop_requested) {
         {
-            let mut failures = failures
+            let mut failures = worker
+                .failures
                 .lock()
                 .expect("threaded copy failures mutex poisoned");
             failures.note_block_root(request_root_id, block_id);
         }
 
         let first_visit = {
-            let mut visited = visited
+            let mut visited = worker
+                .visited
                 .lock()
                 .expect("threaded copy visited mutex poisoned");
             visited.insert(block_id)
         };
         if !first_visit {
-            work_queue.finish_item(stop_requested);
+            worker.work_queue.finish_item(worker.stop_requested);
             continue;
         }
 
-        let Some(block_bytes) = read_source_block_threaded(source, block_id, failures, progress)
+        let Some(block_bytes) =
+            read_source_block_threaded(worker.source, block_id, worker.failures, worker.progress)
         else {
-            work_queue.finish_item(stop_requested);
+            worker.work_queue.finish_item(worker.stop_requested);
             continue;
         };
 
         let child_ids = {
-            let mut failures = failures
+            let mut failures = worker
+                .failures
                 .lock()
                 .expect("threaded copy failures mutex poisoned");
             let child_ids = decode_source_block(block_id, &block_bytes, &mut failures);
@@ -721,49 +713,63 @@ fn run_threaded_copy_worker<S, D, F>(
             child_ids
         };
 
-        if !stop_requested.load(Ordering::SeqCst) {
-            work_queue.enqueue_children(request_root_id, &child_ids, stop_requested);
+        if !worker.stop_requested.load(Ordering::SeqCst) {
+            worker
+                .work_queue
+                .enqueue_children(request_root_id, &child_ids, worker.stop_requested);
         }
 
-        match destination_mode {
+        match worker.destination_mode {
             CopyDestinationMode::ReadBeforeWrite => {
-                if stop_requested.load(Ordering::SeqCst) {
-                    work_queue.finish_item(stop_requested);
+                if worker.stop_requested.load(Ordering::SeqCst) {
+                    worker.work_queue.finish_item(worker.stop_requested);
                     continue;
                 }
-                match block_store_get_block_bytes(destination, &block_id) {
+                match block_store_get_block_bytes(worker.destination, &block_id) {
                     Ok(Some(_)) => {
-                        metrics
+                        worker
+                            .metrics
                             .lock()
                             .expect("threaded copy metrics mutex poisoned")
                             .note_skipped_already_present_block();
                     }
                     Ok(None) => {
-                        let reservation = write_coordinator.reserve_write(
+                        let reservation = worker.write_coordinator.reserve_write(
                             block_bytes.len(),
-                            destination_mode,
-                            stop_requested,
+                            worker.destination_mode,
+                            worker.stop_requested,
                         );
                         if let Some(reservation) = reservation {
-                            let result =
-                                block_store_put_block_bytes(destination, &block_id, &block_bytes);
-                            let should_checkpoint =
-                                write_coordinator.complete_write(reservation.block_bytes_len);
-                            record_threaded_write_result(block_id, true, result, metrics, failures);
+                            let result = block_store_put_block_bytes(
+                                worker.destination,
+                                &block_id,
+                                &block_bytes,
+                            );
+                            let should_checkpoint = worker
+                                .write_coordinator
+                                .complete_write(reservation.block_bytes_len);
+                            record_threaded_write_result(
+                                block_id,
+                                true,
+                                result,
+                                worker.metrics,
+                                worker.failures,
+                            );
                             if should_checkpoint {
                                 run_threaded_checkpoint_if_needed(
-                                    destination_ptr,
-                                    root_ids,
-                                    failures,
-                                    write_coordinator,
-                                    checkpoint,
-                                    stop_requested,
+                                    worker.destination_ptr,
+                                    worker.root_ids,
+                                    worker.failures,
+                                    worker.write_coordinator,
+                                    worker.checkpoint,
+                                    worker.stop_requested,
                                 );
                             }
                         }
                     }
                     Err(error) => {
-                        failures
+                        worker
+                            .failures
                             .lock()
                             .expect("threaded copy failures mutex poisoned")
                             .record(
@@ -775,34 +781,43 @@ fn run_threaded_copy_worker<S, D, F>(
                 }
             }
             CopyDestinationMode::BlindWrite => {
-                if let Some(reservation) = write_coordinator.reserve_write(
+                if let Some(reservation) = worker.write_coordinator.reserve_write(
                     block_bytes.len(),
-                    destination_mode,
-                    stop_requested,
+                    worker.destination_mode,
+                    worker.stop_requested,
                 ) {
-                    metrics
+                    worker
+                        .metrics
                         .lock()
                         .expect("threaded copy metrics mutex poisoned")
                         .note_attempted_write_block();
-                    let result = block_store_put_block_bytes(destination, &block_id, &block_bytes);
-                    let should_checkpoint =
-                        write_coordinator.complete_write(reservation.block_bytes_len);
-                    record_threaded_write_result(block_id, false, result, metrics, failures);
+                    let result =
+                        block_store_put_block_bytes(worker.destination, &block_id, &block_bytes);
+                    let should_checkpoint = worker
+                        .write_coordinator
+                        .complete_write(reservation.block_bytes_len);
+                    record_threaded_write_result(
+                        block_id,
+                        false,
+                        result,
+                        worker.metrics,
+                        worker.failures,
+                    );
                     if should_checkpoint {
                         run_threaded_checkpoint_if_needed(
-                            destination_ptr,
-                            root_ids,
-                            failures,
-                            write_coordinator,
-                            checkpoint,
-                            stop_requested,
+                            worker.destination_ptr,
+                            worker.root_ids,
+                            worker.failures,
+                            worker.write_coordinator,
+                            worker.checkpoint,
+                            worker.stop_requested,
                         );
                     }
                 }
             }
         }
 
-        work_queue.finish_item(stop_requested);
+        worker.work_queue.finish_item(worker.stop_requested);
     }
 }
 
@@ -967,6 +982,22 @@ struct ThreadedWriteReservation {
 }
 
 struct ThreadedDestinationPtr<D>(*mut D);
+
+struct ThreadedCopyWorkerContext<'a, S, D, F> {
+    source: &'a S,
+    destination: &'a D,
+    destination_ptr: ThreadedDestinationPtr<D>,
+    root_ids: &'a [BlockHash],
+    destination_mode: CopyDestinationMode,
+    work_queue: &'a ThreadedWorkQueue,
+    visited: &'a Mutex<HashSet<BlockHash>>,
+    metrics: &'a Mutex<CopyMetrics>,
+    failures: &'a Mutex<CopyFailureTracker>,
+    write_coordinator: &'a ThreadedWriteCoordinator,
+    checkpoint: &'a Mutex<Option<BlindWriteCheckpoint<F>>>,
+    progress: Option<&'a RootedBlockCopyProgress>,
+    stop_requested: &'a AtomicBool,
+}
 
 impl<D> Clone for ThreadedDestinationPtr<D> {
     fn clone(&self) -> Self {
