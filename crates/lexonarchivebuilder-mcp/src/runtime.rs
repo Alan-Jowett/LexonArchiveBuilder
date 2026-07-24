@@ -458,6 +458,95 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn search_chunks_returns_indexed_chunk_content_from_local_redb_profile() {
+        let temp = tempdir().unwrap();
+        let document_path = temp.path().join("overview.txt");
+        fs::write(
+            &document_path,
+            b"LexonArchiveBuilder MCP runtime redb document body\n",
+        )
+        .unwrap();
+
+        let server = spawn_embedding_server(2);
+        let batch_request = BatchRequest {
+            environment: EnvironmentConfig::LocalRedb {
+                block_store_root: PathBuf::from("block-store"),
+                embedding: LocalEmbeddingConfig {
+                    base_url: server.base_url.clone(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 5,
+                    retry_delay_ms: 1,
+                },
+            },
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 2,
+                encoding: "f32le".into(),
+            },
+            block_size_target: 65_536,
+            stage: ExecutionStage::FullPipeline,
+            profile_version: lexonarchivebuilder_indexer::config::PUBLISHED_PROFILE_V0_1_0,
+            max_concurrency: None,
+            replay_batch_size: None,
+            ref_name: "test-branch".into(),
+            items: vec![BatchItemConfig::Document {
+                path: document_path
+                    .strip_prefix(temp.path())
+                    .unwrap()
+                    .to_path_buf(),
+                metadata: BTreeMap::from([("collection".into(), "docs".into())]),
+            }],
+        };
+        let summary = run_request(temp.path(), batch_request).await.unwrap();
+        let summary_path = temp.path().join("summary.json");
+        write_summary_file(&summary_path, &summary).unwrap();
+
+        let runtime = McpRuntime::new(
+            temp.path().to_path_buf(),
+            McpConfig {
+                environment: EnvironmentConfig::LocalRedb {
+                    block_store_root: PathBuf::from("block-store"),
+                    embedding: LocalEmbeddingConfig {
+                        base_url: server.base_url.clone(),
+                        model: "all-MiniLM-L6-v2".into(),
+                        api_key_env: None,
+                        request_timeout_secs: 5,
+                        max_retries: 5,
+                        retry_delay_ms: 1,
+                    },
+                },
+                embedding_spec: EmbeddingSpecConfig {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                index: IndexConfig::SummaryFile {
+                    path: PathBuf::from("summary.json"),
+                },
+                top_k: 5,
+                traversal_width: 3,
+            },
+        )
+        .unwrap();
+
+        let response = runtime
+            .search_chunks(SearchChunksRequest {
+                query: "runtime redb document".into(),
+                top_k: None,
+                traversal_width: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(response.root_id, summary.root_id);
+        assert!(response.results.iter().any(|hit| {
+            hit.text
+                .contains("LexonArchiveBuilder MCP runtime redb document body")
+        }));
+        server.join();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn search_chunks_surfaces_email_chunk_provenance_metadata() {
         let temp = tempdir().unwrap();
         let mailbox_path = temp.path().join("2026-01.mbox");

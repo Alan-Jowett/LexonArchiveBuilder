@@ -14,6 +14,7 @@ use lexongraph_block_store_azure_table_v2::AzureTableBlockStoreV2;
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_block_store_memory::MemoryBlockStore;
 use lexongraph_block_store_overlay::{OverlayBlockStore, OverlayStoreLayer, PassiveLayer};
+use lexongraph_block_store_redb::RedbBlockStore;
 
 use crate::config::{EnvironmentConfig, ProductionBlockStoreConfig};
 use crate::paths::resolve_path;
@@ -22,6 +23,7 @@ use crate::paths::resolve_path;
 pub enum ConfiguredBlockStore {
     GatewayHttp3(Http3BlockStore),
     Local(FilesystemBlockStore),
+    LocalRedb(RedbBlockStore),
     Overlay(Arc<OverlayBlockStore>),
     AzureTable(AzureTableBlockStoreV2),
 }
@@ -40,6 +42,10 @@ impl ConfiguredBlockStore {
                 block_store_root, ..
             } => FilesystemBlockStore::new(resolve_path(request_dir, block_store_root))
                 .map(Self::Local),
+            EnvironmentConfig::LocalRedb {
+                block_store_root, ..
+            } => RedbBlockStore::new(resolve_path(request_dir, block_store_root))
+                .map(Self::LocalRedb),
             EnvironmentConfig::LocalOverlay { block_store, .. }
             | EnvironmentConfig::Production { block_store, .. } => {
                 Self::production_overlay_store(request_dir, block_store)
@@ -188,6 +194,7 @@ impl BlockStore for ConfiguredBlockStore {
         match self {
             Self::GatewayHttp3(store) => store.put_block_bytes(block_id, block_bytes).await,
             Self::Local(store) => store.put_block_bytes(block_id, block_bytes).await,
+            Self::LocalRedb(store) => store.put_block_bytes(block_id, block_bytes).await,
             Self::Overlay(store) => store.put_block_bytes(block_id, block_bytes).await,
             Self::AzureTable(store) => store.put_block_bytes(block_id, block_bytes).await,
         }
@@ -200,6 +207,7 @@ impl BlockStore for ConfiguredBlockStore {
         match self {
             Self::GatewayHttp3(store) => store.get_block_bytes(block_id).await,
             Self::Local(store) => store.get_block_bytes(block_id).await,
+            Self::LocalRedb(store) => store.get_block_bytes(block_id).await,
             Self::Overlay(store) => store.get_block_bytes(block_id).await,
             Self::AzureTable(store) => store.get_block_bytes(block_id).await,
         }
@@ -209,6 +217,7 @@ impl BlockStore for ConfiguredBlockStore {
         match self {
             Self::GatewayHttp3(store) => store.iter_block_ids(),
             Self::Local(store) => store.iter_block_ids(),
+            Self::LocalRedb(store) => store.iter_block_ids(),
             Self::Overlay(store) => store.iter_block_ids(),
             Self::AzureTable(store) => store.iter_block_ids(),
         }
@@ -280,6 +289,23 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = ConfiguredBlockStore::Local(
             FilesystemBlockStore::new(dir.path().join("blocks")).unwrap(),
+        );
+        let block = sample_block();
+        let block_id = put_block(&store, &block);
+
+        let block_ids = block_on_block_store_future(async {
+            store.iter_block_ids()?.try_collect::<Vec<_>>().await
+        })
+        .unwrap();
+
+        assert_eq!(block_ids, vec![block_id]);
+    }
+
+    #[test]
+    fn configured_local_redb_store_delegates_iter_block_ids() {
+        let dir = tempdir().unwrap();
+        let store = ConfiguredBlockStore::LocalRedb(
+            RedbBlockStore::new(dir.path().join("blocks")).unwrap(),
         );
         let block = sample_block();
         let block_id = put_block(&store, &block);

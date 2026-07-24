@@ -26,6 +26,7 @@ lexongraph-block-store-azure-table-v2.workspace = true
 lexongraph-block-store-fs.workspace = true
 lexongraph-block-store-memory.workspace = true
 lexongraph-block-store-overlay.workspace = true
+lexongraph-block-store-redb.workspace = true
 lexongraph-embeddings-trait.workspace = true
 lexongraph-search.workspace = true
 lexongraph-streaming-indexer.workspace = true

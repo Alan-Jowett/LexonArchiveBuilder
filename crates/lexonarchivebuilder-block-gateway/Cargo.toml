@@ -20,6 +20,7 @@ lexongraph-block-store.workspace = true
 lexongraph-block-store-fs.workspace = true
 lexongraph-block-store-memory.workspace = true
 lexongraph-block-store-overlay.workspace = true
+lexongraph-block-store-redb.workspace = true
 lexongraph-block-store-azure-table-v2.workspace = true
 quinn.workspace = true
 rustls.workspace = true

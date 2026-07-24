@@ -4,14 +4,17 @@
 use std::ffi::OsStr;
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use env_logger::Env;
 use lexonarchivebuilder_indexer::block_copy::{
-    CopyDestinationMode, DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
-    copy_rooted_blocks_with_mode_and_limit, default_report_path as default_copy_report_path,
+    CopyDestinationMode, DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES, RootedBlockCopyProgress,
+    RootedBlockCopyProgressSnapshot, copy_rooted_blocks_with_mode_and_limit_and_progress,
+    default_report_path as default_copy_report_path,
     render_report_summary as render_copy_report_summary, write_report as write_copy_report,
 };
 use lexonarchivebuilder_indexer::block_store::ConfiguredBlockStore;
@@ -35,8 +38,6 @@ use lexonarchivebuilder_indexer::{
     ClusteringConfigOverrides, ExecutionStage, run_request_file_with_outputs,
     validate_request_file_with_overrides, write_summary_file,
 };
-use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
-
 const DEFAULT_LOCAL_MODEL: &str = "all-MiniLM-L6-v2";
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_MAX_RETRIES: u32 = 5;
@@ -143,6 +144,7 @@ enum Command {
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
 enum ReadableBlockStoreProfile {
     Local,
+    LocalRedb,
     Production,
     ProductionV2,
     GatewayHttp3,
@@ -151,6 +153,7 @@ enum ReadableBlockStoreProfile {
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
 enum WritableBlockStoreProfile {
     Local,
+    LocalRedb,
     Production,
     ProductionV2,
 }
@@ -159,7 +162,13 @@ enum WritableBlockStoreProfile {
 struct BlockStoreArgs {
     #[arg(long, value_enum, default_value_t = ReadableBlockStoreProfile::Local)]
     block_store_profile: ReadableBlockStoreProfile,
-    #[arg(long, required_if_eq("block_store_profile", "local"))]
+    #[arg(
+        long,
+        required_if_eq_any([
+            ("block_store_profile", "local"),
+            ("block_store_profile", "local-redb"),
+        ])
+    )]
     block_store_root: Option<PathBuf>,
     #[arg(
         long,
@@ -199,7 +208,13 @@ impl BlockStoreArgs {
 struct SourceBlockStoreArgs {
     #[arg(long, value_enum, default_value_t = ReadableBlockStoreProfile::Local)]
     source_block_store_profile: ReadableBlockStoreProfile,
-    #[arg(long, required_if_eq("source_block_store_profile", "local"))]
+    #[arg(
+        long,
+        required_if_eq_any([
+            ("source_block_store_profile", "local"),
+            ("source_block_store_profile", "local-redb"),
+        ])
+    )]
     source_block_store_root: Option<PathBuf>,
     #[arg(
         long,
@@ -239,7 +254,13 @@ impl SourceBlockStoreArgs {
 struct DestinationBlockStoreArgs {
     #[arg(long, value_enum, default_value_t = WritableBlockStoreProfile::Local)]
     destination_block_store_profile: WritableBlockStoreProfile,
-    #[arg(long, required_if_eq("destination_block_store_profile", "local"))]
+    #[arg(
+        long,
+        required_if_eq_any([
+            ("destination_block_store_profile", "local"),
+            ("destination_block_store_profile", "local-redb"),
+        ])
+    )]
     destination_block_store_root: Option<PathBuf>,
     #[arg(
         long,
@@ -284,6 +305,11 @@ fn block_store_environment_config(
     let environment = match block_store_profile {
         ReadableBlockStoreProfile::Local => EnvironmentConfig::Local {
             block_store_root: block_store_root.expect("local block_store_root is required by clap"),
+            embedding: unused_local_embedding(),
+        },
+        ReadableBlockStoreProfile::LocalRedb => EnvironmentConfig::LocalRedb {
+            block_store_root: block_store_root
+                .expect("local-redb block_store_root is required by clap"),
             embedding: unused_local_embedding(),
         },
         ReadableBlockStoreProfile::Production => EnvironmentConfig::Production {
@@ -335,6 +361,7 @@ fn destination_block_store_environment_config(
 ) -> EnvironmentConfig {
     let readable_profile = match block_store_profile {
         WritableBlockStoreProfile::Local => ReadableBlockStoreProfile::Local,
+        WritableBlockStoreProfile::LocalRedb => ReadableBlockStoreProfile::LocalRedb,
         WritableBlockStoreProfile::Production => ReadableBlockStoreProfile::Production,
         WritableBlockStoreProfile::ProductionV2 => ReadableBlockStoreProfile::ProductionV2,
     };
@@ -356,34 +383,102 @@ fn configured_block_store_from_environment(
         .context("failed to configure block store")
 }
 
-async fn await_with_copy_liveness<Fut, F, T>(
-    operation: Fut,
-    heartbeat_interval: Duration,
-    mut heartbeat_message: F,
-) -> T
-where
-    Fut: Future<Output = T>,
-    F: FnMut(Duration) -> String,
-{
-    let start = std::time::Instant::now();
-    let mut heartbeat = interval_at(TokioInstant::now() + heartbeat_interval, heartbeat_interval);
-    heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    tokio::pin!(operation);
-    loop {
-        tokio::select! {
-            biased;
-            result = &mut operation => return result,
-            _ = heartbeat.tick() => eprintln!("{}", heartbeat_message(start.elapsed())),
+struct CopyLivenessHeartbeat {
+    keep_running: Arc<AtomicBool>,
+    heartbeat_thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl CopyLivenessHeartbeat {
+    fn new<F>(heartbeat_interval: Duration, heartbeat_message: F) -> Self
+    where
+        F: Fn() -> String + Send + 'static,
+    {
+        if heartbeat_interval.is_zero() {
+            return Self {
+                keep_running: Arc::new(AtomicBool::new(false)),
+                heartbeat_thread: None,
+            };
+        }
+
+        let keep_running = Arc::new(AtomicBool::new(true));
+        let heartbeat_keep_running = Arc::clone(&keep_running);
+        let heartbeat_thread = Some(std::thread::spawn(move || {
+            while heartbeat_keep_running.load(Ordering::Acquire) {
+                std::thread::park_timeout(heartbeat_interval);
+                if !heartbeat_keep_running.load(Ordering::Acquire) {
+                    break;
+                }
+                eprintln!("{}", heartbeat_message());
+            }
+        }));
+
+        Self {
+            keep_running,
+            heartbeat_thread,
+        }
+    }
+
+    fn stop(&mut self) {
+        self.keep_running.store(false, Ordering::Release);
+        if let Some(heartbeat_thread) = self.heartbeat_thread.take() {
+            heartbeat_thread.thread().unpark();
+            let _ = heartbeat_thread.join();
         }
     }
 }
 
-fn format_copy_liveness_message(root_count: usize, elapsed: Duration) -> String {
+impl Drop for CopyLivenessHeartbeat {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+async fn await_with_copy_liveness<Fut, F, T>(
+    operation: Fut,
+    heartbeat_interval: Duration,
+    heartbeat_message: F,
+) -> T
+where
+    Fut: Future<Output = T>,
+    F: Fn() -> String + Send + 'static,
+{
+    let mut heartbeat = CopyLivenessHeartbeat::new(heartbeat_interval, heartbeat_message);
+    let result = operation.await;
+    heartbeat.stop();
+    result
+}
+
+fn format_copy_liveness_message(
+    root_count: usize,
+    elapsed: Duration,
+    progress: RootedBlockCopyProgressSnapshot,
+) -> String {
+    let mut details = vec![format!("read {}", progress.read_source_block_count)];
+    if let Some(copied_block_count) = progress.copied_block_count {
+        details.push(format!("copied {copied_block_count}"));
+    }
+    if let Some(skipped_already_present_block_count) = progress.skipped_already_present_block_count
+    {
+        details.push(format!("skipped {skipped_already_present_block_count}"));
+    }
+    if let Some(attempted_write_block_count) = progress.attempted_write_block_count {
+        details.push(format!("attempted {attempted_write_block_count}"));
+    }
+    details.push(format!("failed {}", progress.failed_block_count));
     format!(
-        "Rooted block copy still running after {}s for {} requested root(s)...",
+        "Rooted block copy still running after {}s for {} requested root(s): {}...",
         elapsed.as_secs(),
-        root_count
+        root_count,
+        details.join(", ")
     )
+}
+
+fn build_copy_liveness_message(
+    root_count: usize,
+    progress: RootedBlockCopyProgress,
+) -> impl Fn() -> String + Send + 'static {
+    let start = std::time::Instant::now();
+    move || format_copy_liveness_message(root_count, start.elapsed(), progress.snapshot())
 }
 
 fn rust_log_requested_with(value: Option<&OsStr>) -> bool {
@@ -522,20 +617,23 @@ async fn main() -> anyhow::Result<()> {
                 .collect::<Result<Vec<_>, _>>()?;
             let source_store = configured_source_block_store(&source_block_store)?;
             let destination_store = configured_destination_block_store(&destination_block_store)?;
+            let destination_mode = if blind_write {
+                CopyDestinationMode::BlindWrite
+            } else {
+                CopyDestinationMode::ReadBeforeWrite
+            };
+            let progress = RootedBlockCopyProgress::new(destination_mode);
             let report = await_with_copy_liveness(
-                copy_rooted_blocks_with_mode_and_limit(
+                copy_rooted_blocks_with_mode_and_limit_and_progress(
                     &source_store,
                     &destination_store,
                     &root_ids,
-                    if blind_write {
-                        CopyDestinationMode::BlindWrite
-                    } else {
-                        CopyDestinationMode::ReadBeforeWrite
-                    },
+                    destination_mode,
                     max_in_flight_destination_writes,
+                    Some(progress.clone()),
                 ),
                 COPY_LIVENESS_HEARTBEAT_INTERVAL,
-                |elapsed| format_copy_liveness_message(root_ids.len(), elapsed),
+                build_copy_liveness_message(root_ids.len(), progress.clone()),
             )
             .await;
             let output_path = json_out.unwrap_or_else(|| default_copy_report_path(&root_ids));
@@ -764,6 +862,40 @@ mod tests {
     }
 
     #[test]
+    fn quality_command_parses_local_redb_block_store_args() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "quality",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--block-store-profile",
+            "local-redb",
+            "--block-store-root",
+            "blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Quality { block_store, .. } => {
+                assert_eq!(
+                    block_store.block_store_profile,
+                    ReadableBlockStoreProfile::LocalRedb
+                );
+                let environment = block_store.try_environment_config().unwrap();
+                match environment {
+                    EnvironmentConfig::LocalRedb {
+                        block_store_root, ..
+                    } => {
+                        assert_eq!(block_store_root, PathBuf::from("blocks"));
+                    }
+                    _ => panic!("expected local-redb environment"),
+                }
+            }
+            _ => panic!("expected quality command"),
+        }
+    }
+
+    #[test]
     fn quality_command_parses_fast_random_walk_flag() {
         let cli = Cli::try_parse_from([
             "lexonarchivebuilder-indexer",
@@ -856,6 +988,7 @@ mod tests {
                         assert_eq!(block_store.prefix, None);
                     }
                     EnvironmentConfig::Local { .. }
+                    | EnvironmentConfig::LocalRedb { .. }
                     | EnvironmentConfig::LocalOverlay { .. }
                     | EnvironmentConfig::ProductionV2 { .. } => {
                         panic!("expected production environment")
@@ -897,6 +1030,7 @@ mod tests {
                         assert_eq!(block_store.memory_cache_max_resident_blocks, None);
                     }
                     EnvironmentConfig::Local { .. }
+                    | EnvironmentConfig::LocalRedb { .. }
                     | EnvironmentConfig::LocalOverlay { .. }
                     | EnvironmentConfig::Production { .. } => {
                         panic!("expected production-v2 environment")
@@ -1028,6 +1162,7 @@ mod tests {
                         assert_eq!(block_store.memory_cache_max_resident_blocks, None);
                     }
                     EnvironmentConfig::Local { .. }
+                    | EnvironmentConfig::LocalRedb { .. }
                     | EnvironmentConfig::LocalOverlay { .. }
                     | EnvironmentConfig::Production { .. } => {
                         panic!("expected production-v2 environment")
@@ -1121,6 +1256,63 @@ mod tests {
     }
 
     #[test]
+    fn copy_command_parses_local_redb_source_and_destination_args() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--source-block-store-profile",
+            "local-redb",
+            "--source-block-store-root",
+            "source-blocks",
+            "--destination-block-store-profile",
+            "local-redb",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Copy {
+                source_block_store,
+                destination_block_store,
+                ..
+            } => {
+                assert_eq!(
+                    source_block_store.source_block_store_profile,
+                    ReadableBlockStoreProfile::LocalRedb
+                );
+                assert_eq!(
+                    destination_block_store.destination_block_store_profile,
+                    WritableBlockStoreProfile::LocalRedb
+                );
+                assert_eq!(
+                    source_block_store.source_block_store_root,
+                    Some(PathBuf::from("source-blocks"))
+                );
+                match source_block_store.try_environment_config().unwrap() {
+                    EnvironmentConfig::LocalRedb {
+                        block_store_root, ..
+                    } => {
+                        assert_eq!(block_store_root, PathBuf::from("source-blocks"));
+                    }
+                    _ => panic!("expected local-redb source environment"),
+                }
+                match destination_block_store.to_environment_config() {
+                    EnvironmentConfig::LocalRedb {
+                        block_store_root, ..
+                    } => {
+                        assert_eq!(block_store_root, PathBuf::from("destination-blocks"));
+                    }
+                    _ => panic!("expected local-redb destination environment"),
+                }
+            }
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
     fn copy_command_rejects_production_profile_without_overlay_args() {
         let error = Cli::try_parse_from([
             "lexonarchivebuilder-indexer",
@@ -1182,6 +1374,7 @@ mod tests {
                         assert_eq!(block_store.memory_cache_max_resident_blocks, None);
                     }
                     EnvironmentConfig::Local { .. }
+                    | EnvironmentConfig::LocalRedb { .. }
                     | EnvironmentConfig::LocalOverlay { .. }
                     | EnvironmentConfig::Production { .. } => {
                         panic!("expected production-v2 environment")
@@ -1343,6 +1536,7 @@ mod tests {
     async fn copy_liveness_heartbeat_emits_for_slow_operations() {
         let messages = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&messages);
+        let start = std::time::Instant::now();
 
         let output = await_with_copy_liveness(
             async {
@@ -1350,8 +1544,19 @@ mod tests {
                 7usize
             },
             Duration::from_millis(5),
-            move |elapsed| {
-                let message = format_copy_liveness_message(2, elapsed);
+            move || {
+                let message = format_copy_liveness_message(
+                    2,
+                    start.elapsed(),
+                    RootedBlockCopyProgressSnapshot {
+                        destination_mode: CopyDestinationMode::ReadBeforeWrite,
+                        read_source_block_count: 5,
+                        copied_block_count: Some(2),
+                        skipped_already_present_block_count: Some(3),
+                        attempted_write_block_count: None,
+                        failed_block_count: 0,
+                    },
+                );
                 captured.lock().unwrap().push(message.clone());
                 message
             },
@@ -1363,26 +1568,106 @@ mod tests {
         assert!(!messages.is_empty());
         assert!(messages[0].contains("still running"));
         assert!(messages[0].contains("2 requested root(s)"));
+        assert!(messages[0].contains("read 5"));
+        assert!(messages[0].contains("copied 2"));
+        assert!(messages[0].contains("skipped 3"));
     }
 
     #[tokio::test]
-    async fn copy_liveness_heartbeat_stays_quiet_for_fast_operations() {
+    async fn copy_liveness_heartbeat_emits_for_sync_blocking_operations() {
         let messages = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&messages);
+        let start = std::time::Instant::now();
 
         let output = await_with_copy_liveness(
-            async { 11usize },
-            Duration::from_millis(20),
-            move |elapsed| {
-                let message = format_copy_liveness_message(1, elapsed);
+            async {
+                std::thread::sleep(Duration::from_millis(25));
+                13usize
+            },
+            Duration::from_millis(5),
+            move || {
+                let message = format_copy_liveness_message(
+                    1,
+                    start.elapsed(),
+                    RootedBlockCopyProgressSnapshot {
+                        destination_mode: CopyDestinationMode::BlindWrite,
+                        read_source_block_count: 4,
+                        copied_block_count: None,
+                        skipped_already_present_block_count: None,
+                        attempted_write_block_count: Some(4),
+                        failed_block_count: 1,
+                    },
+                );
                 captured.lock().unwrap().push(message.clone());
                 message
             },
         )
         .await;
 
+        assert_eq!(output, 13);
+        let messages = messages.lock().unwrap();
+        assert!(!messages.is_empty());
+        assert!(messages[0].contains("attempted 4"));
+        assert!(messages[0].contains("failed 1"));
+    }
+
+    #[tokio::test]
+    async fn copy_liveness_heartbeat_stays_quiet_for_fast_operations() {
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&messages);
+        let start = std::time::Instant::now();
+
+        let output =
+            await_with_copy_liveness(async { 11usize }, Duration::from_millis(20), move || {
+                let message = format_copy_liveness_message(
+                    1,
+                    start.elapsed(),
+                    RootedBlockCopyProgressSnapshot {
+                        destination_mode: CopyDestinationMode::BlindWrite,
+                        read_source_block_count: 4,
+                        copied_block_count: None,
+                        skipped_already_present_block_count: None,
+                        attempted_write_block_count: Some(4),
+                        failed_block_count: 1,
+                    },
+                );
+                captured.lock().unwrap().push(message.clone());
+                message
+            })
+            .await;
+
         assert_eq!(output, 11);
         assert!(messages.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn copy_liveness_heartbeat_stops_when_operation_panics() {
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&messages);
+
+        let task = tokio::spawn(async move {
+            await_with_copy_liveness(
+                async {
+                    sleep(Duration::from_millis(25)).await;
+                    panic!("boom");
+                },
+                Duration::from_millis(5),
+                move || {
+                    captured.lock().unwrap().push("heartbeat".to_string());
+                    "heartbeat".to_string()
+                },
+            )
+            .await
+        });
+
+        let error = task.await.expect_err("operation should panic");
+        assert!(error.is_panic());
+
+        sleep(Duration::from_millis(20)).await;
+        let emitted_before_wait = messages.lock().unwrap().len();
+        assert!(emitted_before_wait > 0);
+        sleep(Duration::from_millis(20)).await;
+        assert_eq!(messages.lock().unwrap().len(), emitted_before_wait);
     }
 
     #[test]

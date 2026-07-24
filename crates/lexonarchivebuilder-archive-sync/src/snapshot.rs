@@ -688,6 +688,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use lexongraph_block_store_fs::FilesystemBlockStore;
+    use lexongraph_block_store_redb::RedbBlockStore;
     use tempfile::tempdir;
 
     use super::*;
@@ -796,6 +797,42 @@ mod tests {
                 .iter()
                 .all(|entry| !entry.block_id.is_empty() && entry.byte_length > 0)
         );
+    }
+
+    #[test]
+    fn acquisition_persists_snapshot_payloads_in_redb_store() {
+        let temp = tempdir().unwrap();
+        let source_root = temp.path().join("source");
+        fs::create_dir_all(source_root.join("ietf")).unwrap();
+        fs::write(source_root.join("ietf").join("2026-01.mbox"), b"mailbox-a").unwrap();
+        fs::write(source_root.join("ietf").join("2026-02.mbox"), b"mailbox-b").unwrap();
+
+        let store = RedbBlockStore::new(temp.path().join("blocks")).unwrap();
+        let runner = CopyTreeRsyncRunner::new(source_root.clone());
+        let mut journal = sample_journal();
+
+        let snapshot = block_on(acquire_source_snapshot(
+            &store,
+            &mut journal,
+            "rsync://example.invalid/mailman",
+            &temp.path().join("mirror"),
+            "2026-06-19T22:00:00Z",
+            &runner,
+        ))
+        .unwrap();
+
+        assert!(!snapshot.reused_existing);
+        assert!(
+            block_on(
+                store.get_block_bytes(
+                    &parse_block_hash(snapshot.manifest_block_id.as_str())
+                        .expect("manifest block ID should parse"),
+                )
+            )
+            .unwrap()
+            .is_some()
+        );
+        assert_eq!(journal.current_stage, WorkflowStage::MailboxAdmission);
     }
 
     #[test]
