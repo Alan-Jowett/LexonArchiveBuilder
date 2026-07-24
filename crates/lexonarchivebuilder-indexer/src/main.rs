@@ -4,6 +4,8 @@
 use std::ffi::OsStr;
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -36,8 +38,6 @@ use lexonarchivebuilder_indexer::{
     ClusteringConfigOverrides, ExecutionStage, run_request_file_with_outputs,
     validate_request_file_with_overrides, write_summary_file,
 };
-use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
-
 const DEFAULT_LOCAL_MODEL: &str = "all-MiniLM-L6-v2";
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_MAX_RETRIES: u32 = 5;
@@ -386,23 +386,35 @@ fn configured_block_store_from_environment(
 async fn await_with_copy_liveness<Fut, F, T>(
     operation: Fut,
     heartbeat_interval: Duration,
-    mut heartbeat_message: F,
+    heartbeat_message: F,
 ) -> T
 where
     Fut: Future<Output = T>,
-    F: FnMut(Duration) -> String,
+    F: Fn() -> String + Send + 'static,
 {
-    let start = std::time::Instant::now();
-    let mut heartbeat = interval_at(TokioInstant::now() + heartbeat_interval, heartbeat_interval);
-    heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    tokio::pin!(operation);
-    loop {
-        tokio::select! {
-            biased;
-            result = &mut operation => return result,
-            _ = heartbeat.tick() => eprintln!("{}", heartbeat_message(start.elapsed())),
-        }
+    let keep_running = Arc::new(AtomicBool::new(true));
+    let heartbeat_thread = if heartbeat_interval.is_zero() {
+        None
+    } else {
+        let keep_running = Arc::clone(&keep_running);
+        Some(std::thread::spawn(move || {
+            while keep_running.load(Ordering::Acquire) {
+                std::thread::park_timeout(heartbeat_interval);
+                if !keep_running.load(Ordering::Acquire) {
+                    break;
+                }
+                eprintln!("{}", heartbeat_message());
+            }
+        }))
+    };
+
+    let result = operation.await;
+    keep_running.store(false, Ordering::Release);
+    if let Some(heartbeat_thread) = heartbeat_thread {
+        heartbeat_thread.thread().unpark();
+        let _ = heartbeat_thread.join();
     }
+    result
 }
 
 fn format_copy_liveness_message(
@@ -428,6 +440,14 @@ fn format_copy_liveness_message(
         root_count,
         details.join(", ")
     )
+}
+
+fn build_copy_liveness_message(
+    root_count: usize,
+    progress: RootedBlockCopyProgress,
+) -> impl Fn() -> String + Send + 'static {
+    let start = std::time::Instant::now();
+    move || format_copy_liveness_message(root_count, start.elapsed(), progress.snapshot())
 }
 
 fn rust_log_requested_with(value: Option<&OsStr>) -> bool {
@@ -582,9 +602,7 @@ async fn main() -> anyhow::Result<()> {
                     Some(progress.clone()),
                 ),
                 COPY_LIVENESS_HEARTBEAT_INTERVAL,
-                |elapsed| {
-                    format_copy_liveness_message(root_ids.len(), elapsed, progress.snapshot())
-                },
+                build_copy_liveness_message(root_ids.len(), progress.clone()),
             )
             .await;
             let output_path = json_out.unwrap_or_else(|| default_copy_report_path(&root_ids));
@@ -1487,6 +1505,7 @@ mod tests {
     async fn copy_liveness_heartbeat_emits_for_slow_operations() {
         let messages = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&messages);
+        let start = std::time::Instant::now();
 
         let output = await_with_copy_liveness(
             async {
@@ -1494,10 +1513,10 @@ mod tests {
                 7usize
             },
             Duration::from_millis(5),
-            move |elapsed| {
+            move || {
                 let message = format_copy_liveness_message(
                     2,
-                    elapsed,
+                    start.elapsed(),
                     RootedBlockCopyProgressSnapshot {
                         destination_mode: CopyDestinationMode::ReadBeforeWrite,
                         read_source_block_count: 5,
@@ -1524,17 +1543,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn copy_liveness_heartbeat_stays_quiet_for_fast_operations() {
+    async fn copy_liveness_heartbeat_emits_for_sync_blocking_operations() {
         let messages = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&messages);
+        let start = std::time::Instant::now();
 
         let output = await_with_copy_liveness(
-            async { 11usize },
-            Duration::from_millis(20),
-            move |elapsed| {
+            async {
+                std::thread::sleep(Duration::from_millis(25));
+                13usize
+            },
+            Duration::from_millis(5),
+            move || {
                 let message = format_copy_liveness_message(
                     1,
-                    elapsed,
+                    start.elapsed(),
                     RootedBlockCopyProgressSnapshot {
                         destination_mode: CopyDestinationMode::BlindWrite,
                         read_source_block_count: 4,
@@ -1549,6 +1572,38 @@ mod tests {
             },
         )
         .await;
+
+        assert_eq!(output, 13);
+        let messages = messages.lock().unwrap();
+        assert!(!messages.is_empty());
+        assert!(messages[0].contains("attempted 4"));
+        assert!(messages[0].contains("failed 1"));
+    }
+
+    #[tokio::test]
+    async fn copy_liveness_heartbeat_stays_quiet_for_fast_operations() {
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&messages);
+        let start = std::time::Instant::now();
+
+        let output =
+            await_with_copy_liveness(async { 11usize }, Duration::from_millis(20), move || {
+                let message = format_copy_liveness_message(
+                    1,
+                    start.elapsed(),
+                    RootedBlockCopyProgressSnapshot {
+                        destination_mode: CopyDestinationMode::BlindWrite,
+                        read_source_block_count: 4,
+                        copied_block_count: None,
+                        skipped_already_present_block_count: None,
+                        attempted_write_block_count: Some(4),
+                        failed_block_count: 1,
+                    },
+                );
+                captured.lock().unwrap().push(message.clone());
+                message
+            })
+            .await;
 
         assert_eq!(output, 11);
         assert!(messages.lock().unwrap().is_empty());
