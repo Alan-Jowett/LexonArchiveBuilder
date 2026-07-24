@@ -12,8 +12,10 @@ use anyhow::Context;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use env_logger::Env;
 use lexonarchivebuilder_indexer::block_copy::{
-    CopyDestinationMode, DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES, RootedBlockCopyProgress,
-    RootedBlockCopyProgressSnapshot, copy_rooted_blocks_with_mode_and_limit_and_progress,
+    BLIND_WRITE_REDB_COMPACTION_INTERVAL_BLOCKS, CopyDestinationMode,
+    DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES, RootedBlockCopyProgress,
+    RootedBlockCopyProgressSnapshot, copy_rooted_blocks_with_mode_and_limit_and_checkpoint,
+    copy_rooted_blocks_with_mode_and_limit_and_progress,
     default_report_path as default_copy_report_path,
     render_report_summary as render_copy_report_summary, write_report as write_copy_report,
 };
@@ -687,7 +689,7 @@ async fn main() -> anyhow::Result<()> {
                 .map(|root_id| parse_block_hash(root_id))
                 .collect::<Result<Vec<_>, _>>()?;
             let source_store = configured_source_block_store(&source_block_store)?;
-            let destination_store =
+            let mut destination_store =
                 configured_destination_block_store(&destination_block_store, blind_write)?;
             let destination_mode = if blind_write {
                 CopyDestinationMode::BlindWrite
@@ -695,19 +697,39 @@ async fn main() -> anyhow::Result<()> {
                 CopyDestinationMode::ReadBeforeWrite
             };
             let progress = RootedBlockCopyProgress::new(destination_mode);
-            let report = await_with_copy_liveness(
-                copy_rooted_blocks_with_mode_and_limit_and_progress(
-                    &source_store,
-                    &destination_store,
-                    &root_ids,
-                    destination_mode,
-                    max_in_flight_destination_writes,
-                    Some(progress.clone()),
-                ),
-                COPY_LIVENESS_HEARTBEAT_INTERVAL,
-                build_copy_liveness_message(root_ids.len(), progress.clone()),
-            )
-            .await;
+            let report = if blind_write
+                && matches!(destination_store, ConfiguredBlockStore::LocalRedb(_))
+            {
+                await_with_copy_liveness(
+                    copy_rooted_blocks_with_mode_and_limit_and_checkpoint(
+                        &source_store,
+                        &mut destination_store,
+                        &root_ids,
+                        destination_mode,
+                        max_in_flight_destination_writes,
+                        Some(progress.clone()),
+                        BLIND_WRITE_REDB_COMPACTION_INTERVAL_BLOCKS,
+                        |destination: &mut ConfiguredBlockStore| destination.compact_now(),
+                    ),
+                    COPY_LIVENESS_HEARTBEAT_INTERVAL,
+                    build_copy_liveness_message(root_ids.len(), progress.clone()),
+                )
+                .await
+            } else {
+                await_with_copy_liveness(
+                    copy_rooted_blocks_with_mode_and_limit_and_progress(
+                        &source_store,
+                        &mut destination_store,
+                        &root_ids,
+                        destination_mode,
+                        max_in_flight_destination_writes,
+                        Some(progress.clone()),
+                    ),
+                    COPY_LIVENESS_HEARTBEAT_INTERVAL,
+                    build_copy_liveness_message(root_ids.len(), progress.clone()),
+                )
+                .await
+            };
             let output_path = json_out.unwrap_or_else(|| default_copy_report_path(&root_ids));
             write_copy_report(&output_path, &report)?;
             println!("{}", render_copy_report_summary(&report));

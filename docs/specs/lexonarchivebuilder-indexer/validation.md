@@ -1012,9 +1012,11 @@ approved shared target set, at least one exercised non-local side uses either
 the approved `production-v2` profile or the approved read-only `gateway-http3`
 profile on the source side, the destination already contains at least one
 reachable block, the source rooted graph contains at least one unreachable
-block, and the invocation encounters at least one copy failure for a reachable
+block, the invocation encounters at least one copy failure for a reachable
 block after the tool has already proven other reachable blocks can be copied or
-skipped.
+skipped, and one exercised blind-write case targets direct `local-redb` with
+enough reachable blocks to cross at least one `500,000` attempted-write
+checkpoint.
 
 **Pass condition:** the tool traverses only the immutable blocks reachable from
 the caller-supplied roots in the source store and copies those blocks to the
@@ -1044,7 +1046,13 @@ leave mutable references such as current-root and
 replay-journal-head unchanged. When the source profile is `gateway-http3`,
 gateway `404` responses count as missing-block source reads while transport,
 protocol, or other non-success responses remain explicit failures, and the
-destination side still uses one of the writable approved profiles.
+destination side still uses one of the writable approved profiles. When the
+blind-write destination profile is direct `local-redb`, the tool pauses after
+every `500,000` attempted destination writes, requests redb compaction
+successfully through the already-targeted destination store, preserves
+readability under the same immutable block identities across each checkpoint,
+and then resumes the same rooted-copy invocation without widening that behavior
+to read-before-write or non-redb destinations.
 
 **Traces to:** RQ-INDEXER-005B, DSG-LFI-005D, DSG-LFI-005E, DSG-LFI-007G
 
@@ -1387,7 +1395,10 @@ The same package must also keep bounded asynchronous destination-write
 concurrency behind one operator-selectable CLI limit with first approved
 default `64`, and apply that bounded write path to both rooted-copy modes only
 after the repository has determined that a destination write is actually
-required.
+required. When blind-write targets direct `local-redb`, the same package must
+also require copy-time checkpoint compaction after every `500,000` attempted
+destination writes without broadening that compaction behavior to
+read-before-write or non-redb destinations.
 
 **Traces to:** RQ-INDEXER-005B, RQ-INDEXER-009, RQ-INDEXER-010A, DSG-LFI-005D,
 DSG-LFI-007G, DSG-LFI-009, DSG-LFI-011
