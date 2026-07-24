@@ -210,24 +210,9 @@ fn validate_storage_profile_config(config: &GatewayConfig) -> anyhow::Result<()>
                     "local-redb block_store_root is required for the redb-backed gateway profile"
                 );
             }
-            if config.block_store_filesystem_cache_root.is_some() {
-                bail!(
-                    "local-redb block_store_filesystem_cache_root is not supported for the redb-backed gateway profile"
-                );
-            }
-            if config
-                .block_store_memory_cache_max_resident_blocks
-                .is_some()
-            {
-                bail!(
-                    "local-redb block_store_memory_cache_max_resident_blocks is not supported for the redb-backed gateway profile"
-                );
-            }
-            if !config.block_store_container_sas_url.trim().is_empty() {
-                bail!(
-                    "local-redb block_store_container_sas_url is not supported for the redb-backed gateway profile"
-                );
-            }
+            // NOTE: Production-oriented gateway options may still be present via environment variables.
+            // For the local-redb profile, these values are ignored because the selected storage_profile
+            // fully determines backend behavior.
         }
         GatewayStorageProfile::Production => {
             if config.block_store_root.is_some() {
