@@ -195,7 +195,7 @@ fn validate_storage_profile_config(config: &GatewayConfig) -> anyhow::Result<()>
         .is_some_and(|prefix| !prefix.trim().is_empty())
     {
         bail!(
-            "non-empty block_store_prefix values are not supported by the Azure Table-backed gateway profiles"
+            "non-empty block_store_prefix values are not supported by the approved gateway storage profiles"
         );
     }
 
@@ -706,6 +706,11 @@ mod tests {
             .expect_err("gateway profiles should reject non-empty prefixes");
 
         assert!(error.to_string().contains("block_store_prefix"));
+        assert!(
+            error
+                .to_string()
+                .contains("approved gateway storage profiles")
+        );
     }
 
     #[test]
