@@ -819,8 +819,8 @@ rather than as permission to narrow the current external contract.
 In this increment:
 
 - the repository may update its delegated construction, status-observer
-  mapping, or related runtime adapter code to match the latest upstream `main`
-  constrained-v3 API shape
+  mapping, or related runtime adapter code to match the LexonGraph `main`
+  commit `031b1a1061bebfcccdac91169335b92693039e8f` constrained-v3 API shape
 - those compatibility updates SHALL preserve the existing caller-visible stage
   contract (`full`, `ingestion-and-embedding`, `clustering-and-block-assembly`)
   and unchanged MCP search or retrieval behavior for already-indexed content

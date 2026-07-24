@@ -2257,7 +2257,7 @@ fn clustering_blocked_on_summary(status: &StreamingIndexingStatus) -> Option<Str
         StreamingIndexingPhase::V3TerminalMaterializationLoad { layer_index } => {
             if let Some(total) = status.phase_total_unit_count {
                 parts.push(format!(
-                    "loading terminal materialization input(s) for layer {layer_index} {} of {total}",
+                    "loading terminal materialization input(s) for layer {layer_index}; completed {} of {total}",
                     status.completed_unit_count
                 ));
             } else {
@@ -10611,6 +10611,25 @@ mod tests {
         assert_eq!(
             format_indexing_status(status),
             "Terminal materialization load for layer 1 started for 8 input item(s)"
+        );
+    }
+
+    #[test]
+    fn v3_terminal_materialization_blocked_on_summary_includes_completed_prefix() {
+        let status = test_streaming_status(
+            StreamingIndexingPhase::V3TerminalMaterializationLoad { layer_index: 1 },
+            StreamingIndexingStatusState::InProgress,
+            8,
+            Some(8),
+            3,
+            Some(5),
+            Duration::from_millis(250),
+            None,
+        );
+
+        assert_eq!(
+            clustering_blocked_on_summary(&status).as_deref(),
+            Some("loading terminal materialization input(s) for layer 1; completed 3 of 8")
         );
     }
 

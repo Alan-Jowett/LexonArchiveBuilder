@@ -602,8 +602,8 @@ approved request-adjacent artifact policy.
 ### VAL-LFI-002N7
 
 Inspect one refresh from commit `7c8f375137375709bb608ee2609b38cb80e5422c`
-to a newer LexonGraph `main` revision that changes the constrained-v3
-delegated API shape.
+to LexonGraph `main` commit `031b1a1061bebfcccdac91169335b92693039e8f`
+that changes the constrained-v3 delegated API shape.
 
 **Pass condition:** LexonArchiveBuilder updates its adapter boundary so the
 latest upstream constrained-v3 construction, lifecycle, or observer surfaces

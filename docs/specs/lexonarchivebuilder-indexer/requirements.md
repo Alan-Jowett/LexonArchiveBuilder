@@ -537,9 +537,9 @@
   on the constrained v3 `0.7.0` path, LexonArchiveBuilder must report that gap
   explicitly rather than silently weakening split-stage replay, published-
   profile selection, or operator-visible progress behavior.
-- **UR-292 [KNOWN]:** Switch LexonArchiveBuilder to the latest available
-  LexonGraph `main` revision again after commit
-  `7c8f375137375709bb608ee2609b38cb80e5422c`.
+- **UR-292 [KNOWN]:** Switch LexonArchiveBuilder from LexonGraph commit
+  `7c8f375137375709bb608ee2609b38cb80e5422c` to LexonGraph `main` commit
+  `031b1a1061bebfcccdac91169335b92693039e8f`.
 - **UR-293 [KNOWN]:** Adapt LexonArchiveBuilder to any breaking upstream
   indexing API changes required by that latest LexonGraph `main` revision while
   preserving the current external stage contract and unchanged MCP search or
@@ -689,7 +689,7 @@
 | CM-INDEXER-129 | Revise | Replace the delegated planner-state-root requirement with a request-adjacent delegated v3 working-root requirement for the `0.7.0` path while preserving explicit failure and opaque upstream ownership of temporary partition artifacts | UR-285, UR-287, UR-289 |
 | CM-INDEXER-130 | Revise | Preserve standalone clustering and full-pipeline replay semantics by feeding the delegated v3 path from the same deterministic replayable leaf block-id authority rather than reopening request-era source content | UR-287, UR-288 |
 | CM-INDEXER-131 | Revise | Preserve operator-usable clustering progress and diagnosis across the v3 migration by projecting the best available v3 hierarchy-planning, partition-load, and bottom-up assembly telemetry without inventing missing v2-only pending-partition detail | UR-290, UR-291 |
-| CM-INDEXER-132 | Revise | Refresh the approved latest-LexonGraph integration target from commit `7c8f375137375709bb608ee2609b38cb80e5422c` to the current upstream `main` revision and require LexonArchiveBuilder to absorb any breaking delegated API changes without weakening the approved external stage or clustering-observability contracts | UR-292, UR-293, UR-294, UR-295 |
+| CM-INDEXER-132 | Revise | Refresh the approved latest-LexonGraph integration target from commit `7c8f375137375709bb608ee2609b38cb80e5422c` to LexonGraph `main` commit `031b1a1061bebfcccdac91169335b92693039e8f` and require LexonArchiveBuilder to absorb any breaking delegated API changes without weakening the approved external stage or clustering-observability contracts | UR-292, UR-293, UR-294, UR-295 |
 
 ## Before / After
 
@@ -3433,9 +3433,9 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   did not require another immediate refresh if later upstream `main` changes
   broke the constrained v3 integration boundary again.
 - **After [KNOWN]:** The requirements now refresh that approved upstream target
-  to the current LexonGraph `main` revision and require LexonArchiveBuilder to
-  adapt any resulting breaking delegated indexing API changes while preserving
-  the approved external stage contract, unchanged MCP search or retrieval
-  behavior for already-indexed content, and the current operator-visible v3
-  progress, telemetry, and diagnosis semantics unless a true upstream
-  capability regression must be surfaced explicitly.
+  to LexonGraph `main` commit `031b1a1061bebfcccdac91169335b92693039e8f`
+  and require LexonArchiveBuilder to adapt any resulting breaking delegated
+  indexing API changes while preserving the approved external stage contract,
+  unchanged MCP search or retrieval behavior for already-indexed content, and
+  the current operator-visible v3 progress, telemetry, and diagnosis semantics
+  unless a true upstream capability regression must be surfaced explicitly.
