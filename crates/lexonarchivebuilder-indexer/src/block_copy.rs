@@ -7,8 +7,8 @@ use std::future::Future;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 
 use ciborium::Value;
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -25,6 +25,7 @@ use crate::mailbox::{NORMALIZED_EMAIL_ARTIFACT_BLOCK_TYPE, NORMALIZED_EMAIL_MEDI
 use crate::tree_tools::parse_block_hash;
 
 pub const DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES: usize = 64;
+pub const DEFAULT_COPY_WORKER_THREADS: usize = 1;
 pub const BLIND_WRITE_REDB_COMPACTION_INTERVAL_BLOCKS: usize = 500_000;
 const DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITE_BYTES: usize = 64 * 1024 * 1024;
 const DESTINATION_STORE_FAILURE_ID: &str = "destination-store";
@@ -92,6 +93,7 @@ struct CopyMetrics {
 
 struct CopyExecutionConfig<F> {
     max_in_flight_destination_writes: usize,
+    worker_thread_count: usize,
     max_in_flight_destination_write_bytes: usize,
     progress: Option<RootedBlockCopyProgress>,
     blind_write_checkpoint: Option<BlindWriteCheckpoint<F>>,
@@ -248,8 +250,8 @@ pub async fn copy_rooted_blocks<S, D>(
     root_ids: &[BlockHash],
 ) -> RootedBlockCopyReport
 where
-    S: BlockStore,
-    D: BlockStore,
+    S: BlockStore + Sync,
+    D: BlockStore + Sync,
 {
     copy_rooted_blocks_with_mode_and_limit(
         source,
@@ -268,8 +270,8 @@ pub async fn copy_rooted_blocks_with_mode<S, D>(
     destination_mode: CopyDestinationMode,
 ) -> RootedBlockCopyReport
 where
-    S: BlockStore,
-    D: BlockStore,
+    S: BlockStore + Sync,
+    D: BlockStore + Sync,
 {
     copy_rooted_blocks_with_mode_and_limit(
         source,
@@ -289,8 +291,8 @@ pub async fn copy_rooted_blocks_with_mode_and_limit<S, D>(
     max_in_flight_destination_writes: usize,
 ) -> RootedBlockCopyReport
 where
-    S: BlockStore,
-    D: BlockStore,
+    S: BlockStore + Sync,
+    D: BlockStore + Sync,
 {
     copy_rooted_blocks_with_mode_and_limit_and_progress(
         source,
@@ -298,6 +300,7 @@ where
         root_ids,
         destination_mode,
         max_in_flight_destination_writes,
+        DEFAULT_COPY_WORKER_THREADS,
         None,
     )
     .await
@@ -309,11 +312,12 @@ pub async fn copy_rooted_blocks_with_mode_and_limit_and_progress<S, D>(
     root_ids: &[BlockHash],
     destination_mode: CopyDestinationMode,
     max_in_flight_destination_writes: usize,
+    worker_thread_count: usize,
     progress: Option<RootedBlockCopyProgress>,
 ) -> RootedBlockCopyReport
 where
-    S: BlockStore,
-    D: BlockStore,
+    S: BlockStore + Sync,
+    D: BlockStore + Sync,
 {
     copy_rooted_blocks_with_mode_and_limits(
         source,
@@ -321,6 +325,7 @@ where
         root_ids,
         destination_mode,
         max_in_flight_destination_writes,
+        worker_thread_count,
         DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITE_BYTES,
         progress,
     )
@@ -333,13 +338,14 @@ pub async fn copy_rooted_blocks_with_mode_and_limit_and_checkpoint<S, D, F>(
     root_ids: &[BlockHash],
     destination_mode: CopyDestinationMode,
     max_in_flight_destination_writes: usize,
+    worker_thread_count: usize,
     progress: Option<RootedBlockCopyProgress>,
     blind_write_checkpoint: BlindWriteCheckpoint<F>,
 ) -> RootedBlockCopyReport
 where
-    S: BlockStore,
-    D: BlockStore,
-    F: FnMut(&mut D) -> Result<(), BlockStoreError>,
+    S: BlockStore + Sync,
+    D: BlockStore + Sync,
+    F: FnMut(&mut D) -> Result<(), BlockStoreError> + Send,
 {
     copy_rooted_blocks_with_mode_and_limits_and_checkpoint(
         source,
@@ -348,6 +354,7 @@ where
         destination_mode,
         CopyExecutionConfig {
             max_in_flight_destination_writes,
+            worker_thread_count,
             max_in_flight_destination_write_bytes: DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITE_BYTES,
             progress,
             blind_write_checkpoint: Some(blind_write_checkpoint),
@@ -362,12 +369,13 @@ async fn copy_rooted_blocks_with_mode_and_limits<S, D>(
     root_ids: &[BlockHash],
     destination_mode: CopyDestinationMode,
     max_in_flight_destination_writes: usize,
+    worker_thread_count: usize,
     max_in_flight_destination_write_bytes: usize,
     progress: Option<RootedBlockCopyProgress>,
 ) -> RootedBlockCopyReport
 where
-    S: BlockStore,
-    D: BlockStore,
+    S: BlockStore + Sync,
+    D: BlockStore + Sync,
 {
     copy_rooted_blocks_with_mode_and_limits_and_checkpoint::<
         S,
@@ -380,6 +388,7 @@ where
         destination_mode,
         CopyExecutionConfig {
             max_in_flight_destination_writes,
+            worker_thread_count,
             max_in_flight_destination_write_bytes,
             progress,
             blind_write_checkpoint: None,
@@ -396,9 +405,40 @@ async fn copy_rooted_blocks_with_mode_and_limits_and_checkpoint<S, D, F>(
     execution_config: CopyExecutionConfig<F>,
 ) -> RootedBlockCopyReport
 where
-    S: BlockStore,
-    D: BlockStore,
-    F: FnMut(&mut D) -> Result<(), BlockStoreError>,
+    S: BlockStore + Sync,
+    D: BlockStore + Sync,
+    F: FnMut(&mut D) -> Result<(), BlockStoreError> + Send,
+{
+    if execution_config.worker_thread_count <= 1 {
+        return copy_rooted_blocks_single_worker_with_mode_and_limits_and_checkpoint(
+            source,
+            destination,
+            root_ids,
+            destination_mode,
+            execution_config,
+        )
+        .await;
+    }
+    copy_rooted_blocks_multi_worker_with_mode_and_limits_and_checkpoint(
+        source,
+        destination,
+        root_ids,
+        destination_mode,
+        execution_config,
+    )
+}
+
+async fn copy_rooted_blocks_single_worker_with_mode_and_limits_and_checkpoint<S, D, F>(
+    source: &S,
+    destination: &mut D,
+    root_ids: &[BlockHash],
+    destination_mode: CopyDestinationMode,
+    execution_config: CopyExecutionConfig<F>,
+) -> RootedBlockCopyReport
+where
+    S: BlockStore + Sync,
+    D: BlockStore + Sync,
+    F: FnMut(&mut D) -> Result<(), BlockStoreError> + Send,
 {
     let requested_root_ids = root_ids.iter().map(ToString::to_string).collect::<Vec<_>>();
     let mut queue = root_ids
@@ -409,6 +449,7 @@ where
     let mut visited = HashSet::new();
     let CopyExecutionConfig {
         max_in_flight_destination_writes,
+        worker_thread_count: _,
         max_in_flight_destination_write_bytes,
         progress,
         blind_write_checkpoint,
@@ -543,6 +584,577 @@ where
             .then_some(metrics.attempted_write_block_count),
         failed_block_count: count_failed_blocks(failures.failures()),
         failures: failures.into_failures(),
+    }
+}
+
+fn copy_rooted_blocks_multi_worker_with_mode_and_limits_and_checkpoint<S, D, F>(
+    source: &S,
+    destination: &mut D,
+    root_ids: &[BlockHash],
+    destination_mode: CopyDestinationMode,
+    execution_config: CopyExecutionConfig<F>,
+) -> RootedBlockCopyReport
+where
+    S: BlockStore + Sync,
+    D: BlockStore + Sync,
+    F: FnMut(&mut D) -> Result<(), BlockStoreError> + Send,
+{
+    let requested_root_ids = root_ids.iter().map(ToString::to_string).collect::<Vec<_>>();
+    let CopyExecutionConfig {
+        max_in_flight_destination_writes,
+        worker_thread_count,
+        max_in_flight_destination_write_bytes,
+        progress,
+        blind_write_checkpoint,
+    } = execution_config;
+    let work_queue = ThreadedWorkQueue::new(root_ids);
+    let visited = Mutex::new(HashSet::new());
+    let metrics = Mutex::new(CopyMetrics::new(progress.clone()));
+    let failures = Mutex::new(CopyFailureTracker::new(progress.clone()));
+    let stop_requested = AtomicBool::new(false);
+    let write_coordinator = ThreadedWriteCoordinator::new(
+        max_in_flight_destination_writes.max(1),
+        max_in_flight_destination_write_bytes,
+        blind_write_checkpoint
+            .as_ref()
+            .map(|checkpoint| checkpoint.interval),
+    );
+    let checkpoint = Mutex::new(blind_write_checkpoint);
+    let destination_ptr = ThreadedDestinationPtr(destination as *mut D);
+    let destination_ref: &D = destination;
+
+    std::thread::scope(|scope| {
+        for _ in 0..worker_thread_count.max(1) {
+            scope.spawn(|| {
+                run_threaded_copy_worker(
+                    source,
+                    destination_ref,
+                    destination_ptr,
+                    root_ids,
+                    destination_mode,
+                    &work_queue,
+                    &visited,
+                    &metrics,
+                    &failures,
+                    &write_coordinator,
+                    &checkpoint,
+                    progress.as_ref(),
+                    &stop_requested,
+                );
+            });
+        }
+    });
+
+    let metrics = metrics
+        .into_inner()
+        .expect("threaded copy metrics mutex poisoned");
+    let failures = failures
+        .into_inner()
+        .expect("threaded copy failures mutex poisoned");
+    RootedBlockCopyReport {
+        destination_mode,
+        requested_root_ids,
+        copied_block_count: matches!(destination_mode, CopyDestinationMode::ReadBeforeWrite)
+            .then_some(metrics.copied_block_count),
+        skipped_already_present_block_count: matches!(
+            destination_mode,
+            CopyDestinationMode::ReadBeforeWrite
+        )
+        .then_some(metrics.skipped_already_present_block_count),
+        attempted_write_block_count: matches!(destination_mode, CopyDestinationMode::BlindWrite)
+            .then_some(metrics.attempted_write_block_count),
+        failed_block_count: count_failed_blocks(failures.failures()),
+        failures: failures.into_failures(),
+    }
+}
+
+fn run_threaded_copy_worker<S, D, F>(
+    source: &S,
+    destination: &D,
+    destination_ptr: ThreadedDestinationPtr<D>,
+    root_ids: &[BlockHash],
+    destination_mode: CopyDestinationMode,
+    work_queue: &ThreadedWorkQueue,
+    visited: &Mutex<HashSet<BlockHash>>,
+    metrics: &Mutex<CopyMetrics>,
+    failures: &Mutex<CopyFailureTracker>,
+    write_coordinator: &ThreadedWriteCoordinator,
+    checkpoint: &Mutex<Option<BlindWriteCheckpoint<F>>>,
+    progress: Option<&RootedBlockCopyProgress>,
+    stop_requested: &AtomicBool,
+) where
+    S: BlockStore + Sync,
+    D: BlockStore + Sync,
+    F: FnMut(&mut D) -> Result<(), BlockStoreError> + Send,
+{
+    while let Some((request_root_id, block_id)) = work_queue.pop(stop_requested) {
+        {
+            let mut failures = failures
+                .lock()
+                .expect("threaded copy failures mutex poisoned");
+            failures.note_block_root(request_root_id, block_id);
+        }
+
+        let first_visit = {
+            let mut visited = visited
+                .lock()
+                .expect("threaded copy visited mutex poisoned");
+            visited.insert(block_id)
+        };
+        if !first_visit {
+            work_queue.finish_item(stop_requested);
+            continue;
+        }
+
+        let Some(block_bytes) = read_source_block_threaded(source, block_id, failures, progress)
+        else {
+            work_queue.finish_item(stop_requested);
+            continue;
+        };
+
+        let child_ids = {
+            let mut failures = failures
+                .lock()
+                .expect("threaded copy failures mutex poisoned");
+            let child_ids = decode_source_block(block_id, &block_bytes, &mut failures);
+            failures.remember_children(block_id, &child_ids);
+            child_ids
+        };
+
+        if !stop_requested.load(Ordering::SeqCst) {
+            work_queue.enqueue_children(request_root_id, &child_ids, stop_requested);
+        }
+
+        match destination_mode {
+            CopyDestinationMode::ReadBeforeWrite => {
+                if stop_requested.load(Ordering::SeqCst) {
+                    work_queue.finish_item(stop_requested);
+                    continue;
+                }
+                match block_store_get_block_bytes(destination, &block_id) {
+                    Ok(Some(_)) => {
+                        metrics
+                            .lock()
+                            .expect("threaded copy metrics mutex poisoned")
+                            .note_skipped_already_present_block();
+                    }
+                    Ok(None) => {
+                        let reservation = write_coordinator.reserve_write(
+                            block_bytes.len(),
+                            destination_mode,
+                            stop_requested,
+                        );
+                        if let Some(reservation) = reservation {
+                            let result =
+                                block_store_put_block_bytes(destination, &block_id, &block_bytes);
+                            let should_checkpoint =
+                                write_coordinator.complete_write(reservation.block_bytes_len);
+                            record_threaded_write_result(block_id, true, result, metrics, failures);
+                            if should_checkpoint {
+                                run_threaded_checkpoint_if_needed(
+                                    destination_ptr,
+                                    root_ids,
+                                    failures,
+                                    write_coordinator,
+                                    checkpoint,
+                                    stop_requested,
+                                );
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        failures
+                            .lock()
+                            .expect("threaded copy failures mutex poisoned")
+                            .record(
+                                block_id,
+                                CopyFailureOperation::CheckDestinationBlock,
+                                error.to_string(),
+                            );
+                    }
+                }
+            }
+            CopyDestinationMode::BlindWrite => {
+                if let Some(reservation) = write_coordinator.reserve_write(
+                    block_bytes.len(),
+                    destination_mode,
+                    stop_requested,
+                ) {
+                    metrics
+                        .lock()
+                        .expect("threaded copy metrics mutex poisoned")
+                        .note_attempted_write_block();
+                    let result = block_store_put_block_bytes(destination, &block_id, &block_bytes);
+                    let should_checkpoint =
+                        write_coordinator.complete_write(reservation.block_bytes_len);
+                    record_threaded_write_result(block_id, false, result, metrics, failures);
+                    if should_checkpoint {
+                        run_threaded_checkpoint_if_needed(
+                            destination_ptr,
+                            root_ids,
+                            failures,
+                            write_coordinator,
+                            checkpoint,
+                            stop_requested,
+                        );
+                    }
+                }
+            }
+        }
+
+        work_queue.finish_item(stop_requested);
+    }
+}
+
+fn read_source_block_threaded<S>(
+    source: &S,
+    block_id: BlockHash,
+    failures: &Mutex<CopyFailureTracker>,
+    progress: Option<&RootedBlockCopyProgress>,
+) -> Option<Vec<u8>>
+where
+    S: BlockStore + Sync,
+{
+    if let Some(progress) = progress {
+        progress.note_read_source_block();
+    }
+    match block_store_get_block_bytes(source, &block_id) {
+        Ok(Some(bytes)) => Some(bytes),
+        Ok(None) => {
+            failures
+                .lock()
+                .expect("threaded copy failures mutex poisoned")
+                .record(
+                    block_id,
+                    CopyFailureOperation::ReadSourceBlock,
+                    "source block was not found",
+                );
+            None
+        }
+        Err(error) => {
+            failures
+                .lock()
+                .expect("threaded copy failures mutex poisoned")
+                .record(
+                    block_id,
+                    CopyFailureOperation::ReadSourceBlock,
+                    error.to_string(),
+                );
+            None
+        }
+    }
+}
+
+fn block_store_get_block_bytes<S>(
+    store: &S,
+    block_id: &BlockHash,
+) -> Result<Option<Vec<u8>>, BlockStoreError>
+where
+    S: BlockStore + Sync,
+{
+    crate::block_store::block_on_block_store_future(store.get_block_bytes(block_id))
+}
+
+fn block_store_put_block_bytes<D>(
+    store: &D,
+    block_id: &BlockHash,
+    block_bytes: &[u8],
+) -> Result<(), BlockStoreError>
+where
+    D: BlockStore + Sync,
+{
+    crate::block_store::block_on_block_store_future(store.put_block_bytes(block_id, block_bytes))
+}
+
+fn record_threaded_write_result(
+    block_id: BlockHash,
+    count_as_copied: bool,
+    result: Result<(), BlockStoreError>,
+    metrics: &Mutex<CopyMetrics>,
+    failures: &Mutex<CopyFailureTracker>,
+) {
+    match result {
+        Ok(()) => {
+            if count_as_copied {
+                metrics
+                    .lock()
+                    .expect("threaded copy metrics mutex poisoned")
+                    .note_copied_block();
+            }
+        }
+        Err(error) => {
+            failures
+                .lock()
+                .expect("threaded copy failures mutex poisoned")
+                .record(
+                    block_id,
+                    CopyFailureOperation::WriteDestinationBlock,
+                    error.to_string(),
+                );
+        }
+    }
+}
+
+fn run_threaded_checkpoint_if_needed<D, F>(
+    destination_ptr: ThreadedDestinationPtr<D>,
+    root_ids: &[BlockHash],
+    failures: &Mutex<CopyFailureTracker>,
+    write_coordinator: &ThreadedWriteCoordinator,
+    checkpoint: &Mutex<Option<BlindWriteCheckpoint<F>>>,
+    stop_requested: &AtomicBool,
+) where
+    D: BlockStore + Sync,
+    F: FnMut(&mut D) -> Result<(), BlockStoreError> + Send,
+{
+    let result = {
+        let mut checkpoint = checkpoint
+            .lock()
+            .expect("threaded copy checkpoint mutex poisoned");
+        let checkpoint = checkpoint
+            .as_mut()
+            .expect("threaded checkpoint must exist when checkpoint coordination is enabled");
+        // SAFETY: the write coordinator calls this only after blocking new writes and
+        // observing that no destination writes remain active, so this is the sole
+        // destination access point while checkpoint compaction is running.
+        unsafe { (checkpoint.action)(&mut *destination_ptr.0) }
+    };
+    match result {
+        Ok(()) => write_coordinator.finish_checkpoint(),
+        Err(error) => {
+            failures
+                .lock()
+                .expect("threaded copy failures mutex poisoned")
+                .record_store_failure(
+                    root_ids,
+                    CopyFailureOperation::CompactDestinationStore,
+                    error.to_string(),
+                );
+            stop_requested.store(true, Ordering::SeqCst);
+            write_coordinator.fail_checkpoint();
+        }
+    }
+}
+
+struct ThreadedWorkQueue {
+    state: Mutex<ThreadedWorkQueueState>,
+    ready: Condvar,
+}
+
+struct ThreadedWorkQueueState {
+    queue: VecDeque<(BlockHash, BlockHash)>,
+    active_workers: usize,
+    shutdown: bool,
+}
+
+struct ThreadedWriteCoordinator {
+    state: Mutex<ThreadedWriteState>,
+    ready: Condvar,
+    max_in_flight_destination_writes: usize,
+    max_in_flight_destination_write_bytes: usize,
+    checkpoint_interval: Option<usize>,
+}
+
+struct ThreadedWriteState {
+    active_writes: usize,
+    active_write_bytes: usize,
+    attempted_write_count: usize,
+    checkpoint_pending: bool,
+    checkpoint_running: bool,
+}
+
+struct ThreadedWriteReservation {
+    block_bytes_len: usize,
+}
+
+struct ThreadedDestinationPtr<D>(*mut D);
+
+impl<D> Clone for ThreadedDestinationPtr<D> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<D> Copy for ThreadedDestinationPtr<D> {}
+
+unsafe impl<D> Send for ThreadedDestinationPtr<D> {}
+unsafe impl<D> Sync for ThreadedDestinationPtr<D> {}
+
+impl ThreadedWorkQueue {
+    fn new(root_ids: &[BlockHash]) -> Self {
+        Self {
+            state: Mutex::new(ThreadedWorkQueueState {
+                queue: root_ids
+                    .iter()
+                    .copied()
+                    .map(|root_id| (root_id, root_id))
+                    .collect(),
+                active_workers: 0,
+                shutdown: false,
+            }),
+            ready: Condvar::new(),
+        }
+    }
+
+    fn pop(&self, stop_requested: &AtomicBool) -> Option<(BlockHash, BlockHash)> {
+        let mut state = self
+            .state
+            .lock()
+            .expect("threaded copy work queue mutex poisoned");
+        loop {
+            if state.shutdown || stop_requested.load(Ordering::SeqCst) {
+                state.shutdown = true;
+                self.ready.notify_all();
+                return None;
+            }
+            if let Some(item) = state.queue.pop_front() {
+                state.active_workers += 1;
+                return Some(item);
+            }
+            if state.active_workers == 0 {
+                state.shutdown = true;
+                self.ready.notify_all();
+                return None;
+            }
+            state = self
+                .ready
+                .wait(state)
+                .expect("threaded copy work queue mutex poisoned while waiting");
+        }
+    }
+
+    fn enqueue_children(
+        &self,
+        request_root_id: BlockHash,
+        child_ids: &[BlockHash],
+        stop_requested: &AtomicBool,
+    ) {
+        if child_ids.is_empty() || stop_requested.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut state = self
+            .state
+            .lock()
+            .expect("threaded copy work queue mutex poisoned");
+        if state.shutdown {
+            return;
+        }
+        enqueue_children(request_root_id, child_ids, &mut state.queue);
+        self.ready.notify_all();
+    }
+
+    fn finish_item(&self, stop_requested: &AtomicBool) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("threaded copy work queue mutex poisoned");
+        state.active_workers = state.active_workers.saturating_sub(1);
+        if stop_requested.load(Ordering::SeqCst)
+            || (state.active_workers == 0 && state.queue.is_empty())
+        {
+            state.shutdown = true;
+        }
+        self.ready.notify_all();
+    }
+}
+
+impl ThreadedWriteCoordinator {
+    fn new(
+        max_in_flight_destination_writes: usize,
+        max_in_flight_destination_write_bytes: usize,
+        checkpoint_interval: Option<usize>,
+    ) -> Self {
+        Self {
+            state: Mutex::new(ThreadedWriteState {
+                active_writes: 0,
+                active_write_bytes: 0,
+                attempted_write_count: 0,
+                checkpoint_pending: false,
+                checkpoint_running: false,
+            }),
+            ready: Condvar::new(),
+            max_in_flight_destination_writes,
+            max_in_flight_destination_write_bytes,
+            checkpoint_interval,
+        }
+    }
+
+    fn reserve_write(
+        &self,
+        block_bytes_len: usize,
+        destination_mode: CopyDestinationMode,
+        stop_requested: &AtomicBool,
+    ) -> Option<ThreadedWriteReservation> {
+        let mut state = self
+            .state
+            .lock()
+            .expect("threaded copy write coordinator mutex poisoned");
+        loop {
+            if stop_requested.load(Ordering::SeqCst) {
+                return None;
+            }
+            let write_limit_reached = state.active_writes >= self.max_in_flight_destination_writes;
+            let byte_limit_reached = !matches!(state.active_writes, 0)
+                && self.max_in_flight_destination_write_bytes > 0
+                && state.active_write_bytes.saturating_add(block_bytes_len)
+                    > self.max_in_flight_destination_write_bytes;
+            if state.checkpoint_pending
+                || state.checkpoint_running
+                || write_limit_reached
+                || byte_limit_reached
+            {
+                state = self
+                    .ready
+                    .wait(state)
+                    .expect("threaded copy write coordinator mutex poisoned while waiting");
+                continue;
+            }
+            state.active_writes += 1;
+            state.active_write_bytes += block_bytes_len;
+            if matches!(destination_mode, CopyDestinationMode::BlindWrite)
+                && self
+                    .checkpoint_interval
+                    .is_some_and(|interval| interval > 0)
+            {
+                state.attempted_write_count += 1;
+                if state.attempted_write_count.is_multiple_of(
+                    self.checkpoint_interval
+                        .expect("checked checkpoint interval above"),
+                ) {
+                    state.checkpoint_pending = true;
+                }
+            }
+            return Some(ThreadedWriteReservation { block_bytes_len });
+        }
+    }
+
+    fn complete_write(&self, block_bytes_len: usize) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .expect("threaded copy write coordinator mutex poisoned");
+        state.active_writes = state.active_writes.saturating_sub(1);
+        state.active_write_bytes = state.active_write_bytes.saturating_sub(block_bytes_len);
+        let should_run_checkpoint =
+            state.checkpoint_pending && !state.checkpoint_running && state.active_writes == 0;
+        if should_run_checkpoint {
+            state.checkpoint_running = true;
+        }
+        self.ready.notify_all();
+        should_run_checkpoint
+    }
+
+    fn finish_checkpoint(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("threaded copy write coordinator mutex poisoned");
+        state.checkpoint_pending = false;
+        state.checkpoint_running = false;
+        self.ready.notify_all();
+    }
+
+    fn fail_checkpoint(&self) {
+        self.finish_checkpoint();
     }
 }
 
@@ -1543,6 +2155,7 @@ mod tests {
             &[root],
             CopyDestinationMode::ReadBeforeWrite,
             DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            DEFAULT_COPY_WORKER_THREADS,
             Some(progress.clone()),
         )
         .await;
@@ -1576,6 +2189,7 @@ mod tests {
             &[root],
             CopyDestinationMode::BlindWrite,
             DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            DEFAULT_COPY_WORKER_THREADS,
             Some(progress.clone()),
         )
         .await;
@@ -1603,6 +2217,7 @@ mod tests {
             &[root],
             CopyDestinationMode::ReadBeforeWrite,
             DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            DEFAULT_COPY_WORKER_THREADS,
             Some(progress.clone()),
         )
         .await;
@@ -1630,6 +2245,7 @@ mod tests {
             &[root],
             CopyDestinationMode::ReadBeforeWrite,
             DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            DEFAULT_COPY_WORKER_THREADS,
             Some(progress.clone()),
         )
         .await;
@@ -1702,6 +2318,7 @@ mod tests {
             &[root],
             CopyDestinationMode::BlindWrite,
             DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            DEFAULT_COPY_WORKER_THREADS,
             None,
             BlindWriteCheckpoint {
                 interval: 2,
@@ -1732,6 +2349,7 @@ mod tests {
             &[root],
             CopyDestinationMode::BlindWrite,
             DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            DEFAULT_COPY_WORKER_THREADS,
             None,
             BlindWriteCheckpoint {
                 interval: 2,
@@ -1773,6 +2391,7 @@ mod tests {
             &[root_a, root_b],
             CopyDestinationMode::BlindWrite,
             DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            DEFAULT_COPY_WORKER_THREADS,
             None,
             BlindWriteCheckpoint {
                 interval: 1,
@@ -1878,6 +2497,7 @@ mod tests {
             &[root],
             CopyDestinationMode::ReadBeforeWrite,
             8,
+            DEFAULT_COPY_WORKER_THREADS,
             max_in_flight_destination_write_bytes,
             None,
         )
@@ -1891,6 +2511,66 @@ mod tests {
             "observed {} in-flight bytes with cap {}",
             destination.inner.max_in_flight_bytes(),
             max_in_flight_destination_write_bytes
+        );
+    }
+
+    #[tokio::test]
+    async fn rooted_block_copy_multi_worker_traversal_processes_shared_child_once() {
+        let source_inner = Arc::new(MemoryBlockStore::new(16).unwrap());
+        let shared = source_inner.put(&leaf_block("shared")).await.unwrap();
+        let left = source_inner
+            .put(&leaf_block_with_refs(
+                "left",
+                &[("email_artifact_ref", shared.to_string())],
+            ))
+            .await
+            .unwrap();
+        let right = source_inner
+            .put(&leaf_block_with_refs(
+                "right",
+                &[("email_artifact_ref", shared.to_string())],
+            ))
+            .await
+            .unwrap();
+        let root = source_inner
+            .put(&branch_block(&[left, right]))
+            .await
+            .unwrap();
+        let source = Arc::new(BlockingReadStore::new(
+            Arc::clone(&source_inner),
+            HashSet::from([left, right]),
+            2,
+        ));
+        let observer_source = Arc::clone(&source);
+        let observer = std::thread::spawn(move || {
+            observer_source.wait_until_max_observed();
+            observer_source.release_reads();
+        });
+        let mut destination = MemoryBlockStore::new(16).unwrap();
+
+        let report = copy_rooted_blocks_with_mode_and_limit_and_progress(
+            source.as_ref(),
+            &mut destination,
+            &[root],
+            CopyDestinationMode::ReadBeforeWrite,
+            DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            2,
+            None,
+        )
+        .await;
+
+        observer.join().unwrap();
+
+        assert_eq!(source.max_in_flight_reads(), 2);
+        assert_eq!(report.copied_block_count, Some(4));
+        assert_eq!(report.skipped_already_present_block_count, Some(0));
+        assert_eq!(report.failed_block_count, 0);
+        assert!(
+            destination
+                .get_block_bytes(&shared)
+                .await
+                .unwrap()
+                .is_some()
         );
     }
 
@@ -1966,6 +2646,18 @@ mod tests {
         release_writes_notify: tokio::sync::Notify,
     }
 
+    struct BlockingReadStore {
+        inner: Arc<MemoryBlockStore>,
+        blocked_reads: HashSet<BlockHash>,
+        active_reads: AtomicUsize,
+        max_in_flight_reads: AtomicUsize,
+        target_max_in_flight_reads: usize,
+        observed_target_reads: Mutex<bool>,
+        observed_target_reads_ready: Condvar,
+        release_reads: Mutex<bool>,
+        release_reads_ready: Condvar,
+    }
+
     struct SlowByteTrackingPutStore {
         inner: Arc<MemoryBlockStore>,
         active_write_bytes: AtomicUsize,
@@ -2024,6 +2716,52 @@ mod tests {
 
         fn max_in_flight_bytes(&self) -> usize {
             self.max_in_flight_bytes.load(Ordering::SeqCst)
+        }
+    }
+
+    impl BlockingReadStore {
+        fn new(
+            inner: Arc<MemoryBlockStore>,
+            blocked_reads: HashSet<BlockHash>,
+            target_max_in_flight_reads: usize,
+        ) -> Self {
+            Self {
+                inner,
+                blocked_reads,
+                active_reads: AtomicUsize::new(0),
+                max_in_flight_reads: AtomicUsize::new(0),
+                target_max_in_flight_reads,
+                observed_target_reads: Mutex::new(false),
+                observed_target_reads_ready: Condvar::new(),
+                release_reads: Mutex::new(false),
+                release_reads_ready: Condvar::new(),
+            }
+        }
+
+        fn wait_until_max_observed(&self) {
+            let mut observed = self
+                .observed_target_reads
+                .lock()
+                .expect("blocking read observer mutex poisoned");
+            while !*observed {
+                observed = self
+                    .observed_target_reads_ready
+                    .wait(observed)
+                    .expect("blocking read observer mutex poisoned while waiting");
+            }
+        }
+
+        fn release_reads(&self) {
+            let mut released = self
+                .release_reads
+                .lock()
+                .expect("blocking read release mutex poisoned");
+            *released = true;
+            self.release_reads_ready.notify_all();
+        }
+
+        fn max_in_flight_reads(&self) -> usize {
+            self.max_in_flight_reads.load(Ordering::SeqCst)
         }
     }
 
@@ -2129,6 +2867,57 @@ mod tests {
             &self,
             block_id: &BlockHash,
         ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            self.inner.get_block_bytes(block_id).await
+        }
+
+        fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+            self.inner.iter_block_ids()
+        }
+    }
+
+    #[async_trait]
+    impl BlockStore for BlockingReadStore {
+        async fn put_block_bytes(
+            &self,
+            block_id: &BlockHash,
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            self.inner.put_block_bytes(block_id, block_bytes).await
+        }
+
+        async fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            if self.blocked_reads.contains(block_id) {
+                let active = self.active_reads.fetch_add(1, Ordering::SeqCst) + 1;
+                self.max_in_flight_reads.fetch_max(active, Ordering::SeqCst);
+                if active >= self.target_max_in_flight_reads {
+                    let mut observed = self
+                        .observed_target_reads
+                        .lock()
+                        .expect("blocking read observer mutex poisoned");
+                    if !*observed {
+                        *observed = true;
+                        self.observed_target_reads_ready.notify_all();
+                    }
+                }
+                {
+                    let mut released = self
+                        .release_reads
+                        .lock()
+                        .expect("blocking read release mutex poisoned");
+                    while !*released {
+                        released = self
+                            .release_reads_ready
+                            .wait(released)
+                            .expect("blocking read release mutex poisoned while waiting");
+                    }
+                }
+                let result = self.inner.get_block_bytes(block_id).await;
+                self.active_reads.fetch_sub(1, Ordering::SeqCst);
+                return result;
+            }
             self.inner.get_block_bytes(block_id).await
         }
 

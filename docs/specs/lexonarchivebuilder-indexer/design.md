@@ -22,7 +22,8 @@ replay-stable fingerprinting, temporary upstream `main` tracking for
 rapid profile validation, upstream wgpu-acceleration revision
 compatibility, 0.6.x published-profile evaluation, local testing sweep
 automation, v0.7.0 fixed-budget ladder experiment automation, rooted
-block-store copy tooling with live default heartbeat counters, CLI-only
+block-store copy tooling with live default heartbeat counters plus additive
+worker-threaded traversal, CLI-only
 local-redb maintenance compaction, upstream embedding-readback API adoption, LAB-owned
 replay-journaled split-stage recovery, bounded-residency deterministic replay
 ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, replay batch-size decoupling from CPU concurrency, bounded multi-batch replay-prefetch buffering, and layer-parallel
@@ -49,8 +50,9 @@ latest published-profile and telemetry compatibility, temporary upstream
 `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, upstream regression assessment,
 0.6.x published-profile evaluation, local testing sweep automation,
-v0.7.0 fixed-budget ladder experiment automation, rooted block-store copy tooling,
-upstream embedding-readback API adoption, embedding-phase
+v0.7.0 fixed-budget ladder experiment automation, rooted block-store copy
+tooling with additive worker-threaded traversal, upstream embedding-readback
+API adoption, embedding-phase
 batch-progress observability,
 replay-submission observability, streaming-status observability,
 pass-end convergence telemetry, user-usable convergence diagnosis, explicit delegated-contract and
@@ -1768,6 +1770,29 @@ discovers only the blocks reachable from those roots by following stored
 references, and writes raw block bytes to the destination boundary without
 re-encoding block payloads or introducing backend-specific transfer logic.
 
+When the operator-selected rooted-copy worker-thread count is greater than one,
+the same rooted traversal is realized through one shared queue of pending block
+identities plus concurrent workers that each repeat the same repository-owned
+workflow: pop one block identity, read the corresponding source block, decode
+it, append any newly discovered child block identities to the back of the
+shared queue, and then submit the block to the already-approved destination-
+side copy mode.
+
+That worker-threaded traversal is additive to the existing asynchronous
+destination-write pipeline rather than a replacement for it. Traversal workers
+decide what block identities become eligible for destination handling, while
+the separate bounded destination-write limit continues to govern how many
+destination writes may remain in flight after a block has already reached the
+publication path.
+
+Because rooted graphs may converge on the same immutable child through multiple
+parents, the shared traversal design must preserve at-most-once logical
+handling for each block identity within one invocation even when multiple
+workers discover the same child concurrently. The design therefore constrains
+queue admission, visited tracking, and reporting semantics to remain rooted-
+reachability-preserving and mode-truthful rather than coupling correctness to
+one serialized traversal order.
+
 Because the transfer contract is hash-addressed immutable block identity, the
 copy workflow treats destination preexistence as a normal condition: it may
 check whether a destination block identity is already present and skip that
@@ -2125,6 +2150,10 @@ dedicated CLI-only operator surface that accepts:
 - one source block-store target using the approved shared profile contract
 - one destination block-store target using the same approved contract
 - one or more caller-supplied root block identifiers
+- one optional worker-thread count for source-side rooted traversal, with first
+  approved default `1`
+- one separate optional maximum in-flight destination-write limit, with first
+  approved default `64`
 - one optional artifact destination when the default JSON output location is
   insufficient
 
@@ -2151,6 +2180,12 @@ destination reads hang or are disproportionately expensive: it still traverses
 the same rooted immutable graph and still treats duplicate publication as safe,
 but it accepts weaker outcome classification in exchange for avoiding
 destination presence checks entirely.
+
+The new worker-thread control is separate from that destination-mode choice and
+from the destination-write overlap limit. Operators may therefore keep the
+current single-worker traversal while widening destination-write overlap, widen
+traversal worker count while keeping conservative write overlap, or tune both
+surfaces together without changing the CLI-only rooted-copy boundary.
 
 When rooted traversal determines that destination publication is required, the
 same CLI surface may keep multiple destination writes in flight
@@ -2390,12 +2425,14 @@ LexonArchiveBuilder-owned verification artifacts validate:
 - correct rooted block copy over the shared `BlockStore` boundary, including
   reachable-only traversal, identity-preserving transfer, the default
   read-before-write classification path, the opt-in blind-write path with
-  reduced copied-versus-skipped accounting, bounded asynchronous destination-
-  write concurrency with one operator-selectable limit defaulting to `64`,
-  blind-write checkpoint compaction every `500,000` attempted writes when the
-  destination is direct local redb, failure reporting, default in-flight
-  liveness on the normal CLI surface, and preservation of mutable-reference
-  exclusion
+  reduced copied-versus-skipped accounting, one operator-selectable rooted-
+  traversal worker-thread limit defaulting to `1`, bounded asynchronous
+  destination-write concurrency with a separate operator-selectable limit
+  defaulting to `64`, blind-write checkpoint compaction every `500,000`
+  attempted writes when the destination is direct local redb, failure
+  reporting, default in-flight liveness on the normal CLI surface, at-most-once
+  logical handling for duplicate child discovery, and preservation of mutable-
+  reference exclusion
 - correct application and defaulting of the administrator-defined concurrency
   budget
 - preservation of stable batch contracts across environments
