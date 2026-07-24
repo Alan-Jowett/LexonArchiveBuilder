@@ -14,7 +14,7 @@ use lexongraph_block_store_azure_table_v2::AzureTableBlockStoreV2;
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_block_store_memory::MemoryBlockStore;
 use lexongraph_block_store_overlay::{OverlayBlockStore, OverlayStoreLayer, PassiveLayer};
-use lexongraph_block_store_redb::RedbBlockStore;
+use lexongraph_block_store_redb::{RedbBlockStore, RedbBlockStoreDurabilityMode};
 
 use crate::config::{EnvironmentConfig, ProductionBlockStoreConfig};
 use crate::paths::resolve_path;
@@ -37,6 +37,18 @@ impl ConfiguredBlockStore {
         request_dir: &Path,
         environment: &EnvironmentConfig,
     ) -> Result<Self, BlockStoreError> {
+        Self::from_environment_with_redb_durability(
+            request_dir,
+            environment,
+            RedbBlockStoreDurabilityMode::Durable,
+        )
+    }
+
+    pub fn from_environment_with_redb_durability(
+        request_dir: &Path,
+        environment: &EnvironmentConfig,
+        redb_durability_mode: RedbBlockStoreDurabilityMode,
+    ) -> Result<Self, BlockStoreError> {
         match environment {
             EnvironmentConfig::Local {
                 block_store_root, ..
@@ -44,8 +56,11 @@ impl ConfiguredBlockStore {
                 .map(Self::Local),
             EnvironmentConfig::LocalRedb {
                 block_store_root, ..
-            } => RedbBlockStore::new(resolve_path(request_dir, block_store_root))
-                .map(Self::LocalRedb),
+            } => RedbBlockStore::new_with_durability(
+                resolve_path(request_dir, block_store_root),
+                redb_durability_mode,
+            )
+            .map(Self::LocalRedb),
             EnvironmentConfig::LocalOverlay { block_store, .. }
             | EnvironmentConfig::Production { block_store, .. } => {
                 Self::production_overlay_store(request_dir, block_store)
@@ -231,7 +246,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::config::ProductionEmbeddingConfig;
+    use crate::config::{LocalEmbeddingConfig, ProductionEmbeddingConfig};
 
     fn put_block(store: &impl BlockStore, block: &Block) -> BlockHash {
         block_on_block_store_future(store.put(block)).unwrap()
@@ -316,6 +331,35 @@ mod tests {
         .unwrap();
 
         assert_eq!(block_ids, vec![block_id]);
+    }
+
+    #[test]
+    fn configured_local_redb_store_supports_fast_durability() {
+        let dir = tempdir().unwrap();
+        let environment = EnvironmentConfig::LocalRedb {
+            block_store_root: dir.path().join("blocks"),
+            embedding: LocalEmbeddingConfig {
+                base_url: "http://unused.local".into(),
+                model: "all-MiniLM-L6-v2".into(),
+                api_key_env: None,
+                request_timeout_secs: 30,
+                max_retries: 5,
+                retry_delay_ms: 1_000,
+            },
+        };
+        let store = ConfiguredBlockStore::from_environment_with_redb_durability(
+            Path::new("."),
+            &environment,
+            RedbBlockStoreDurabilityMode::Fast,
+        )
+        .unwrap();
+
+        match store {
+            ConfiguredBlockStore::LocalRedb(store) => {
+                assert!(format!("{store:?}").contains("Fast"));
+            }
+            _ => panic!("expected local redb store"),
+        }
     }
 
     #[test]
