@@ -108,6 +108,18 @@ impl ConfiguredBlockStore {
             .map_err(|error| BlockStoreError::BackendFailure(error.to_string()))?;
         AzureTableBlockStoreV2::new(&config.container_sas_url).map(Self::AzureTable)
     }
+
+    pub fn compact_now(&mut self) -> Result<(), BlockStoreError> {
+        match self {
+            Self::LocalRedb(store) => store.compact_now(),
+            Self::GatewayHttp3(_) | Self::Local(_) | Self::Overlay(_) | Self::AzureTable(_) => {
+                Err(BlockStoreError::BackendFailure(
+                    "maintenance compact is supported only for the local-redb block-store profile"
+                        .to_owned(),
+                ))
+            }
+        }
+    }
 }
 
 pub(crate) fn block_on_block_store_future<F>(future: F) -> F::Output
@@ -242,7 +254,9 @@ impl BlockStore for ConfiguredBlockStore {
 #[cfg(test)]
 mod tests {
     use futures::TryStreamExt;
-    use lexongraph_block::{Block, Content, EmbeddingSpec, LeafBlock, LeafEntry, VERSION_1};
+    use lexongraph_block::{
+        Block, Content, EmbeddingSpec, LeafBlock, LeafEntry, VERSION_1, serialize_block,
+    };
     use tempfile::tempdir;
 
     use super::*;
@@ -360,6 +374,36 @@ mod tests {
             }
             _ => panic!("expected local redb store"),
         }
+    }
+
+    #[test]
+    fn configured_local_redb_store_compacts_without_losing_blocks() {
+        let dir = tempdir().unwrap();
+        let mut store = ConfiguredBlockStore::LocalRedb(
+            RedbBlockStore::new(dir.path().join("blocks")).unwrap(),
+        );
+        let block = sample_block();
+        let block_id = put_block(&store, &block);
+
+        store.compact_now().unwrap();
+
+        let retrieved = block_on_block_store_future(store.get_block_bytes(&block_id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(retrieved, serialize_block(&block).unwrap().bytes);
+    }
+
+    #[test]
+    fn configured_local_filesystem_store_rejects_compaction() {
+        let dir = tempdir().unwrap();
+        let mut store = ConfiguredBlockStore::Local(
+            FilesystemBlockStore::new(dir.path().join("blocks")).unwrap(),
+        );
+
+        let error = store.compact_now().unwrap_err();
+
+        assert!(matches!(error, BlockStoreError::BackendFailure(_)));
+        assert!(error.to_string().contains("local-redb"));
     }
 
     #[test]

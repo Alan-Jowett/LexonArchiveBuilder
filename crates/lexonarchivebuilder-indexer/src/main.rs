@@ -140,6 +140,18 @@ enum Command {
         #[command(flatten)]
         destination_block_store: DestinationBlockStoreArgs,
     },
+    Maintenance {
+        #[command(subcommand)]
+        command: MaintenanceCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum MaintenanceCommand {
+    Compact {
+        #[command(flatten)]
+        block_store: MaintenanceBlockStoreArgs,
+    },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
@@ -193,6 +205,52 @@ struct BlockStoreArgs {
 }
 
 impl BlockStoreArgs {
+    fn try_environment_config(&self) -> anyhow::Result<EnvironmentConfig> {
+        block_store_environment_config(
+            self.block_store_profile,
+            self.block_store_root.clone(),
+            self.block_store_container_sas_url.clone(),
+            self.block_store_filesystem_cache_root.clone(),
+            self.block_store_memory_cache_max_resident_blocks,
+            self.block_store_prefix.clone(),
+        )
+    }
+}
+
+#[derive(Debug, Args)]
+struct MaintenanceBlockStoreArgs {
+    #[arg(long, value_enum, default_value_t = ReadableBlockStoreProfile::LocalRedb)]
+    block_store_profile: ReadableBlockStoreProfile,
+    #[arg(
+        long,
+        required_if_eq_any([
+            ("block_store_profile", "local"),
+            ("block_store_profile", "local-redb"),
+        ])
+    )]
+    block_store_root: Option<PathBuf>,
+    #[arg(
+        long,
+        required_if_eq_any([
+            ("block_store_profile", "production"),
+            ("block_store_profile", "production-v2"),
+        ])
+    )]
+    block_store_container_sas_url: Option<String>,
+    #[arg(long, required_if_eq("block_store_profile", "gateway-http3"))]
+    block_store_gateway_dns_name: Option<String>,
+    #[arg(long, required_if_eq("block_store_profile", "production"))]
+    block_store_filesystem_cache_root: Option<PathBuf>,
+    #[arg(long, required_if_eq("block_store_profile", "production"))]
+    block_store_memory_cache_max_resident_blocks: Option<usize>,
+    #[arg(
+        long,
+        help = "Reserved for non-Azure block store backends. The approved Azure-backed production profiles reject non-empty prefixes."
+    )]
+    block_store_prefix: Option<String>,
+}
+
+impl MaintenanceBlockStoreArgs {
     fn try_environment_config(&self) -> anyhow::Result<EnvironmentConfig> {
         block_store_environment_config(
             self.block_store_profile,
@@ -382,6 +440,18 @@ fn configured_block_store_from_environment(
 ) -> anyhow::Result<ConfiguredBlockStore> {
     ConfiguredBlockStore::from_environment(Path::new("."), environment)
         .context("failed to configure block store")
+}
+
+impl ReadableBlockStoreProfile {
+    fn as_cli_value(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::LocalRedb => "local-redb",
+            Self::Production => "production",
+            Self::ProductionV2 => "production-v2",
+            Self::GatewayHttp3 => "gateway-http3",
+        }
+    }
 }
 
 struct CopyLivenessHeartbeat {
@@ -646,12 +716,40 @@ async fn main() -> anyhow::Result<()> {
                 std::process::exit(COPY_FAILURES_EXIT_CODE);
             }
         }
+        Command::Maintenance { command } => match command {
+            MaintenanceCommand::Compact { block_store } => {
+                let profile = block_store.block_store_profile;
+                let mut store = configured_maintenance_block_store(&block_store)?;
+                store.compact_now().context(format!(
+                    "failed to compact block store for profile {}",
+                    profile.as_cli_value()
+                ))?;
+                println!(
+                    "Maintenance compact completed for block-store profile {}.",
+                    profile.as_cli_value()
+                );
+            }
+        },
     }
 
     Ok(())
 }
 
 fn configured_block_store(args: &BlockStoreArgs) -> anyhow::Result<ConfiguredBlockStore> {
+    match args.block_store_profile {
+        ReadableBlockStoreProfile::GatewayHttp3 => ConfiguredBlockStore::gateway_http3_store(
+            args.block_store_gateway_dns_name
+                .as_deref()
+                .expect("gateway-http3 dns name is required by clap"),
+        )
+        .context("failed to configure gateway-http3 block store"),
+        _ => configured_block_store_from_environment(&args.try_environment_config()?),
+    }
+}
+
+fn configured_maintenance_block_store(
+    args: &MaintenanceBlockStoreArgs,
+) -> anyhow::Result<ConfiguredBlockStore> {
     match args.block_store_profile {
         ReadableBlockStoreProfile::GatewayHttp3 => ConfiguredBlockStore::gateway_http3_store(
             args.block_store_gateway_dns_name
@@ -1216,6 +1314,64 @@ mod tests {
                 );
             }
             _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn maintenance_compact_command_parses_local_redb_args() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "maintenance",
+            "compact",
+            "--block-store-profile",
+            "local-redb",
+            "--block-store-root",
+            "blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Maintenance {
+                command: MaintenanceCommand::Compact { block_store },
+            } => {
+                assert_eq!(
+                    block_store.block_store_profile,
+                    ReadableBlockStoreProfile::LocalRedb
+                );
+                assert_eq!(block_store.block_store_root, Some(PathBuf::from("blocks")));
+                match block_store.try_environment_config().unwrap() {
+                    EnvironmentConfig::LocalRedb {
+                        block_store_root, ..
+                    } => assert_eq!(block_store_root, PathBuf::from("blocks")),
+                    _ => panic!("expected local-redb environment"),
+                }
+            }
+            _ => panic!("expected maintenance compact command"),
+        }
+    }
+
+    #[test]
+    fn maintenance_compact_command_defaults_to_local_redb_profile() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "maintenance",
+            "compact",
+            "--block-store-root",
+            "blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Maintenance {
+                command: MaintenanceCommand::Compact { block_store },
+            } => {
+                assert_eq!(
+                    block_store.block_store_profile,
+                    ReadableBlockStoreProfile::LocalRedb
+                );
+                assert_eq!(block_store.block_store_root, Some(PathBuf::from("blocks")));
+            }
+            _ => panic!("expected maintenance compact command"),
         }
     }
 
