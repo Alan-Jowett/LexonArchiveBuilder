@@ -708,13 +708,11 @@ async fn read_source_block(
     failures: &mut CopyFailureTracker,
     progress: Option<&RootedBlockCopyProgress>,
 ) -> Option<Vec<u8>> {
+    if let Some(progress) = progress {
+        progress.note_read_source_block();
+    }
     match source.get_block_bytes(&block_id).await {
-        Ok(Some(bytes)) => {
-            if let Some(progress) = progress {
-                progress.note_read_source_block();
-            }
-            Some(bytes)
-        }
+        Ok(Some(bytes)) => Some(bytes),
         Ok(None) => {
             failures.record(
                 block_id,
@@ -1397,6 +1395,58 @@ mod tests {
         assert_eq!(snapshot.skipped_already_present_block_count, None);
         assert_eq!(snapshot.attempted_write_block_count, Some(3));
         assert_eq!(snapshot.failed_block_count, 0);
+    }
+
+    #[tokio::test]
+    async fn rooted_block_copy_progress_counts_missing_source_reads() {
+        let source = MemoryBlockStore::new(16).unwrap();
+        let destination = MemoryBlockStore::new(16).unwrap();
+        let missing_leaf = BlockHash::from_bytes([0x22; BlockHash::LEN]);
+        let root = source.put(&branch_block(&[missing_leaf])).await.unwrap();
+
+        let progress = RootedBlockCopyProgress::new(CopyDestinationMode::ReadBeforeWrite);
+        let report = copy_rooted_blocks_with_mode_and_limit_and_progress(
+            &source,
+            &destination,
+            &[root],
+            CopyDestinationMode::ReadBeforeWrite,
+            DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            Some(progress.clone()),
+        )
+        .await;
+        let snapshot = progress.snapshot();
+
+        assert_eq!(report.copied_block_count, Some(1));
+        assert_eq!(report.failed_block_count, 1);
+        assert_eq!(snapshot.read_source_block_count, 2);
+        assert_eq!(snapshot.failed_block_count, 1);
+    }
+
+    #[tokio::test]
+    async fn rooted_block_copy_progress_counts_failed_source_reads() {
+        let source_inner = Arc::new(MemoryBlockStore::new(16).unwrap());
+        let root = source_inner.put(&leaf_block("alpha")).await.unwrap();
+        let source = RejectingReadStore {
+            inner: source_inner,
+        };
+        let destination = MemoryBlockStore::new(16).unwrap();
+
+        let progress = RootedBlockCopyProgress::new(CopyDestinationMode::ReadBeforeWrite);
+        let report = copy_rooted_blocks_with_mode_and_limit_and_progress(
+            &source,
+            &destination,
+            &[root],
+            CopyDestinationMode::ReadBeforeWrite,
+            DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            Some(progress.clone()),
+        )
+        .await;
+        let snapshot = progress.snapshot();
+
+        assert_eq!(report.copied_block_count, Some(0));
+        assert_eq!(report.failed_block_count, 1);
+        assert_eq!(snapshot.read_source_block_count, 1);
+        assert_eq!(snapshot.failed_block_count, 1);
     }
 
     #[tokio::test]

@@ -383,6 +383,56 @@ fn configured_block_store_from_environment(
         .context("failed to configure block store")
 }
 
+struct CopyLivenessHeartbeat {
+    keep_running: Arc<AtomicBool>,
+    heartbeat_thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl CopyLivenessHeartbeat {
+    fn new<F>(heartbeat_interval: Duration, heartbeat_message: F) -> Self
+    where
+        F: Fn() -> String + Send + 'static,
+    {
+        if heartbeat_interval.is_zero() {
+            return Self {
+                keep_running: Arc::new(AtomicBool::new(false)),
+                heartbeat_thread: None,
+            };
+        }
+
+        let keep_running = Arc::new(AtomicBool::new(true));
+        let heartbeat_keep_running = Arc::clone(&keep_running);
+        let heartbeat_thread = Some(std::thread::spawn(move || {
+            while heartbeat_keep_running.load(Ordering::Acquire) {
+                std::thread::park_timeout(heartbeat_interval);
+                if !heartbeat_keep_running.load(Ordering::Acquire) {
+                    break;
+                }
+                eprintln!("{}", heartbeat_message());
+            }
+        }));
+
+        Self {
+            keep_running,
+            heartbeat_thread,
+        }
+    }
+
+    fn stop(&mut self) {
+        self.keep_running.store(false, Ordering::Release);
+        if let Some(heartbeat_thread) = self.heartbeat_thread.take() {
+            heartbeat_thread.thread().unpark();
+            let _ = heartbeat_thread.join();
+        }
+    }
+}
+
+impl Drop for CopyLivenessHeartbeat {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 async fn await_with_copy_liveness<Fut, F, T>(
     operation: Fut,
     heartbeat_interval: Duration,
@@ -392,28 +442,9 @@ where
     Fut: Future<Output = T>,
     F: Fn() -> String + Send + 'static,
 {
-    let keep_running = Arc::new(AtomicBool::new(true));
-    let heartbeat_thread = if heartbeat_interval.is_zero() {
-        None
-    } else {
-        let keep_running = Arc::clone(&keep_running);
-        Some(std::thread::spawn(move || {
-            while keep_running.load(Ordering::Acquire) {
-                std::thread::park_timeout(heartbeat_interval);
-                if !keep_running.load(Ordering::Acquire) {
-                    break;
-                }
-                eprintln!("{}", heartbeat_message());
-            }
-        }))
-    };
-
+    let mut heartbeat = CopyLivenessHeartbeat::new(heartbeat_interval, heartbeat_message);
     let result = operation.await;
-    keep_running.store(false, Ordering::Release);
-    if let Some(heartbeat_thread) = heartbeat_thread {
-        heartbeat_thread.thread().unpark();
-        let _ = heartbeat_thread.join();
-    }
+    heartbeat.stop();
     result
 }
 
@@ -1607,6 +1638,36 @@ mod tests {
 
         assert_eq!(output, 11);
         assert!(messages.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn copy_liveness_heartbeat_stops_when_operation_panics() {
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&messages);
+
+        let task = tokio::spawn(async move {
+            await_with_copy_liveness(
+                async {
+                    sleep(Duration::from_millis(25)).await;
+                    panic!("boom");
+                },
+                Duration::from_millis(5),
+                move || {
+                    captured.lock().unwrap().push("heartbeat".to_string());
+                    "heartbeat".to_string()
+                },
+            )
+            .await
+        });
+
+        let error = task.await.expect_err("operation should panic");
+        assert!(error.is_panic());
+
+        sleep(Duration::from_millis(20)).await;
+        let emitted_before_wait = messages.lock().unwrap().len();
+        assert!(emitted_before_wait > 0);
+        sleep(Duration::from_millis(20)).await;
+        assert_eq!(messages.lock().unwrap().len(), emitted_before_wait);
     }
 
     #[test]
