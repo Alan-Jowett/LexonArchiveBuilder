@@ -38,6 +38,7 @@ use lexonarchivebuilder_indexer::{
     ClusteringConfigOverrides, ExecutionStage, run_request_file_with_outputs,
     validate_request_file_with_overrides, write_summary_file,
 };
+use lexongraph_block_store_redb::RedbBlockStoreDurabilityMode;
 const DEFAULT_LOCAL_MODEL: &str = "all-MiniLM-L6-v2";
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_MAX_RETRIES: u32 = 5;
@@ -121,7 +122,7 @@ enum Command {
         root_ids: Vec<String>,
         #[arg(
             long,
-            help = "Skip destination existence reads and attempt destination writes directly."
+            help = "Skip destination existence reads and attempt destination writes directly. With a local-redb destination, this also disables per-put flushes for faster syncs without crash-resume support."
         )]
         blind_write: bool,
         #[arg(
@@ -616,7 +617,8 @@ async fn main() -> anyhow::Result<()> {
                 .map(|root_id| parse_block_hash(root_id))
                 .collect::<Result<Vec<_>, _>>()?;
             let source_store = configured_source_block_store(&source_block_store)?;
-            let destination_store = configured_destination_block_store(&destination_block_store)?;
+            let destination_store =
+                configured_destination_block_store(&destination_block_store, blind_write)?;
             let destination_mode = if blind_write {
                 CopyDestinationMode::BlindWrite
             } else {
@@ -677,8 +679,19 @@ fn configured_source_block_store(
 
 fn configured_destination_block_store(
     args: &DestinationBlockStoreArgs,
+    blind_write: bool,
 ) -> anyhow::Result<ConfiguredBlockStore> {
-    configured_block_store_from_environment(&args.to_environment_config())
+    let environment = args.to_environment_config();
+    ConfiguredBlockStore::from_environment_with_redb_durability(
+        Path::new("."),
+        &environment,
+        if blind_write {
+            RedbBlockStoreDurabilityMode::Fast
+        } else {
+            RedbBlockStoreDurabilityMode::Durable
+        },
+    )
+    .context("failed to configure block store")
 }
 
 fn unused_local_embedding() -> LocalEmbeddingConfig {
