@@ -10,8 +10,9 @@ use anyhow::Context;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use env_logger::Env;
 use lexonarchivebuilder_indexer::block_copy::{
-    CopyDestinationMode, DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
-    copy_rooted_blocks_with_mode_and_limit, default_report_path as default_copy_report_path,
+    CopyDestinationMode, DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES, RootedBlockCopyProgress,
+    RootedBlockCopyProgressSnapshot, copy_rooted_blocks_with_mode_and_limit_and_progress,
+    default_report_path as default_copy_report_path,
     render_report_summary as render_copy_report_summary, write_report as write_copy_report,
 };
 use lexonarchivebuilder_indexer::block_store::ConfiguredBlockStore;
@@ -404,11 +405,28 @@ where
     }
 }
 
-fn format_copy_liveness_message(root_count: usize, elapsed: Duration) -> String {
+fn format_copy_liveness_message(
+    root_count: usize,
+    elapsed: Duration,
+    progress: RootedBlockCopyProgressSnapshot,
+) -> String {
+    let mut details = vec![format!("read {}", progress.read_source_block_count)];
+    if let Some(copied_block_count) = progress.copied_block_count {
+        details.push(format!("copied {copied_block_count}"));
+    }
+    if let Some(skipped_already_present_block_count) = progress.skipped_already_present_block_count
+    {
+        details.push(format!("skipped {skipped_already_present_block_count}"));
+    }
+    if let Some(attempted_write_block_count) = progress.attempted_write_block_count {
+        details.push(format!("attempted {attempted_write_block_count}"));
+    }
+    details.push(format!("failed {}", progress.failed_block_count));
     format!(
-        "Rooted block copy still running after {}s for {} requested root(s)...",
+        "Rooted block copy still running after {}s for {} requested root(s): {}...",
         elapsed.as_secs(),
-        root_count
+        root_count,
+        details.join(", ")
     )
 }
 
@@ -548,20 +566,25 @@ async fn main() -> anyhow::Result<()> {
                 .collect::<Result<Vec<_>, _>>()?;
             let source_store = configured_source_block_store(&source_block_store)?;
             let destination_store = configured_destination_block_store(&destination_block_store)?;
+            let destination_mode = if blind_write {
+                CopyDestinationMode::BlindWrite
+            } else {
+                CopyDestinationMode::ReadBeforeWrite
+            };
+            let progress = RootedBlockCopyProgress::new(destination_mode);
             let report = await_with_copy_liveness(
-                copy_rooted_blocks_with_mode_and_limit(
+                copy_rooted_blocks_with_mode_and_limit_and_progress(
                     &source_store,
                     &destination_store,
                     &root_ids,
-                    if blind_write {
-                        CopyDestinationMode::BlindWrite
-                    } else {
-                        CopyDestinationMode::ReadBeforeWrite
-                    },
+                    destination_mode,
                     max_in_flight_destination_writes,
+                    Some(progress.clone()),
                 ),
                 COPY_LIVENESS_HEARTBEAT_INTERVAL,
-                |elapsed| format_copy_liveness_message(root_ids.len(), elapsed),
+                |elapsed| {
+                    format_copy_liveness_message(root_ids.len(), elapsed, progress.snapshot())
+                },
             )
             .await;
             let output_path = json_out.unwrap_or_else(|| default_copy_report_path(&root_ids));
@@ -1472,7 +1495,18 @@ mod tests {
             },
             Duration::from_millis(5),
             move |elapsed| {
-                let message = format_copy_liveness_message(2, elapsed);
+                let message = format_copy_liveness_message(
+                    2,
+                    elapsed,
+                    RootedBlockCopyProgressSnapshot {
+                        destination_mode: CopyDestinationMode::ReadBeforeWrite,
+                        read_source_block_count: 5,
+                        copied_block_count: Some(2),
+                        skipped_already_present_block_count: Some(3),
+                        attempted_write_block_count: None,
+                        failed_block_count: 0,
+                    },
+                );
                 captured.lock().unwrap().push(message.clone());
                 message
             },
@@ -1484,6 +1518,9 @@ mod tests {
         assert!(!messages.is_empty());
         assert!(messages[0].contains("still running"));
         assert!(messages[0].contains("2 requested root(s)"));
+        assert!(messages[0].contains("read 5"));
+        assert!(messages[0].contains("copied 2"));
+        assert!(messages[0].contains("skipped 3"));
     }
 
     #[tokio::test]
@@ -1495,7 +1532,18 @@ mod tests {
             async { 11usize },
             Duration::from_millis(20),
             move |elapsed| {
-                let message = format_copy_liveness_message(1, elapsed);
+                let message = format_copy_liveness_message(
+                    1,
+                    elapsed,
+                    RootedBlockCopyProgressSnapshot {
+                        destination_mode: CopyDestinationMode::BlindWrite,
+                        read_source_block_count: 4,
+                        copied_block_count: None,
+                        skipped_already_present_block_count: None,
+                        attempted_write_block_count: Some(4),
+                        failed_block_count: 1,
+                    },
+                );
                 captured.lock().unwrap().push(message.clone());
                 message
             },

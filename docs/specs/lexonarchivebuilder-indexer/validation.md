@@ -17,7 +17,7 @@ effective-profile identity signaling,
 clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted
-CLI search over stored trees, rooted block-store copy tooling, replay-stable fingerprinting, temporary
+CLI search over stored trees, rooted block-store copy tooling with live default heartbeat counters, replay-stable fingerprinting, temporary
 upstream `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, 0.6.x published-profile
 evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
@@ -1033,7 +1033,12 @@ the truthfulness of the approved mode-specific reporting contract merely because
 write completions arrive out of order. Both modes must emit basic default
 in-flight liveness or progress on the normal CLI output surface before final
 completion when the rooted copy runs long enough that silence would otherwise
-resemble a hang, and both leave mutable references such as current-root and
+resemble a hang. That in-flight output must include mode-truthful live counter
+updates rather than elapsed-time-only proof of life: the default
+read-before-write path must surface copied and skipped-already-present progress
+when known, while blind-write must surface attempted-write and failure-oriented
+progress without claiming skipped-state knowledge it did not observe. Both modes
+leave mutable references such as current-root and
 replay-journal-head unchanged. When the source profile is `gateway-http3`,
 gateway `404` responses count as missing-block source reads while transport,
 protocol, or other non-success responses remain explicit failures, and the
@@ -1351,6 +1356,8 @@ block-store profile within the shared repository targeting contract rather than
 as a copy-only storage exception, while requiring default rooted-copy liveness
 on the normal CLI surface rather than making ordinary operators opt into a
 verbose-only signal to see that long-running transfer work is still active. The
+same package must also tighten that default liveness into mode-truthful live
+counter progress rather than elapsed-time-only proof of life. The
 same package must also preserve read-before-write classification as the default
 rooted-copy behavior while allowing an explicit opt-in blind-write mode that
 avoids destination reads and accepts reduced copied-versus-skipped accounting.
