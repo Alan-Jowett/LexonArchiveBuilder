@@ -293,6 +293,9 @@ enum FailingSubsetPhaseDiagnostics {
     PlanningPass { pass_number: usize },
     HierarchyPlanning { stage: String },
     V3PartitionLoad { layer_index: usize },
+    V3PartitionTrainIngest { layer_index: usize },
+    V3PartitionClassify { layer_index: usize },
+    V3TerminalMaterializationLoad { layer_index: usize },
     FinalMaterializationReplay,
     BottomUpAssembly { layer_index: usize },
 }
@@ -2119,6 +2122,15 @@ fn planning_live_status_telemetry_record(
         StreamingIndexingPhase::V3PartitionLoad { layer_index } => {
             ("partition-load", Some(layer_index))
         }
+        StreamingIndexingPhase::V3PartitionTrainIngest { layer_index } => {
+            ("partition-train-ingest", Some(layer_index))
+        }
+        StreamingIndexingPhase::V3PartitionClassify { layer_index } => {
+            ("partition-classify", Some(layer_index))
+        }
+        StreamingIndexingPhase::V3TerminalMaterializationLoad { layer_index } => {
+            ("terminal-materialization-load", Some(layer_index))
+        }
         StreamingIndexingPhase::BottomUpAssembly { layer_index } => {
             ("bottom-up-assembly", Some(layer_index))
         }
@@ -2212,6 +2224,45 @@ fn clustering_blocked_on_summary(status: &StreamingIndexingStatus) -> Option<Str
             } else {
                 parts.push(format!(
                     "loading layer {layer_index} block(s); completed {}",
+                    status.completed_unit_count
+                ));
+            }
+        }
+        StreamingIndexingPhase::V3PartitionTrainIngest { layer_index } => {
+            if let Some(total) = status.phase_total_unit_count {
+                parts.push(format!(
+                    "training ingest for layer {layer_index} item(s) {} of {total}",
+                    status.completed_unit_count
+                ));
+            } else {
+                parts.push(format!(
+                    "training ingest for layer {layer_index}; completed {}",
+                    status.completed_unit_count
+                ));
+            }
+        }
+        StreamingIndexingPhase::V3PartitionClassify { layer_index } => {
+            if let Some(total) = status.phase_total_unit_count {
+                parts.push(format!(
+                    "classifying layer {layer_index} item(s) {} of {total}",
+                    status.completed_unit_count
+                ));
+            } else {
+                parts.push(format!(
+                    "classifying layer {layer_index}; completed {}",
+                    status.completed_unit_count
+                ));
+            }
+        }
+        StreamingIndexingPhase::V3TerminalMaterializationLoad { layer_index } => {
+            if let Some(total) = status.phase_total_unit_count {
+                parts.push(format!(
+                    "loading terminal materialization input(s) for layer {layer_index} {} of {total}",
+                    status.completed_unit_count
+                ));
+            } else {
+                parts.push(format!(
+                    "loading terminal materialization input(s) for layer {layer_index}; completed {}",
                     status.completed_unit_count
                 ));
             }
@@ -2733,6 +2784,21 @@ fn failing_subset_phase_diagnostics(
         }
         StreamingIndexingPhase::V3PartitionLoad { layer_index } => {
             FailingSubsetPhaseDiagnostics::V3PartitionLoad {
+                layer_index: *layer_index,
+            }
+        }
+        StreamingIndexingPhase::V3PartitionTrainIngest { layer_index } => {
+            FailingSubsetPhaseDiagnostics::V3PartitionTrainIngest {
+                layer_index: *layer_index,
+            }
+        }
+        StreamingIndexingPhase::V3PartitionClassify { layer_index } => {
+            FailingSubsetPhaseDiagnostics::V3PartitionClassify {
+                layer_index: *layer_index,
+            }
+        }
+        StreamingIndexingPhase::V3TerminalMaterializationLoad { layer_index } => {
+            FailingSubsetPhaseDiagnostics::V3TerminalMaterializationLoad {
                 layer_index: *layer_index,
             }
         }
@@ -6478,6 +6544,9 @@ fn failed_status_specificity(status: &StreamingIndexingStatus) -> usize {
         StreamingIndexingPhase::FinalMaterializationReplay => 1,
         StreamingIndexingPhase::HierarchyPlanning { .. } => 2,
         StreamingIndexingPhase::V3PartitionLoad { .. } => 2,
+        StreamingIndexingPhase::V3PartitionTrainIngest { .. } => 2,
+        StreamingIndexingPhase::V3PartitionClassify { .. } => 2,
+        StreamingIndexingPhase::V3TerminalMaterializationLoad { .. } => 2,
         StreamingIndexingPhase::BottomUpAssembly { .. } => 2,
     }
 }
@@ -6510,6 +6579,15 @@ fn delegated_phase_label(phase: &StreamingIndexingPhase) -> String {
         StreamingIndexingPhase::HierarchyPlanning { stage } => format_planning_stage(*stage).into(),
         StreamingIndexingPhase::V3PartitionLoad { layer_index } => {
             format!("partition load for layer {layer_index}")
+        }
+        StreamingIndexingPhase::V3PartitionTrainIngest { layer_index } => {
+            format!("partition train ingest for layer {layer_index}")
+        }
+        StreamingIndexingPhase::V3PartitionClassify { layer_index } => {
+            format!("partition classify for layer {layer_index}")
+        }
+        StreamingIndexingPhase::V3TerminalMaterializationLoad { layer_index } => {
+            format!("terminal materialization load for layer {layer_index}")
         }
         StreamingIndexingPhase::FinalMaterializationReplay => {
             "final materialization replay".to_string()
@@ -6724,6 +6802,162 @@ fn format_indexing_status(status: StreamingIndexingStatus) -> String {
             ),
             None => format!(
                 "Partition load for layer {layer_index} failed after {elapsed_ms} ms; completed {} leaf block(s): {}",
+                status.completed_unit_count,
+                status.error.unwrap_or_else(|| "unknown error".into())
+            ),
+        },
+        (
+            StreamingIndexingPhase::V3PartitionTrainIngest { layer_index },
+            StreamingIndexingStatusState::Started,
+        ) => match status.phase_total_unit_count {
+            Some(total) => format!(
+                "Partition train ingest for layer {layer_index} started for {total} item(s)"
+            ),
+            None => format!(
+                "Partition train ingest for layer {layer_index} started with an unknown item total"
+            ),
+        },
+        (
+            StreamingIndexingPhase::V3PartitionTrainIngest { layer_index },
+            StreamingIndexingStatusState::InProgress,
+        ) => match status.phase_total_unit_count {
+            Some(total) => format!(
+                "Partition train ingest for layer {layer_index} still running after {elapsed_ms} ms; completed {} of {total} item(s)",
+                status.completed_unit_count
+            ),
+            None => format!(
+                "Partition train ingest for layer {layer_index} still running after {elapsed_ms} ms; completed {} item(s)",
+                status.completed_unit_count
+            ),
+        },
+        (
+            StreamingIndexingPhase::V3PartitionTrainIngest { layer_index },
+            StreamingIndexingStatusState::Completed,
+        ) => match status.phase_total_unit_count {
+            Some(total) => format!(
+                "Partition train ingest for layer {layer_index} completed in {elapsed_ms} ms; ingested {} of {total} item(s)",
+                status.completed_unit_count
+            ),
+            None => format!(
+                "Partition train ingest for layer {layer_index} completed in {elapsed_ms} ms; ingested {} item(s)",
+                status.completed_unit_count
+            ),
+        },
+        (
+            StreamingIndexingPhase::V3PartitionTrainIngest { layer_index },
+            StreamingIndexingStatusState::Failed,
+        ) => match status.phase_total_unit_count {
+            Some(total) => format!(
+                "Partition train ingest for layer {layer_index} failed after {elapsed_ms} ms; completed {} of {total} item(s): {}",
+                status.completed_unit_count,
+                status.error.unwrap_or_else(|| "unknown error".into())
+            ),
+            None => format!(
+                "Partition train ingest for layer {layer_index} failed after {elapsed_ms} ms; completed {} item(s): {}",
+                status.completed_unit_count,
+                status.error.unwrap_or_else(|| "unknown error".into())
+            ),
+        },
+        (
+            StreamingIndexingPhase::V3PartitionClassify { layer_index },
+            StreamingIndexingStatusState::Started,
+        ) => match status.phase_total_unit_count {
+            Some(total) => {
+                format!("Partition classify for layer {layer_index} started for {total} item(s)")
+            }
+            None => format!(
+                "Partition classify for layer {layer_index} started with an unknown item total"
+            ),
+        },
+        (
+            StreamingIndexingPhase::V3PartitionClassify { layer_index },
+            StreamingIndexingStatusState::InProgress,
+        ) => match status.phase_total_unit_count {
+            Some(total) => format!(
+                "Partition classify for layer {layer_index} still running after {elapsed_ms} ms; completed {} of {total} item(s)",
+                status.completed_unit_count
+            ),
+            None => format!(
+                "Partition classify for layer {layer_index} still running after {elapsed_ms} ms; completed {} item(s)",
+                status.completed_unit_count
+            ),
+        },
+        (
+            StreamingIndexingPhase::V3PartitionClassify { layer_index },
+            StreamingIndexingStatusState::Completed,
+        ) => match status.phase_total_unit_count {
+            Some(total) => format!(
+                "Partition classify for layer {layer_index} completed in {elapsed_ms} ms; classified {} of {total} item(s)",
+                status.completed_unit_count
+            ),
+            None => format!(
+                "Partition classify for layer {layer_index} completed in {elapsed_ms} ms; classified {} item(s)",
+                status.completed_unit_count
+            ),
+        },
+        (
+            StreamingIndexingPhase::V3PartitionClassify { layer_index },
+            StreamingIndexingStatusState::Failed,
+        ) => match status.phase_total_unit_count {
+            Some(total) => format!(
+                "Partition classify for layer {layer_index} failed after {elapsed_ms} ms; completed {} of {total} item(s): {}",
+                status.completed_unit_count,
+                status.error.unwrap_or_else(|| "unknown error".into())
+            ),
+            None => format!(
+                "Partition classify for layer {layer_index} failed after {elapsed_ms} ms; completed {} item(s): {}",
+                status.completed_unit_count,
+                status.error.unwrap_or_else(|| "unknown error".into())
+            ),
+        },
+        (
+            StreamingIndexingPhase::V3TerminalMaterializationLoad { layer_index },
+            StreamingIndexingStatusState::Started,
+        ) => match status.phase_total_unit_count {
+            Some(total) => format!(
+                "Terminal materialization load for layer {layer_index} started for {total} input item(s)"
+            ),
+            None => format!(
+                "Terminal materialization load for layer {layer_index} started with an unknown input total"
+            ),
+        },
+        (
+            StreamingIndexingPhase::V3TerminalMaterializationLoad { layer_index },
+            StreamingIndexingStatusState::InProgress,
+        ) => match status.phase_total_unit_count {
+            Some(total) => format!(
+                "Terminal materialization load for layer {layer_index} still running after {elapsed_ms} ms; completed {} of {total} input item(s)",
+                status.completed_unit_count
+            ),
+            None => format!(
+                "Terminal materialization load for layer {layer_index} still running after {elapsed_ms} ms; completed {} input item(s)",
+                status.completed_unit_count
+            ),
+        },
+        (
+            StreamingIndexingPhase::V3TerminalMaterializationLoad { layer_index },
+            StreamingIndexingStatusState::Completed,
+        ) => match status.phase_total_unit_count {
+            Some(total) => format!(
+                "Terminal materialization load for layer {layer_index} completed in {elapsed_ms} ms; loaded {} of {total} input item(s)",
+                status.completed_unit_count
+            ),
+            None => format!(
+                "Terminal materialization load for layer {layer_index} completed in {elapsed_ms} ms; loaded {} input item(s)",
+                status.completed_unit_count
+            ),
+        },
+        (
+            StreamingIndexingPhase::V3TerminalMaterializationLoad { layer_index },
+            StreamingIndexingStatusState::Failed,
+        ) => match status.phase_total_unit_count {
+            Some(total) => format!(
+                "Terminal materialization load for layer {layer_index} failed after {elapsed_ms} ms; completed {} of {total} input item(s): {}",
+                status.completed_unit_count,
+                status.error.unwrap_or_else(|| "unknown error".into())
+            ),
+            None => format!(
+                "Terminal materialization load for layer {layer_index} failed after {elapsed_ms} ms; completed {} input item(s): {}",
                 status.completed_unit_count,
                 status.error.unwrap_or_else(|| "unknown error".into())
             ),
@@ -9422,6 +9656,44 @@ mod tests {
     }
 
     #[test]
+    fn planning_pass_telemetry_writes_new_v3_phase_kinds() {
+        let temp = tempdir().unwrap();
+        let telemetry_path = temp.path().join("planning-pass-telemetry.jsonl");
+        let telemetry = PlanningTelemetryContext {
+            run_identity: PlanningRunIdentity {
+                effective_profile_version: "0.7.0".into(),
+                delegated_contract_family: DelegatedContractFamily::V3,
+            },
+            sink_path: Some(telemetry_path.clone()),
+            sink_initialized: Arc::new(AtomicBool::new(false)),
+            sink_write_lock: Arc::new(Mutex::new(())),
+            diagnosis_state: Arc::new(Mutex::new(PlanningTelemetryState::default())),
+        };
+        let status = test_streaming_status(
+            StreamingIndexingPhase::V3PartitionClassify { layer_index: 3 },
+            StreamingIndexingStatusState::InProgress,
+            12,
+            Some(12),
+            5,
+            Some(7),
+            Duration::from_millis(250),
+            None,
+        );
+
+        let (record, diagnosis_message) = telemetry.project_planning_status(&status);
+        telemetry.write_json_record(&record.unwrap()).unwrap();
+
+        let written = fs::read_to_string(&telemetry_path).unwrap();
+        assert!(written.contains("\"telemetry_kind\":\"live-status\""));
+        assert!(written.contains("\"phase_kind\":\"partition-classify\""));
+        assert!(written.contains("\"phase_label\":\"partition classify for layer 3\""));
+        assert!(written.contains("\"blocked_on_summary\":\"classifying layer 3 item(s) 5 of 12\""));
+        assert!(diagnosis_message.unwrap().contains(
+            "Clustering diagnosis: latest delegated phase partition classify for layer 3 is in-progress"
+        ));
+    }
+
+    #[test]
     fn planning_pass_telemetry_first_intra_pass_record_replaces_prior_run_file_contents() {
         let temp = tempdir().unwrap();
         let telemetry_path = temp.path().join("planning-pass-telemetry.jsonl");
@@ -10282,6 +10554,63 @@ mod tests {
         assert_eq!(
             format_indexing_status(status),
             "Partition load for layer 2 still running after 250 ms; completed 4 of 9 leaf block(s)"
+        );
+    }
+
+    #[test]
+    fn v3_partition_train_ingest_progress_is_logged_explicitly() {
+        let status = test_streaming_status(
+            StreamingIndexingPhase::V3PartitionTrainIngest { layer_index: 2 },
+            StreamingIndexingStatusState::Completed,
+            9,
+            Some(9),
+            9,
+            Some(0),
+            Duration::from_millis(250),
+            None,
+        );
+
+        assert_eq!(
+            format_indexing_status(status),
+            "Partition train ingest for layer 2 completed in 250 ms; ingested 9 of 9 item(s)"
+        );
+    }
+
+    #[test]
+    fn v3_partition_classify_progress_is_logged_explicitly() {
+        let status = test_streaming_status(
+            StreamingIndexingPhase::V3PartitionClassify { layer_index: 2 },
+            StreamingIndexingStatusState::InProgress,
+            9,
+            Some(9),
+            4,
+            Some(5),
+            Duration::from_millis(250),
+            None,
+        );
+
+        assert_eq!(
+            format_indexing_status(status),
+            "Partition classify for layer 2 still running after 250 ms; completed 4 of 9 item(s)"
+        );
+    }
+
+    #[test]
+    fn v3_terminal_materialization_load_progress_is_logged_explicitly() {
+        let status = test_streaming_status(
+            StreamingIndexingPhase::V3TerminalMaterializationLoad { layer_index: 1 },
+            StreamingIndexingStatusState::Started,
+            8,
+            Some(8),
+            0,
+            Some(8),
+            Duration::from_millis(0),
+            None,
+        );
+
+        assert_eq!(
+            format_indexing_status(status),
+            "Terminal materialization load for layer 1 started for 8 input item(s)"
         );
     }
 

@@ -27,8 +27,9 @@ replay-journaled split-stage recovery, bounded-residency deterministic replay
 ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, replay batch-size decoupling from CPU concurrency, bounded multi-batch replay-prefetch buffering, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
 non-search artifacts, plus conditional streaming-indexer v3 adoption with
-repository-default published profile `0.7.0` and derived request-adjacent
-delegated v3 working-root support, in
+repository-default published profile `0.7.0`, derived request-adjacent
+delegated v3 working-root support, and renewed compatibility with later
+upstream-`main` constrained-v3 breaking changes, in
 `docs/specs/lexonarchivebuilder-indexer/requirements.md`,
 `docs/specs/lexonarchivebuilder-indexer/design.md`, and
 `docs/specs/lexonarchivebuilder-indexer/validation.md`.
@@ -59,8 +60,9 @@ LAB-owned replay-journaled split-stage recovery, bounded-residency deterministic
 replay ordering for clustering replay, independent replay batch-size versus
 replay-materialization concurrency tuning, bounded multi-batch replay-prefetch
 buffering, derived request-adjacent delegated v3 working-root
-support, and
-layer-parallel delegated block construction for the local/testing profile.
+support, repeatable adaptation to later upstream-`main` constrained-v3 API
+breakage, and layer-parallel delegated block construction for the
+local/testing profile.
 
 This document is layered on top of:
 
@@ -806,6 +808,36 @@ contract currently supports it, without silently narrowing non-`0.7.0`
 evaluation or adding a new caller-visible working-root selector.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003I, RQ-INDEXER-003A3, RQ-INDEXER-010A
+
+### DSG-LFI-001I2 `Latest upstream-main constrained-v3 compatibility refresh`
+
+When LexonArchiveBuilder refreshes the approved LexonGraph dependency target
+beyond commit `7c8f375137375709bb608ee2609b38cb80e5422c`, the repository treats
+new constrained-v3 API breakage as an adapter-boundary compatibility update
+rather than as permission to narrow the current external contract.
+
+In this increment:
+
+- the repository may update its delegated construction, status-observer
+  mapping, or related runtime adapter code to match the latest upstream `main`
+  constrained-v3 API shape
+- those compatibility updates SHALL preserve the existing caller-visible stage
+  contract (`full`, `ingestion-and-embedding`, `clustering-and-block-assembly`)
+  and unchanged MCP search or retrieval behavior for already-indexed content
+- if later upstream `main` renames or reshapes constrained-v3 lifecycle phases,
+  LexonArchiveBuilder SHALL remap those upstream signals onto the existing
+  repository-owned operator progress, telemetry, and diagnosis semantics rather
+  than silently dropping them
+- if a repository-required capability is genuinely absent on the refreshed
+  upstream surface, the implementation SHALL surface that as an explicit
+  compatibility finding or upstream regression instead of silently weakening the
+  approved behavior
+
+This keeps temporary upstream-`main` refreshes scoped to the LexonGraph
+integration boundary while preserving the current repository-visible runtime
+contracts.
+
+**Traces to:** RQ-INDEXER-003G, RQ-INDEXER-003I, RQ-INDEXER-010A
 
 ### DSG-LFI-002 `Batch runtime shape`
 

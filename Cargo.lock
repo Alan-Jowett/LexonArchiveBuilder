@@ -1454,7 +1454,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tokio",
  "tower-service",
  "tracing",
@@ -1857,7 +1857,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-adaptive-planning-policy"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=7c8f375137375709bb608ee2609b38cb80e5422c#7c8f375137375709bb608ee2609b38cb80e5422c"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=031b1a1061bebfcccdac91169335b92693039e8f#031b1a1061bebfcccdac91169335b92693039e8f"
 dependencies = [
  "lexongraph-directional-pca",
  "lexongraph-pca",
@@ -1867,7 +1867,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=7c8f375137375709bb608ee2609b38cb80e5422c#7c8f375137375709bb608ee2609b38cb80e5422c"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=031b1a1061bebfcccdac91169335b92693039e8f#031b1a1061bebfcccdac91169335b92693039e8f"
 dependencies = [
  "ciborium",
  "half",
@@ -1877,7 +1877,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=7c8f375137375709bb608ee2609b38cb80e5422c#7c8f375137375709bb608ee2609b38cb80e5422c"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=031b1a1061bebfcccdac91169335b92693039e8f#031b1a1061bebfcccdac91169335b92693039e8f"
 dependencies = [
  "async-trait",
  "futures",
@@ -1887,7 +1887,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store-azure-sdk"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=7c8f375137375709bb608ee2609b38cb80e5422c#7c8f375137375709bb608ee2609b38cb80e5422c"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=031b1a1061bebfcccdac91169335b92693039e8f#031b1a1061bebfcccdac91169335b92693039e8f"
 dependencies = [
  "async-trait",
  "azure_core 1.1.0",
@@ -1900,7 +1900,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store-azure-table-v2"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=7c8f375137375709bb608ee2609b38cb80e5422c#7c8f375137375709bb608ee2609b38cb80e5422c"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=031b1a1061bebfcccdac91169335b92693039e8f#031b1a1061bebfcccdac91169335b92693039e8f"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1918,7 +1918,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store-fs"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=7c8f375137375709bb608ee2609b38cb80e5422c#7c8f375137375709bb608ee2609b38cb80e5422c"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=031b1a1061bebfcccdac91169335b92693039e8f#031b1a1061bebfcccdac91169335b92693039e8f"
 dependencies = [
  "async-trait",
  "futures",
@@ -1930,7 +1930,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store-memory"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=7c8f375137375709bb608ee2609b38cb80e5422c#7c8f375137375709bb608ee2609b38cb80e5422c"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=031b1a1061bebfcccdac91169335b92693039e8f#031b1a1061bebfcccdac91169335b92693039e8f"
 dependencies = [
  "async-trait",
  "futures",
@@ -1941,7 +1941,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store-overlay"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=7c8f375137375709bb608ee2609b38cb80e5422c#7c8f375137375709bb608ee2609b38cb80e5422c"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=031b1a1061bebfcccdac91169335b92693039e8f#031b1a1061bebfcccdac91169335b92693039e8f"
 dependencies = [
  "async-trait",
  "futures",
@@ -1952,7 +1952,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-dcbc-streaming"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=7c8f375137375709bb608ee2609b38cb80e5422c#7c8f375137375709bb608ee2609b38cb80e5422c"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=031b1a1061bebfcccdac91169335b92693039e8f#031b1a1061bebfcccdac91169335b92693039e8f"
 dependencies = [
  "lexongraph-streaming-clustering",
  "sha2 0.11.0",
@@ -1961,7 +1961,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-directional-pca"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=7c8f375137375709bb608ee2609b38cb80e5422c#7c8f375137375709bb608ee2609b38cb80e5422c"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=031b1a1061bebfcccdac91169335b92693039e8f#031b1a1061bebfcccdac91169335b92693039e8f"
 dependencies = [
  "lexongraph-pca",
  "lexongraph-streaming-clustering",
@@ -1972,7 +1972,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-embeddings-trait"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=7c8f375137375709bb608ee2609b38cb80e5422c#7c8f375137375709bb608ee2609b38cb80e5422c"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=031b1a1061bebfcccdac91169335b92693039e8f#031b1a1061bebfcccdac91169335b92693039e8f"
 dependencies = [
  "lexongraph-block",
  "pollster",
@@ -1981,7 +1981,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-linear-algebra-acceleration"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=7c8f375137375709bb608ee2609b38cb80e5422c#7c8f375137375709bb608ee2609b38cb80e5422c"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=031b1a1061bebfcccdac91169335b92693039e8f#031b1a1061bebfcccdac91169335b92693039e8f"
 dependencies = [
  "serde",
 ]
@@ -1989,7 +1989,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-pca"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=7c8f375137375709bb608ee2609b38cb80e5422c#7c8f375137375709bb608ee2609b38cb80e5422c"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=031b1a1061bebfcccdac91169335b92693039e8f#031b1a1061bebfcccdac91169335b92693039e8f"
 dependencies = [
  "nalgebra",
 ]
@@ -1997,7 +1997,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-search"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=7c8f375137375709bb608ee2609b38cb80e5422c#7c8f375137375709bb608ee2609b38cb80e5422c"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=031b1a1061bebfcccdac91169335b92693039e8f#031b1a1061bebfcccdac91169335b92693039e8f"
 dependencies = [
  "futures",
  "lexongraph-block",
@@ -2007,7 +2007,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-spherical-kmeans"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=7c8f375137375709bb608ee2609b38cb80e5422c#7c8f375137375709bb608ee2609b38cb80e5422c"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=031b1a1061bebfcccdac91169335b92693039e8f#031b1a1061bebfcccdac91169335b92693039e8f"
 dependencies = [
  "lexongraph-linear-algebra-acceleration",
  "lexongraph-streaming-clustering",
@@ -2018,12 +2018,12 @@ dependencies = [
 [[package]]
 name = "lexongraph-streaming-clustering"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=7c8f375137375709bb608ee2609b38cb80e5422c#7c8f375137375709bb608ee2609b38cb80e5422c"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=031b1a1061bebfcccdac91169335b92693039e8f#031b1a1061bebfcccdac91169335b92693039e8f"
 
 [[package]]
 name = "lexongraph-streaming-indexer"
-version = "0.3.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=7c8f375137375709bb608ee2609b38cb80e5422c#7c8f375137375709bb608ee2609b38cb80e5422c"
+version = "0.4.0"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=031b1a1061bebfcccdac91169335b92693039e8f#031b1a1061bebfcccdac91169335b92693039e8f"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -2430,7 +2430,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.42",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -2469,7 +2469,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -3946,7 +3946,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
