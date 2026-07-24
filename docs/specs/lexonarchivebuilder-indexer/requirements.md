@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, replay-order preparation efficiency, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v3 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v3-compatible clustering observability projection, user-usable convergence-diagnosis surfacing, latest-LexonGraph constrained v3 working-root adoption at commit `7c8f375137375709bb608ee2609b38cb80e5422c`, issue-83 replay-order memory decoupling from corpus size, bounded replay-batch preparation overlap exploration for issue #88, issue #93 replay batch-size decoupling from CPU concurrency, issue #95 bounded multi-batch replay-prefetch buffering, renewed latest-upstream-main compatibility after post-`7c8f375137375709bb608ee2609b38cb80e5422c` breaking LexonGraph changes, and repo-wide redb block-store targeting support after refreshing to a newer LexonGraph `main` revision
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, v3-compatible clustering telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, bounded-residency deterministic replay ordering for deterministic replay submission, efficient replay-order preparation behind the existing replay contract, bounded replay-batch preparation overlap behind the existing replay contract, independent replay batch-sizing versus replay-materialization concurrency control for clustering replay, bounded multi-batch replay-prefetch buffering for clustering replay, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v3 API when the selected published profile is `0.7.0`, upstream-managed request-adjacent v3 working-root derivation for clustering-enabled v3 execution, repeatable adaptation to later upstream-main breaking changes without weakening the current external stage or observability contracts, and first-class redb block-store targeting across archive-sync, block-gateway, indexer, MCP, and repo-owned copy/sync surfaces
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, replay-order preparation efficiency, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v3 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v3-compatible clustering observability projection, user-usable convergence-diagnosis surfacing, latest-LexonGraph constrained v3 working-root adoption at commit `7c8f375137375709bb608ee2609b38cb80e5422c`, issue-83 replay-order memory decoupling from corpus size, bounded replay-batch preparation overlap exploration for issue #88, issue #93 replay batch-size decoupling from CPU concurrency, issue #95 bounded multi-batch replay-prefetch buffering, renewed latest-upstream-main compatibility after post-`7c8f375137375709bb608ee2609b38cb80e5422c` breaking LexonGraph changes, repo-wide redb block-store targeting support after refreshing to a newer LexonGraph `main` revision, and rooted block-copy live progress counters on the default heartbeat surface
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, v3-compatible clustering telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, live rooted-copy progress reporting, bounded-residency deterministic replay ordering for deterministic replay submission, efficient replay-order preparation behind the existing replay contract, bounded replay-batch preparation overlap behind the existing replay contract, independent replay batch-sizing versus replay-materialization concurrency control for clustering replay, bounded multi-batch replay-prefetch buffering for clustering replay, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v3 API when the selected published profile is `0.7.0`, upstream-managed request-adjacent v3 working-root derivation for clustering-enabled v3 execution, repeatable adaptation to later upstream-main breaking changes without weakening the current external stage or observability contracts, and first-class redb block-store targeting across archive-sync, block-gateway, indexer, MCP, and repo-owned copy/sync surfaces
 
 ## USER-REQUEST
 
@@ -586,6 +586,16 @@
   filesystem-targeting profile, this increment may still add redb targeting,
   but it must do so without silently weakening the existing Azure-backed
   profiles or changing their operational meaning.
+- **UR-303 [KNOWN]:** Rooted block copy should report operator-usable live
+  progress counters on its default heartbeat surface so users can tell whether
+  long-running copy work is discovering source blocks, skipping already-present
+  destination blocks, publishing new destination blocks, or accumulating
+  failures rather than only seeing elapsed-time liveness.
+- **UR-304 [INFERRED]:** Live rooted-copy progress counters must remain
+  truthful to the selected destination mode: read-before-write may report
+  copied and skipped-already-present progress, while blind-write may report
+  attempted writes and failures without implying destination-state knowledge it
+  did not read.
 
 ## Change Manifest
 
@@ -724,6 +734,7 @@
 | CM-INDEXER-131 | Revise | Preserve operator-usable clustering progress and diagnosis across the v3 migration by projecting the best available v3 hierarchy-planning, partition-load, and bottom-up assembly telemetry without inventing missing v2-only pending-partition detail | UR-290, UR-291 |
 | CM-INDEXER-132 | Revise | Refresh the approved latest-LexonGraph integration target from commit `7c8f375137375709bb608ee2609b38cb80e5422c` to LexonGraph `main` commit `031b1a1061bebfcccdac91169335b92693039e8f` and require LexonArchiveBuilder to absorb any breaking delegated API changes without weakening the approved external stage or clustering-observability contracts | UR-292, UR-293, UR-294, UR-295 |
 | CM-INDEXER-133 | Revise | Refresh the approved LexonGraph integration target from commit `031b1a1061bebfcccdac91169335b92693039e8f` to LexonGraph `main` commit `9f845b5f1ff6e13cb7e51d5ca23bde11b8ff8f31`, add explicit redb block-store targeting across archive-sync, block-gateway, indexer, MCP, and repo-owned copy/sync workflows, keep mutable refs on the filesystem, preserve fs-to-redb migration/copy workflows, and leave existing Azure-backed profile meanings intact | UR-296, UR-297, UR-297A, UR-298, UR-299, UR-300, UR-301, UR-302 |
+| CM-INDEXER-134 | Revise | Strengthen rooted block-copy observability from elapsed-time-only liveness to mode-truthful live progress counters on the default heartbeat surface without changing rooted reachability, write concurrency, or copy-mode semantics | UR-192, UR-193, UR-198, UR-303, UR-304 |
 
 ## Before / After
 
@@ -2532,6 +2543,17 @@ to another configured block store.
   block transfer work, the tool SHALL emit basic default operator-visible
   liveness or progress on its normal CLI output surface before final completion
   so a large copy does not appear hung while work is still advancing.
+- **Live-progress detail [KNOWN]:** That default copy heartbeat SHALL report
+  repository-owned live counter progress derived from the current copy walk,
+  including completed destination publications plus any already-known skipped or
+  failed outcomes, so operators can distinguish read-heavy traversal from
+  blocked-or-idle behavior.
+- **Mode-truthfulness rule [INFERRED]:** Live progress on the default heartbeat
+  surface SHALL preserve the same truthful reporting boundary as the final copy
+  report: read-before-write may surface copied and skipped-already-present
+  counts, while blind-write may surface attempted-write and failure counts
+  without claiming skipped-destination knowledge that the invocation did not
+  observe.
 - **Mutable-reference exclusion [KNOWN]:** This increment copies immutable block
   content only; repository-owned mutable references such as current-root or
   replay-journal-head publication remain out of scope unless a later approved
@@ -2543,7 +2565,7 @@ to another configured block store.
 - **Surface boundary [KNOWN]:** The tool is additive to existing indexing,
   quality, search, and MCP surfaces and SHALL NOT become an indexing stage, a
   `BatchRequest` feature, or an MCP-visible API in this increment.
-- **Traceability:** UR-153, UR-154, UR-155, UR-156, UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188, UR-189, UR-190, UR-191, UR-192, UR-193, UR-196, UR-197, UR-202, UR-205, UR-206, UR-207, UR-209
+- **Traceability:** UR-153, UR-154, UR-155, UR-156, UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188, UR-189, UR-190, UR-191, UR-192, UR-193, UR-196, UR-197, UR-198, UR-202, UR-205, UR-206, UR-207, UR-209, UR-303, UR-304
 
 #### RQ-INDEXER-005C - Opt-in SDK diagnostic logging on existing CLI surfaces
 
@@ -3491,19 +3513,32 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   fs-to-redb migration and copy workflows, and leaves existing Azure-backed
   profile meanings unchanged.
 
+### BA-INDEXER-134
+
+- **Before [KNOWN]:** The rooted block-copy CLI emitted only elapsed-time
+  liveness during long-running copy work, even though the repository-owned copy
+  loop already tracked internal copied, skipped, attempted, and failed counts.
+- **After [KNOWN]:** The requirements now demand operator-visible live progress
+  counters on that default heartbeat surface, with the exact counters remaining
+  truthful to read-before-write versus blind-write mode semantics rather than
+  introducing a separate verbose-only progress interface.
+
 ### Invariant Impact Assessment
 
 - **Content-model abstraction boundaries:** Preserved. The increment changes
-  only the repository-selected local immutable block-store backend options; it
-  does not add a second content-resolution or embedding abstraction stack.
-- **Local/prod environment parity:** Expanded carefully. Local operation gains a
-  second explicit immutable block-store backend, and repo components that
-  already expose Azure-backed targets may also gain explicit redb targeting,
-  but existing Azure-backed meanings must remain stable.
-- **Search contract stability:** Preserved. MCP and rooted search behavior must
-  remain tied to the same rooted content semantics regardless of whether local
-  immutable blocks reside on the filesystem or in redb.
+  only operator-visible rooted-copy progress reporting; it does not add or
+  reshape content-resolution, embedding, or block-store abstraction families.
+- **Local/prod environment parity:** Preserved. The heartbeat refinement applies
+  to the shared rooted-copy CLI surface regardless of whether the selected
+  stores are local filesystem, local redb, gateway, or approved Azure-backed
+  profiles.
+- **Search contract stability:** Preserved. The increment changes only copy-task
+  observability and does not alter indexing, MCP, or rooted search semantics.
 - **Indexing safety, idempotence, recoverability:** Preserved. Hash-addressed
-  immutable blocks, external mutable refs, and explicit copy/migration flows
-  keep reruns and backend-to-backend movement auditable rather than redefining
-  the existing local backend in place.
+  immutable blocks, rooted reachability, and existing copy-mode boundaries stay
+  unchanged; the increment only surfaces already-tracked progress more clearly.
+- **Operator observability:** Preserved and tightened. The increment extends the
+  existing no-silent-gap principle for long-running operator workflows from
+  elapsed-time liveness to live counter progress on rooted copy, without
+  creating a second progress surface or weakening truthful mode-specific copy
+  accounting.

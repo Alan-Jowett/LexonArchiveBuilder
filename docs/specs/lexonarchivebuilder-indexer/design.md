@@ -22,7 +22,7 @@ replay-stable fingerprinting, temporary upstream `main` tracking for
 rapid profile validation, upstream wgpu-acceleration revision
 compatibility, 0.6.x published-profile evaluation, local testing sweep
 automation, v0.7.0 fixed-budget ladder experiment automation, rooted
-block-store copy tooling, upstream embedding-readback API adoption, LAB-owned
+block-store copy tooling with live default heartbeat counters, upstream embedding-readback API adoption, LAB-owned
 replay-journaled split-stage recovery, bounded-residency deterministic replay
 ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, replay batch-size decoupling from CPU concurrency, bounded multi-batch replay-prefetch buffering, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
@@ -2151,6 +2151,16 @@ separate progress API or daemon, and is intentionally lighter-weight than any
 future opt-in verbose diagnostic mode. The design leaves the exact cadence and
 message schema to implementation so long as ordinary operators can tell that
 rooted traversal or transfer work is still advancing.
+
+That default heartbeat is not just elapsed-time proof-of-life. The CLI surface
+projects mode-truthful live counters from the repository-owned rooted-copy walk
+onto the same normal output stream so operators can distinguish traversal-heavy
+progress from actual destination publication progress. In default
+read-before-write mode, the heartbeat may report copied, skipped-already-
+present, and failed outcomes because destination-state classification is known
+before enqueueing writes. In blind-write mode, the heartbeat instead reports
+attempted-write and failure-oriented progress without inventing skipped-state
+knowledge that the invocation deliberately avoided reading.
 
 **Traces to:** RQ-INDEXER-005B, RQ-INDEXER-009
 

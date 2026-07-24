@@ -7,6 +7,8 @@ use std::future::Future;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ciborium::Value;
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -63,6 +65,156 @@ pub enum CopyDestinationMode {
     BlindWrite,
 }
 
+#[derive(Clone, Debug)]
+pub struct RootedBlockCopyProgress {
+    destination_mode: CopyDestinationMode,
+    state: Arc<CopyProgressState>,
+}
+
+#[derive(Debug)]
+struct CopyProgressState {
+    read_source_block_count: AtomicUsize,
+    copied_block_count: AtomicUsize,
+    skipped_already_present_block_count: AtomicUsize,
+    attempted_write_block_count: AtomicUsize,
+    failed_block_count: AtomicUsize,
+}
+
+struct CopyMetrics {
+    copied_block_count: usize,
+    skipped_already_present_block_count: usize,
+    attempted_write_block_count: usize,
+    progress: Option<RootedBlockCopyProgress>,
+}
+
+impl RootedBlockCopyProgress {
+    pub fn new(destination_mode: CopyDestinationMode) -> Self {
+        Self {
+            destination_mode,
+            state: Arc::new(CopyProgressState::default()),
+        }
+    }
+
+    pub fn snapshot(&self) -> RootedBlockCopyProgressSnapshot {
+        RootedBlockCopyProgressSnapshot {
+            destination_mode: self.destination_mode,
+            read_source_block_count: self.state.read_source_block_count.load(Ordering::Relaxed),
+            copied_block_count: matches!(
+                self.destination_mode,
+                CopyDestinationMode::ReadBeforeWrite
+            )
+            .then(|| self.state.copied_block_count.load(Ordering::Relaxed)),
+            skipped_already_present_block_count: matches!(
+                self.destination_mode,
+                CopyDestinationMode::ReadBeforeWrite
+            )
+            .then(|| {
+                self.state
+                    .skipped_already_present_block_count
+                    .load(Ordering::Relaxed)
+            }),
+            attempted_write_block_count: matches!(
+                self.destination_mode,
+                CopyDestinationMode::BlindWrite
+            )
+            .then(|| {
+                self.state
+                    .attempted_write_block_count
+                    .load(Ordering::Relaxed)
+            }),
+            failed_block_count: self.state.failed_block_count.load(Ordering::Relaxed),
+        }
+    }
+
+    fn note_read_source_block(&self) {
+        self.state
+            .read_source_block_count
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn note_copied_block(&self) {
+        self.state
+            .copied_block_count
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn note_skipped_already_present_block(&self) {
+        self.state
+            .skipped_already_present_block_count
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn note_attempted_write_block(&self) {
+        self.state
+            .attempted_write_block_count
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn note_failed_block(&self) {
+        self.state
+            .failed_block_count
+            .fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl Default for CopyProgressState {
+    fn default() -> Self {
+        Self {
+            read_source_block_count: AtomicUsize::new(0),
+            copied_block_count: AtomicUsize::new(0),
+            skipped_already_present_block_count: AtomicUsize::new(0),
+            attempted_write_block_count: AtomicUsize::new(0),
+            failed_block_count: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl CopyMetrics {
+    fn new(progress: Option<RootedBlockCopyProgress>) -> Self {
+        Self {
+            copied_block_count: 0,
+            skipped_already_present_block_count: 0,
+            attempted_write_block_count: 0,
+            progress,
+        }
+    }
+
+    fn progress(&self) -> Option<&RootedBlockCopyProgress> {
+        self.progress.as_ref()
+    }
+
+    fn note_copied_block(&mut self) {
+        self.copied_block_count += 1;
+        if let Some(progress) = self.progress() {
+            progress.note_copied_block();
+        }
+    }
+
+    fn note_skipped_already_present_block(&mut self) {
+        self.skipped_already_present_block_count += 1;
+        if let Some(progress) = self.progress() {
+            progress.note_skipped_already_present_block();
+        }
+    }
+
+    fn note_attempted_write_block(&mut self) {
+        self.attempted_write_block_count += 1;
+        if let Some(progress) = self.progress() {
+            progress.note_attempted_write_block();
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RootedBlockCopyProgressSnapshot {
+    pub destination_mode: CopyDestinationMode,
+    pub read_source_block_count: usize,
+    pub copied_block_count: Option<usize>,
+    pub skipped_already_present_block_count: Option<usize>,
+    pub attempted_write_block_count: Option<usize>,
+    pub failed_block_count: usize,
+}
+
 #[derive(Debug, Error)]
 pub enum RootedBlockCopyError {
     #[error("failed to render rooted block-copy report: {message}")]
@@ -113,6 +265,25 @@ pub async fn copy_rooted_blocks_with_mode_and_limit(
     destination_mode: CopyDestinationMode,
     max_in_flight_destination_writes: usize,
 ) -> RootedBlockCopyReport {
+    copy_rooted_blocks_with_mode_and_limit_and_progress(
+        source,
+        destination,
+        root_ids,
+        destination_mode,
+        max_in_flight_destination_writes,
+        None,
+    )
+    .await
+}
+
+pub async fn copy_rooted_blocks_with_mode_and_limit_and_progress(
+    source: &dyn BlockStore,
+    destination: &dyn BlockStore,
+    root_ids: &[BlockHash],
+    destination_mode: CopyDestinationMode,
+    max_in_flight_destination_writes: usize,
+    progress: Option<RootedBlockCopyProgress>,
+) -> RootedBlockCopyReport {
     copy_rooted_blocks_with_mode_and_limits(
         source,
         destination,
@@ -120,6 +291,7 @@ pub async fn copy_rooted_blocks_with_mode_and_limit(
         destination_mode,
         max_in_flight_destination_writes,
         DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITE_BYTES,
+        progress,
     )
     .await
 }
@@ -131,6 +303,7 @@ async fn copy_rooted_blocks_with_mode_and_limits(
     destination_mode: CopyDestinationMode,
     max_in_flight_destination_writes: usize,
     max_in_flight_destination_write_bytes: usize,
+    progress: Option<RootedBlockCopyProgress>,
 ) -> RootedBlockCopyReport {
     let requested_root_ids = root_ids.iter().map(ToString::to_string).collect::<Vec<_>>();
     let mut queue = root_ids
@@ -140,10 +313,8 @@ async fn copy_rooted_blocks_with_mode_and_limits(
         .collect::<VecDeque<_>>();
     let mut visited = HashSet::new();
     let effective_write_limit = max_in_flight_destination_writes.max(1);
-    let mut copied_block_count = 0usize;
-    let mut skipped_already_present_block_count = 0usize;
-    let mut attempted_write_block_count = 0usize;
-    let mut failures = CopyFailureTracker::default();
+    let mut metrics = CopyMetrics::new(progress.clone());
+    let mut failures = CopyFailureTracker::new(progress.clone());
     let mut pending_writes = FuturesUnordered::<PendingDestinationWrite<'_>>::new();
     let mut in_flight_destination_write_bytes = 0usize;
 
@@ -153,7 +324,9 @@ async fn copy_rooted_blocks_with_mode_and_limits(
             continue;
         }
 
-        let Some(block_bytes) = read_source_block(source, block_id, &mut failures).await else {
+        let Some(block_bytes) =
+            read_source_block(source, block_id, &mut failures, metrics.progress()).await
+        else {
             continue;
         };
         let child_ids = decode_source_block(block_id, &block_bytes, &mut failures);
@@ -163,7 +336,7 @@ async fn copy_rooted_blocks_with_mode_and_limits(
             CopyDestinationMode::ReadBeforeWrite => {
                 match destination.get_block_bytes(&block_id).await {
                     Ok(Some(_)) => {
-                        skipped_already_present_block_count += 1;
+                        metrics.note_skipped_already_present_block();
                     }
                     Ok(None) => {
                         let block_bytes_len = block_bytes.len();
@@ -173,7 +346,7 @@ async fn copy_rooted_blocks_with_mode_and_limits(
                             max_in_flight_destination_write_bytes,
                             block_bytes_len,
                             &mut in_flight_destination_write_bytes,
-                            &mut copied_block_count,
+                            &mut metrics,
                             &mut failures,
                         )
                         .await;
@@ -194,7 +367,7 @@ async fn copy_rooted_blocks_with_mode_and_limits(
                 }
             }
             CopyDestinationMode::BlindWrite => {
-                attempted_write_block_count += 1;
+                metrics.note_attempted_write_block();
                 let block_bytes_len = block_bytes.len();
                 wait_for_write_capacity(
                     &mut pending_writes,
@@ -202,7 +375,7 @@ async fn copy_rooted_blocks_with_mode_and_limits(
                     max_in_flight_destination_write_bytes,
                     block_bytes_len,
                     &mut in_flight_destination_write_bytes,
-                    &mut copied_block_count,
+                    &mut metrics,
                     &mut failures,
                 )
                 .await;
@@ -224,7 +397,7 @@ async fn copy_rooted_blocks_with_mode_and_limits(
         record_write_completion(
             completion,
             &mut in_flight_destination_write_bytes,
-            &mut copied_block_count,
+            &mut metrics,
             &mut failures,
         );
     }
@@ -233,14 +406,14 @@ async fn copy_rooted_blocks_with_mode_and_limits(
         destination_mode,
         requested_root_ids,
         copied_block_count: matches!(destination_mode, CopyDestinationMode::ReadBeforeWrite)
-            .then_some(copied_block_count),
+            .then_some(metrics.copied_block_count),
         skipped_already_present_block_count: matches!(
             destination_mode,
             CopyDestinationMode::ReadBeforeWrite
         )
-        .then_some(skipped_already_present_block_count),
+        .then_some(metrics.skipped_already_present_block_count),
         attempted_write_block_count: matches!(destination_mode, CopyDestinationMode::BlindWrite)
-            .then_some(attempted_write_block_count),
+            .then_some(metrics.attempted_write_block_count),
         failed_block_count: count_failed_blocks(failures.failures()),
         failures: failures.into_failures(),
     }
@@ -257,10 +430,23 @@ struct CopyFailureTracker {
     block_roots: HashMap<BlockHash, HashSet<BlockHash>>,
     discovered_children: HashMap<BlockHash, Vec<BlockHash>>,
     failure_templates: HashMap<BlockHash, Vec<FailureTemplate>>,
+    failed_block_ids: HashSet<BlockHash>,
     failures: Vec<CopyFailure>,
+    progress: Option<RootedBlockCopyProgress>,
 }
 
 impl CopyFailureTracker {
+    fn new(progress: Option<RootedBlockCopyProgress>) -> Self {
+        Self {
+            block_roots: HashMap::new(),
+            discovered_children: HashMap::new(),
+            failure_templates: HashMap::new(),
+            failed_block_ids: HashSet::new(),
+            failures: Vec::new(),
+            progress,
+        }
+    }
+
     fn note_block_root(&mut self, request_root_id: BlockHash, block_id: BlockHash) {
         self.associate_root_with_known_subgraph(request_root_id, block_id);
     }
@@ -285,6 +471,11 @@ impl CopyFailureTracker {
         message: impl Into<String>,
     ) {
         let message = message.into();
+        if self.failed_block_ids.insert(block_id)
+            && let Some(progress) = self.progress.as_ref()
+        {
+            progress.note_failed_block();
+        }
         self.failure_templates
             .entry(block_id)
             .or_default()
@@ -374,7 +565,7 @@ async fn wait_for_write_capacity(
     max_in_flight_destination_write_bytes: usize,
     next_write_bytes: usize,
     in_flight_destination_write_bytes: &mut usize,
-    copied_block_count: &mut usize,
+    metrics: &mut CopyMetrics,
     failures: &mut CopyFailureTracker,
 ) {
     while pending_writes.len() >= effective_write_limit
@@ -390,7 +581,7 @@ async fn wait_for_write_capacity(
         record_write_completion(
             completion,
             in_flight_destination_write_bytes,
-            copied_block_count,
+            metrics,
             failures,
         );
     }
@@ -399,7 +590,7 @@ async fn wait_for_write_capacity(
 fn record_write_completion(
     completion: DestinationWriteCompletion,
     in_flight_destination_write_bytes: &mut usize,
-    copied_block_count: &mut usize,
+    metrics: &mut CopyMetrics,
     failures: &mut CopyFailureTracker,
 ) {
     *in_flight_destination_write_bytes =
@@ -407,7 +598,7 @@ fn record_write_completion(
     match completion.result {
         Ok(()) => {
             if completion.count_as_copied {
-                *copied_block_count += 1;
+                metrics.note_copied_block();
             }
         }
         Err(error) => failures.record(
@@ -515,9 +706,15 @@ async fn read_source_block(
     source: &dyn BlockStore,
     block_id: BlockHash,
     failures: &mut CopyFailureTracker,
+    progress: Option<&RootedBlockCopyProgress>,
 ) -> Option<Vec<u8>> {
     match source.get_block_bytes(&block_id).await {
-        Ok(Some(bytes)) => Some(bytes),
+        Ok(Some(bytes)) => {
+            if let Some(progress) = progress {
+                progress.note_read_source_block();
+            }
+            Some(bytes)
+        }
         Ok(None) => {
             failures.record(
                 block_id,
@@ -1136,6 +1333,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rooted_block_copy_progress_tracks_read_before_write_counts() {
+        let source = MemoryBlockStore::new(16).unwrap();
+        let destination = MemoryBlockStore::new(16).unwrap();
+
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let root = source.put(&branch_block(&[alpha, beta])).await.unwrap();
+
+        let alpha_bytes = source.get_block_bytes(&alpha).await.unwrap().unwrap();
+        destination
+            .put_block_bytes(&alpha, &alpha_bytes)
+            .await
+            .unwrap();
+
+        let progress = RootedBlockCopyProgress::new(CopyDestinationMode::ReadBeforeWrite);
+        let report = copy_rooted_blocks_with_mode_and_limit_and_progress(
+            &source,
+            &destination,
+            &[root],
+            CopyDestinationMode::ReadBeforeWrite,
+            DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            Some(progress.clone()),
+        )
+        .await;
+        let snapshot = progress.snapshot();
+
+        assert_eq!(report.copied_block_count, Some(2));
+        assert_eq!(report.skipped_already_present_block_count, Some(1));
+        assert_eq!(snapshot.read_source_block_count, 3);
+        assert_eq!(snapshot.copied_block_count, Some(2));
+        assert_eq!(snapshot.skipped_already_present_block_count, Some(1));
+        assert_eq!(snapshot.attempted_write_block_count, None);
+        assert_eq!(snapshot.failed_block_count, 0);
+    }
+
+    #[tokio::test]
+    async fn rooted_block_copy_progress_tracks_blind_write_counts() {
+        let source = MemoryBlockStore::new(16).unwrap();
+        let destination_inner = Arc::new(MemoryBlockStore::new(16).unwrap());
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let root = source.put(&branch_block(&[alpha, beta])).await.unwrap();
+        let destination = RejectingReadStore {
+            inner: Arc::clone(&destination_inner),
+        };
+
+        let progress = RootedBlockCopyProgress::new(CopyDestinationMode::BlindWrite);
+        let report = copy_rooted_blocks_with_mode_and_limit_and_progress(
+            &source,
+            &destination,
+            &[root],
+            CopyDestinationMode::BlindWrite,
+            DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            Some(progress.clone()),
+        )
+        .await;
+        let snapshot = progress.snapshot();
+
+        assert_eq!(report.attempted_write_block_count, Some(3));
+        assert_eq!(snapshot.read_source_block_count, 3);
+        assert_eq!(snapshot.copied_block_count, None);
+        assert_eq!(snapshot.skipped_already_present_block_count, None);
+        assert_eq!(snapshot.attempted_write_block_count, Some(3));
+        assert_eq!(snapshot.failed_block_count, 0);
+    }
+
+    #[tokio::test]
     async fn rooted_block_copy_blind_write_tolerates_preexisting_destination_blocks() {
         let source = MemoryBlockStore::new(16).unwrap();
         let destination_inner = Arc::new(MemoryBlockStore::new(16).unwrap());
@@ -1242,6 +1506,7 @@ mod tests {
             CopyDestinationMode::ReadBeforeWrite,
             8,
             max_in_flight_destination_write_bytes,
+            None,
         )
         .await;
 
