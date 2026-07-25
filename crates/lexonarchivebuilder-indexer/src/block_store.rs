@@ -8,7 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use lexonarchivebuilder_block_store_http3::Http3BlockStore;
 use lexongraph_block::BlockHash;
-use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
+use lexongraph_block_store::{BlockBytesBatchEntry, BlockIdStream, BlockStore, BlockStoreError};
 use lexongraph_block_store_azure_sdk::AzureBlobBlockStore;
 use lexongraph_block_store_azure_table_v2::AzureTableBlockStoreV2;
 use lexongraph_block_store_fs::FilesystemBlockStore;
@@ -224,6 +224,19 @@ impl BlockStore for ConfiguredBlockStore {
             Self::LocalRedb(store) => store.put_block_bytes(block_id, block_bytes).await,
             Self::Overlay(store) => store.put_block_bytes(block_id, block_bytes).await,
             Self::AzureTable(store) => store.put_block_bytes(block_id, block_bytes).await,
+        }
+    }
+
+    async fn put_block_bytes_batch(
+        &self,
+        entries: &[BlockBytesBatchEntry<'_>],
+    ) -> Result<(), BlockStoreError> {
+        match self {
+            Self::GatewayHttp3(store) => store.put_block_bytes_batch(entries).await,
+            Self::Local(store) => store.put_block_bytes_batch(entries).await,
+            Self::LocalRedb(store) => store.put_block_bytes_batch(entries).await,
+            Self::Overlay(store) => store.put_block_bytes_batch(entries).await,
+            Self::AzureTable(store) => store.put_block_bytes_batch(entries).await,
         }
     }
 

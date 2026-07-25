@@ -680,6 +680,33 @@
   apply uniformly across the existing approved rooted-copy source and
   destination profile family rather than introducing backend-specific traversal
   concurrency controls.
+- **UR-327 [KNOWN]:** The approved LexonGraph integration target should refresh
+  from the repository's current rooted-copy dependency baseline to a newer
+  LexonGraph `main` revision that exposes the upstream batched block-write
+  capability needed by rooted-copy destination publication.
+- **UR-328 [KNOWN]:** Rooted block copy should use the upstream batched
+  block-write capability for any approved destination profile whose refreshed
+  LexonGraph-backed publication path exposes that capability.
+- **UR-329 [KNOWN]:** If an approved rooted-copy destination profile does not
+  expose the upstream batched block-write capability after the LexonGraph
+  refresh, the tool should fall back to the existing non-batched destination
+  publication behavior rather than rejecting the copy command.
+- **UR-330 [INFERRED]:** Batched destination publication must preserve the
+  existing rooted-copy external contract: reachable-only immutable traversal,
+  at-most-once logical handling, mode-truthful copied/skipped/attempted/failed
+  reporting, and existing read-before-write versus blind-write semantics must
+  remain stable whether the destination publishes one block per write or many
+  blocks per batch.
+- **UR-331 [INFERRED]:** Adopting upstream batched writes must remain internal
+  to the destination-side block-store abstraction, so rooted-copy CLI
+  semantics, worker-thread traversal semantics, and backend-neutral copy-engine
+  contracts do not gain new backend-specific operator controls merely to enable
+  batching.
+- **UR-332 [INFERRED]:** If a destination-specific implementation needs staging,
+  queueing, or bounded backpressure to realize batched writes safely, that
+  behavior must remain encapsulated in the destination-specific publication
+  wrapper rather than leaking repository-owned redb-specific mechanics into the
+  generic rooted-copy traversal contract.
 
 ## Change Manifest
 
@@ -825,6 +852,9 @@
 | CM-INDEXER-138 | Revise | Add a separate CLI-controlled rooted-copy worker-thread limit for concurrent queue-based source read, decode, child discovery, and write submission while preserving the existing reachable-only immutable traversal contract | UR-317, UR-318, UR-320, UR-321, UR-322, UR-323 |
 | CM-INDEXER-139 | Revise | Preserve `--max-in-flight-destination-writes` as a distinct destination-write overlap control and require the new worker-thread option to remain additive rather than replacing the existing write-concurrency surface | UR-198, UR-199, UR-200, UR-319, UR-320 |
 | CM-INDEXER-140 | Revise | Constrain worker-threaded rooted copy to remain CLI-only, profile-uniform, and mode-truthful across read-before-write and blind-write execution without inventing backend-specific traversal controls or weakening report semantics | UR-321, UR-324, UR-325, UR-326 |
+| CM-INDEXER-141 | Revise | Refresh the approved LexonGraph integration target to a newer `main` revision whose delegated block-store surface exposes the batched destination-write capability required by rooted block copy | UR-327 |
+| CM-INDEXER-142 | Revise | Allow rooted-copy destination publication to use upstream batched writes for capable approved destination profiles while preserving fallback to the existing non-batched behavior for approved profiles that still lack that capability | UR-328, UR-329, UR-330 |
+| CM-INDEXER-143 | Revise | Keep any destination-specific batching, staging, and backpressure mechanics behind the destination-side block-store abstraction so the generic rooted-copy traversal contract and CLI surface remain backend-neutral | UR-330, UR-331, UR-332 |
 
 ## Before / After
 
@@ -2702,7 +2732,7 @@ to another configured block store.
   SHALL apply through the same approved rooted-copy profile vocabulary rather
   than introducing backend-specific source-walk concurrency controls for
   individual stores.
-- **Traceability:** UR-153, UR-154, UR-155, UR-156, UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188, UR-189, UR-190, UR-191, UR-192, UR-193, UR-196, UR-197, UR-198, UR-202, UR-205, UR-206, UR-207, UR-209, UR-297, UR-298, UR-299, UR-303, UR-304, UR-317, UR-318, UR-319, UR-320, UR-321, UR-322, UR-323, UR-324, UR-325, UR-326
+- **Traceability:** UR-153, UR-154, UR-155, UR-156, UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188, UR-189, UR-190, UR-191, UR-192, UR-193, UR-196, UR-197, UR-198, UR-202, UR-205, UR-206, UR-207, UR-209, UR-297, UR-298, UR-299, UR-303, UR-304, UR-317, UR-318, UR-319, UR-320, UR-321, UR-322, UR-323, UR-324, UR-325, UR-326, UR-327, UR-328, UR-329, UR-330, UR-331, UR-332
 
 #### RQ-INDEXER-005C - Opt-in SDK diagnostic logging on existing CLI surfaces
 
@@ -3765,6 +3795,34 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   profile-uniform behavior, and truthful read-before-write versus blind-write
   reporting semantics.
 
+### BA-INDEXER-141
+
+- **Before [KNOWN]:** The approved rooted-copy requirements tracked a newer
+  LexonGraph `main` refresh for redb support and compaction, but they did not
+  yet require a delegated upstream revision that exposed batched destination
+  writes for rooted-copy publication.
+- **After [KNOWN]:** The requirements now direct rooted copy to refresh to a
+  newer LexonGraph `main` revision that exposes the upstream batched write
+  capability needed by this increment.
+
+### BA-INDEXER-142
+
+- **Before [KNOWN]:** Rooted-copy destination publication assumed the existing
+  non-batched write path across approved destination profiles.
+- **After [KNOWN]:** Rooted copy may now publish through upstream batched writes
+  for approved destination profiles that expose that capability, while approved
+  profiles that still lack it must fall back to the existing non-batched
+  behavior instead of failing outright.
+
+### BA-INDEXER-143
+
+- **Before [KNOWN]:** The requirements did not yet constrain where
+  destination-specific batching, staging, or backpressure mechanics should live
+  when rooted copy adopted upstream batched writes.
+- **After [KNOWN]:** The requirements now keep those mechanics behind the
+  destination-side block-store abstraction so the generic rooted-copy traversal
+  contract and CLI remain backend-neutral.
+
 ### Invariant Impact Assessment
 
 - **Content-model abstraction boundaries:** Preserved. The increment extends the
@@ -3790,6 +3848,12 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   bound, so traversal concurrency expands without collapsing the established
   distinction between source-side graph walking and destination-side write
   overlap.
+- **Environment-specific behavior stays behind stable interfaces:** Preserved
+  and extended. Batched destination publication may exploit upstream
+  destination-specific capabilities, but any staging, queueing, or backpressure
+  mechanics remain behind the destination-side block-store abstraction rather
+  than altering the generic rooted-copy traversal contract or widening the CLI
+  surface with backend-owned controls.
 - **Operator workflow clarity:** Preserved and extended. The new generic
   `maintenance` namespace gives operators an explicit one-store maintenance
   entry point without implying a backend-neutral compaction contract or

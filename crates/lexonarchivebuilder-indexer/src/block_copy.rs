@@ -8,13 +8,13 @@ use std::io::Cursor;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use ciborium::Value;
 use futures::stream::{FuturesUnordered, StreamExt};
 use lexongraph_block::{BlockHash, DecodedBlock, deserialize_versioned_block, v2};
-use lexongraph_block_store::{BlockStore, BlockStoreError};
+use lexongraph_block_store::{BlockBytesBatchEntry, BlockStore, BlockStoreError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -30,6 +30,8 @@ pub const DEFAULT_COPY_WORKER_THREADS: usize = 1;
 pub const BLIND_WRITE_REDB_COMPACTION_INTERVAL_BLOCKS: usize = 500_000;
 const DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITE_BYTES: usize = 64 * 1024 * 1024;
 const DESTINATION_STORE_FAILURE_ID: &str = "destination-store";
+const UNSUPPORTED_BATCH_WRITE_MESSAGE: &str =
+    "batch writes are not supported by this block store backend";
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -98,6 +100,14 @@ struct CopyExecutionConfig<F> {
     max_in_flight_destination_write_bytes: usize,
     progress: Option<RootedBlockCopyProgress>,
     blind_write_checkpoint: Option<BlindWriteCheckpoint<F>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BatchWriteCapability {
+    Unknown = 0,
+    Probing = 1,
+    Supported = 2,
+    Unsupported = 3,
 }
 
 pub struct BlindWriteCheckpoint<F> {
@@ -185,6 +195,46 @@ impl Default for CopyProgressState {
             failed_block_count: AtomicUsize::new(0),
         }
     }
+}
+
+fn load_batch_write_capability(state: &AtomicU8) -> BatchWriteCapability {
+    match state.load(Ordering::Acquire) {
+        0 => BatchWriteCapability::Unknown,
+        1 => BatchWriteCapability::Probing,
+        2 => BatchWriteCapability::Supported,
+        3 => BatchWriteCapability::Unsupported,
+        _ => unreachable!("invalid batch write capability state"),
+    }
+}
+
+fn try_begin_batch_write_probe(state: &AtomicU8) -> bool {
+    state
+        .compare_exchange(
+            BatchWriteCapability::Unknown as u8,
+            BatchWriteCapability::Probing as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_ok()
+}
+
+fn complete_batch_write_probe(state: &AtomicU8, supported: bool) {
+    state.store(
+        if supported {
+            BatchWriteCapability::Supported as u8
+        } else {
+            BatchWriteCapability::Unsupported as u8
+        },
+        Ordering::Release,
+    );
+}
+
+fn is_unsupported_batch_write_error(error: &BlockStoreError) -> bool {
+    matches!(error, BlockStoreError::BackendFailure(message) if {
+        let message = message.to_ascii_lowercase();
+        message.contains(UNSUPPORTED_BATCH_WRITE_MESSAGE)
+            || (message.contains("batch write") && message.contains("not supported"))
+    })
 }
 
 impl CopyMetrics {
@@ -460,8 +510,12 @@ where
     let effective_write_limit = max_in_flight_destination_writes.max(1);
     let mut metrics = CopyMetrics::new(progress.clone());
     let mut failures = CopyFailureTracker::new(progress.clone());
+    let batch_write_capability = AtomicU8::new(BatchWriteCapability::Unknown as u8);
     let mut pending_writes = FuturesUnordered::<PendingDestinationWrite<'_>>::new();
+    let mut buffered_write_jobs = Vec::new();
+    let mut in_flight_destination_write_count = 0usize;
     let mut in_flight_destination_write_bytes = 0usize;
+    let mut buffered_write_bytes = 0usize;
     let mut blind_write_checkpoint = blind_write_checkpoint;
 
     while let Some((request_root_id, block_id)) = queue.pop_front() {
@@ -485,25 +539,25 @@ where
                         metrics.note_skipped_already_present_block();
                     }
                     Ok(None) => {
-                        let block_bytes_len = block_bytes.len();
-                        wait_for_write_capacity(
+                        buffer_destination_write_job(
                             &mut pending_writes,
+                            destination as *const D,
+                            &batch_write_capability,
+                            &mut buffered_write_jobs,
+                            &mut buffered_write_bytes,
                             effective_write_limit,
                             max_in_flight_destination_write_bytes,
-                            block_bytes_len,
+                            &mut in_flight_destination_write_count,
                             &mut in_flight_destination_write_bytes,
                             &mut metrics,
                             &mut failures,
+                            ThreadedWriteJob {
+                                block_id,
+                                block_bytes,
+                                count_as_copied: true,
+                            },
                         )
                         .await;
-                        enqueue_destination_write(
-                            &mut pending_writes,
-                            destination as *const D,
-                            block_id,
-                            block_bytes,
-                            true,
-                        );
-                        in_flight_destination_write_bytes += block_bytes_len;
                     }
                     Err(error) => failures.record(
                         block_id,
@@ -514,25 +568,25 @@ where
             }
             CopyDestinationMode::BlindWrite => {
                 metrics.note_attempted_write_block();
-                let block_bytes_len = block_bytes.len();
-                wait_for_write_capacity(
+                buffer_destination_write_job(
                     &mut pending_writes,
+                    destination as *const D,
+                    &batch_write_capability,
+                    &mut buffered_write_jobs,
+                    &mut buffered_write_bytes,
                     effective_write_limit,
                     max_in_flight_destination_write_bytes,
-                    block_bytes_len,
+                    &mut in_flight_destination_write_count,
                     &mut in_flight_destination_write_bytes,
                     &mut metrics,
                     &mut failures,
+                    ThreadedWriteJob {
+                        block_id,
+                        block_bytes,
+                        count_as_copied: false,
+                    },
                 )
                 .await;
-                enqueue_destination_write(
-                    &mut pending_writes,
-                    destination as *const D,
-                    block_id,
-                    block_bytes,
-                    false,
-                );
-                in_flight_destination_write_bytes += block_bytes_len;
                 if should_run_blind_write_checkpoint(
                     destination_mode,
                     metrics.attempted_write_block_count,
@@ -540,8 +594,23 @@ where
                         .as_ref()
                         .map(|checkpoint| checkpoint.interval),
                 ) {
+                    flush_buffered_destination_writes(
+                        &mut pending_writes,
+                        destination as *const D,
+                        &batch_write_capability,
+                        &mut buffered_write_jobs,
+                        &mut buffered_write_bytes,
+                        effective_write_limit,
+                        max_in_flight_destination_write_bytes,
+                        &mut in_flight_destination_write_count,
+                        &mut in_flight_destination_write_bytes,
+                        &mut metrics,
+                        &mut failures,
+                    )
+                    .await;
                     flush_pending_writes(
                         &mut pending_writes,
+                        &mut in_flight_destination_write_count,
                         &mut in_flight_destination_write_bytes,
                         &mut metrics,
                         &mut failures,
@@ -564,9 +633,24 @@ where
         enqueue_children(request_root_id, &child_ids, &mut queue);
     }
 
+    flush_buffered_destination_writes(
+        &mut pending_writes,
+        destination as *const D,
+        &batch_write_capability,
+        &mut buffered_write_jobs,
+        &mut buffered_write_bytes,
+        effective_write_limit,
+        max_in_flight_destination_write_bytes,
+        &mut in_flight_destination_write_count,
+        &mut in_flight_destination_write_bytes,
+        &mut metrics,
+        &mut failures,
+    )
+    .await;
     while let Some(completion) = pending_writes.next().await {
-        record_write_completion(
+        record_write_completions(
             completion,
+            &mut in_flight_destination_write_count,
             &mut in_flight_destination_write_bytes,
             &mut metrics,
             &mut failures,
@@ -622,6 +706,7 @@ where
     let metrics = Mutex::new(CopyMetrics::new(progress.clone()));
     let failures = Mutex::new(CopyFailureTracker::new(progress.clone()));
     let stop_requested = AtomicBool::new(false);
+    let batch_write_capability = AtomicU8::new(BatchWriteCapability::Unknown as u8);
     let checkpoint = Mutex::new(blind_write_checkpoint);
     let destination_ref: &D = destination;
     let traversal_context = ThreadedTraversalWorkerContext {
@@ -643,6 +728,7 @@ where
         metrics: &metrics,
         failures: &failures,
         checkpoint: &checkpoint,
+        batch_write_capability: &batch_write_capability,
         stop_requested: &stop_requested,
     };
 
@@ -892,16 +978,20 @@ where
     runtime.block_on(store.get_block_bytes(block_id))
 }
 
-fn block_store_put_block_bytes_in_runtime<D>(
+fn block_store_put_block_bytes_batch_in_runtime<D>(
     runtime: &tokio::runtime::Runtime,
     store: &D,
-    block_id: &BlockHash,
-    block_bytes: &[u8],
-) -> Result<(), BlockStoreError>
+    jobs: Vec<ThreadedWriteJob>,
+    batch_write_capability: &AtomicU8,
+) -> Vec<DestinationWriteCompletion>
 where
     D: BlockStore + Sync,
 {
-    runtime.block_on(store.put_block_bytes(block_id, block_bytes))
+    runtime.block_on(publish_destination_write_batch(
+        store,
+        jobs,
+        batch_write_capability,
+    ))
 }
 
 fn run_threaded_write_worker<D, F>(worker: &ThreadedWriteWorkerContext<'_, D, F>)
@@ -914,26 +1004,24 @@ where
         .build()
         .expect("failed to build tokio runtime for threaded write worker");
     loop {
-        match worker.write_queue.next_action(worker.stop_requested) {
-            ThreadedWriteWorkerAction::Write(write_job) => {
+        match worker
+            .write_queue
+            .next_action(worker.stop_requested, worker.batch_write_capability)
+        {
+            ThreadedWriteWorkerAction::WriteBatch(write_batch) => {
                 let _active_write = ThreadedActiveWriteGuard::new(
                     worker.write_queue,
-                    write_job.block_bytes.len(),
+                    write_batch.jobs.len(),
+                    write_batch.total_block_bytes_len,
                     worker.stop_requested,
                 );
-                let result = block_store_put_block_bytes_in_runtime(
+                let completions = block_store_put_block_bytes_batch_in_runtime(
                     &runtime,
                     worker.destination,
-                    &write_job.block_id,
-                    &write_job.block_bytes,
+                    write_batch.jobs,
+                    worker.batch_write_capability,
                 );
-                record_threaded_write_result(
-                    write_job.block_id,
-                    write_job.count_as_copied,
-                    result,
-                    worker.metrics,
-                    worker.failures,
-                );
+                record_threaded_write_completions(completions, worker.metrics, worker.failures);
             }
             ThreadedWriteWorkerAction::RunCheckpoint => run_threaded_checkpoint_if_needed(
                 worker.root_ids,
@@ -947,31 +1035,31 @@ where
     }
 }
 
-fn record_threaded_write_result(
-    block_id: BlockHash,
-    count_as_copied: bool,
-    result: Result<(), BlockStoreError>,
+fn record_threaded_write_completions(
+    completions: Vec<DestinationWriteCompletion>,
     metrics: &Mutex<CopyMetrics>,
     failures: &Mutex<CopyFailureTracker>,
 ) {
-    match result {
-        Ok(()) => {
-            if count_as_copied {
-                metrics
-                    .lock()
-                    .expect("threaded copy metrics mutex poisoned")
-                    .note_copied_block();
+    for completion in completions {
+        match completion.result {
+            Ok(()) => {
+                if completion.count_as_copied {
+                    metrics
+                        .lock()
+                        .expect("threaded copy metrics mutex poisoned")
+                        .note_copied_block();
+                }
             }
-        }
-        Err(error) => {
-            failures
-                .lock()
-                .expect("threaded copy failures mutex poisoned")
-                .record(
-                    block_id,
-                    CopyFailureOperation::WriteDestinationBlock,
-                    error.to_string(),
-                );
+            Err(message) => {
+                failures
+                    .lock()
+                    .expect("threaded copy failures mutex poisoned")
+                    .record(
+                        completion.block_id,
+                        CopyFailureOperation::WriteDestinationBlock,
+                        message,
+                    );
+            }
         }
     }
 }
@@ -1048,8 +1136,13 @@ struct ThreadedWriteJob {
     count_as_copied: bool,
 }
 
+struct DestinationWriteBatch {
+    jobs: Vec<ThreadedWriteJob>,
+    total_block_bytes_len: usize,
+}
+
 enum ThreadedWriteWorkerAction {
-    Write(ThreadedWriteJob),
+    WriteBatch(DestinationWriteBatch),
     RunCheckpoint,
     Shutdown,
 }
@@ -1074,6 +1167,7 @@ struct ThreadedWriteWorkerContext<'a, D, F> {
     metrics: &'a Mutex<CopyMetrics>,
     failures: &'a Mutex<CopyFailureTracker>,
     checkpoint: &'a Mutex<Option<BlindWriteCheckpoint<F>>>,
+    batch_write_capability: &'a AtomicU8,
     stop_requested: &'a AtomicBool,
 }
 
@@ -1103,6 +1197,7 @@ impl Drop for ThreadedWorkItemGuard<'_> {
 
 struct ThreadedActiveWriteGuard<'a> {
     write_queue: &'a ThreadedWriteQueue,
+    job_count: usize,
     block_bytes_len: usize,
     stop_requested: &'a AtomicBool,
 }
@@ -1110,11 +1205,13 @@ struct ThreadedActiveWriteGuard<'a> {
 impl<'a> ThreadedActiveWriteGuard<'a> {
     fn new(
         write_queue: &'a ThreadedWriteQueue,
+        job_count: usize,
         block_bytes_len: usize,
         stop_requested: &'a AtomicBool,
     ) -> Self {
         Self {
             write_queue,
+            job_count,
             block_bytes_len,
             stop_requested,
         }
@@ -1127,7 +1224,8 @@ impl Drop for ThreadedActiveWriteGuard<'_> {
             self.stop_requested.store(true, Ordering::SeqCst);
             self.write_queue.request_shutdown();
         }
-        self.write_queue.complete_write(self.block_bytes_len);
+        self.write_queue
+            .complete_write_batch(self.job_count, self.block_bytes_len);
     }
 }
 
@@ -1244,7 +1342,7 @@ impl ThreadedWriteQueue {
     }
 
     fn writer_thread_count(&self) -> usize {
-        self.max_in_flight_destination_writes
+        self.max_in_flight_destination_writes.max(1)
     }
 
     fn enqueue(
@@ -1302,18 +1400,66 @@ impl ThreadedWriteQueue {
         }
     }
 
-    fn next_action(&self, stop_requested: &AtomicBool) -> ThreadedWriteWorkerAction {
+    fn next_action(
+        &self,
+        stop_requested: &AtomicBool,
+        batch_write_capability: &AtomicU8,
+    ) -> ThreadedWriteWorkerAction {
         let mut state = self
             .state
             .lock()
             .expect("threaded copy write queue mutex poisoned");
         loop {
-            if let Some(write_job) = state.queue.pop_front() {
-                let block_bytes_len = write_job.block_bytes.len();
-                state.queued_write_bytes = state.queued_write_bytes.saturating_sub(block_bytes_len);
-                state.active_writes += 1;
-                state.active_write_bytes += block_bytes_len;
-                return ThreadedWriteWorkerAction::Write(write_job);
+            let capability = load_batch_write_capability(batch_write_capability);
+            if !matches!(capability, BatchWriteCapability::Unsupported) && state.active_writes > 0 {
+                state = self
+                    .ready
+                    .wait(state)
+                    .expect("threaded copy write queue mutex poisoned while waiting");
+                continue;
+            }
+            let target_batch_len = match capability {
+                BatchWriteCapability::Supported => self.max_in_flight_destination_writes.max(1),
+                BatchWriteCapability::Unknown => {
+                    if state.queue.len() >= 2 && try_begin_batch_write_probe(batch_write_capability)
+                    {
+                        2
+                    } else {
+                        1
+                    }
+                }
+                BatchWriteCapability::Probing | BatchWriteCapability::Unsupported => 1,
+            };
+            if let Some(first_job) = state.queue.pop_front() {
+                let mut jobs = vec![first_job];
+                let mut total_block_bytes_len = jobs[0].block_bytes.len();
+                state.queued_write_bytes = state
+                    .queued_write_bytes
+                    .saturating_sub(jobs[0].block_bytes.len());
+                while jobs.len() < target_batch_len {
+                    let Some(next_job) = state.queue.pop_front() else {
+                        break;
+                    };
+                    if self.max_in_flight_destination_write_bytes > 0
+                        && !jobs.is_empty()
+                        && total_block_bytes_len.saturating_add(next_job.block_bytes.len())
+                            > self.max_in_flight_destination_write_bytes
+                    {
+                        state.queue.push_front(next_job);
+                        break;
+                    }
+                    total_block_bytes_len += next_job.block_bytes.len();
+                    state.queued_write_bytes = state
+                        .queued_write_bytes
+                        .saturating_sub(next_job.block_bytes.len());
+                    jobs.push(next_job);
+                }
+                state.active_writes += jobs.len();
+                state.active_write_bytes += total_block_bytes_len;
+                return ThreadedWriteWorkerAction::WriteBatch(DestinationWriteBatch {
+                    jobs,
+                    total_block_bytes_len,
+                });
             }
             if state.checkpoint_pending && !state.checkpoint_running && state.active_writes == 0 {
                 state.checkpoint_pending = false;
@@ -1335,12 +1481,12 @@ impl ThreadedWriteQueue {
         }
     }
 
-    fn complete_write(&self, block_bytes_len: usize) {
+    fn complete_write_batch(&self, completed_jobs: usize, block_bytes_len: usize) {
         let mut state = self
             .state
             .lock()
             .expect("threaded copy write queue mutex poisoned");
-        state.active_writes = state.active_writes.saturating_sub(1);
+        state.active_writes = state.active_writes.saturating_sub(completed_jobs);
         state.active_write_bytes = state.active_write_bytes.saturating_sub(block_bytes_len);
         self.ready.notify_all();
     }
@@ -1528,55 +1674,255 @@ impl CopyFailureTracker {
     }
 }
 
-type PendingDestinationWrite<'a> = Pin<Box<dyn Future<Output = DestinationWriteCompletion> + 'a>>;
+type PendingDestinationWrite<'a> =
+    Pin<Box<dyn Future<Output = Vec<DestinationWriteCompletion>> + 'a>>;
 
 struct DestinationWriteCompletion {
     block_id: BlockHash,
     block_bytes_len: usize,
     count_as_copied: bool,
-    result: Result<(), BlockStoreError>,
+    result: Result<(), String>,
 }
 
-fn enqueue_destination_write<'a, D>(
+fn destination_write_batch_len(
+    batch_write_capability: &AtomicU8,
+    effective_write_limit: usize,
+) -> usize {
+    match load_batch_write_capability(batch_write_capability) {
+        BatchWriteCapability::Supported => effective_write_limit.max(1),
+        BatchWriteCapability::Unknown => effective_write_limit.clamp(1, 2),
+        BatchWriteCapability::Probing | BatchWriteCapability::Unsupported => 1,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn buffer_destination_write_job<'a, D>(
     pending_writes: &mut FuturesUnordered<PendingDestinationWrite<'a>>,
     destination: *const D,
-    block_id: BlockHash,
-    block_bytes: Vec<u8>,
-    count_as_copied: bool,
+    batch_write_capability: &'a AtomicU8,
+    buffered_write_jobs: &mut Vec<ThreadedWriteJob>,
+    buffered_write_bytes: &mut usize,
+    effective_write_limit: usize,
+    max_in_flight_destination_write_bytes: usize,
+    in_flight_destination_write_count: &mut usize,
+    in_flight_destination_write_bytes: &mut usize,
+    metrics: &mut CopyMetrics,
+    failures: &mut CopyFailureTracker,
+    write_job: ThreadedWriteJob,
 ) where
-    D: BlockStore + 'a,
+    D: BlockStore + Sync + 'a,
+{
+    let next_write_bytes = write_job.block_bytes.len();
+    let target_batch_len =
+        destination_write_batch_len(batch_write_capability, effective_write_limit);
+    if !buffered_write_jobs.is_empty()
+        && (buffered_write_jobs.len() >= target_batch_len
+            || (max_in_flight_destination_write_bytes > 0
+                && buffered_write_bytes.saturating_add(next_write_bytes)
+                    > max_in_flight_destination_write_bytes))
+    {
+        flush_buffered_destination_writes(
+            pending_writes,
+            destination,
+            batch_write_capability,
+            buffered_write_jobs,
+            buffered_write_bytes,
+            effective_write_limit,
+            max_in_flight_destination_write_bytes,
+            in_flight_destination_write_count,
+            in_flight_destination_write_bytes,
+            metrics,
+            failures,
+        )
+        .await;
+    }
+    *buffered_write_bytes = buffered_write_bytes.saturating_add(next_write_bytes);
+    buffered_write_jobs.push(write_job);
+    if buffered_write_jobs.len() >= target_batch_len
+        || (max_in_flight_destination_write_bytes > 0
+            && *buffered_write_bytes >= max_in_flight_destination_write_bytes)
+    {
+        flush_buffered_destination_writes(
+            pending_writes,
+            destination,
+            batch_write_capability,
+            buffered_write_jobs,
+            buffered_write_bytes,
+            effective_write_limit,
+            max_in_flight_destination_write_bytes,
+            in_flight_destination_write_count,
+            in_flight_destination_write_bytes,
+            metrics,
+            failures,
+        )
+        .await;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn flush_buffered_destination_writes<'a, D>(
+    pending_writes: &mut FuturesUnordered<PendingDestinationWrite<'a>>,
+    destination: *const D,
+    batch_write_capability: &'a AtomicU8,
+    buffered_write_jobs: &mut Vec<ThreadedWriteJob>,
+    buffered_write_bytes: &mut usize,
+    effective_write_limit: usize,
+    max_in_flight_destination_write_bytes: usize,
+    in_flight_destination_write_count: &mut usize,
+    in_flight_destination_write_bytes: &mut usize,
+    metrics: &mut CopyMetrics,
+    failures: &mut CopyFailureTracker,
+) where
+    D: BlockStore + Sync + 'a,
+{
+    if buffered_write_jobs.is_empty() {
+        return;
+    }
+    let publication_jobs = std::mem::take(buffered_write_jobs);
+    let publication_bytes = std::mem::take(buffered_write_bytes);
+    let publication_job_count = publication_jobs.len();
+    if publication_jobs.len() > 1
+        && matches!(
+            load_batch_write_capability(batch_write_capability),
+            BatchWriteCapability::Unknown
+        )
+    {
+        let _ = try_begin_batch_write_probe(batch_write_capability);
+    }
+    wait_for_write_capacity(
+        pending_writes,
+        effective_write_limit,
+        publication_jobs.len(),
+        max_in_flight_destination_write_bytes,
+        in_flight_destination_write_count,
+        publication_bytes,
+        in_flight_destination_write_bytes,
+        metrics,
+        failures,
+    )
+    .await;
+    enqueue_destination_write_batch(
+        pending_writes,
+        destination,
+        publication_jobs,
+        batch_write_capability,
+    );
+    *in_flight_destination_write_count =
+        in_flight_destination_write_count.saturating_add(publication_job_count);
+    *in_flight_destination_write_bytes =
+        in_flight_destination_write_bytes.saturating_add(publication_bytes);
+}
+
+fn enqueue_destination_write_batch<'a, D>(
+    pending_writes: &mut FuturesUnordered<PendingDestinationWrite<'a>>,
+    destination: *const D,
+    jobs: Vec<ThreadedWriteJob>,
+    batch_write_capability: &'a AtomicU8,
+) where
+    D: BlockStore + Sync + 'a,
 {
     pending_writes.push(Box::pin(async move {
-        let block_bytes_len = block_bytes.len();
         // SAFETY: `destination` points to the destination store owned by the enclosing
-        // copy invocation. The copy loop does not mutate that store while writes are
-        // in flight: checkpoint compaction first flushes `pending_writes`, and the
-        // function drains all remaining writes before returning.
-        let result = unsafe {
-            (&*destination)
-                .put_block_bytes(&block_id, &block_bytes)
-                .await
-        };
-        DestinationWriteCompletion {
-            block_id,
-            block_bytes_len,
-            count_as_copied,
-            result,
-        }
+        // copy invocation. The copy loop does not mutate that store while publications
+        // are in flight: checkpoint compaction first flushes `pending_writes`, and the
+        // function drains all remaining publications before returning.
+        let destination = unsafe { &*destination };
+        publish_destination_write_batch(destination, jobs, batch_write_capability).await
     }));
 }
 
+async fn publish_destination_write_batch<D>(
+    destination: &D,
+    jobs: Vec<ThreadedWriteJob>,
+    batch_write_capability: &AtomicU8,
+) -> Vec<DestinationWriteCompletion>
+where
+    D: BlockStore + Sync,
+{
+    let probing_single_write = jobs.len() == 1
+        && matches!(
+            load_batch_write_capability(batch_write_capability),
+            BatchWriteCapability::Unknown | BatchWriteCapability::Probing
+        );
+    if jobs.len() <= 1 && !probing_single_write {
+        return publish_destination_write_jobs_one_by_one(destination, jobs).await;
+    }
+
+    let entries = jobs
+        .iter()
+        .map(|job| BlockBytesBatchEntry {
+            block_id: &job.block_id,
+            block_bytes: &job.block_bytes,
+        })
+        .collect::<Vec<_>>();
+    match destination.put_block_bytes_batch(&entries).await {
+        Ok(()) => {
+            complete_batch_write_probe(batch_write_capability, true);
+            jobs.into_iter()
+                .map(|job| DestinationWriteCompletion {
+                    block_id: job.block_id,
+                    block_bytes_len: job.block_bytes.len(),
+                    count_as_copied: job.count_as_copied,
+                    result: Ok(()),
+                })
+                .collect()
+        }
+        Err(error) if is_unsupported_batch_write_error(&error) => {
+            complete_batch_write_probe(batch_write_capability, false);
+            publish_destination_write_jobs_one_by_one(destination, jobs).await
+        }
+        Err(error) => {
+            complete_batch_write_probe(batch_write_capability, true);
+            let message = error.to_string();
+            jobs.into_iter()
+                .map(|job| DestinationWriteCompletion {
+                    block_id: job.block_id,
+                    block_bytes_len: job.block_bytes.len(),
+                    count_as_copied: job.count_as_copied,
+                    result: Err(message.clone()),
+                })
+                .collect()
+        }
+    }
+}
+
+async fn publish_destination_write_jobs_one_by_one<D>(
+    destination: &D,
+    jobs: Vec<ThreadedWriteJob>,
+) -> Vec<DestinationWriteCompletion>
+where
+    D: BlockStore + Sync,
+{
+    let mut completions = Vec::with_capacity(jobs.len());
+    for job in jobs {
+        let result = destination
+            .put_block_bytes(&job.block_id, &job.block_bytes)
+            .await
+            .map_err(|error| error.to_string());
+        completions.push(DestinationWriteCompletion {
+            block_id: job.block_id,
+            block_bytes_len: job.block_bytes.len(),
+            count_as_copied: job.count_as_copied,
+            result,
+        });
+    }
+    completions
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn wait_for_write_capacity(
     pending_writes: &mut FuturesUnordered<PendingDestinationWrite<'_>>,
     effective_write_limit: usize,
+    next_write_count: usize,
     max_in_flight_destination_write_bytes: usize,
+    in_flight_destination_write_count: &mut usize,
     next_write_bytes: usize,
     in_flight_destination_write_bytes: &mut usize,
     metrics: &mut CopyMetrics,
     failures: &mut CopyFailureTracker,
 ) {
-    while pending_writes.len() >= effective_write_limit
-        || (!pending_writes.is_empty()
+    while in_flight_destination_write_count.saturating_add(next_write_count) > effective_write_limit
+        || (*in_flight_destination_write_count > 0
             && max_in_flight_destination_write_bytes > 0
             && in_flight_destination_write_bytes.saturating_add(next_write_bytes)
                 > max_in_flight_destination_write_bytes)
@@ -1585,8 +1931,9 @@ async fn wait_for_write_capacity(
             .next()
             .await
             .expect("pending destination writes should complete");
-        record_write_completion(
+        record_write_completions(
             completion,
+            in_flight_destination_write_count,
             in_flight_destination_write_bytes,
             metrics,
             failures,
@@ -1596,13 +1943,15 @@ async fn wait_for_write_capacity(
 
 async fn flush_pending_writes(
     pending_writes: &mut FuturesUnordered<PendingDestinationWrite<'_>>,
+    in_flight_destination_write_count: &mut usize,
     in_flight_destination_write_bytes: &mut usize,
     metrics: &mut CopyMetrics,
     failures: &mut CopyFailureTracker,
 ) {
     while let Some(completion) = pending_writes.next().await {
-        record_write_completion(
+        record_write_completions(
             completion,
+            in_flight_destination_write_count,
             in_flight_destination_write_bytes,
             metrics,
             failures,
@@ -1623,25 +1972,30 @@ fn should_run_blind_write_checkpoint(
         })
 }
 
-fn record_write_completion(
-    completion: DestinationWriteCompletion,
+fn record_write_completions(
+    completions: Vec<DestinationWriteCompletion>,
+    in_flight_destination_write_count: &mut usize,
     in_flight_destination_write_bytes: &mut usize,
     metrics: &mut CopyMetrics,
     failures: &mut CopyFailureTracker,
 ) {
-    *in_flight_destination_write_bytes =
-        in_flight_destination_write_bytes.saturating_sub(completion.block_bytes_len);
-    match completion.result {
-        Ok(()) => {
-            if completion.count_as_copied {
-                metrics.note_copied_block();
+    *in_flight_destination_write_count =
+        in_flight_destination_write_count.saturating_sub(completions.len());
+    for completion in completions {
+        *in_flight_destination_write_bytes =
+            in_flight_destination_write_bytes.saturating_sub(completion.block_bytes_len);
+        match completion.result {
+            Ok(()) => {
+                if completion.count_as_copied {
+                    metrics.note_copied_block();
+                }
             }
+            Err(message) => failures.record(
+                completion.block_id,
+                CopyFailureOperation::WriteDestinationBlock,
+                message,
+            ),
         }
-        Err(error) => failures.record(
-            completion.block_id,
-            CopyFailureOperation::WriteDestinationBlock,
-            error.to_string(),
-        ),
     }
 }
 
@@ -2002,7 +2356,9 @@ mod tests {
         Block, BranchBlock, BranchEntry, Content, EmbeddingSpec, LeafBlock, LeafEntry, VERSION_1,
         VersionedBlock, v2,
     };
-    use lexongraph_block_store::{BlockIdStream, BlockStoreError, BlockStoreExt};
+    use lexongraph_block_store::{
+        BlockBytesBatchEntry, BlockIdStream, BlockStoreError, BlockStoreExt,
+    };
     use lexongraph_block_store_memory::MemoryBlockStore;
     use tempfile::tempdir;
 
@@ -2763,12 +3119,61 @@ mod tests {
             inner: Arc::clone(&destination),
         };
         let copy_future = async {
-            copy_rooted_blocks_with_mode_and_limit(
+            copy_rooted_blocks_with_mode_and_limit_and_progress(
                 source.as_ref(),
                 &mut copy_destination,
                 &[root],
                 CopyDestinationMode::ReadBeforeWrite,
                 2,
+                2,
+                None,
+            )
+            .await
+        };
+        let observer = std::thread::spawn(move || {
+            observer_destination.wait_until_max_observed();
+            let observed = observer_destination.max_in_flight();
+            observer_destination.release_writes();
+            assert!(
+                (1..=2).contains(&observed),
+                "observed {observed} in-flight writes"
+            );
+        });
+
+        let report = copy_future.await;
+        observer.join().unwrap();
+
+        assert_eq!(report.copied_block_count, Some(4));
+        assert_eq!(report.skipped_already_present_block_count, Some(0));
+        assert_eq!(report.failed_block_count, 0);
+    }
+
+    #[tokio::test]
+    async fn rooted_block_copy_single_worker_honors_bounded_in_flight_destination_writes_when_batched()
+     {
+        let source = Arc::new(MemoryBlockStore::new(16).unwrap());
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let gamma = source.put(&leaf_block("gamma")).await.unwrap();
+        let root = source
+            .put(&branch_block(&[alpha, beta, gamma]))
+            .await
+            .unwrap();
+        let destination = Arc::new(BlockingBatchPutStore::new(32, 2));
+
+        let observer_destination = Arc::clone(&destination);
+        let mut copy_destination = SharedStore {
+            inner: Arc::clone(&destination),
+        };
+        let copy_future = async {
+            copy_rooted_blocks_with_mode_and_limit_and_progress(
+                source.as_ref(),
+                &mut copy_destination,
+                &[root],
+                CopyDestinationMode::ReadBeforeWrite,
+                2,
+                1,
+                None,
             )
             .await
         };
@@ -2892,6 +3297,161 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rooted_block_copy_multi_worker_uses_batch_writes_when_supported() {
+        let source = MemoryBlockStore::new(16).unwrap();
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let gamma = source.put(&leaf_block("gamma")).await.unwrap();
+        let root = source
+            .put(&branch_block(&[alpha, beta, gamma]))
+            .await
+            .unwrap();
+        let destination = Arc::new(RecordingBatchPutStore::new(32));
+        let mut copy_destination = SharedStore {
+            inner: Arc::clone(&destination),
+        };
+
+        let report = copy_rooted_blocks_with_mode_and_limit_and_progress(
+            &source,
+            &mut copy_destination,
+            &[root],
+            CopyDestinationMode::ReadBeforeWrite,
+            DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            2,
+            None,
+        )
+        .await;
+
+        assert_eq!(report.copied_block_count, Some(4));
+        assert_eq!(report.failed_block_count, 0);
+        assert!(
+            destination
+                .batch_call_sizes()
+                .into_iter()
+                .any(|batch_len| batch_len > 1)
+        );
+    }
+
+    #[test]
+    fn threaded_write_queue_uses_configured_in_flight_write_count_for_writers() {
+        let queue = ThreadedWriteQueue::new(3, 0, None);
+
+        assert_eq!(queue.writer_thread_count(), 3);
+    }
+
+    #[tokio::test]
+    async fn rooted_block_copy_falls_back_when_destination_batches_are_unsupported() {
+        let source = MemoryBlockStore::new(16).unwrap();
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let gamma = source.put(&leaf_block("gamma")).await.unwrap();
+        let root = source
+            .put(&branch_block(&[alpha, beta, gamma]))
+            .await
+            .unwrap();
+        let destination = Arc::new(UnsupportedBatchPutStore::new(32));
+        let mut copy_destination = SharedStore {
+            inner: Arc::clone(&destination),
+        };
+
+        let report = copy_rooted_blocks_with_mode_and_limit_and_progress(
+            &source,
+            &mut copy_destination,
+            &[root],
+            CopyDestinationMode::ReadBeforeWrite,
+            DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            2,
+            None,
+        )
+        .await;
+
+        assert_eq!(report.copied_block_count, Some(4));
+        assert_eq!(report.failed_block_count, 0);
+        assert_eq!(destination.single_put_count(), 4);
+    }
+
+    #[tokio::test]
+    async fn rooted_block_copy_drains_single_queued_write_via_single_entry_probe() {
+        let source = MemoryBlockStore::new(16).unwrap();
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let root = source.put(&branch_block(&[alpha, beta])).await.unwrap();
+        let destination = Arc::new(UnsupportedBatchPutStore::new(32));
+        let mut copy_destination = SharedStore {
+            inner: Arc::clone(&destination),
+        };
+
+        let report = tokio::time::timeout(
+            Duration::from_secs(1),
+            copy_rooted_blocks_with_mode_and_limit_and_progress(
+                &source,
+                &mut copy_destination,
+                &[root],
+                CopyDestinationMode::ReadBeforeWrite,
+                1,
+                2,
+                None,
+            ),
+        )
+        .await
+        .expect("single queued write should not deadlock");
+
+        assert_eq!(report.copied_block_count, Some(3));
+        assert_eq!(report.failed_block_count, 0);
+        assert_eq!(destination.batch_probe_count(), 1);
+        assert_eq!(destination.single_put_count(), 3);
+    }
+
+    #[tokio::test]
+    async fn publish_destination_write_batch_falls_back_for_contextual_unsupported_error() {
+        let source = MemoryBlockStore::new(16).unwrap();
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let alpha_bytes = source.get_block_bytes(&alpha).await.unwrap().unwrap();
+        let beta_bytes = source.get_block_bytes(&beta).await.unwrap().unwrap();
+        let destination = UnsupportedBatchPutStore::new(16);
+        let batch_write_capability = AtomicU8::new(BatchWriteCapability::Unknown as u8);
+
+        let completions = publish_destination_write_batch(
+            &destination,
+            vec![
+                ThreadedWriteJob {
+                    block_id: alpha,
+                    block_bytes: alpha_bytes.clone(),
+                    count_as_copied: true,
+                },
+                ThreadedWriteJob {
+                    block_id: beta,
+                    block_bytes: beta_bytes.clone(),
+                    count_as_copied: true,
+                },
+            ],
+            &batch_write_capability,
+        )
+        .await;
+
+        assert_eq!(destination.batch_probe_count(), 1);
+        assert_eq!(destination.single_put_count(), 2);
+        assert_eq!(
+            load_batch_write_capability(&batch_write_capability),
+            BatchWriteCapability::Unsupported
+        );
+        assert!(
+            completions
+                .iter()
+                .all(|completion| completion.result.is_ok())
+        );
+        assert_eq!(
+            destination.get_block_bytes(&alpha).await.unwrap(),
+            Some(alpha_bytes)
+        );
+        assert_eq!(
+            destination.get_block_bytes(&beta).await.unwrap(),
+            Some(beta_bytes)
+        );
+    }
+
+    #[tokio::test]
     async fn rooted_block_copy_writes_decode_failures_and_reports_all_reaching_roots() {
         let source = MemoryBlockStore::new(16).unwrap();
         let mut destination = MemoryBlockStore::new(16).unwrap();
@@ -2957,8 +3517,8 @@ mod tests {
         active_writes: AtomicUsize,
         max_in_flight: AtomicUsize,
         target_max_in_flight: usize,
-        observed_target: AtomicBool,
-        observed_target_notify: tokio::sync::Notify,
+        observed_target: Mutex<bool>,
+        observed_target_ready: Condvar,
         release_writes_flag: AtomicBool,
         release_writes_notify: tokio::sync::Notify,
     }
@@ -2982,6 +3542,31 @@ mod tests {
         write_delay: Duration,
     }
 
+    struct RecordingBatchPutStore {
+        inner: Arc<MemoryBlockStore>,
+        single_put_count: AtomicUsize,
+        batch_call_sizes: Mutex<Vec<usize>>,
+        single_write_delay: Duration,
+    }
+
+    struct BlockingBatchPutStore {
+        inner: Arc<MemoryBlockStore>,
+        active_writes: AtomicUsize,
+        max_in_flight: AtomicUsize,
+        target_max_in_flight: usize,
+        observed_target: AtomicBool,
+        observed_target_notify: tokio::sync::Notify,
+        release_writes_flag: AtomicBool,
+        release_writes_notify: tokio::sync::Notify,
+    }
+
+    struct UnsupportedBatchPutStore {
+        inner: Arc<MemoryBlockStore>,
+        single_put_count: AtomicUsize,
+        batch_probe_count: AtomicUsize,
+        single_write_delay: Duration,
+    }
+
     struct SharedStore<T> {
         inner: Arc<T>,
     }
@@ -2993,18 +3578,24 @@ mod tests {
                 active_writes: AtomicUsize::new(0),
                 max_in_flight: AtomicUsize::new(0),
                 target_max_in_flight,
-                observed_target: AtomicBool::new(false),
-                observed_target_notify: tokio::sync::Notify::new(),
+                observed_target: Mutex::new(false),
+                observed_target_ready: Condvar::new(),
                 release_writes_flag: AtomicBool::new(false),
                 release_writes_notify: tokio::sync::Notify::new(),
             }
         }
 
-        async fn wait_until_max_observed(&self) {
-            if self.observed_target.load(Ordering::SeqCst) {
-                return;
+        fn wait_until_max_observed(&self) {
+            let mut observed = self
+                .observed_target
+                .lock()
+                .expect("blocking write observer mutex poisoned");
+            while !*observed {
+                observed = self
+                    .observed_target_ready
+                    .wait(observed)
+                    .expect("blocking write observer mutex poisoned while waiting");
             }
-            self.observed_target_notify.notified().await;
         }
 
         fn release_writes(&self) {
@@ -3082,6 +3673,74 @@ mod tests {
         }
     }
 
+    impl RecordingBatchPutStore {
+        fn new(capacity: usize) -> Self {
+            Self {
+                inner: Arc::new(MemoryBlockStore::new(capacity).unwrap()),
+                single_put_count: AtomicUsize::new(0),
+                batch_call_sizes: Mutex::new(Vec::new()),
+                single_write_delay: Duration::from_millis(20),
+            }
+        }
+
+        fn batch_call_sizes(&self) -> Vec<usize> {
+            self.batch_call_sizes
+                .lock()
+                .expect("recording batch sizes mutex poisoned")
+                .clone()
+        }
+    }
+
+    impl BlockingBatchPutStore {
+        fn new(capacity: usize, target_max_in_flight: usize) -> Self {
+            Self {
+                inner: Arc::new(MemoryBlockStore::new(capacity).unwrap()),
+                active_writes: AtomicUsize::new(0),
+                max_in_flight: AtomicUsize::new(0),
+                target_max_in_flight,
+                observed_target: AtomicBool::new(false),
+                observed_target_notify: tokio::sync::Notify::new(),
+                release_writes_flag: AtomicBool::new(false),
+                release_writes_notify: tokio::sync::Notify::new(),
+            }
+        }
+
+        async fn wait_until_max_observed(&self) {
+            if self.observed_target.load(Ordering::SeqCst) {
+                return;
+            }
+            self.observed_target_notify.notified().await;
+        }
+
+        fn release_writes(&self) {
+            self.release_writes_flag.store(true, Ordering::SeqCst);
+            self.release_writes_notify.notify_waiters();
+        }
+
+        fn max_in_flight(&self) -> usize {
+            self.max_in_flight.load(Ordering::SeqCst)
+        }
+    }
+
+    impl UnsupportedBatchPutStore {
+        fn new(capacity: usize) -> Self {
+            Self {
+                inner: Arc::new(MemoryBlockStore::new(capacity).unwrap()),
+                single_put_count: AtomicUsize::new(0),
+                batch_probe_count: AtomicUsize::new(0),
+                single_write_delay: Duration::from_millis(20),
+            }
+        }
+
+        fn batch_probe_count(&self) -> usize {
+            self.batch_probe_count.load(Ordering::SeqCst)
+        }
+
+        fn single_put_count(&self) -> usize {
+            self.single_put_count.load(Ordering::SeqCst)
+        }
+    }
+
     #[async_trait]
     impl<T> BlockStore for SharedStore<T>
     where
@@ -3093,6 +3752,13 @@ mod tests {
             block_bytes: &[u8],
         ) -> Result<(), BlockStoreError> {
             self.inner.put_block_bytes(block_id, block_bytes).await
+        }
+
+        async fn put_block_bytes_batch(
+            &self,
+            entries: &[BlockBytesBatchEntry<'_>],
+        ) -> Result<(), BlockStoreError> {
+            self.inner.put_block_bytes_batch(entries).await
         }
 
         async fn get_block_bytes(
@@ -3167,10 +3833,15 @@ mod tests {
         ) -> Result<(), BlockStoreError> {
             let active = self.active_writes.fetch_add(1, Ordering::SeqCst) + 1;
             self.max_in_flight.fetch_max(active, Ordering::SeqCst);
-            if active >= self.target_max_in_flight
-                && !self.observed_target.swap(true, Ordering::SeqCst)
-            {
-                self.observed_target_notify.notify_waiters();
+            if active >= self.target_max_in_flight {
+                let mut observed = self
+                    .observed_target
+                    .lock()
+                    .expect("blocking write observer mutex poisoned");
+                if !*observed {
+                    *observed = true;
+                    self.observed_target_ready.notify_all();
+                }
             }
             while !self.release_writes_flag.load(Ordering::SeqCst) {
                 self.release_writes_notify.notified().await;
@@ -3261,6 +3932,129 @@ mod tests {
             self.active_write_bytes
                 .fetch_sub(block_bytes.len(), Ordering::SeqCst);
             result
+        }
+
+        async fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            self.inner.get_block_bytes(block_id).await
+        }
+
+        fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+            self.inner.iter_block_ids()
+        }
+    }
+
+    #[async_trait]
+    impl BlockStore for RecordingBatchPutStore {
+        async fn put_block_bytes(
+            &self,
+            block_id: &BlockHash,
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            self.single_put_count.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(self.single_write_delay).await;
+            self.inner.put_block_bytes(block_id, block_bytes).await
+        }
+
+        async fn put_block_bytes_batch(
+            &self,
+            entries: &[BlockBytesBatchEntry<'_>],
+        ) -> Result<(), BlockStoreError> {
+            self.batch_call_sizes
+                .lock()
+                .expect("recording batch sizes mutex poisoned")
+                .push(entries.len());
+            for entry in entries {
+                self.inner
+                    .put_block_bytes(entry.block_id, entry.block_bytes)
+                    .await?;
+            }
+            Ok(())
+        }
+
+        async fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            self.inner.get_block_bytes(block_id).await
+        }
+
+        fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+            self.inner.iter_block_ids()
+        }
+    }
+
+    #[async_trait]
+    impl BlockStore for BlockingBatchPutStore {
+        async fn put_block_bytes(
+            &self,
+            block_id: &BlockHash,
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            self.inner.put_block_bytes(block_id, block_bytes).await
+        }
+
+        async fn put_block_bytes_batch(
+            &self,
+            entries: &[BlockBytesBatchEntry<'_>],
+        ) -> Result<(), BlockStoreError> {
+            let active = self
+                .active_writes
+                .fetch_add(entries.len(), Ordering::SeqCst)
+                + entries.len();
+            self.max_in_flight.fetch_max(active, Ordering::SeqCst);
+            if active >= self.target_max_in_flight
+                && !self.observed_target.swap(true, Ordering::SeqCst)
+            {
+                self.observed_target_notify.notify_waiters();
+            }
+            while !self.release_writes_flag.load(Ordering::SeqCst) {
+                self.release_writes_notify.notified().await;
+            }
+            for entry in entries {
+                self.inner
+                    .put_block_bytes(entry.block_id, entry.block_bytes)
+                    .await?;
+            }
+            self.active_writes
+                .fetch_sub(entries.len(), Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            self.inner.get_block_bytes(block_id).await
+        }
+
+        fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+            self.inner.iter_block_ids()
+        }
+    }
+
+    #[async_trait]
+    impl BlockStore for UnsupportedBatchPutStore {
+        async fn put_block_bytes(
+            &self,
+            block_id: &BlockHash,
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            self.single_put_count.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(self.single_write_delay).await;
+            self.inner.put_block_bytes(block_id, block_bytes).await
+        }
+
+        async fn put_block_bytes_batch(
+            &self,
+            _entries: &[BlockBytesBatchEntry<'_>],
+        ) -> Result<(), BlockStoreError> {
+            self.batch_probe_count.fetch_add(1, Ordering::SeqCst);
+            Err(BlockStoreError::BackendFailure(format!(
+                "backend rejected batch path: {UNSUPPORTED_BATCH_WRITE_MESSAGE}"
+            )))
         }
 
         async fn get_block_bytes(

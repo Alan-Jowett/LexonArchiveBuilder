@@ -17,7 +17,7 @@ effective-profile identity signaling,
 clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted
-CLI search over stored trees, rooted block-store copy tooling with live default heartbeat counters plus additive worker-threaded traversal, CLI-only local-redb maintenance compaction, replay-stable fingerprinting, temporary
+CLI search over stored trees, rooted block-store copy tooling with live default heartbeat counters plus additive worker-threaded traversal and capability-based batched destination publication, CLI-only local-redb maintenance compaction, replay-stable fingerprinting, temporary
 upstream `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, 0.6.x published-profile
 evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
@@ -55,7 +55,8 @@ clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted CLI
 search over stored trees, rooted block-store copy tooling with additive
-worker-threaded traversal, replay-stable fingerprinting, LAB-owned replay-journaled
+worker-threaded traversal and capability-based batched destination
+publication, replay-stable fingerprinting, LAB-owned replay-journaled
 split-stage recovery, bounded-residency deterministic replay ordering for
 clustering replay, independent replay batch-size versus replay-materialization
 concurrency control for clustering replay, bounded multi-batch replay-prefetch
@@ -620,16 +621,19 @@ diagnosis behavior.
 
 ### VAL-LFI-002N8
 
-Inspect one refresh from the repository's current LexonGraph dependency pin
-`01c9908256278d7d075e0abc856ef7bd3679fe6c` to merged LexonGraph `main` commit
-`385c07fff4adbe5574b9ae605eaae0679647b9dd` that introduces the redb
-`compact_now` capability needed by the maintenance increment.
+Inspect one refresh from merged LexonGraph `main` commit
+`385c07fff4adbe5574b9ae605eaae0679647b9dd` to a newer merged LexonGraph
+`main` revision that introduces the batched block-write capability needed by
+rooted-copy destination publication while preserving the redb `compact_now`
+capability already used by the maintenance increment.
 
 **Pass condition:** LexonArchiveBuilder updates its adapter/configuration
 boundary so the refreshed upstream block-store surface can be targeted across
-archive-sync, block-gateway, indexer, MCP, and repo-owned copy workflows, and
-so the indexer maintenance increment can reach the upstream redb
-`compact_now` capability, without weakening the caller-visible stage contract,
+archive-sync, block-gateway, indexer, MCP, and repo-owned copy workflows, so
+rooted-copy destinations can reach the upstream batched block-write capability
+when available, and so the indexer maintenance increment can still reach the
+upstream redb `compact_now` capability, without weakening the caller-visible
+stage contract,
 search semantics, or the meaning of already-approved Azure-backed profiles. If
 the refreshed upstream surface lacks a repository-required seam for one of
 those components, the gap is
@@ -1006,20 +1010,23 @@ DSG-LFI-005C, DSG-LFI-006A, DSG-LFI-007E
 
 ### VAL-LFI-005D
 
-Run the rooted block-copy tool from one representative source store to one
-representative destination store using one or more caller-supplied root block
-identifiers, where the selected source and destination profiles come from the
-approved shared target set, at least one exercised non-local side uses either
-the approved `production-v2` profile or the approved read-only `gateway-http3`
-profile on the source side, the destination already contains at least one
-reachable block, the source rooted graph contains at least one unreachable
-block, the invocation encounters at least one copy failure for a reachable
-block after the tool has already proven other reachable blocks can be copied or
-skipped, one exercised run sets the rooted-copy worker-thread count above `1`,
-at least one exercised rooted graph includes a child reachable through multiple
-parents, and one exercised blind-write case targets direct `local-redb` with
-enough reachable blocks to cross at least one `500,000` attempted-write
-checkpoint.
+Run the rooted block-copy tool from one representative source store to one or
+more representative destination stores using one or more caller-supplied root
+block identifiers, where the selected source and destination profiles come from
+the approved shared target set, at least one exercised non-local side uses
+either the approved `production-v2` profile or the approved read-only
+`gateway-http3` profile on the source side, the destination already contains at
+least one reachable block, the source rooted graph contains at least one
+unreachable block, the invocation encounters at least one copy failure for a
+reachable block after the tool has already proven other reachable blocks can be
+copied or skipped, one exercised run sets the rooted-copy worker-thread count
+above `1`, at least one exercised rooted graph includes a child reachable
+through multiple parents, one exercised blind-write case targets direct
+`local-redb` with enough reachable blocks to cross at least one `500,000`
+attempted-write checkpoint, at least one exercised destination profile exposes
+the refreshed upstream batched block-write capability, and when any approved
+destination profile still lacks that capability after the refresh at least one
+exercised run targets such a profile.
 
 **Pass condition:** the tool traverses only the immutable blocks reachable from
 the caller-supplied roots in the source store and copies those blocks to the
@@ -1033,18 +1040,30 @@ directly, and reports attempted-write plus failure-oriented outcomes without
 claiming exact skipped-already-present classification. Both modes must support
 one operator-selectable bounded destination-write concurrency limit with first
 approved default `64`, and the same limit must allow multiple destination
-writes to remain in flight whenever a block has already been classified for
-publication. The tool must also support one separate operator-selectable
+publication units to remain in flight whenever a block has already been
+classified for publication. The tool must also support one separate
+operator-selectable
 rooted-traversal worker-thread count with first approved default `1`, and when
 that worker count is greater than `1` each worker must still follow the same
 queue-driven contract of pop, read, decode, enqueue children to the back, and
 submit the block to the destination-side copy path. The separate worker-thread
 and destination-write limits must remain independently controllable. Concurrent
-traversal plus bounded asynchronous writes must not cause unreachable blocks to
-be written, must preserve at-most-once logical handling when multiple parents
-discover the same child, must not require a backend-specific transfer path, and
-must not change the truthfulness of the approved mode-specific reporting
-contract merely because traversal or write completions arrive out of order.
+traversal plus bounded asynchronous destination publication must not cause
+unreachable blocks to be written, must preserve at-most-once logical handling
+when multiple parents discover the same child, must not require a backend-
+specific transfer path, and must not change the truthfulness of the approved
+mode-specific reporting contract merely because traversal or single-write or
+batched publication completions arrive out of order. For destinations whose
+refreshed upstream path exposes batched writes, the copy tool must publish
+eligible blocks through that capability without changing the rooted-copy CLI
+surface, traversal contract, or mode-truthful reporting semantics. When an
+approved destination profile still lacks the batched capability after the
+refresh, the same rooted-copy invocation must fall back to the existing
+non-batched publication behavior instead of rejecting the command. Any
+destination-specific staging, batching, queueing, or bounded backpressure used
+to realize batched publication must stay behind the destination-side
+publication wrapper rather than widening the backend-neutral rooted-copy
+contract with new backend-specific operator controls.
 Both modes must emit basic default
 in-flight liveness or progress on the normal CLI output surface before final
 completion when the rooted copy runs long enough that silence would otherwise
