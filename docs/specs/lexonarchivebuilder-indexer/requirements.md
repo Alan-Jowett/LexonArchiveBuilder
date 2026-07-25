@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, replay-order preparation efficiency, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v3 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v3-compatible clustering observability projection, user-usable convergence-diagnosis surfacing, latest-LexonGraph constrained v3 working-root adoption at commit `7c8f375137375709bb608ee2609b38cb80e5422c`, issue-83 replay-order memory decoupling from corpus size, bounded replay-batch preparation overlap exploration for issue #88, issue #93 replay batch-size decoupling from CPU concurrency, issue #95 bounded multi-batch replay-prefetch buffering, renewed latest-upstream-main compatibility after post-`7c8f375137375709bb608ee2609b38cb80e5422c` breaking LexonGraph changes, repo-wide redb block-store targeting support after refreshing to a newer LexonGraph `main` revision, rooted block-copy live progress counters on the default heartbeat surface, CLI-only block-store maintenance with local-redb compaction, and blind-write rooted-copy checkpoint compaction for direct local-redb destinations
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, v3-compatible clustering telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, live rooted-copy progress reporting, CLI-only one-store block-store maintenance with initial local-redb compaction, blind-write copy-time checkpoint compaction for direct local-redb destinations, bounded-residency deterministic replay ordering for deterministic replay submission, efficient replay-order preparation behind the existing replay contract, bounded replay-batch preparation overlap behind the existing replay contract, independent replay batch-sizing versus replay-materialization concurrency control for clustering replay, bounded multi-batch replay-prefetch buffering for clustering replay, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v3 API when the selected published profile is `0.7.0`, upstream-managed request-adjacent v3 working-root derivation for clustering-enabled v3 execution, repeatable adaptation to later upstream-main breaking changes without weakening the current external stage or observability contracts, and first-class redb block-store targeting across archive-sync, block-gateway, indexer, MCP, and repo-owned copy/sync surfaces
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, replay-order preparation efficiency, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v3 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v3-compatible clustering observability projection, user-usable convergence-diagnosis surfacing, latest-LexonGraph constrained v3 working-root adoption at commit `7c8f375137375709bb608ee2609b38cb80e5422c`, issue-83 replay-order memory decoupling from corpus size, bounded replay-batch preparation overlap exploration for issue #88, issue #93 replay batch-size decoupling from CPU concurrency, issue #95 bounded multi-batch replay-prefetch buffering, renewed latest-upstream-main compatibility after post-`7c8f375137375709bb608ee2609b38cb80e5422c` breaking LexonGraph changes, repo-wide redb block-store targeting support after refreshing to a newer LexonGraph `main` revision, rooted block-copy live progress counters on the default heartbeat surface, CLI-only block-store maintenance with local-redb compaction, blind-write rooted-copy checkpoint compaction for direct local-redb destinations, and additive worker-threaded rooted block-copy traversal
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, v3-compatible clustering telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, live rooted-copy progress reporting, worker-threaded rooted-copy traversal over the shared queue-based block walk, CLI-only one-store block-store maintenance with initial local-redb compaction, blind-write copy-time checkpoint compaction for direct local-redb destinations, bounded-residency deterministic replay ordering for deterministic replay submission, efficient replay-order preparation behind the existing replay contract, bounded replay-batch preparation overlap behind the existing replay contract, independent replay batch-sizing versus replay-materialization concurrency control for clustering replay, bounded multi-batch replay-prefetch buffering for clustering replay, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v3 API when the selected published profile is `0.7.0`, upstream-managed request-adjacent v3 working-root derivation for clustering-enabled v3 execution, repeatable adaptation to later upstream-main breaking changes without weakening the current external stage or observability contracts, and first-class redb block-store targeting across archive-sync, block-gateway, indexer, MCP, and repo-owned copy/sync surfaces
 
 ## USER-REQUEST
 
@@ -643,6 +643,43 @@
   remain internal to one logical rooted-copy invocation, preserving rooted
   reachability, immutable block identity, readable destination state, and safe
   operator re-run behavior across checkpoint boundaries.
+- **UR-317 [KNOWN]:** The rooted block-copy CLI should accept an operator-supplied
+  worker-thread count that allows multiple workers to process rooted-copy block
+  traversal concurrently from one approved source block store to one approved
+  destination block store.
+- **UR-318 [KNOWN]:** Each rooted block-copy worker should repeat the same
+  queue-driven workflow: pop a block identity from the shared work queue, read
+  the block from the source store, decode it, push any discovered child block
+  identities to the back of the same queue, and then submit the block to the
+  existing destination-side copy path.
+- **UR-319 [KNOWN]:** The new rooted-copy worker-thread control should be
+  additive to the existing operator-selectable maximum in-flight destination-
+  write limit rather than replacing that existing write-concurrency control.
+- **UR-320 [KNOWN]:** The first repository-approved default for the rooted-copy
+  worker-thread count is `1`, so the existing single-worker traversal behavior
+  remains the default unless an operator explicitly opts into higher
+  concurrency.
+- **UR-321 [INFERRED]:** Worker-threaded rooted copy should apply to both
+  approved copy modes: the default read-before-write path and the explicit
+  blind-write path.
+- **UR-322 [INFERRED]:** Concurrent rooted-copy workers must preserve the
+  existing reachable-only copy boundary, so only caller-selected roots and
+  immutable blocks reachable from those roots may be processed or written.
+- **UR-323 [INFERRED]:** Concurrent rooted-copy workers must preserve at-most-
+  once logical handling for each immutable block identity within one invocation
+  even when multiple workers discover the same child through different parent
+  paths.
+- **UR-324 [INFERRED]:** Adding worker-threaded traversal must preserve the
+  current mode-truthful reporting contract: traversal concurrency may improve
+  throughput, but it must not invent copied, skipped, attempted, or failed
+  outcomes that the selected copy mode did not actually observe.
+- **UR-325 [INFERRED]:** The new worker-thread option remains a CLI-only operator
+  control and must not expand rooted block copy into an MCP-visible API, an
+  indexing stage, or a `BatchRequest` feature.
+- **UR-326 [INFERRED]:** The same worker-threaded traversal contract should
+  apply uniformly across the existing approved rooted-copy source and
+  destination profile family rather than introducing backend-specific traversal
+  concurrency controls.
 
 ## Change Manifest
 
@@ -785,6 +822,9 @@
 | CM-INDEXER-135 | Add | Add a CLI-only one-store `maintenance` namespace with an initial `compact` action that targets local redb immutable block stores through the upstream Redb compaction capability while preserving mutable-ref boundaries and explicit unsupported-profile failures | UR-305, UR-306, UR-307, UR-308, UR-309, UR-310, UR-311, UR-312 |
 | CM-INDEXER-136 | Revise | Refresh the approved LexonGraph integration target from the repository's current dependency pin `01c9908256278d7d075e0abc856ef7bd3679fe6c` to merged `main` commit `385c07fff4adbe5574b9ae605eaae0679647b9dd` so the indexer can consume the upstream redb `compact_now` API required by the new maintenance surface | UR-313 |
 | CM-INDEXER-137 | Revise | Add automatic checkpoint compaction every `500,000` attempted writes for rooted-copy blind-write runs that target direct local redb destinations, so large transfers do not grow the redb file without bound while preserving existing behavior for other copy modes and profiles | UR-197, UR-200, UR-310, UR-314, UR-315, UR-316 |
+| CM-INDEXER-138 | Revise | Add a separate CLI-controlled rooted-copy worker-thread limit for concurrent queue-based source read, decode, child discovery, and write submission while preserving the existing reachable-only immutable traversal contract | UR-317, UR-318, UR-320, UR-321, UR-322, UR-323 |
+| CM-INDEXER-139 | Revise | Preserve `--max-in-flight-destination-writes` as a distinct destination-write overlap control and require the new worker-thread option to remain additive rather than replacing the existing write-concurrency surface | UR-198, UR-199, UR-200, UR-319, UR-320 |
+| CM-INDEXER-140 | Revise | Constrain worker-threaded rooted copy to remain CLI-only, profile-uniform, and mode-truthful across read-before-write and blind-write execution without inventing backend-specific traversal controls or weakening report semantics | UR-321, UR-324, UR-325, UR-326 |
 
 ## Before / After
 
@@ -2621,6 +2661,26 @@ to another configured block store.
   including completed destination publications plus any already-known skipped or
   failed outcomes, so operators can distinguish read-heavy traversal from
   blocked-or-idle behavior.
+- **Worker-thread control [KNOWN]:** The CLI SHALL expose one operator-selectable
+  rooted-copy worker-thread count separate from the existing maximum in-flight
+  destination-write limit, and the first repository-approved default for that
+  worker-thread count is `1`.
+- **Worker-loop contract [KNOWN]:** Each rooted-copy worker SHALL repeat the same
+  queue-driven workflow: pop one block identity from the shared traversal
+  queue, read that block from the selected source store, decode it, enqueue any
+  discovered child block identities at the back of the same queue, and then
+  submit that block through the selected destination-side copy mode.
+- **Traversal-mode applicability [KNOWN]:** This worker-threaded traversal
+  contract SHALL apply to both the default read-before-write path and the
+  explicit blind-write path; it does not replace the already-approved bounded
+  asynchronous destination-write behavior.
+- **Worker/write separation [KNOWN]:** Worker-thread concurrency and maximum
+  in-flight destination-write concurrency SHALL remain separate operator
+  controls so operators may widen traversal parallelism without implicitly
+  changing the approved destination-write bound, or vice versa.
+- **At-most-once traversal rule [INFERRED]:** Concurrent workers SHALL preserve
+  at-most-once logical handling for each immutable block identity within one
+  rooted-copy invocation even when multiple parents reference the same child.
 - **Mode-truthfulness rule [INFERRED]:** Live progress on the default heartbeat
   surface SHALL preserve the same truthful reporting boundary as the final copy
   report: read-before-write may surface copied and skipped-already-present
@@ -2638,7 +2698,11 @@ to another configured block store.
 - **Surface boundary [KNOWN]:** The tool is additive to existing indexing,
   quality, search, and MCP surfaces and SHALL NOT become an indexing stage, a
   `BatchRequest` feature, or an MCP-visible API in this increment.
-- **Traceability:** UR-153, UR-154, UR-155, UR-156, UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188, UR-189, UR-190, UR-191, UR-192, UR-193, UR-196, UR-197, UR-198, UR-202, UR-205, UR-206, UR-207, UR-209, UR-297, UR-298, UR-299, UR-303, UR-304
+- **Profile-uniformity rule [INFERRED]:** The worker-threaded traversal contract
+  SHALL apply through the same approved rooted-copy profile vocabulary rather
+  than introducing backend-specific source-walk concurrency controls for
+  individual stores.
+- **Traceability:** UR-153, UR-154, UR-155, UR-156, UR-180, UR-181, UR-182, UR-183, UR-184, UR-185, UR-186, UR-187, UR-188, UR-189, UR-190, UR-191, UR-192, UR-193, UR-196, UR-197, UR-198, UR-202, UR-205, UR-206, UR-207, UR-209, UR-297, UR-298, UR-299, UR-303, UR-304, UR-317, UR-318, UR-319, UR-320, UR-321, UR-322, UR-323, UR-324, UR-325, UR-326
 
 #### RQ-INDEXER-005C - Opt-in SDK diagnostic logging on existing CLI surfaces
 
@@ -3359,6 +3423,14 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
   - user request in this session: "can we modify the copy to be async and keep say 64 (or some number) of azure writes in flight?"
   - user clarification in this session selecting: "Expose a CLI flag with default 64 (Recommended)"
   - user clarification in this session selecting: "Apply to both modes when a destination write is needed (Recommended)"
+  - user request in this session: "add a command line option to the block store copy sub-command to allow N threads to copy blocks from source to destination block store concurrently. Allow the user to pass the option via the command line. Behavior of each thread should be:
+Pop block id from queue
+Read block
+Decode block
+If block has children, push to the back of the queue
+Write block"
+  - user clarification in this session selecting: "Keep both controls (Recommended)"
+  - user clarification in this session selecting: "Default to 1 worker thread and require opt-in for higher concurrency (Recommended)"
   - user request in this session: "does lexongraph / azure sdk have any rust tracing we can enable to see why it's happening?"
   - user request in this session: "ok, can we modify lexonarchivebuilder-indexer to make this work?"
   - user clarification in this session selecting: "Respect `RUST_LOG` automatically with no new CLI flag (Recommended)"
@@ -3666,16 +3738,44 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   the same logical rooted-copy invocation without widening that checkpoint
   behavior to read-before-write or non-redb targets.
 
+### BA-INDEXER-138
+
+- **Before [KNOWN]:** The rooted block-copy requirements defined bounded
+  asynchronous destination-write overlap, but the rooted traversal, source
+  read, decode, and child-discovery loop still remained single-worker.
+- **After [KNOWN]:** The requirements now add a separate rooted-copy worker-
+  thread option that allows multiple workers to process the shared queue-driven
+  traversal workflow concurrently.
+
+### BA-INDEXER-139
+
+- **Before [KNOWN]:** `--max-in-flight-destination-writes` was the only approved
+  rooted-copy concurrency control and governed destination-write overlap only.
+- **After [KNOWN]:** The requirements now preserve that existing destination-
+  write control and add a distinct worker-thread control rather than replacing
+  the approved write-concurrency surface.
+
+### BA-INDEXER-140
+
+- **Before [KNOWN]:** The rooted-copy requirements did not explicitly constrain
+  concurrent workers to preserve at-most-once logical block handling or shared-
+  profile traversal behavior when multiple parents discovered the same child.
+- **After [KNOWN]:** The requirements now require worker-threaded rooted copy to
+  preserve reachable-only traversal, at-most-once logical block handling,
+  profile-uniform behavior, and truthful read-before-write versus blind-write
+  reporting semantics.
+
 ### Invariant Impact Assessment
 
-- **Content-model abstraction boundaries:** Preserved. The increment adds only a
-  CLI-only maintenance workflow over the existing immutable block-store
-  boundary; it does not reshape content resolution, embedding, or search corpus
-  semantics.
+- **Content-model abstraction boundaries:** Preserved. The increment extends the
+  existing CLI-only rooted-copy and maintenance workflows over the immutable
+  block-store boundary; it does not reshape content resolution, embedding, or
+  search corpus semantics.
 - **Local/prod environment parity:** Preserved with explicit capability
-  boundaries. The generic `maintenance` namespace and the new blind-write
-  checkpoint compaction behavior remain indexer-owned local-redb capabilities;
-  both stay explicitly limited to direct local redb rather than changing the
+  boundaries. The new rooted-copy worker-thread control applies through the
+  same approved profile vocabulary across local and non-local copy targets,
+  while the generic `maintenance` namespace plus blind-write checkpoint
+  compaction remain indexer-owned local-redb capabilities and do not change the
   meaning of approved non-local profiles or the default read-before-write copy
   path.
 - **Search contract stability:** Preserved. The increment does not alter MCP
@@ -3685,6 +3785,11 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   filesystem outside redb, and both maintenance compaction plus blind-write
   checkpoint compaction remain additive redb-specific behaviors rather than
   hidden side effects of indexing or default copy workflows.
+- **Rooted-copy concurrency control separation:** Preserved and extended. The
+  new worker-thread control remains additive to the existing destination-write
+  bound, so traversal concurrency expands without collapsing the established
+  distinction between source-side graph walking and destination-side write
+  overlap.
 - **Operator workflow clarity:** Preserved and extended. The new generic
   `maintenance` namespace gives operators an explicit one-store maintenance
   entry point without implying a backend-neutral compaction contract or

@@ -17,7 +17,7 @@ effective-profile identity signaling,
 clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted
-CLI search over stored trees, rooted block-store copy tooling with live default heartbeat counters, CLI-only local-redb maintenance compaction, replay-stable fingerprinting, temporary
+CLI search over stored trees, rooted block-store copy tooling with live default heartbeat counters plus additive worker-threaded traversal, CLI-only local-redb maintenance compaction, replay-stable fingerprinting, temporary
 upstream `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, 0.6.x published-profile
 evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
@@ -54,7 +54,8 @@ effective-profile identity signaling, telemetry-count-semantics clarity,
 clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted CLI
-search over stored trees, rooted block-store copy tooling, replay-stable fingerprinting, LAB-owned replay-journaled
+search over stored trees, rooted block-store copy tooling with additive
+worker-threaded traversal, replay-stable fingerprinting, LAB-owned replay-journaled
 split-stage recovery, bounded-residency deterministic replay ordering for
 clustering replay, independent replay batch-size versus replay-materialization
 concurrency control for clustering replay, bounded multi-batch replay-prefetch
@@ -1014,7 +1015,9 @@ profile on the source side, the destination already contains at least one
 reachable block, the source rooted graph contains at least one unreachable
 block, the invocation encounters at least one copy failure for a reachable
 block after the tool has already proven other reachable blocks can be copied or
-skipped, and one exercised blind-write case targets direct `local-redb` with
+skipped, one exercised run sets the rooted-copy worker-thread count above `1`,
+at least one exercised rooted graph includes a child reachable through multiple
+parents, and one exercised blind-write case targets direct `local-redb` with
 enough reachable blocks to cross at least one `500,000` attempted-write
 checkpoint.
 
@@ -1031,10 +1034,18 @@ claiming exact skipped-already-present classification. Both modes must support
 one operator-selectable bounded destination-write concurrency limit with first
 approved default `64`, and the same limit must allow multiple destination
 writes to remain in flight whenever a block has already been classified for
-publication. That bounded write pipeline must not cause unreachable blocks to be
-written, must not require a backend-specific transfer path, and must not change
-the truthfulness of the approved mode-specific reporting contract merely because
-write completions arrive out of order. Both modes must emit basic default
+publication. The tool must also support one separate operator-selectable
+rooted-traversal worker-thread count with first approved default `1`, and when
+that worker count is greater than `1` each worker must still follow the same
+queue-driven contract of pop, read, decode, enqueue children to the back, and
+submit the block to the destination-side copy path. The separate worker-thread
+and destination-write limits must remain independently controllable. Concurrent
+traversal plus bounded asynchronous writes must not cause unreachable blocks to
+be written, must preserve at-most-once logical handling when multiple parents
+discover the same child, must not require a backend-specific transfer path, and
+must not change the truthfulness of the approved mode-specific reporting
+contract merely because traversal or write completions arrive out of order.
+Both modes must emit basic default
 in-flight liveness or progress on the normal CLI output surface before final
 completion when the rooted copy runs long enough that silence would otherwise
 resemble a hang. That in-flight output must include mode-truthful live counter

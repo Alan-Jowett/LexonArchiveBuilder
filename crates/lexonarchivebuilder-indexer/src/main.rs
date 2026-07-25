@@ -13,7 +13,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use env_logger::Env;
 use lexonarchivebuilder_indexer::block_copy::{
     BLIND_WRITE_REDB_COMPACTION_INTERVAL_BLOCKS, BlindWriteCheckpoint, CopyDestinationMode,
-    DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES, RootedBlockCopyProgress,
+    DEFAULT_COPY_WORKER_THREADS, DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES, RootedBlockCopyProgress,
     RootedBlockCopyProgressSnapshot, copy_rooted_blocks_with_mode_and_limit_and_checkpoint,
     copy_rooted_blocks_with_mode_and_limit_and_progress,
     default_report_path as default_copy_report_path,
@@ -127,6 +127,14 @@ enum Command {
             help = "Skip destination existence reads and attempt destination writes directly. With a local-redb destination, this also disables per-put flushes for faster syncs without crash-resume support."
         )]
         blind_write: bool,
+        #[arg(
+            long,
+            default_value_t = DEFAULT_COPY_WORKER_THREADS,
+            value_parser = parse_bounded_worker_threads,
+            value_name = "COUNT",
+            help = "Number of rooted block-copy traversal worker threads to run concurrently."
+        )]
+        worker_threads: usize,
         #[arg(
             long,
             default_value_t = DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
@@ -679,6 +687,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Copy {
             root_ids,
             blind_write,
+            worker_threads,
             max_in_flight_destination_writes,
             json_out,
             source_block_store,
@@ -700,6 +709,7 @@ async fn main() -> anyhow::Result<()> {
             let report = if blind_write
                 && matches!(&destination_store, ConfiguredBlockStore::LocalRedb(_))
             {
+                let mut checkpoint_store = destination_store.clone();
                 await_with_copy_liveness(
                     copy_rooted_blocks_with_mode_and_limit_and_checkpoint(
                         &source_store,
@@ -707,12 +717,11 @@ async fn main() -> anyhow::Result<()> {
                         &root_ids,
                         destination_mode,
                         max_in_flight_destination_writes,
+                        worker_threads,
                         Some(progress.clone()),
                         BlindWriteCheckpoint {
                             interval: BLIND_WRITE_REDB_COMPACTION_INTERVAL_BLOCKS,
-                            action: |destination: &mut ConfiguredBlockStore| {
-                                destination.compact_now()
-                            },
+                            action: move || checkpoint_store.compact_now(),
                         },
                     ),
                     COPY_LIVENESS_HEARTBEAT_INTERVAL,
@@ -727,6 +736,7 @@ async fn main() -> anyhow::Result<()> {
                         &root_ids,
                         destination_mode,
                         max_in_flight_destination_writes,
+                        worker_threads,
                         Some(progress.clone()),
                     ),
                     COPY_LIVENESS_HEARTBEAT_INTERVAL,
@@ -843,6 +853,19 @@ fn parse_positive_usize(value: &str) -> Result<usize, String> {
         .map_err(|_| format!("invalid positive integer: {value}"))?;
     if parsed == 0 {
         return Err("value must be greater than zero".into());
+    }
+    Ok(parsed)
+}
+
+fn parse_bounded_worker_threads(value: &str) -> Result<usize, String> {
+    let parsed = parse_positive_usize(value)?;
+    let max_worker_threads = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1);
+    if parsed > max_worker_threads {
+        return Err(format!(
+            "value must be no greater than available parallelism ({max_worker_threads})"
+        ));
     }
     Ok(parsed)
 }
@@ -1664,6 +1687,94 @@ mod tests {
             ),
             _ => panic!("expected copy command"),
         }
+    }
+
+    #[test]
+    fn copy_command_defaults_worker_threads() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--source-block-store-root",
+            "source-blocks",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Copy { worker_threads, .. } => {
+                assert_eq!(worker_threads, DEFAULT_COPY_WORKER_THREADS)
+            }
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn copy_command_parses_worker_threads_override() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--worker-threads",
+            "3",
+            "--source-block-store-root",
+            "source-blocks",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Copy { worker_threads, .. } => assert_eq!(worker_threads, 3),
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn copy_command_rejects_zero_worker_threads() {
+        let error = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--worker-threads",
+            "0",
+            "--source-block-store-root",
+            "source-blocks",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap_err();
+
+        let rendered = error.to_string();
+        assert!(rendered.contains("--worker-threads"));
+    }
+
+    #[test]
+    fn copy_command_rejects_excessive_worker_threads() {
+        let excessive = std::thread::available_parallelism()
+            .map(|count| count.get() + 1)
+            .unwrap_or(2);
+        let error = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "copy",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--worker-threads",
+            &excessive.to_string(),
+            "--source-block-store-root",
+            "source-blocks",
+            "--destination-block-store-root",
+            "destination-blocks",
+        ])
+        .unwrap_err();
+
+        let rendered = error.to_string();
+        assert!(rendered.contains("--worker-threads"));
+        assert!(rendered.contains("available parallelism"));
     }
 
     #[test]
