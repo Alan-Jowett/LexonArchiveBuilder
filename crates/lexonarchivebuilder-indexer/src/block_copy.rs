@@ -230,7 +230,11 @@ fn complete_batch_write_probe(state: &AtomicU8, supported: bool) {
 }
 
 fn is_unsupported_batch_write_error(error: &BlockStoreError) -> bool {
-    matches!(error, BlockStoreError::BackendFailure(message) if message == UNSUPPORTED_BATCH_WRITE_MESSAGE)
+    matches!(error, BlockStoreError::BackendFailure(message) if {
+        let message = message.to_ascii_lowercase();
+        message.contains(UNSUPPORTED_BATCH_WRITE_MESSAGE)
+            || (message.contains("batch write") && message.contains("not supported"))
+    })
 }
 
 impl CopyMetrics {
@@ -1136,8 +1140,6 @@ enum ThreadedWriteWorkerAction {
     Shutdown,
 }
 
-const THREADED_BATCH_WRITER_THREAD_COUNT: usize = 1;
-
 struct ThreadedTraversalWorkerContext<'a, S, D> {
     source: &'a S,
     destination: &'a D,
@@ -1333,7 +1335,7 @@ impl ThreadedWriteQueue {
     }
 
     fn writer_thread_count(&self) -> usize {
-        THREADED_BATCH_WRITER_THREAD_COUNT
+        self.max_in_flight_destination_writes.max(1)
     }
 
     fn enqueue(
@@ -1402,20 +1404,6 @@ impl ThreadedWriteQueue {
             .expect("threaded copy write queue mutex poisoned");
         loop {
             let capability = load_batch_write_capability(batch_write_capability);
-            if matches!(capability, BatchWriteCapability::Unknown)
-                && state.queue.len() == 1
-                && !state.producers_finished
-                && !state.shutdown
-                && !stop_requested.load(Ordering::SeqCst)
-                && !state.checkpoint_pending
-                && !state.checkpoint_running
-            {
-                state = self
-                    .ready
-                    .wait(state)
-                    .expect("threaded copy write queue mutex poisoned while waiting");
-                continue;
-            }
             let target_batch_len = match capability {
                 BatchWriteCapability::Supported => self.max_in_flight_destination_writes.max(1),
                 BatchWriteCapability::Unknown => {
@@ -3259,10 +3247,10 @@ mod tests {
     }
 
     #[test]
-    fn threaded_write_queue_uses_single_writer_thread_for_batched_publication() {
-        let queue = ThreadedWriteQueue::new(64, 0, None);
+    fn threaded_write_queue_uses_configured_in_flight_write_count_for_writers() {
+        let queue = ThreadedWriteQueue::new(3, 0, None);
 
-        assert_eq!(queue.writer_thread_count(), 1);
+        assert_eq!(queue.writer_thread_count(), 3);
     }
 
     #[tokio::test]
@@ -3293,8 +3281,88 @@ mod tests {
 
         assert_eq!(report.copied_block_count, Some(4));
         assert_eq!(report.failed_block_count, 0);
-        assert!(destination.batch_probe_count() >= 1);
         assert_eq!(destination.single_put_count(), 4);
+    }
+
+    #[tokio::test]
+    async fn rooted_block_copy_drains_single_queued_write_when_batch_probe_cannot_start() {
+        let source = MemoryBlockStore::new(16).unwrap();
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let root = source.put(&branch_block(&[alpha, beta])).await.unwrap();
+        let destination = Arc::new(UnsupportedBatchPutStore::new(32));
+        let mut copy_destination = SharedStore {
+            inner: Arc::clone(&destination),
+        };
+
+        let report = tokio::time::timeout(
+            Duration::from_secs(1),
+            copy_rooted_blocks_with_mode_and_limit_and_progress(
+                &source,
+                &mut copy_destination,
+                &[root],
+                CopyDestinationMode::ReadBeforeWrite,
+                1,
+                2,
+                None,
+            ),
+        )
+        .await
+        .expect("single queued write should not deadlock");
+
+        assert_eq!(report.copied_block_count, Some(3));
+        assert_eq!(report.failed_block_count, 0);
+        assert_eq!(destination.batch_probe_count(), 0);
+        assert_eq!(destination.single_put_count(), 3);
+    }
+
+    #[tokio::test]
+    async fn publish_destination_write_batch_falls_back_for_contextual_unsupported_error() {
+        let source = MemoryBlockStore::new(16).unwrap();
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let alpha_bytes = source.get_block_bytes(&alpha).await.unwrap().unwrap();
+        let beta_bytes = source.get_block_bytes(&beta).await.unwrap().unwrap();
+        let destination = UnsupportedBatchPutStore::new(16);
+        let batch_write_capability = AtomicU8::new(BatchWriteCapability::Unknown as u8);
+
+        let completions = publish_destination_write_batch(
+            &destination,
+            vec![
+                ThreadedWriteJob {
+                    block_id: alpha,
+                    block_bytes: alpha_bytes.clone(),
+                    count_as_copied: true,
+                },
+                ThreadedWriteJob {
+                    block_id: beta,
+                    block_bytes: beta_bytes.clone(),
+                    count_as_copied: true,
+                },
+            ],
+            &batch_write_capability,
+        )
+        .await;
+
+        assert_eq!(destination.batch_probe_count(), 1);
+        assert_eq!(destination.single_put_count(), 2);
+        assert_eq!(
+            load_batch_write_capability(&batch_write_capability),
+            BatchWriteCapability::Unsupported
+        );
+        assert!(
+            completions
+                .iter()
+                .all(|completion| completion.result.is_ok())
+        );
+        assert_eq!(
+            destination.get_block_bytes(&alpha).await.unwrap(),
+            Some(alpha_bytes)
+        );
+        assert_eq!(
+            destination.get_block_bytes(&beta).await.unwrap(),
+            Some(beta_bytes)
+        );
     }
 
     #[tokio::test]
@@ -3796,9 +3864,9 @@ mod tests {
             _entries: &[BlockBytesBatchEntry<'_>],
         ) -> Result<(), BlockStoreError> {
             self.batch_probe_count.fetch_add(1, Ordering::SeqCst);
-            Err(BlockStoreError::BackendFailure(
-                UNSUPPORTED_BATCH_WRITE_MESSAGE.to_string(),
-            ))
+            Err(BlockStoreError::BackendFailure(format!(
+                "backend rejected batch path: {UNSUPPORTED_BATCH_WRITE_MESSAGE}"
+            )))
         }
 
         async fn get_block_bytes(
