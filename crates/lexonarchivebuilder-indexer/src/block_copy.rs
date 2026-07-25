@@ -1136,6 +1136,8 @@ enum ThreadedWriteWorkerAction {
     Shutdown,
 }
 
+const THREADED_BATCH_WRITER_THREAD_COUNT: usize = 1;
+
 struct ThreadedTraversalWorkerContext<'a, S, D> {
     source: &'a S,
     destination: &'a D,
@@ -1331,7 +1333,7 @@ impl ThreadedWriteQueue {
     }
 
     fn writer_thread_count(&self) -> usize {
-        self.max_in_flight_destination_writes
+        THREADED_BATCH_WRITER_THREAD_COUNT
     }
 
     fn enqueue(
@@ -3254,6 +3256,13 @@ mod tests {
                 .into_iter()
                 .any(|batch_len| batch_len > 1)
         );
+    }
+
+    #[test]
+    fn threaded_write_queue_uses_single_writer_thread_for_batched_publication() {
+        let queue = ThreadedWriteQueue::new(64, 0, None);
+
+        assert_eq!(queue.writer_thread_count(), 1);
     }
 
     #[tokio::test]
