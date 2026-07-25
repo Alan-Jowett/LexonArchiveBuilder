@@ -513,6 +513,7 @@ where
     let batch_write_capability = AtomicU8::new(BatchWriteCapability::Unknown as u8);
     let mut pending_writes = FuturesUnordered::<PendingDestinationWrite<'_>>::new();
     let mut buffered_write_jobs = Vec::new();
+    let mut in_flight_destination_write_count = 0usize;
     let mut in_flight_destination_write_bytes = 0usize;
     let mut buffered_write_bytes = 0usize;
     let mut blind_write_checkpoint = blind_write_checkpoint;
@@ -546,6 +547,7 @@ where
                             &mut buffered_write_bytes,
                             effective_write_limit,
                             max_in_flight_destination_write_bytes,
+                            &mut in_flight_destination_write_count,
                             &mut in_flight_destination_write_bytes,
                             &mut metrics,
                             &mut failures,
@@ -574,6 +576,7 @@ where
                     &mut buffered_write_bytes,
                     effective_write_limit,
                     max_in_flight_destination_write_bytes,
+                    &mut in_flight_destination_write_count,
                     &mut in_flight_destination_write_bytes,
                     &mut metrics,
                     &mut failures,
@@ -599,6 +602,7 @@ where
                         &mut buffered_write_bytes,
                         effective_write_limit,
                         max_in_flight_destination_write_bytes,
+                        &mut in_flight_destination_write_count,
                         &mut in_flight_destination_write_bytes,
                         &mut metrics,
                         &mut failures,
@@ -606,6 +610,7 @@ where
                     .await;
                     flush_pending_writes(
                         &mut pending_writes,
+                        &mut in_flight_destination_write_count,
                         &mut in_flight_destination_write_bytes,
                         &mut metrics,
                         &mut failures,
@@ -636,6 +641,7 @@ where
         &mut buffered_write_bytes,
         effective_write_limit,
         max_in_flight_destination_write_bytes,
+        &mut in_flight_destination_write_count,
         &mut in_flight_destination_write_bytes,
         &mut metrics,
         &mut failures,
@@ -644,6 +650,7 @@ where
     while let Some(completion) = pending_writes.next().await {
         record_write_completions(
             completion,
+            &mut in_flight_destination_write_count,
             &mut in_flight_destination_write_bytes,
             &mut metrics,
             &mut failures,
@@ -1683,7 +1690,7 @@ fn destination_write_batch_len(
 ) -> usize {
     match load_batch_write_capability(batch_write_capability) {
         BatchWriteCapability::Supported => effective_write_limit.max(1),
-        BatchWriteCapability::Unknown => 2,
+        BatchWriteCapability::Unknown => effective_write_limit.clamp(1, 2),
         BatchWriteCapability::Probing | BatchWriteCapability::Unsupported => 1,
     }
 }
@@ -1697,6 +1704,7 @@ async fn buffer_destination_write_job<'a, D>(
     buffered_write_bytes: &mut usize,
     effective_write_limit: usize,
     max_in_flight_destination_write_bytes: usize,
+    in_flight_destination_write_count: &mut usize,
     in_flight_destination_write_bytes: &mut usize,
     metrics: &mut CopyMetrics,
     failures: &mut CopyFailureTracker,
@@ -1721,6 +1729,7 @@ async fn buffer_destination_write_job<'a, D>(
             buffered_write_bytes,
             effective_write_limit,
             max_in_flight_destination_write_bytes,
+            in_flight_destination_write_count,
             in_flight_destination_write_bytes,
             metrics,
             failures,
@@ -1741,6 +1750,7 @@ async fn buffer_destination_write_job<'a, D>(
             buffered_write_bytes,
             effective_write_limit,
             max_in_flight_destination_write_bytes,
+            in_flight_destination_write_count,
             in_flight_destination_write_bytes,
             metrics,
             failures,
@@ -1758,6 +1768,7 @@ async fn flush_buffered_destination_writes<'a, D>(
     buffered_write_bytes: &mut usize,
     effective_write_limit: usize,
     max_in_flight_destination_write_bytes: usize,
+    in_flight_destination_write_count: &mut usize,
     in_flight_destination_write_bytes: &mut usize,
     metrics: &mut CopyMetrics,
     failures: &mut CopyFailureTracker,
@@ -1769,6 +1780,7 @@ async fn flush_buffered_destination_writes<'a, D>(
     }
     let publication_jobs = std::mem::take(buffered_write_jobs);
     let publication_bytes = std::mem::take(buffered_write_bytes);
+    let publication_job_count = publication_jobs.len();
     if publication_jobs.len() > 1
         && matches!(
             load_batch_write_capability(batch_write_capability),
@@ -1780,7 +1792,9 @@ async fn flush_buffered_destination_writes<'a, D>(
     wait_for_write_capacity(
         pending_writes,
         effective_write_limit,
+        publication_jobs.len(),
         max_in_flight_destination_write_bytes,
+        in_flight_destination_write_count,
         publication_bytes,
         in_flight_destination_write_bytes,
         metrics,
@@ -1793,6 +1807,8 @@ async fn flush_buffered_destination_writes<'a, D>(
         publication_jobs,
         batch_write_capability,
     );
+    *in_flight_destination_write_count =
+        in_flight_destination_write_count.saturating_add(publication_job_count);
     *in_flight_destination_write_bytes =
         in_flight_destination_write_bytes.saturating_add(publication_bytes);
 }
@@ -1896,14 +1912,16 @@ where
 async fn wait_for_write_capacity(
     pending_writes: &mut FuturesUnordered<PendingDestinationWrite<'_>>,
     effective_write_limit: usize,
+    next_write_count: usize,
     max_in_flight_destination_write_bytes: usize,
+    in_flight_destination_write_count: &mut usize,
     next_write_bytes: usize,
     in_flight_destination_write_bytes: &mut usize,
     metrics: &mut CopyMetrics,
     failures: &mut CopyFailureTracker,
 ) {
-    while pending_writes.len() >= effective_write_limit
-        || (!pending_writes.is_empty()
+    while in_flight_destination_write_count.saturating_add(next_write_count) > effective_write_limit
+        || (*in_flight_destination_write_count > 0
             && max_in_flight_destination_write_bytes > 0
             && in_flight_destination_write_bytes.saturating_add(next_write_bytes)
                 > max_in_flight_destination_write_bytes)
@@ -1914,6 +1932,7 @@ async fn wait_for_write_capacity(
             .expect("pending destination writes should complete");
         record_write_completions(
             completion,
+            in_flight_destination_write_count,
             in_flight_destination_write_bytes,
             metrics,
             failures,
@@ -1923,6 +1942,7 @@ async fn wait_for_write_capacity(
 
 async fn flush_pending_writes(
     pending_writes: &mut FuturesUnordered<PendingDestinationWrite<'_>>,
+    in_flight_destination_write_count: &mut usize,
     in_flight_destination_write_bytes: &mut usize,
     metrics: &mut CopyMetrics,
     failures: &mut CopyFailureTracker,
@@ -1930,6 +1950,7 @@ async fn flush_pending_writes(
     while let Some(completion) = pending_writes.next().await {
         record_write_completions(
             completion,
+            in_flight_destination_write_count,
             in_flight_destination_write_bytes,
             metrics,
             failures,
@@ -1952,10 +1973,13 @@ fn should_run_blind_write_checkpoint(
 
 fn record_write_completions(
     completions: Vec<DestinationWriteCompletion>,
+    in_flight_destination_write_count: &mut usize,
     in_flight_destination_write_bytes: &mut usize,
     metrics: &mut CopyMetrics,
     failures: &mut CopyFailureTracker,
 ) {
+    *in_flight_destination_write_count =
+        in_flight_destination_write_count.saturating_sub(completions.len());
     for completion in completions {
         *in_flight_destination_write_bytes =
             in_flight_destination_write_bytes.saturating_sub(completion.block_bytes_len);
@@ -3094,12 +3118,61 @@ mod tests {
             inner: Arc::clone(&destination),
         };
         let copy_future = async {
-            copy_rooted_blocks_with_mode_and_limit(
+            copy_rooted_blocks_with_mode_and_limit_and_progress(
                 source.as_ref(),
                 &mut copy_destination,
                 &[root],
                 CopyDestinationMode::ReadBeforeWrite,
                 2,
+                2,
+                None,
+            )
+            .await
+        };
+        let observer = std::thread::spawn(move || {
+            observer_destination.wait_until_max_observed();
+            let observed = observer_destination.max_in_flight();
+            observer_destination.release_writes();
+            assert!(
+                (1..=2).contains(&observed),
+                "observed {observed} in-flight writes"
+            );
+        });
+
+        let report = copy_future.await;
+        observer.join().unwrap();
+
+        assert_eq!(report.copied_block_count, Some(4));
+        assert_eq!(report.skipped_already_present_block_count, Some(0));
+        assert_eq!(report.failed_block_count, 0);
+    }
+
+    #[tokio::test]
+    async fn rooted_block_copy_single_worker_honors_bounded_in_flight_destination_writes_when_batched()
+     {
+        let source = Arc::new(MemoryBlockStore::new(16).unwrap());
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let gamma = source.put(&leaf_block("gamma")).await.unwrap();
+        let root = source
+            .put(&branch_block(&[alpha, beta, gamma]))
+            .await
+            .unwrap();
+        let destination = Arc::new(BlockingBatchPutStore::new(32, 2));
+
+        let observer_destination = Arc::clone(&destination);
+        let mut copy_destination = SharedStore {
+            inner: Arc::clone(&destination),
+        };
+        let copy_future = async {
+            copy_rooted_blocks_with_mode_and_limit_and_progress(
+                source.as_ref(),
+                &mut copy_destination,
+                &[root],
+                CopyDestinationMode::ReadBeforeWrite,
+                2,
+                1,
+                None,
             )
             .await
         };
@@ -3443,8 +3516,8 @@ mod tests {
         active_writes: AtomicUsize,
         max_in_flight: AtomicUsize,
         target_max_in_flight: usize,
-        observed_target: AtomicBool,
-        observed_target_notify: tokio::sync::Notify,
+        observed_target: Mutex<bool>,
+        observed_target_ready: Condvar,
         release_writes_flag: AtomicBool,
         release_writes_notify: tokio::sync::Notify,
     }
@@ -3475,6 +3548,17 @@ mod tests {
         single_write_delay: Duration,
     }
 
+    struct BlockingBatchPutStore {
+        inner: Arc<MemoryBlockStore>,
+        active_writes: AtomicUsize,
+        max_in_flight: AtomicUsize,
+        target_max_in_flight: usize,
+        observed_target: AtomicBool,
+        observed_target_notify: tokio::sync::Notify,
+        release_writes_flag: AtomicBool,
+        release_writes_notify: tokio::sync::Notify,
+    }
+
     struct UnsupportedBatchPutStore {
         inner: Arc<MemoryBlockStore>,
         single_put_count: AtomicUsize,
@@ -3493,18 +3577,24 @@ mod tests {
                 active_writes: AtomicUsize::new(0),
                 max_in_flight: AtomicUsize::new(0),
                 target_max_in_flight,
-                observed_target: AtomicBool::new(false),
-                observed_target_notify: tokio::sync::Notify::new(),
+                observed_target: Mutex::new(false),
+                observed_target_ready: Condvar::new(),
                 release_writes_flag: AtomicBool::new(false),
                 release_writes_notify: tokio::sync::Notify::new(),
             }
         }
 
-        async fn wait_until_max_observed(&self) {
-            if self.observed_target.load(Ordering::SeqCst) {
-                return;
+        fn wait_until_max_observed(&self) {
+            let mut observed = self
+                .observed_target
+                .lock()
+                .expect("blocking write observer mutex poisoned");
+            while !*observed {
+                observed = self
+                    .observed_target_ready
+                    .wait(observed)
+                    .expect("blocking write observer mutex poisoned while waiting");
             }
-            self.observed_target_notify.notified().await;
         }
 
         fn release_writes(&self) {
@@ -3597,6 +3687,37 @@ mod tests {
                 .lock()
                 .expect("recording batch sizes mutex poisoned")
                 .clone()
+        }
+    }
+
+    impl BlockingBatchPutStore {
+        fn new(capacity: usize, target_max_in_flight: usize) -> Self {
+            Self {
+                inner: Arc::new(MemoryBlockStore::new(capacity).unwrap()),
+                active_writes: AtomicUsize::new(0),
+                max_in_flight: AtomicUsize::new(0),
+                target_max_in_flight,
+                observed_target: AtomicBool::new(false),
+                observed_target_notify: tokio::sync::Notify::new(),
+                release_writes_flag: AtomicBool::new(false),
+                release_writes_notify: tokio::sync::Notify::new(),
+            }
+        }
+
+        async fn wait_until_max_observed(&self) {
+            if self.observed_target.load(Ordering::SeqCst) {
+                return;
+            }
+            self.observed_target_notify.notified().await;
+        }
+
+        fn release_writes(&self) {
+            self.release_writes_flag.store(true, Ordering::SeqCst);
+            self.release_writes_notify.notify_waiters();
+        }
+
+        fn max_in_flight(&self) -> usize {
+            self.max_in_flight.load(Ordering::SeqCst)
         }
     }
 
@@ -3711,10 +3832,15 @@ mod tests {
         ) -> Result<(), BlockStoreError> {
             let active = self.active_writes.fetch_add(1, Ordering::SeqCst) + 1;
             self.max_in_flight.fetch_max(active, Ordering::SeqCst);
-            if active >= self.target_max_in_flight
-                && !self.observed_target.swap(true, Ordering::SeqCst)
-            {
-                self.observed_target_notify.notify_waiters();
+            if active >= self.target_max_in_flight {
+                let mut observed = self
+                    .observed_target
+                    .lock()
+                    .expect("blocking write observer mutex poisoned");
+                if !*observed {
+                    *observed = true;
+                    self.observed_target_ready.notify_all();
+                }
             }
             while !self.release_writes_flag.load(Ordering::SeqCst) {
                 self.release_writes_notify.notified().await;
@@ -3844,6 +3970,55 @@ mod tests {
                     .put_block_bytes(entry.block_id, entry.block_bytes)
                     .await?;
             }
+            Ok(())
+        }
+
+        async fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            self.inner.get_block_bytes(block_id).await
+        }
+
+        fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+            self.inner.iter_block_ids()
+        }
+    }
+
+    #[async_trait]
+    impl BlockStore for BlockingBatchPutStore {
+        async fn put_block_bytes(
+            &self,
+            block_id: &BlockHash,
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            self.inner.put_block_bytes(block_id, block_bytes).await
+        }
+
+        async fn put_block_bytes_batch(
+            &self,
+            entries: &[BlockBytesBatchEntry<'_>],
+        ) -> Result<(), BlockStoreError> {
+            let active = self
+                .active_writes
+                .fetch_add(entries.len(), Ordering::SeqCst)
+                + entries.len();
+            self.max_in_flight.fetch_max(active, Ordering::SeqCst);
+            if active >= self.target_max_in_flight
+                && !self.observed_target.swap(true, Ordering::SeqCst)
+            {
+                self.observed_target_notify.notify_waiters();
+            }
+            while !self.release_writes_flag.load(Ordering::SeqCst) {
+                self.release_writes_notify.notified().await;
+            }
+            for entry in entries {
+                self.inner
+                    .put_block_bytes(entry.block_id, entry.block_bytes)
+                    .await?;
+            }
+            self.active_writes
+                .fetch_sub(entries.len(), Ordering::SeqCst);
             Ok(())
         }
 
