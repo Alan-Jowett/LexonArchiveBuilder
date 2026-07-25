@@ -1404,6 +1404,13 @@ impl ThreadedWriteQueue {
             .expect("threaded copy write queue mutex poisoned");
         loop {
             let capability = load_batch_write_capability(batch_write_capability);
+            if !matches!(capability, BatchWriteCapability::Unsupported) && state.active_writes > 0 {
+                state = self
+                    .ready
+                    .wait(state)
+                    .expect("threaded copy write queue mutex poisoned while waiting");
+                continue;
+            }
             let target_batch_len = match capability {
                 BatchWriteCapability::Supported => self.max_in_flight_destination_writes.max(1),
                 BatchWriteCapability::Unknown => {
@@ -1816,7 +1823,12 @@ async fn publish_destination_write_batch<D>(
 where
     D: BlockStore + Sync,
 {
-    if jobs.len() <= 1 {
+    let probing_single_write = jobs.len() == 1
+        && matches!(
+            load_batch_write_capability(batch_write_capability),
+            BatchWriteCapability::Unknown | BatchWriteCapability::Probing
+        );
+    if jobs.len() <= 1 && !probing_single_write {
         return publish_destination_write_jobs_one_by_one(destination, jobs).await;
     }
 
@@ -3285,7 +3297,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rooted_block_copy_drains_single_queued_write_when_batch_probe_cannot_start() {
+    async fn rooted_block_copy_drains_single_queued_write_via_single_entry_probe() {
         let source = MemoryBlockStore::new(16).unwrap();
         let alpha = source.put(&leaf_block("alpha")).await.unwrap();
         let beta = source.put(&leaf_block("beta")).await.unwrap();
@@ -3312,7 +3324,7 @@ mod tests {
 
         assert_eq!(report.copied_block_count, Some(3));
         assert_eq!(report.failed_block_count, 0);
-        assert_eq!(destination.batch_probe_count(), 0);
+        assert_eq!(destination.batch_probe_count(), 1);
         assert_eq!(destination.single_put_count(), 3);
     }
 
