@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::future::Future;
 use std::io::Cursor;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -346,7 +347,7 @@ pub async fn copy_rooted_blocks_with_mode_and_limit_and_checkpoint<S, D, F>(
 where
     S: BlockStore + Sync,
     D: BlockStore + Sync,
-    F: FnMut(&mut D) -> Result<(), BlockStoreError> + Send,
+    F: FnMut() -> Result<(), BlockStoreError> + Send,
 {
     copy_rooted_blocks_with_mode_and_limits_and_checkpoint(
         source,
@@ -382,7 +383,7 @@ where
     copy_rooted_blocks_with_mode_and_limits_and_checkpoint::<
         S,
         D,
-        fn(&mut D) -> Result<(), BlockStoreError>,
+        fn() -> Result<(), BlockStoreError>,
     >(
         source,
         destination,
@@ -409,7 +410,7 @@ async fn copy_rooted_blocks_with_mode_and_limits_and_checkpoint<S, D, F>(
 where
     S: BlockStore + Sync,
     D: BlockStore + Sync,
-    F: FnMut(&mut D) -> Result<(), BlockStoreError> + Send,
+    F: FnMut() -> Result<(), BlockStoreError> + Send,
 {
     if execution_config.worker_thread_count <= 1 {
         return copy_rooted_blocks_single_worker_with_mode_and_limits_and_checkpoint(
@@ -440,7 +441,7 @@ async fn copy_rooted_blocks_single_worker_with_mode_and_limits_and_checkpoint<S,
 where
     S: BlockStore + Sync,
     D: BlockStore + Sync,
-    F: FnMut(&mut D) -> Result<(), BlockStoreError> + Send,
+    F: FnMut() -> Result<(), BlockStoreError> + Send,
 {
     let requested_root_ids = root_ids.iter().map(ToString::to_string).collect::<Vec<_>>();
     let mut queue = root_ids
@@ -547,7 +548,7 @@ where
                     )
                     .await;
                     if let Some(checkpoint) = blind_write_checkpoint.as_mut()
-                        && let Err(error) = (checkpoint.action)(destination)
+                        && let Err(error) = (checkpoint.action)()
                     {
                         failures.record_store_failure(
                             root_ids,
@@ -599,7 +600,7 @@ fn copy_rooted_blocks_multi_worker_with_mode_and_limits_and_checkpoint<S, D, F>(
 where
     S: BlockStore + Sync,
     D: BlockStore + Sync,
-    F: FnMut(&mut D) -> Result<(), BlockStoreError> + Send,
+    F: FnMut() -> Result<(), BlockStoreError> + Send,
 {
     let requested_root_ids = root_ids.iter().map(ToString::to_string).collect::<Vec<_>>();
     let CopyExecutionConfig {
@@ -610,39 +611,92 @@ where
         blind_write_checkpoint,
     } = execution_config;
     let work_queue = ThreadedWorkQueue::new(root_ids);
-    let visited = Mutex::new(HashSet::new());
-    let metrics = Mutex::new(CopyMetrics::new(progress.clone()));
-    let failures = Mutex::new(CopyFailureTracker::new(progress.clone()));
-    let stop_requested = AtomicBool::new(false);
-    let write_coordinator = ThreadedWriteCoordinator::new(
+    let write_queue = ThreadedWriteQueue::new(
         max_in_flight_destination_writes.max(1),
         max_in_flight_destination_write_bytes,
         blind_write_checkpoint
             .as_ref()
             .map(|checkpoint| checkpoint.interval),
     );
+    let visited = Mutex::new(HashSet::new());
+    let metrics = Mutex::new(CopyMetrics::new(progress.clone()));
+    let failures = Mutex::new(CopyFailureTracker::new(progress.clone()));
+    let stop_requested = AtomicBool::new(false);
     let checkpoint = Mutex::new(blind_write_checkpoint);
-    let destination_ptr = ThreadedDestinationPtr(destination as *mut D);
     let destination_ref: &D = destination;
-    let worker_context = ThreadedCopyWorkerContext {
+    let traversal_context = ThreadedTraversalWorkerContext {
         source,
         destination: destination_ref,
-        destination_ptr,
-        root_ids,
         destination_mode,
         work_queue: &work_queue,
+        write_queue: &write_queue,
         visited: &visited,
         metrics: &metrics,
         failures: &failures,
-        write_coordinator: &write_coordinator,
-        checkpoint: &checkpoint,
         progress: progress.as_ref(),
+        stop_requested: &stop_requested,
+    };
+    let writer_context = ThreadedWriteWorkerContext {
+        destination: destination_ref,
+        root_ids,
+        write_queue: &write_queue,
+        metrics: &metrics,
+        failures: &failures,
+        checkpoint: &checkpoint,
         stop_requested: &stop_requested,
     };
 
     std::thread::scope(|scope| {
+        let mut traversal_handles = Vec::new();
         for _ in 0..worker_thread_count.max(1) {
-            scope.spawn(|| run_threaded_copy_worker(&worker_context));
+            traversal_handles.push(scope.spawn(|| {
+                if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| {
+                    run_threaded_copy_worker(&traversal_context)
+                })) {
+                    stop_requested.store(true, Ordering::SeqCst);
+                    work_queue.request_shutdown();
+                    write_queue.request_shutdown();
+                    panic::resume_unwind(payload);
+                }
+            }));
+        }
+        let mut writer_handles = Vec::new();
+        for _ in 0..write_queue.writer_thread_count() {
+            writer_handles.push(scope.spawn(|| {
+                if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| {
+                    run_threaded_write_worker(&writer_context)
+                })) {
+                    stop_requested.store(true, Ordering::SeqCst);
+                    work_queue.request_shutdown();
+                    write_queue.request_shutdown();
+                    panic::resume_unwind(payload);
+                }
+            }));
+        }
+
+        let mut panic_payload = None;
+        for handle in traversal_handles {
+            if let Err(payload) = handle.join() {
+                stop_requested.store(true, Ordering::SeqCst);
+                work_queue.request_shutdown();
+                write_queue.request_shutdown();
+                if panic_payload.is_none() {
+                    panic_payload = Some(payload);
+                }
+            }
+        }
+        write_queue.finish_producing(stop_requested.load(Ordering::SeqCst));
+        for handle in writer_handles {
+            if let Err(payload) = handle.join() {
+                stop_requested.store(true, Ordering::SeqCst);
+                write_queue.request_shutdown();
+                if panic_payload.is_none() {
+                    panic_payload = Some(payload);
+                }
+            }
+        }
+        if let Some(payload) = panic_payload {
+            panic::resume_unwind(payload);
         }
     });
 
@@ -669,13 +723,17 @@ where
     }
 }
 
-fn run_threaded_copy_worker<S, D, F>(worker: &ThreadedCopyWorkerContext<'_, S, D, F>)
+fn run_threaded_copy_worker<S, D>(worker: &ThreadedTraversalWorkerContext<'_, S, D>)
 where
     S: BlockStore + Sync,
     D: BlockStore + Sync,
-    F: FnMut(&mut D) -> Result<(), BlockStoreError> + Send,
 {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime for threaded copy worker");
     while let Some((request_root_id, block_id)) = worker.work_queue.pop(worker.stop_requested) {
+        let _work_item = ThreadedWorkItemGuard::new(worker.work_queue, worker.stop_requested);
         {
             let mut failures = worker
                 .failures
@@ -692,14 +750,16 @@ where
             visited.insert(block_id)
         };
         if !first_visit {
-            worker.work_queue.finish_item(worker.stop_requested);
             continue;
         }
 
-        let Some(block_bytes) =
-            read_source_block_threaded(worker.source, block_id, worker.failures, worker.progress)
-        else {
-            worker.work_queue.finish_item(worker.stop_requested);
+        let Some(block_bytes) = read_source_block_threaded(
+            &runtime,
+            worker.source,
+            block_id,
+            worker.failures,
+            worker.progress,
+        ) else {
             continue;
         };
 
@@ -722,10 +782,13 @@ where
         match worker.destination_mode {
             CopyDestinationMode::ReadBeforeWrite => {
                 if worker.stop_requested.load(Ordering::SeqCst) {
-                    worker.work_queue.finish_item(worker.stop_requested);
                     continue;
                 }
-                match block_store_get_block_bytes(worker.destination, &block_id) {
+                match block_store_get_block_bytes_in_runtime(
+                    &runtime,
+                    worker.destination,
+                    &block_id,
+                ) {
                     Ok(Some(_)) => {
                         worker
                             .metrics
@@ -734,38 +797,15 @@ where
                             .note_skipped_already_present_block();
                     }
                     Ok(None) => {
-                        let reservation = worker.write_coordinator.reserve_write(
-                            block_bytes.len(),
+                        let _ = worker.write_queue.enqueue(
+                            ThreadedWriteJob {
+                                block_id,
+                                block_bytes,
+                                count_as_copied: true,
+                            },
                             worker.destination_mode,
                             worker.stop_requested,
                         );
-                        if let Some(reservation) = reservation {
-                            let result = block_store_put_block_bytes(
-                                worker.destination,
-                                &block_id,
-                                &block_bytes,
-                            );
-                            let should_checkpoint = worker
-                                .write_coordinator
-                                .complete_write(reservation.block_bytes_len);
-                            record_threaded_write_result(
-                                block_id,
-                                true,
-                                result,
-                                worker.metrics,
-                                worker.failures,
-                            );
-                            if should_checkpoint {
-                                run_threaded_checkpoint_if_needed(
-                                    worker.destination_ptr,
-                                    worker.root_ids,
-                                    worker.failures,
-                                    worker.write_coordinator,
-                                    worker.checkpoint,
-                                    worker.stop_requested,
-                                );
-                            }
-                        }
                     }
                     Err(error) => {
                         worker
@@ -781,8 +821,12 @@ where
                 }
             }
             CopyDestinationMode::BlindWrite => {
-                if let Some(reservation) = worker.write_coordinator.reserve_write(
-                    block_bytes.len(),
+                if worker.write_queue.enqueue(
+                    ThreadedWriteJob {
+                        block_id,
+                        block_bytes,
+                        count_as_copied: false,
+                    },
                     worker.destination_mode,
                     worker.stop_requested,
                 ) {
@@ -791,37 +835,14 @@ where
                         .lock()
                         .expect("threaded copy metrics mutex poisoned")
                         .note_attempted_write_block();
-                    let result =
-                        block_store_put_block_bytes(worker.destination, &block_id, &block_bytes);
-                    let should_checkpoint = worker
-                        .write_coordinator
-                        .complete_write(reservation.block_bytes_len);
-                    record_threaded_write_result(
-                        block_id,
-                        false,
-                        result,
-                        worker.metrics,
-                        worker.failures,
-                    );
-                    if should_checkpoint {
-                        run_threaded_checkpoint_if_needed(
-                            worker.destination_ptr,
-                            worker.root_ids,
-                            worker.failures,
-                            worker.write_coordinator,
-                            worker.checkpoint,
-                            worker.stop_requested,
-                        );
-                    }
                 }
             }
         }
-
-        worker.work_queue.finish_item(worker.stop_requested);
     }
 }
 
 fn read_source_block_threaded<S>(
+    runtime: &tokio::runtime::Runtime,
     source: &S,
     block_id: BlockHash,
     failures: &Mutex<CopyFailureTracker>,
@@ -833,7 +854,7 @@ where
     if let Some(progress) = progress {
         progress.note_read_source_block();
     }
-    match block_store_get_block_bytes(source, &block_id) {
+    match block_store_get_block_bytes_in_runtime(runtime, source, &block_id) {
         Ok(Some(bytes)) => Some(bytes),
         Ok(None) => {
             failures
@@ -860,17 +881,19 @@ where
     }
 }
 
-fn block_store_get_block_bytes<S>(
+fn block_store_get_block_bytes_in_runtime<S>(
+    runtime: &tokio::runtime::Runtime,
     store: &S,
     block_id: &BlockHash,
 ) -> Result<Option<Vec<u8>>, BlockStoreError>
 where
     S: BlockStore + Sync,
 {
-    crate::block_store::block_on_block_store_future(store.get_block_bytes(block_id))
+    runtime.block_on(store.get_block_bytes(block_id))
 }
 
-fn block_store_put_block_bytes<D>(
+fn block_store_put_block_bytes_in_runtime<D>(
+    runtime: &tokio::runtime::Runtime,
     store: &D,
     block_id: &BlockHash,
     block_bytes: &[u8],
@@ -878,7 +901,50 @@ fn block_store_put_block_bytes<D>(
 where
     D: BlockStore + Sync,
 {
-    crate::block_store::block_on_block_store_future(store.put_block_bytes(block_id, block_bytes))
+    runtime.block_on(store.put_block_bytes(block_id, block_bytes))
+}
+
+fn run_threaded_write_worker<D, F>(worker: &ThreadedWriteWorkerContext<'_, D, F>)
+where
+    D: BlockStore + Sync,
+    F: FnMut() -> Result<(), BlockStoreError> + Send,
+{
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime for threaded write worker");
+    loop {
+        match worker.write_queue.next_action(worker.stop_requested) {
+            ThreadedWriteWorkerAction::Write(write_job) => {
+                let _active_write = ThreadedActiveWriteGuard::new(
+                    worker.write_queue,
+                    write_job.block_bytes.len(),
+                    worker.stop_requested,
+                );
+                let result = block_store_put_block_bytes_in_runtime(
+                    &runtime,
+                    worker.destination,
+                    &write_job.block_id,
+                    &write_job.block_bytes,
+                );
+                record_threaded_write_result(
+                    write_job.block_id,
+                    write_job.count_as_copied,
+                    result,
+                    worker.metrics,
+                    worker.failures,
+                );
+            }
+            ThreadedWriteWorkerAction::RunCheckpoint => run_threaded_checkpoint_if_needed(
+                worker.root_ids,
+                worker.failures,
+                worker.write_queue,
+                worker.checkpoint,
+                worker.stop_requested,
+            ),
+            ThreadedWriteWorkerAction::Shutdown => return,
+        }
+    }
 }
 
 fn record_threaded_write_result(
@@ -910,16 +976,14 @@ fn record_threaded_write_result(
     }
 }
 
-fn run_threaded_checkpoint_if_needed<D, F>(
-    destination_ptr: ThreadedDestinationPtr<D>,
+fn run_threaded_checkpoint_if_needed<F>(
     root_ids: &[BlockHash],
     failures: &Mutex<CopyFailureTracker>,
-    write_coordinator: &ThreadedWriteCoordinator,
+    write_queue: &ThreadedWriteQueue,
     checkpoint: &Mutex<Option<BlindWriteCheckpoint<F>>>,
     stop_requested: &AtomicBool,
 ) where
-    D: BlockStore + Sync,
-    F: FnMut(&mut D) -> Result<(), BlockStoreError> + Send,
+    F: FnMut() -> Result<(), BlockStoreError> + Send,
 {
     let result = {
         let mut checkpoint = checkpoint
@@ -928,13 +992,10 @@ fn run_threaded_checkpoint_if_needed<D, F>(
         let checkpoint = checkpoint
             .as_mut()
             .expect("threaded checkpoint must exist when checkpoint coordination is enabled");
-        // SAFETY: the write coordinator calls this only after blocking new writes and
-        // observing that no destination writes remain active, so this is the sole
-        // destination access point while checkpoint compaction is running.
-        unsafe { (checkpoint.action)(&mut *destination_ptr.0) }
+        (checkpoint.action)()
     };
     match result {
-        Ok(()) => write_coordinator.finish_checkpoint(),
+        Ok(()) => write_queue.finish_checkpoint(),
         Err(error) => {
             failures
                 .lock()
@@ -945,7 +1006,7 @@ fn run_threaded_checkpoint_if_needed<D, F>(
                     error.to_string(),
                 );
             stop_requested.store(true, Ordering::SeqCst);
-            write_coordinator.fail_checkpoint();
+            write_queue.fail_checkpoint();
         }
     }
 }
@@ -961,7 +1022,7 @@ struct ThreadedWorkQueueState {
     shutdown: bool,
 }
 
-struct ThreadedWriteCoordinator {
+struct ThreadedWriteQueue {
     state: Mutex<ThreadedWriteState>,
     ready: Condvar,
     max_in_flight_destination_writes: usize,
@@ -970,45 +1031,105 @@ struct ThreadedWriteCoordinator {
 }
 
 struct ThreadedWriteState {
+    queue: VecDeque<ThreadedWriteJob>,
+    queued_write_bytes: usize,
     active_writes: usize,
     active_write_bytes: usize,
     attempted_write_count: usize,
+    producers_finished: bool,
+    shutdown: bool,
     checkpoint_pending: bool,
     checkpoint_running: bool,
 }
 
-struct ThreadedWriteReservation {
-    block_bytes_len: usize,
+struct ThreadedWriteJob {
+    block_id: BlockHash,
+    block_bytes: Vec<u8>,
+    count_as_copied: bool,
 }
 
-struct ThreadedDestinationPtr<D>(*mut D);
+enum ThreadedWriteWorkerAction {
+    Write(ThreadedWriteJob),
+    RunCheckpoint,
+    Shutdown,
+}
 
-struct ThreadedCopyWorkerContext<'a, S, D, F> {
+struct ThreadedTraversalWorkerContext<'a, S, D> {
     source: &'a S,
     destination: &'a D,
-    destination_ptr: ThreadedDestinationPtr<D>,
-    root_ids: &'a [BlockHash],
     destination_mode: CopyDestinationMode,
     work_queue: &'a ThreadedWorkQueue,
+    write_queue: &'a ThreadedWriteQueue,
     visited: &'a Mutex<HashSet<BlockHash>>,
     metrics: &'a Mutex<CopyMetrics>,
     failures: &'a Mutex<CopyFailureTracker>,
-    write_coordinator: &'a ThreadedWriteCoordinator,
-    checkpoint: &'a Mutex<Option<BlindWriteCheckpoint<F>>>,
     progress: Option<&'a RootedBlockCopyProgress>,
     stop_requested: &'a AtomicBool,
 }
 
-impl<D> Clone for ThreadedDestinationPtr<D> {
-    fn clone(&self) -> Self {
-        *self
+struct ThreadedWriteWorkerContext<'a, D, F> {
+    destination: &'a D,
+    root_ids: &'a [BlockHash],
+    write_queue: &'a ThreadedWriteQueue,
+    metrics: &'a Mutex<CopyMetrics>,
+    failures: &'a Mutex<CopyFailureTracker>,
+    checkpoint: &'a Mutex<Option<BlindWriteCheckpoint<F>>>,
+    stop_requested: &'a AtomicBool,
+}
+
+struct ThreadedWorkItemGuard<'a> {
+    work_queue: &'a ThreadedWorkQueue,
+    stop_requested: &'a AtomicBool,
+}
+
+impl<'a> ThreadedWorkItemGuard<'a> {
+    fn new(work_queue: &'a ThreadedWorkQueue, stop_requested: &'a AtomicBool) -> Self {
+        Self {
+            work_queue,
+            stop_requested,
+        }
     }
 }
 
-impl<D> Copy for ThreadedDestinationPtr<D> {}
+impl Drop for ThreadedWorkItemGuard<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.stop_requested.store(true, Ordering::SeqCst);
+            self.work_queue.request_shutdown();
+        }
+        self.work_queue.finish_item(self.stop_requested);
+    }
+}
 
-unsafe impl<D> Send for ThreadedDestinationPtr<D> {}
-unsafe impl<D> Sync for ThreadedDestinationPtr<D> {}
+struct ThreadedActiveWriteGuard<'a> {
+    write_queue: &'a ThreadedWriteQueue,
+    block_bytes_len: usize,
+    stop_requested: &'a AtomicBool,
+}
+
+impl<'a> ThreadedActiveWriteGuard<'a> {
+    fn new(
+        write_queue: &'a ThreadedWriteQueue,
+        block_bytes_len: usize,
+        stop_requested: &'a AtomicBool,
+    ) -> Self {
+        Self {
+            write_queue,
+            block_bytes_len,
+            stop_requested,
+        }
+    }
+}
+
+impl Drop for ThreadedActiveWriteGuard<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.stop_requested.store(true, Ordering::SeqCst);
+            self.write_queue.request_shutdown();
+        }
+        self.write_queue.complete_write(self.block_bytes_len);
+    }
+}
 
 impl ThreadedWorkQueue {
     fn new(root_ids: &[BlockHash]) -> Self {
@@ -1086,9 +1207,18 @@ impl ThreadedWorkQueue {
         }
         self.ready.notify_all();
     }
+
+    fn request_shutdown(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("threaded copy work queue mutex poisoned");
+        state.shutdown = true;
+        self.ready.notify_all();
+    }
 }
 
-impl ThreadedWriteCoordinator {
+impl ThreadedWriteQueue {
     fn new(
         max_in_flight_destination_writes: usize,
         max_in_flight_destination_write_bytes: usize,
@@ -1096,9 +1226,13 @@ impl ThreadedWriteCoordinator {
     ) -> Self {
         Self {
             state: Mutex::new(ThreadedWriteState {
+                queue: VecDeque::new(),
+                queued_write_bytes: 0,
                 active_writes: 0,
                 active_write_bytes: 0,
                 attempted_write_count: 0,
+                producers_finished: false,
+                shutdown: false,
                 checkpoint_pending: false,
                 checkpoint_running: false,
             }),
@@ -1109,24 +1243,33 @@ impl ThreadedWriteCoordinator {
         }
     }
 
-    fn reserve_write(
+    fn writer_thread_count(&self) -> usize {
+        self.max_in_flight_destination_writes
+    }
+
+    fn enqueue(
         &self,
-        block_bytes_len: usize,
+        write_job: ThreadedWriteJob,
         destination_mode: CopyDestinationMode,
         stop_requested: &AtomicBool,
-    ) -> Option<ThreadedWriteReservation> {
+    ) -> bool {
+        let block_bytes_len = write_job.block_bytes.len();
         let mut state = self
             .state
             .lock()
-            .expect("threaded copy write coordinator mutex poisoned");
+            .expect("threaded copy write queue mutex poisoned");
         loop {
-            if stop_requested.load(Ordering::SeqCst) {
-                return None;
+            if state.shutdown || stop_requested.load(Ordering::SeqCst) {
+                return false;
             }
-            let write_limit_reached = state.active_writes >= self.max_in_flight_destination_writes;
-            let byte_limit_reached = !matches!(state.active_writes, 0)
+            let in_flight_writes = state.queue.len().saturating_add(state.active_writes);
+            let write_limit_reached = in_flight_writes >= self.max_in_flight_destination_writes;
+            let byte_limit_reached = in_flight_writes > 0
                 && self.max_in_flight_destination_write_bytes > 0
-                && state.active_write_bytes.saturating_add(block_bytes_len)
+                && state
+                    .queued_write_bytes
+                    .saturating_add(state.active_write_bytes)
+                    .saturating_add(block_bytes_len)
                     > self.max_in_flight_destination_write_bytes;
             if state.checkpoint_pending
                 || state.checkpoint_running
@@ -1139,8 +1282,7 @@ impl ThreadedWriteCoordinator {
                     .expect("threaded copy write coordinator mutex poisoned while waiting");
                 continue;
             }
-            state.active_writes += 1;
-            state.active_write_bytes += block_bytes_len;
+            state.queued_write_bytes += block_bytes_len;
             if matches!(destination_mode, CopyDestinationMode::BlindWrite)
                 && self
                     .checkpoint_interval
@@ -1154,38 +1296,101 @@ impl ThreadedWriteCoordinator {
                     state.checkpoint_pending = true;
                 }
             }
-            return Some(ThreadedWriteReservation { block_bytes_len });
+            state.queue.push_back(write_job);
+            self.ready.notify_all();
+            return true;
         }
     }
 
-    fn complete_write(&self, block_bytes_len: usize) -> bool {
+    fn next_action(&self, stop_requested: &AtomicBool) -> ThreadedWriteWorkerAction {
         let mut state = self
             .state
             .lock()
-            .expect("threaded copy write coordinator mutex poisoned");
+            .expect("threaded copy write queue mutex poisoned");
+        loop {
+            if let Some(write_job) = state.queue.pop_front() {
+                let block_bytes_len = write_job.block_bytes.len();
+                state.queued_write_bytes = state.queued_write_bytes.saturating_sub(block_bytes_len);
+                state.active_writes += 1;
+                state.active_write_bytes += block_bytes_len;
+                return ThreadedWriteWorkerAction::Write(write_job);
+            }
+            if state.checkpoint_pending && !state.checkpoint_running && state.active_writes == 0 {
+                state.checkpoint_pending = false;
+                state.checkpoint_running = true;
+                return ThreadedWriteWorkerAction::RunCheckpoint;
+            }
+            if (state.producers_finished || state.shutdown || stop_requested.load(Ordering::SeqCst))
+                && state.active_writes == 0
+                && !state.checkpoint_running
+            {
+                state.shutdown = true;
+                self.ready.notify_all();
+                return ThreadedWriteWorkerAction::Shutdown;
+            }
+            state = self
+                .ready
+                .wait(state)
+                .expect("threaded copy write queue mutex poisoned while waiting");
+        }
+    }
+
+    fn complete_write(&self, block_bytes_len: usize) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("threaded copy write queue mutex poisoned");
         state.active_writes = state.active_writes.saturating_sub(1);
         state.active_write_bytes = state.active_write_bytes.saturating_sub(block_bytes_len);
-        let should_run_checkpoint =
-            state.checkpoint_pending && !state.checkpoint_running && state.active_writes == 0;
-        if should_run_checkpoint {
-            state.checkpoint_running = true;
-        }
         self.ready.notify_all();
-        should_run_checkpoint
     }
 
     fn finish_checkpoint(&self) {
         let mut state = self
             .state
             .lock()
-            .expect("threaded copy write coordinator mutex poisoned");
-        state.checkpoint_pending = false;
+            .expect("threaded copy write queue mutex poisoned");
         state.checkpoint_running = false;
         self.ready.notify_all();
     }
 
     fn fail_checkpoint(&self) {
-        self.finish_checkpoint();
+        let mut state = self
+            .state
+            .lock()
+            .expect("threaded copy write queue mutex poisoned");
+        state.checkpoint_running = false;
+        state.shutdown = true;
+        state.producers_finished = true;
+        state.queue.clear();
+        state.queued_write_bytes = 0;
+        self.ready.notify_all();
+    }
+
+    fn finish_producing(&self, stop_requested: bool) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("threaded copy write queue mutex poisoned");
+        state.producers_finished = true;
+        if stop_requested {
+            state.shutdown = true;
+            state.queue.clear();
+            state.queued_write_bytes = 0;
+        }
+        self.ready.notify_all();
+    }
+
+    fn request_shutdown(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("threaded copy write queue mutex poisoned");
+        state.shutdown = true;
+        state.producers_finished = true;
+        state.queue.clear();
+        state.queued_write_bytes = 0;
+        self.ready.notify_all();
     }
 }
 
@@ -2334,6 +2539,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rooted_block_copy_multi_worker_blind_write_tolerates_preexisting_destination_blocks() {
+        let source = MemoryBlockStore::new(16).unwrap();
+        let destination_inner = Arc::new(MemoryBlockStore::new(16).unwrap());
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let root = source.put(&branch_block(&[alpha, beta])).await.unwrap();
+        let existing_alpha_bytes = source.get_block_bytes(&alpha).await.unwrap().unwrap();
+        destination_inner
+            .put_block_bytes(&alpha, &existing_alpha_bytes)
+            .await
+            .unwrap();
+        let destination = RejectingReadStore {
+            inner: Arc::clone(&destination_inner),
+        };
+
+        let mut destination = destination;
+        let report = copy_rooted_blocks_with_mode_and_limit_and_progress(
+            &source,
+            &mut destination,
+            &[root],
+            CopyDestinationMode::BlindWrite,
+            DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            2,
+            None,
+        )
+        .await;
+
+        assert_eq!(report.destination_mode, CopyDestinationMode::BlindWrite);
+        assert_eq!(report.attempted_write_block_count, Some(3));
+        assert_eq!(report.failed_block_count, 0);
+        assert!(report.failures.is_empty());
+        assert!(
+            destination_inner
+                .get_block_bytes(&root)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            destination_inner
+                .get_block_bytes(&beta)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
     async fn rooted_block_copy_blind_write_runs_checkpoint_action_at_interval() {
         let source = MemoryBlockStore::new(16).unwrap();
         let mut destination = MemoryBlockStore::new(16).unwrap();
@@ -2353,7 +2606,40 @@ mod tests {
             None,
             BlindWriteCheckpoint {
                 interval: 2,
-                action: move |_destination: &mut MemoryBlockStore| {
+                action: move || {
+                    checkpoint_count_for_action.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            },
+        )
+        .await;
+
+        assert_eq!(report.attempted_write_block_count, Some(3));
+        assert_eq!(report.failed_block_count, 0);
+        assert_eq!(checkpoint_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn rooted_block_copy_multi_worker_blind_write_runs_checkpoint_action_at_interval() {
+        let source = MemoryBlockStore::new(16).unwrap();
+        let mut destination = MemoryBlockStore::new(16).unwrap();
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let root = source.put(&branch_block(&[alpha, beta])).await.unwrap();
+        let checkpoint_count = Arc::new(AtomicUsize::new(0));
+        let checkpoint_count_for_action = Arc::clone(&checkpoint_count);
+
+        let report = copy_rooted_blocks_with_mode_and_limit_and_checkpoint(
+            &source,
+            &mut destination,
+            &[root],
+            CopyDestinationMode::BlindWrite,
+            DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES,
+            2,
+            None,
+            BlindWriteCheckpoint {
+                interval: 2,
+                action: move || {
                     checkpoint_count_for_action.fetch_add(1, Ordering::SeqCst);
                     Ok(())
                 },
@@ -2384,7 +2670,7 @@ mod tests {
             None,
             BlindWriteCheckpoint {
                 interval: 2,
-                action: |_destination: &mut MemoryBlockStore| {
+                action: || {
                     Err(BlockStoreError::BackendFailure(
                         TestStoreError("simulated checkpoint compaction failure").to_string(),
                     ))
@@ -2426,7 +2712,7 @@ mod tests {
             None,
             BlindWriteCheckpoint {
                 interval: 1,
-                action: |_destination: &mut MemoryBlockStore| {
+                action: || {
                     Err(BlockStoreError::BackendFailure(
                         TestStoreError("simulated checkpoint compaction failure").to_string(),
                     ))

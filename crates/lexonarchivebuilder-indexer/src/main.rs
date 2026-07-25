@@ -709,6 +709,7 @@ async fn main() -> anyhow::Result<()> {
             let report = if blind_write
                 && matches!(&destination_store, ConfiguredBlockStore::LocalRedb(_))
             {
+                let mut checkpoint_store = destination_store.clone();
                 await_with_copy_liveness(
                     copy_rooted_blocks_with_mode_and_limit_and_checkpoint(
                         &source_store,
@@ -720,9 +721,7 @@ async fn main() -> anyhow::Result<()> {
                         Some(progress.clone()),
                         BlindWriteCheckpoint {
                             interval: BLIND_WRITE_REDB_COMPACTION_INTERVAL_BLOCKS,
-                            action: |destination: &mut ConfiguredBlockStore| {
-                                destination.compact_now()
-                            },
+                            action: move || checkpoint_store.compact_now(),
                         },
                     ),
                     COPY_LIVENESS_HEARTBEAT_INTERVAL,
