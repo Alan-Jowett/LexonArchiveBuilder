@@ -1909,6 +1909,7 @@ where
     completions
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn wait_for_write_capacity(
     pending_writes: &mut FuturesUnordered<PendingDestinationWrite<'_>>,
     effective_write_limit: usize,
