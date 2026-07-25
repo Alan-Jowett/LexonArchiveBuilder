@@ -23,7 +23,8 @@ rapid profile validation, upstream wgpu-acceleration revision
 compatibility, 0.6.x published-profile evaluation, local testing sweep
 automation, v0.7.0 fixed-budget ladder experiment automation, rooted
 block-store copy tooling with live default heartbeat counters plus additive
-worker-threaded traversal, CLI-only
+worker-threaded traversal and capability-based batched destination
+publication, CLI-only
 local-redb maintenance compaction, upstream embedding-readback API adoption, LAB-owned
 replay-journaled split-stage recovery, bounded-residency deterministic replay
 ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, replay batch-size decoupling from CPU concurrency, bounded multi-batch replay-prefetch buffering, and layer-parallel
@@ -51,7 +52,8 @@ latest published-profile and telemetry compatibility, temporary upstream
 wgpu-acceleration revision compatibility, upstream regression assessment,
 0.6.x published-profile evaluation, local testing sweep automation,
 v0.7.0 fixed-budget ladder experiment automation, rooted block-store copy
-tooling with additive worker-threaded traversal, upstream embedding-readback
+tooling with additive worker-threaded traversal and capability-based batched
+destination publication, upstream embedding-readback
 API adoption, embedding-phase
 batch-progress observability,
 replay-submission observability, streaming-status observability,
@@ -846,12 +848,13 @@ contracts.
 ### DSG-LFI-001I3 `Latest upstream-main refresh plus redb backend adoption`
 
 When LexonArchiveBuilder refreshes the approved LexonGraph dependency target
-from the repository's current dependency pin
-`01c9908256278d7d075e0abc856ef7bd3679fe6c` to merged LexonGraph `main` commit
-`385c07fff4adbe5574b9ae605eaae0679647b9dd`, the repository may adopt new
-upstream block-store implementations, including redb and its concrete
-`compact_now` maintenance capability, but must preserve the existing
-repository-owned storage-profile meanings and mutable-ref contract.
+from merged LexonGraph `main` commit
+`385c07fff4adbe5574b9ae605eaae0679647b9dd` to a newer merged LexonGraph
+`main` revision, the repository may adopt new upstream block-store
+implementations and publication capabilities, including redb, its concrete
+`compact_now` maintenance capability, and upstream batched block-write support
+for rooted-copy destinations, but must preserve the existing repository-owned
+storage-profile meanings and mutable-ref contract.
 
 In this increment:
 
@@ -1778,12 +1781,13 @@ it, append any newly discovered child block identities to the back of the
 shared queue, and then submit the block to the already-approved destination-
 side copy mode.
 
-That worker-threaded traversal is additive to the existing asynchronous
-destination-write pipeline rather than a replacement for it. Traversal workers
-decide what block identities become eligible for destination handling, while
-the separate bounded destination-write limit continues to govern how many
-destination writes may remain in flight after a block has already reached the
-publication path.
+That worker-threaded traversal is additive to the destination-side publication
+path rather than a replacement for it. Traversal workers decide what block
+identities become eligible for destination handling, while the separate bounded
+destination-write limit continues to govern destination publication overlap or
+backpressure after a block has already reached the publication path, regardless
+of whether the selected destination ultimately drains that work as single-block
+writes or bounded upstream batches.
 
 Because rooted graphs may converge on the same immutable child through multiple
 parents, the shared traversal design must preserve at-most-once logical
@@ -2188,21 +2192,35 @@ traversal worker count while keeping conservative write overlap, or tune both
 surfaces together without changing the CLI-only rooted-copy boundary.
 
 When rooted traversal determines that destination publication is required, the
-same CLI surface may keep multiple destination writes in flight
-asynchronously instead of waiting for each destination write to complete before
-issuing the next one. That write pipeline remains bounded by one operator-
-selectable CLI concurrency limit, with first approved default `64`, so the
-design improves high-latency backend throughput without redefining the shared
-`BlockStore` contract or inventing a backend-specific transfer path.
+same CLI surface hands the already-classified block to a destination-side
+publication path that may keep multiple publication units in flight
+asynchronously and, for destinations whose refreshed upstream block-store path
+exposes batched writes, may coalesce eligible blocks into bounded upstream
+batches instead of issuing only one-block writes. That publication path remains
+bounded by one operator-selectable CLI concurrency limit, with first approved
+default `64`, so the design improves high-latency backend throughput and may
+exploit delegated batching without redefining the shared `BlockStore` contract
+or inventing a backend-specific transfer path.
 
-The bounded write pipeline applies to both rooted-copy modes. In the default
-read-before-write mode, a block becomes eligible for the asynchronous write
-queue only after the destination has already been classified as missing. In the
-opt-in blind-write mode, the same bounded queue accepts the direct write
-attempts without any preceding destination existence read. Because write
-completions may arrive out of traversal order, the design constrains reporting
-to remain mode-truthful and rooted-reachability-preserving rather than tying
-summary semantics to serialized write completion order.
+The bounded publication path applies to both rooted-copy modes. In the default
+read-before-write mode, a block becomes eligible for destination publication
+only after the destination has already been classified as missing. In the
+opt-in blind-write mode, the same bounded handoff accepts the direct
+publication attempts without any preceding destination existence read.
+Destinations that still lack batched support after the refresh continue to use
+the existing non-batched publication path, while capable destinations may drain
+the same handoff as single-block writes or as bounded multi-block batches.
+Because per-block results may surface through single-write completion or
+batched completion out of traversal order, the design constrains reporting to
+remain mode-truthful and rooted-reachability-preserving rather than tying
+summary semantics to serialized publication completion order.
+
+Any destination-specific staging, batching, queueing, or bounded backpressure
+needed to realize that capability remains encapsulated behind the destination-
+side publication wrapper. The generic rooted-copy traversal logic still submits
+eligible blocks through one backend-neutral handoff and does not gain redb-
+specific command types, queue semantics, or separate CLI controls merely to
+enable batching.
 
 When that opt-in blind-write path targets a direct `local-redb` destination,
 the same rooted-copy invocation also performs periodic space-recovery
@@ -2427,12 +2445,13 @@ LexonArchiveBuilder-owned verification artifacts validate:
   read-before-write classification path, the opt-in blind-write path with
   reduced copied-versus-skipped accounting, one operator-selectable rooted-
   traversal worker-thread limit defaulting to `1`, bounded asynchronous
-  destination-write concurrency with a separate operator-selectable limit
-  defaulting to `64`, blind-write checkpoint compaction every `500,000`
-  attempted writes when the destination is direct local redb, failure
-  reporting, default in-flight liveness on the normal CLI surface, at-most-once
-  logical handling for duplicate child discovery, and preservation of mutable-
-  reference exclusion
+  destination publication concurrency with a separate operator-selectable limit
+  defaulting to `64`, capability-based upstream batched destination
+  publication with non-batched fallback for unsupported approved profiles,
+  blind-write checkpoint compaction every `500,000` attempted writes when the
+  destination is direct local redb, failure reporting, default in-flight
+  liveness on the normal CLI surface, at-most-once logical handling for
+  duplicate child discovery, and preservation of mutable-reference exclusion
 - correct application and defaulting of the administrator-defined concurrency
   budget
 - preservation of stable batch contracts across environments
