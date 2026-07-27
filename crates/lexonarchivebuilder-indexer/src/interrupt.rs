@@ -4,15 +4,17 @@
 #[cfg(test)]
 use std::cell::Cell;
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use thiserror::Error;
 
 const INTERRUPT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const FORCED_INTERRUPT_EXIT_CODE: i32 = 130;
 
 static INTERRUPT_REQUESTED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+static INTERRUPT_SIGNAL_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 thread_local! {
     static TEST_INTERRUPT_REQUESTED: Cell<bool> = const { Cell::new(false) };
@@ -28,12 +30,17 @@ pub fn arm_ctrl_c_handler() -> Result<(), ctrlc::Error> {
     } else {
         let interrupt_requested = Arc::new(AtomicBool::new(false));
         let handler_flag = Arc::clone(&interrupt_requested);
-        ctrlc::set_handler(move || {
-            handler_flag.store(true, Ordering::SeqCst);
+        ctrlc::set_handler(move || match next_interrupt_action(handler_flag.as_ref()) {
+            InterruptAction::RequestGracefulShutdown => {}
+            InterruptAction::ForceExit => {
+                eprintln!("Second Ctrl-C received; forcing immediate exit.");
+                std::process::exit(FORCED_INTERRUPT_EXIT_CODE);
+            }
         })?;
         let _ = INTERRUPT_REQUESTED.set(Arc::clone(&interrupt_requested));
         interrupt_requested
     };
+    INTERRUPT_SIGNAL_COUNT.store(0, Ordering::SeqCst);
     interrupt_requested.store(false, Ordering::SeqCst);
     Ok(())
 }
@@ -87,4 +94,48 @@ where
 #[cfg(test)]
 pub fn set_interrupt_requested_for_tests(requested: bool) {
     TEST_INTERRUPT_REQUESTED.with(|interrupt_requested| interrupt_requested.set(requested));
+}
+
+enum InterruptAction {
+    RequestGracefulShutdown,
+    ForceExit,
+}
+
+fn next_interrupt_action(interrupt_requested: &AtomicBool) -> InterruptAction {
+    if INTERRUPT_SIGNAL_COUNT.fetch_add(1, Ordering::SeqCst) == 0 {
+        interrupt_requested.store(true, Ordering::SeqCst);
+        InterruptAction::RequestGracefulShutdown
+    } else {
+        InterruptAction::ForceExit
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_interrupt_requests_graceful_shutdown() {
+        let interrupt_requested = AtomicBool::new(false);
+        INTERRUPT_SIGNAL_COUNT.store(0, Ordering::SeqCst);
+
+        let action = next_interrupt_action(&interrupt_requested);
+
+        assert!(matches!(action, InterruptAction::RequestGracefulShutdown));
+        assert!(interrupt_requested.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn second_interrupt_forces_exit() {
+        let interrupt_requested = AtomicBool::new(false);
+        INTERRUPT_SIGNAL_COUNT.store(0, Ordering::SeqCst);
+
+        assert!(matches!(
+            next_interrupt_action(&interrupt_requested),
+            InterruptAction::RequestGracefulShutdown
+        ));
+        let action = next_interrupt_action(&interrupt_requested);
+
+        assert!(matches!(action, InterruptAction::ForceExit));
+    }
 }

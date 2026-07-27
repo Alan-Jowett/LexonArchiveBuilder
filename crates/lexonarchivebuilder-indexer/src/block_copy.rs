@@ -287,6 +287,14 @@ fn sync_interrupt_requested(stop_requested: &AtomicBool) -> bool {
     false
 }
 
+fn discard_buffered_destination_writes(
+    buffered_write_jobs: &mut Vec<ThreadedWriteJob>,
+    buffered_write_bytes: &mut usize,
+) {
+    buffered_write_jobs.clear();
+    *buffered_write_bytes = 0;
+}
+
 fn request_threaded_shutdown(
     stop_requested: &AtomicBool,
     work_queue: &ThreadedWorkQueue,
@@ -545,6 +553,10 @@ where
 
     while let Some((request_root_id, block_id)) = queue.pop_front() {
         if sync_interrupt_requested(&stop_requested) {
+            discard_buffered_destination_writes(
+                &mut buffered_write_jobs,
+                &mut buffered_write_bytes,
+            );
             break;
         }
         failures.note_block_root(request_root_id, block_id);
@@ -645,6 +657,10 @@ where
                     )
                     .await;
                     if sync_interrupt_requested(&stop_requested) {
+                        discard_buffered_destination_writes(
+                            &mut buffered_write_jobs,
+                            &mut buffered_write_bytes,
+                        );
                         break;
                     }
                     if let Some(checkpoint) = blind_write_checkpoint.as_mut()
@@ -2399,6 +2415,21 @@ mod tests {
 
     use super::*;
 
+    struct InterruptResetGuard;
+
+    impl InterruptResetGuard {
+        fn new() -> Self {
+            crate::interrupt::set_interrupt_requested_for_tests(false);
+            Self
+        }
+    }
+
+    impl Drop for InterruptResetGuard {
+        fn drop(&mut self) {
+            crate::interrupt::set_interrupt_requested_for_tests(false);
+        }
+    }
+
     #[tokio::test]
     async fn rooted_block_copy_copies_only_reachable_blocks_and_skips_existing() {
         let source = MemoryBlockStore::new(16).unwrap();
@@ -3186,6 +3217,34 @@ mod tests {
         assert_eq!(report.failed_block_count, 0);
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn rooted_block_copy_discards_buffered_writes_after_interrupt() {
+        let _interrupt_guard = InterruptResetGuard::new();
+        let source = MemoryBlockStore::new(16).unwrap();
+        let mut destination = InterruptOnReadMissStore::new(16);
+
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let root = source.put(&branch_block(&[alpha, beta])).await.unwrap();
+
+        let report = copy_rooted_blocks_with_mode_and_limit_and_progress(
+            &source,
+            &mut destination,
+            &[root],
+            CopyDestinationMode::ReadBeforeWrite,
+            2,
+            1,
+            None,
+        )
+        .await;
+
+        assert_eq!(report.copied_block_count, Some(0));
+        assert_eq!(report.failed_block_count, 0);
+        assert!(destination.get_block_bytes(&root).await.unwrap().is_none());
+        assert!(destination.get_block_bytes(&alpha).await.unwrap().is_none());
+        assert!(destination.get_block_bytes(&beta).await.unwrap().is_none());
+    }
+
     #[tokio::test]
     async fn rooted_block_copy_single_worker_honors_bounded_in_flight_destination_writes_when_batched()
      {
@@ -3609,6 +3668,11 @@ mod tests {
         inner: Arc<T>,
     }
 
+    struct InterruptOnReadMissStore {
+        inner: Arc<MemoryBlockStore>,
+        interrupt_triggered: AtomicBool,
+    }
+
     impl BlockingPutStore {
         fn new(capacity: usize, target_max_in_flight: usize) -> Self {
             Self {
@@ -3642,6 +3706,15 @@ mod tests {
 
         fn max_in_flight(&self) -> usize {
             self.max_in_flight.load(Ordering::SeqCst)
+        }
+    }
+
+    impl InterruptOnReadMissStore {
+        fn new(capacity: usize) -> Self {
+            Self {
+                inner: Arc::new(MemoryBlockStore::new(capacity).unwrap()),
+                interrupt_triggered: AtomicBool::new(false),
+            }
         }
     }
 
@@ -3893,6 +3966,32 @@ mod tests {
             block_id: &BlockHash,
         ) -> Result<Option<Vec<u8>>, BlockStoreError> {
             self.inner.get_block_bytes(block_id).await
+        }
+
+        fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+            self.inner.iter_block_ids()
+        }
+    }
+
+    #[async_trait]
+    impl BlockStore for InterruptOnReadMissStore {
+        async fn put_block_bytes(
+            &self,
+            block_id: &BlockHash,
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            self.inner.put_block_bytes(block_id, block_bytes).await
+        }
+
+        async fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            let result = self.inner.get_block_bytes(block_id).await?;
+            if result.is_none() && !self.interrupt_triggered.swap(true, Ordering::SeqCst) {
+                crate::interrupt::set_interrupt_requested_for_tests(true);
+            }
+            Ok(result)
         }
 
         fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {

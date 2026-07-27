@@ -3522,19 +3522,12 @@ async fn run_ingestion_only_stage(
                 .zip(constructed.block_ids.iter().copied())
                 .map(|(item, block_id)| replay_journal_record_from_item(block_id, item))
                 .collect::<Vec<_>>();
-            let replay_journal_head_block_id = append_replay_journal_records_async(
+            publish_replay_journal_and_mutable_refs_async(
                 block_store.clone(),
                 mutable_ref_store.clone(),
                 records,
-            )
-            .await?;
-            update_mutable_ref_store_async(
-                mutable_ref_store.clone(),
-                MutableRefStoreUpdate {
-                    replay_journal_head_block_id,
-                    metadata: io.mutable_ref_metadata.cloned(),
-                    ..MutableRefStoreUpdate::default()
-                },
+                None,
+                io.mutable_ref_metadata.cloned(),
             )
             .await?;
         }
@@ -3680,19 +3673,12 @@ async fn ingest_replay_batch_to_store(
             .zip(constructed.block_ids.iter().copied())
             .map(|(item, block_id)| replay_journal_record_from_item(block_id, item))
             .collect::<Vec<_>>();
-        let replay_journal_head_block_id = append_replay_journal_records_async(
+        publish_replay_journal_and_mutable_refs_async(
             block_store.clone(),
             mutable_ref_store.clone(),
             records,
-        )
-        .await?;
-        update_mutable_ref_store_async(
-            mutable_ref_store.clone(),
-            MutableRefStoreUpdate {
-                replay_journal_head_block_id,
-                metadata: io.mutable_ref_metadata.cloned(),
-                ..MutableRefStoreUpdate::default()
-            },
+            None,
+            io.mutable_ref_metadata.cloned(),
         )
         .await?;
     }
@@ -4697,6 +4683,29 @@ async fn update_mutable_ref_store_async(
         .map_err(RuntimeError::BlockingMutableRefTaskJoin)?
 }
 
+async fn publish_replay_journal_and_mutable_refs_async(
+    block_store: ConfiguredBlockStore,
+    mutable_ref_store: MutableRefStoreLocation,
+    records: Vec<ReplayJournalRecord>,
+    current_root_block_id: Option<String>,
+    metadata: Option<BTreeMap<String, String>>,
+) -> Result<(), RuntimeError> {
+    interrupt::check_for_interrupt()?;
+    let replay_journal_head_block_id =
+        append_replay_journal_records_async(block_store, mutable_ref_store.clone(), records)
+            .await?;
+    interrupt::check_for_interrupt()?;
+    update_mutable_ref_store_async(
+        mutable_ref_store,
+        MutableRefStoreUpdate {
+            current_root_block_id,
+            replay_journal_head_block_id,
+            metadata,
+        },
+    )
+    .await
+}
+
 fn append_replay_journal_records(
     store: &dyn BlockStore,
     mutable_ref_store: &MutableRefStoreLocation,
@@ -5450,19 +5459,12 @@ where
             &result.block_ids,
             &result.root_id,
         ));
-        let replay_journal_head_block_id = append_replay_journal_records_async(
+        publish_replay_journal_and_mutable_refs_async(
             block_store.clone(),
             mutable_ref_store.clone(),
             records,
-        )
-        .await?;
-        update_mutable_ref_store_async(
-            mutable_ref_store.clone(),
-            MutableRefStoreUpdate {
-                current_root_block_id: Some(result.root_id.to_string()),
-                replay_journal_head_block_id,
-                metadata: io.mutable_ref_metadata.cloned(),
-            },
+            Some(result.root_id.to_string()),
+            io.mutable_ref_metadata.cloned(),
         )
         .await?;
     }
@@ -5698,19 +5700,12 @@ where
             &result.block_ids,
             &result.root_id,
         )];
-        let replay_journal_head_block_id = append_replay_journal_records_async(
+        publish_replay_journal_and_mutable_refs_async(
             block_store.clone(),
             mutable_ref_store.clone(),
             records,
-        )
-        .await?;
-        update_mutable_ref_store_async(
-            mutable_ref_store.clone(),
-            MutableRefStoreUpdate {
-                current_root_block_id: Some(result.root_id.to_string()),
-                replay_journal_head_block_id,
-                metadata: io.mutable_ref_metadata.cloned(),
-            },
+            Some(result.root_id.to_string()),
+            io.mutable_ref_metadata.cloned(),
         )
         .await?;
     }
@@ -5876,19 +5871,12 @@ where
             &result.block_ids,
             &result.root_id,
         )];
-        let replay_journal_head_block_id = append_replay_journal_records_async(
+        publish_replay_journal_and_mutable_refs_async(
             block_store.clone(),
             mutable_ref_store.clone(),
             records,
-        )
-        .await?;
-        update_mutable_ref_store_async(
-            mutable_ref_store.clone(),
-            MutableRefStoreUpdate {
-                current_root_block_id: Some(result.root_id.to_string()),
-                replay_journal_head_block_id,
-                metadata: io.mutable_ref_metadata.cloned(),
-            },
+            Some(result.root_id.to_string()),
+            io.mutable_ref_metadata.cloned(),
         )
         .await?;
     }
@@ -11488,6 +11476,78 @@ mod tests {
         let error =
             append_replay_journal_records(&block_store, &mutable_ref_store, &[record]).unwrap_err();
         assert!(matches!(error, RuntimeError::WriteReplayJournal { .. }));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn replay_journal_publication_honors_interrupt_before_mutable_ref_updates() {
+        let _interrupt_guard = InterruptResetGuard::new();
+        let temp = tempdir().unwrap();
+        let block_store = ConfiguredBlockStore::from_environment(
+            temp.path(),
+            &EnvironmentConfig::Local {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: String::new(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+        )
+        .unwrap();
+        let block_store_root = temp.path().join("blocks");
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
+        prepare_mutable_ref_store(&mutable_ref_store).unwrap();
+        let refs_before = load_mutable_ref_store(&mutable_ref_store).unwrap();
+        let record = ReplayJournalRecord::ReplayInput {
+            step_kind: ReplayJournalStepKind::Embedding,
+            block_id: BlockHash::from_bytes([9u8; 32]).to_string(),
+            metadata: vec![],
+            content_ref: ReplayJournalContentRef::Inline {
+                media_type: "text/plain".into(),
+                body: b"payload".to_vec(),
+            },
+        };
+
+        crate::interrupt::set_interrupt_requested_for_tests(true);
+        let error = publish_replay_journal_and_mutable_refs_async(
+            block_store,
+            mutable_ref_store.clone(),
+            vec![record],
+            Some(BlockHash::from_bytes([7u8; 32]).to_string()),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, RuntimeError::Interrupted(_)));
+        assert_eq!(
+            load_mutable_ref_store(&mutable_ref_store).unwrap(),
+            refs_before
+        );
+        assert!(matches!(
+            load_replay_journal_records(
+                &ConfiguredBlockStore::from_environment(
+                    temp.path(),
+                    &EnvironmentConfig::Local {
+                        block_store_root: Path::new("blocks").to_path_buf(),
+                        embedding: LocalEmbeddingConfig {
+                            base_url: String::new(),
+                            model: "all-MiniLM-L6-v2".into(),
+                            api_key_env: None,
+                            request_timeout_secs: 5,
+                            max_retries: 0,
+                            retry_delay_ms: 1,
+                        },
+                    },
+                )
+                .unwrap(),
+                &mutable_ref_store
+            ),
+            Err(RuntimeError::MissingReplayJournalHead { .. })
+        ));
     }
 
     #[test]
