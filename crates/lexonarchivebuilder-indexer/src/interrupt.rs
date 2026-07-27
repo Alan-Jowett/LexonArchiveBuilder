@@ -113,11 +113,33 @@ fn next_interrupt_action(interrupt_requested: &AtomicBool) -> InterruptAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    struct InterruptSignalCountTestGuard {
+        _guard: MutexGuard<'static, ()>,
+    }
+
+    impl InterruptSignalCountTestGuard {
+        fn new() -> Self {
+            static INTERRUPT_SIGNAL_COUNT_TEST_MUTEX: Mutex<()> = Mutex::new(());
+            let guard = INTERRUPT_SIGNAL_COUNT_TEST_MUTEX
+                .lock()
+                .expect("interrupt signal count test mutex poisoned");
+            INTERRUPT_SIGNAL_COUNT.store(0, Ordering::SeqCst);
+            Self { _guard: guard }
+        }
+    }
+
+    impl Drop for InterruptSignalCountTestGuard {
+        fn drop(&mut self) {
+            INTERRUPT_SIGNAL_COUNT.store(0, Ordering::SeqCst);
+        }
+    }
 
     #[test]
     fn first_interrupt_requests_graceful_shutdown() {
+        let _guard = InterruptSignalCountTestGuard::new();
         let interrupt_requested = AtomicBool::new(false);
-        INTERRUPT_SIGNAL_COUNT.store(0, Ordering::SeqCst);
 
         let action = next_interrupt_action(&interrupt_requested);
 
@@ -127,8 +149,8 @@ mod tests {
 
     #[test]
     fn second_interrupt_forces_exit() {
+        let _guard = InterruptSignalCountTestGuard::new();
         let interrupt_requested = AtomicBool::new(false);
-        INTERRUPT_SIGNAL_COUNT.store(0, Ordering::SeqCst);
 
         assert!(matches!(
             next_interrupt_action(&interrupt_requested),

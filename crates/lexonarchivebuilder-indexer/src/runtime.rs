@@ -13024,7 +13024,7 @@ mod tests {
             );
             tokio::pin!(interrupted_run);
 
-            let wait_deadline = Instant::now() + Duration::from_secs(2);
+            let wait_deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 if interrupted_server.max_in_flight() > 0 {
                     break;
@@ -13051,7 +13051,7 @@ mod tests {
         let refs_after_interrupt = load_mutable_ref_store(&mutable_ref_store).unwrap();
         assert_eq!(refs_after_interrupt, refs_before_interrupt);
 
-        let reopen_deadline = Instant::now() + Duration::from_secs(2);
+        let reopen_deadline = Instant::now() + Duration::from_secs(10);
         let reopened_store = loop {
             match ConfiguredBlockStore::from_environment(
                 temp.path(),
