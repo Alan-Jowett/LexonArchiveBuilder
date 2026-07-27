@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use ciborium::Value;
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -22,6 +23,7 @@ use thiserror::Error;
 use crate::custom_blocks::{
     REPLAY_JOURNAL_BLOCK_TYPE, REPLAY_JOURNAL_MEDIA_TYPE, custom_block_payload,
 };
+use crate::interrupt;
 use crate::mailbox::{NORMALIZED_EMAIL_ARTIFACT_BLOCK_TYPE, NORMALIZED_EMAIL_MEDIA_TYPE};
 use crate::tree_tools::parse_block_hash;
 
@@ -29,6 +31,7 @@ pub const DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES: usize = 64;
 pub const DEFAULT_COPY_WORKER_THREADS: usize = 1;
 pub const BLIND_WRITE_REDB_COMPACTION_INTERVAL_BLOCKS: usize = 500_000;
 const DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITE_BYTES: usize = 64 * 1024 * 1024;
+const INTERRUPT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const DESTINATION_STORE_FAILURE_ID: &str = "destination-store";
 const UNSUPPORTED_BATCH_WRITE_MESSAGE: &str =
     "batch writes are not supported by this block store backend";
@@ -271,6 +274,35 @@ impl CopyMetrics {
             progress.note_attempted_write_block();
         }
     }
+}
+
+fn sync_interrupt_requested(stop_requested: &AtomicBool) -> bool {
+    if stop_requested.load(Ordering::SeqCst) {
+        return true;
+    }
+    if interrupt::is_interrupt_requested() {
+        stop_requested.store(true, Ordering::SeqCst);
+        return true;
+    }
+    false
+}
+
+fn discard_buffered_destination_writes(
+    buffered_write_jobs: &mut Vec<ThreadedWriteJob>,
+    buffered_write_bytes: &mut usize,
+) {
+    buffered_write_jobs.clear();
+    *buffered_write_bytes = 0;
+}
+
+fn request_threaded_shutdown(
+    stop_requested: &AtomicBool,
+    work_queue: &ThreadedWorkQueue,
+    write_queue: &ThreadedWriteQueue,
+) {
+    stop_requested.store(true, Ordering::SeqCst);
+    work_queue.request_shutdown();
+    write_queue.request_shutdown();
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -517,8 +549,16 @@ where
     let mut in_flight_destination_write_bytes = 0usize;
     let mut buffered_write_bytes = 0usize;
     let mut blind_write_checkpoint = blind_write_checkpoint;
+    let stop_requested = AtomicBool::new(interrupt::is_interrupt_requested());
 
     while let Some((request_root_id, block_id)) = queue.pop_front() {
+        if sync_interrupt_requested(&stop_requested) {
+            discard_buffered_destination_writes(
+                &mut buffered_write_jobs,
+                &mut buffered_write_bytes,
+            );
+            break;
+        }
         failures.note_block_root(request_root_id, block_id);
         if !visited.insert(block_id) {
             continue;
@@ -616,6 +656,13 @@ where
                         &mut failures,
                     )
                     .await;
+                    if sync_interrupt_requested(&stop_requested) {
+                        discard_buffered_destination_writes(
+                            &mut buffered_write_jobs,
+                            &mut buffered_write_bytes,
+                        );
+                        break;
+                    }
                     if let Some(checkpoint) = blind_write_checkpoint.as_mut()
                         && let Err(error) = (checkpoint.action)()
                     {
@@ -733,15 +780,22 @@ where
     };
 
     std::thread::scope(|scope| {
+        let interrupt_handle = scope.spawn(|| {
+            while !stop_requested.load(Ordering::SeqCst) {
+                if interrupt::is_interrupt_requested() {
+                    request_threaded_shutdown(&stop_requested, &work_queue, &write_queue);
+                    return;
+                }
+                std::thread::sleep(INTERRUPT_POLL_INTERVAL);
+            }
+        });
         let mut traversal_handles = Vec::new();
         for _ in 0..worker_thread_count.max(1) {
             traversal_handles.push(scope.spawn(|| {
                 if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| {
                     run_threaded_copy_worker(&traversal_context)
                 })) {
-                    stop_requested.store(true, Ordering::SeqCst);
-                    work_queue.request_shutdown();
-                    write_queue.request_shutdown();
+                    request_threaded_shutdown(&stop_requested, &work_queue, &write_queue);
                     panic::resume_unwind(payload);
                 }
             }));
@@ -752,9 +806,7 @@ where
                 if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| {
                     run_threaded_write_worker(&writer_context)
                 })) {
-                    stop_requested.store(true, Ordering::SeqCst);
-                    work_queue.request_shutdown();
-                    write_queue.request_shutdown();
+                    request_threaded_shutdown(&stop_requested, &work_queue, &write_queue);
                     panic::resume_unwind(payload);
                 }
             }));
@@ -763,9 +815,7 @@ where
         let mut panic_payload = None;
         for handle in traversal_handles {
             if let Err(payload) = handle.join() {
-                stop_requested.store(true, Ordering::SeqCst);
-                work_queue.request_shutdown();
-                write_queue.request_shutdown();
+                request_threaded_shutdown(&stop_requested, &work_queue, &write_queue);
                 if panic_payload.is_none() {
                     panic_payload = Some(payload);
                 }
@@ -774,13 +824,14 @@ where
         write_queue.finish_producing(stop_requested.load(Ordering::SeqCst));
         for handle in writer_handles {
             if let Err(payload) = handle.join() {
-                stop_requested.store(true, Ordering::SeqCst);
-                write_queue.request_shutdown();
+                request_threaded_shutdown(&stop_requested, &work_queue, &write_queue);
                 if panic_payload.is_none() {
                     panic_payload = Some(payload);
                 }
             }
         }
+        stop_requested.store(true, Ordering::SeqCst);
+        let _ = interrupt_handle.join();
         if let Some(payload) = panic_payload {
             panic::resume_unwind(payload);
         }
@@ -2364,6 +2415,21 @@ mod tests {
 
     use super::*;
 
+    struct InterruptResetGuard;
+
+    impl InterruptResetGuard {
+        fn new() -> Self {
+            crate::interrupt::set_interrupt_requested_for_tests(false);
+            Self
+        }
+    }
+
+    impl Drop for InterruptResetGuard {
+        fn drop(&mut self) {
+            crate::interrupt::set_interrupt_requested_for_tests(false);
+        }
+    }
+
     #[tokio::test]
     async fn rooted_block_copy_copies_only_reachable_blocks_and_skips_existing() {
         let source = MemoryBlockStore::new(16).unwrap();
@@ -3112,7 +3178,7 @@ mod tests {
             .put(&branch_block(&[alpha, beta, gamma]))
             .await
             .unwrap();
-        let destination = Arc::new(BlockingPutStore::new(32, 2));
+        let destination = Arc::new(BlockingPutStore::new(32, 1));
 
         let observer_destination = Arc::clone(&destination);
         let mut copy_destination = SharedStore {
@@ -3131,7 +3197,10 @@ mod tests {
             .await
         };
         let observer = std::thread::spawn(move || {
-            observer_destination.wait_until_max_observed();
+            assert!(
+                observer_destination.wait_until_target_observed(Duration::from_secs(1)),
+                "timed out waiting to observe in-flight writes"
+            );
             let observed = observer_destination.max_in_flight();
             observer_destination.release_writes();
             assert!(
@@ -3146,6 +3215,34 @@ mod tests {
         assert_eq!(report.copied_block_count, Some(4));
         assert_eq!(report.skipped_already_present_block_count, Some(0));
         assert_eq!(report.failed_block_count, 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn rooted_block_copy_discards_buffered_writes_after_interrupt() {
+        let _interrupt_guard = InterruptResetGuard::new();
+        let source = MemoryBlockStore::new(16).unwrap();
+        let mut destination = InterruptOnReadMissStore::new(16);
+
+        let alpha = source.put(&leaf_block("alpha")).await.unwrap();
+        let beta = source.put(&leaf_block("beta")).await.unwrap();
+        let root = source.put(&branch_block(&[alpha, beta])).await.unwrap();
+
+        let report = copy_rooted_blocks_with_mode_and_limit_and_progress(
+            &source,
+            &mut destination,
+            &[root],
+            CopyDestinationMode::ReadBeforeWrite,
+            2,
+            1,
+            None,
+        )
+        .await;
+
+        assert_eq!(report.copied_block_count, Some(0));
+        assert_eq!(report.failed_block_count, 0);
+        assert!(destination.get_block_bytes(&root).await.unwrap().is_none());
+        assert!(destination.get_block_bytes(&alpha).await.unwrap().is_none());
+        assert!(destination.get_block_bytes(&beta).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -3571,6 +3668,11 @@ mod tests {
         inner: Arc<T>,
     }
 
+    struct InterruptOnReadMissStore {
+        inner: Arc<MemoryBlockStore>,
+        interrupt_triggered: AtomicBool,
+    }
+
     impl BlockingPutStore {
         fn new(capacity: usize, target_max_in_flight: usize) -> Self {
             Self {
@@ -3585,26 +3687,34 @@ mod tests {
             }
         }
 
-        fn wait_until_max_observed(&self) {
-            let mut observed = self
-                .observed_target
-                .lock()
-                .expect("blocking write observer mutex poisoned");
-            while !*observed {
-                observed = self
-                    .observed_target_ready
-                    .wait(observed)
-                    .expect("blocking write observer mutex poisoned while waiting");
-            }
-        }
-
         fn release_writes(&self) {
             self.release_writes_flag.store(true, Ordering::SeqCst);
             self.release_writes_notify.notify_waiters();
         }
 
+        fn wait_until_target_observed(&self, timeout: Duration) -> bool {
+            let observed = self
+                .observed_target
+                .lock()
+                .expect("blocking write observer mutex poisoned");
+            let (observed, _) = self
+                .observed_target_ready
+                .wait_timeout_while(observed, timeout, |observed| !*observed)
+                .expect("blocking write observer mutex poisoned while waiting");
+            *observed
+        }
+
         fn max_in_flight(&self) -> usize {
             self.max_in_flight.load(Ordering::SeqCst)
+        }
+    }
+
+    impl InterruptOnReadMissStore {
+        fn new(capacity: usize) -> Self {
+            Self {
+                inner: Arc::new(MemoryBlockStore::new(capacity).unwrap()),
+                interrupt_triggered: AtomicBool::new(false),
+            }
         }
     }
 
@@ -3856,6 +3966,32 @@ mod tests {
             block_id: &BlockHash,
         ) -> Result<Option<Vec<u8>>, BlockStoreError> {
             self.inner.get_block_bytes(block_id).await
+        }
+
+        fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {
+            self.inner.iter_block_ids()
+        }
+    }
+
+    #[async_trait]
+    impl BlockStore for InterruptOnReadMissStore {
+        async fn put_block_bytes(
+            &self,
+            block_id: &BlockHash,
+            block_bytes: &[u8],
+        ) -> Result<(), BlockStoreError> {
+            self.inner.put_block_bytes(block_id, block_bytes).await
+        }
+
+        async fn get_block_bytes(
+            &self,
+            block_id: &BlockHash,
+        ) -> Result<Option<Vec<u8>>, BlockStoreError> {
+            let result = self.inner.get_block_bytes(block_id).await?;
+            if result.is_none() && !self.interrupt_triggered.swap(true, Ordering::SeqCst) {
+                crate::interrupt::set_interrupt_requested_for_tests(true);
+            }
+            Ok(result)
         }
 
         fn iter_block_ids(&self) -> Result<BlockIdStream<'_>, BlockStoreError> {

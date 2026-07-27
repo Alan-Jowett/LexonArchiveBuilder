@@ -17,7 +17,7 @@ effective-profile identity signaling,
 clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted
-CLI search over stored trees, rooted block-store copy tooling with live default heartbeat counters plus additive worker-threaded traversal and capability-based batched destination publication, CLI-only local-redb maintenance compaction, replay-stable fingerprinting, temporary
+CLI search over stored trees, rooted block-store copy tooling with live default heartbeat counters plus additive worker-threaded traversal and capability-based batched destination publication, CLI-only local-redb maintenance compaction, graceful Ctrl-C local-redb shutdown, replay-stable fingerprinting, temporary
 upstream `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, 0.6.x published-profile
 evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
@@ -62,8 +62,9 @@ clustering replay, independent replay batch-size versus replay-materialization
 concurrency control for clustering replay, bounded multi-batch replay-prefetch
 buffering for clustering replay, derived delegated v3 working-root support,
 repeatable adaptation to later upstream-`main` constrained-v3 API breakage,
-repo-wide redb block-store targeting support, and leaf-layer parallel block
-scheduling in the local/testing profile.
+repo-wide redb block-store targeting support, graceful Ctrl-C local-redb
+shutdown, and leaf-layer parallel block scheduling in the local/testing
+profile.
 
 This package validates LexonArchiveBuilder's batch contract, adapter selection, and
 delegated use of LexonGraph interfaces. It does not redefine validation already
@@ -1111,6 +1112,24 @@ result may remain concise human-readable CLI output only.
 
 **Traces to:** RQ-INDEXER-005D, DSG-LFI-005F, DSG-LFI-007H
 
+### VAL-LFI-005F
+
+Interrupt at least one representative long-running indexer CLI command that
+opens direct `local-redb`, then reopen the same store through another approved
+direct `local-redb` command.
+
+**Pass condition:** on the first operator `Ctrl-C`, the interrupted command
+begins repository-owned graceful shutdown rather than exiting as an abrupt dirty
+close, stops admitting new repository-owned work, and ends with an explicit
+interrupted or otherwise unsuccessful operator-visible outcome rather than a
+success-shaped summary, report, or maintenance result. After that interruption,
+reopening the same direct `local-redb` store through another approved command
+does not trigger the known dirty-close recovery path, and any repository-owned
+mutable refs remain at the last authoritative pre-interrupt state rather than
+reflecting unpublished progress.
+
+**Traces to:** RQ-INDEXER-005E, RQ-INDEXER-008, DSG-LFI-005G
+
 ### VAL-LFI-006
 
 Inspect the preserved production environment profile boundary.
@@ -1472,6 +1491,24 @@ direct `local-redb` with explicit failure elsewhere, and preserves the rule
 that repository-owned mutable refs remain outside redb on the filesystem.
 
 **Traces to:** RQ-INDEXER-005D, RQ-INDEXER-009, DSG-LFI-005F, DSG-LFI-007H,
+DSG-LFI-009
+
+### VAL-LFI-009F
+
+Inspect the specification package for the graceful direct-`local-redb`
+interrupt increment against CLI-scope, mutable-ref, and environment-boundary
+constraints.
+
+**Pass condition:** the package scopes graceful `Ctrl-C` handling to any
+indexer-owned CLI surface that opens direct `local-redb`, keeps the behavior on
+the short-lived CLI lifecycle rather than inventing an MCP-visible or daemon-
+style cancellation surface, preserves explicit interrupted outcomes instead of
+success-shaped cancellation results, preserves the rule that mutable refs remain
+authoritative only at the existing publication boundary, and does not silently
+broaden the requirement to filesystem, overlay, Azure-backed, or gateway
+profiles.
+
+**Traces to:** RQ-INDEXER-005E, RQ-INDEXER-009, RQ-INDEXER-010A, DSG-LFI-005G,
 DSG-LFI-009
 
 ### VAL-LFI-009A
