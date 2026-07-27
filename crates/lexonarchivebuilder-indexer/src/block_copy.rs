@@ -3147,7 +3147,7 @@ mod tests {
             .put(&branch_block(&[alpha, beta, gamma]))
             .await
             .unwrap();
-        let destination = Arc::new(BlockingPutStore::new(32, 2));
+        let destination = Arc::new(BlockingPutStore::new(32, 1));
 
         let observer_destination = Arc::clone(&destination);
         let mut copy_destination = SharedStore {
@@ -3166,12 +3166,10 @@ mod tests {
             .await
         };
         let observer = std::thread::spawn(move || {
-            let deadline = std::time::Instant::now() + Duration::from_secs(1);
-            while observer_destination.max_in_flight() == 0 && std::time::Instant::now() < deadline
-            {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            std::thread::sleep(Duration::from_millis(25));
+            assert!(
+                observer_destination.wait_until_target_observed(Duration::from_secs(1)),
+                "timed out waiting to observe in-flight writes"
+            );
             let observed = observer_destination.max_in_flight();
             observer_destination.release_writes();
             assert!(
@@ -3628,6 +3626,18 @@ mod tests {
         fn release_writes(&self) {
             self.release_writes_flag.store(true, Ordering::SeqCst);
             self.release_writes_notify.notify_waiters();
+        }
+
+        fn wait_until_target_observed(&self, timeout: Duration) -> bool {
+            let observed = self
+                .observed_target
+                .lock()
+                .expect("blocking write observer mutex poisoned");
+            let (observed, _) = self
+                .observed_target_ready
+                .wait_timeout_while(observed, timeout, |observed| !*observed)
+                .expect("blocking write observer mutex poisoned while waiting");
+            *observed
         }
 
         fn max_in_flight(&self) -> usize {
