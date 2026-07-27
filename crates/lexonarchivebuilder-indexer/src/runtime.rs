@@ -5960,6 +5960,7 @@ fn for_each_replay_journal_record_newest_first(
 
     let mut visited = HashSet::new();
     loop {
+        interrupt::check_for_interrupt()?;
         if !visited.insert(current_block_id.clone()) {
             return Err(RuntimeError::InvalidReplayJournalHead {
                 block_id: current_block_id,
@@ -5980,6 +5981,7 @@ fn for_each_replay_journal_record_newest_first(
         };
         let decoded = replay_journal_block_body_from_decoded(decoded, &block_hash.to_string())?;
         for entry in decoded.entries.iter().rev() {
+            interrupt::check_for_interrupt()?;
             visit(entry)?;
         }
         match decoded.previous_block_id {
@@ -6012,6 +6014,7 @@ fn collect_ordered_replay_block_ids_from_journal_with_limit(
     progress: &ProgressReporter,
     flush_entry_limit: usize,
 ) -> Result<ReplayOrderStorage, RuntimeError> {
+    interrupt::check_for_interrupt()?;
     prepare_replay_order_scratch_root(replay_order_scratch_root)?;
     let scratch_dir = tempfile::Builder::new()
         .prefix("replay-order-")
@@ -6073,6 +6076,7 @@ fn collect_ordered_replay_block_ids_from_journal_with_limit(
         ),
     );
     let merged_entries_path = scratch_dir.path().join("ordered-replay.bin");
+    interrupt::check_for_interrupt()?;
     let total_items = merge_sorted_replay_order_runs(&run_paths, &merged_entries_path)?;
     if total_items == 0 {
         return Err(RuntimeError::NoClusterableBlocks);
@@ -6096,6 +6100,7 @@ fn flush_sorted_replay_order_run(
     run_index: usize,
     entries: &mut Vec<ReplayOrderEntry>,
 ) -> Result<PathBuf, RuntimeError> {
+    interrupt::check_for_interrupt()?;
     entries.sort_unstable();
     let path = scratch_dir.join(format!("run-{run_index:06}.bin"));
     let file = File::create(&path).map_err(|source| RuntimeError::WriteReplayOrderScratch {
@@ -6105,6 +6110,7 @@ fn flush_sorted_replay_order_run(
     let mut writer = BufWriter::new(file);
     let mut previous_entry: Option<ReplayOrderEntry> = None;
     for entry in entries.iter().copied() {
+        interrupt::check_for_interrupt()?;
         match previous_entry {
             Some(previous) if previous.block_id == entry.block_id => {
                 if previous.digest != entry.digest {
@@ -6149,6 +6155,7 @@ fn merge_sorted_replay_order_runs(
     run_paths: &[PathBuf],
     merged_entries_path: &Path,
 ) -> Result<usize, RuntimeError> {
+    interrupt::check_for_interrupt()?;
     if run_paths.len() <= REPLAY_ORDER_MERGE_FAN_IN {
         return merge_sorted_replay_order_run_group(run_paths, merged_entries_path);
     }
@@ -6166,8 +6173,10 @@ fn merge_sorted_replay_order_runs(
     let mut pass_index = 0usize;
     let mut current_paths = run_paths.to_vec();
     while current_paths.len() > REPLAY_ORDER_MERGE_FAN_IN {
+        interrupt::check_for_interrupt()?;
         let mut next_paths = Vec::new();
         for (group_index, group) in current_paths.chunks(REPLAY_ORDER_MERGE_FAN_IN).enumerate() {
+            interrupt::check_for_interrupt()?;
             let intermediate_path = scratch_dir.join(format!(
                 "merge-pass-{pass_index:02}-run-{group_index:06}.bin"
             ));
@@ -6184,6 +6193,7 @@ fn merge_sorted_replay_order_run_group(
     run_paths: &[PathBuf],
     merged_entries_path: &Path,
 ) -> Result<usize, RuntimeError> {
+    interrupt::check_for_interrupt()?;
     let output = File::create(merged_entries_path).map_err(|source| {
         RuntimeError::WriteReplayOrderScratch {
             path: merged_entries_path.display().to_string(),
@@ -6195,6 +6205,7 @@ fn merge_sorted_replay_order_run_group(
     let mut heap = BinaryHeap::new();
 
     for (run_index, path) in run_paths.iter().enumerate() {
+        interrupt::check_for_interrupt()?;
         let file = File::open(path).map_err(|source| RuntimeError::ReadReplayOrderScratch {
             path: path.display().to_string(),
             source,
@@ -6214,6 +6225,7 @@ fn merge_sorted_replay_order_run_group(
     let mut unique_entries = 0usize;
     let mut previous_entry: Option<ReplayOrderEntry> = None;
     while let Some(cursor) = heap.pop() {
+        interrupt::check_for_interrupt()?;
         let entry = cursor.entry;
         if let Some(previous) = previous_entry {
             if previous.block_id == entry.block_id {
@@ -9323,6 +9335,78 @@ mod tests {
         let entries = storage.read_all_entries().unwrap();
         assert_eq!(entries.len(), REPLAY_ORDER_MERGE_FAN_IN + 1);
         assert!(entries.windows(2).all(|pair| pair[0] <= pair[1]));
+    }
+
+    #[test]
+    fn replay_journal_scan_stops_when_interrupt_requested_during_entry_iteration() {
+        let temp = tempdir().unwrap();
+        let block_store = ConfiguredBlockStore::from_environment(
+            temp.path(),
+            &EnvironmentConfig::LocalRedb {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: String::new(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+        )
+        .unwrap();
+        let block_store_root = temp.path().join("blocks");
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
+        prepare_mutable_ref_store(&mutable_ref_store).unwrap();
+
+        let replay_journal_head_block_id = append_replay_journal_records(
+            &block_store,
+            &mutable_ref_store,
+            &[
+                ReplayJournalRecord::ReplayInput {
+                    step_kind: ReplayJournalStepKind::Embedding,
+                    block_id: BlockHash::from_bytes([1u8; 32]).to_string(),
+                    metadata: vec![],
+                    content_ref: ReplayJournalContentRef::Inline {
+                        media_type: "text/plain".into(),
+                        body: b"alpha".to_vec(),
+                    },
+                },
+                ReplayJournalRecord::ReplayInput {
+                    step_kind: ReplayJournalStepKind::Embedding,
+                    block_id: BlockHash::from_bytes([2u8; 32]).to_string(),
+                    metadata: vec![],
+                    content_ref: ReplayJournalContentRef::Inline {
+                        media_type: "text/plain".into(),
+                        body: b"beta".to_vec(),
+                    },
+                },
+            ],
+        )
+        .unwrap();
+        update_mutable_ref_store(
+            &mutable_ref_store,
+            MutableRefStoreUpdate {
+                replay_journal_head_block_id,
+                ..MutableRefStoreUpdate::default()
+            },
+        )
+        .unwrap();
+
+        let mut visited = 0usize;
+        let error =
+            for_each_replay_journal_record_newest_first(&block_store, &mutable_ref_store, |_| {
+                visited += 1;
+                if visited == 1 {
+                    crate::interrupt::set_interrupt_requested_for_tests(true);
+                }
+                Ok(())
+            })
+            .unwrap_err();
+
+        assert!(matches!(error, RuntimeError::Interrupted(_)));
+        assert_eq!(visited, 1);
+        crate::interrupt::set_interrupt_requested_for_tests(false);
     }
 
     #[test]

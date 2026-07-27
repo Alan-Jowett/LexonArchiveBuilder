@@ -17,7 +17,7 @@ effective-profile identity signaling,
 clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted
-CLI search over stored trees, rooted block-store copy tooling with live default heartbeat counters plus additive worker-threaded traversal and capability-based batched destination publication, CLI-only local-redb maintenance compaction, graceful Ctrl-C local-redb shutdown, replay-stable fingerprinting, temporary
+CLI search over stored trees, rooted block-store copy tooling with live default heartbeat counters plus additive worker-threaded traversal and capability-based batched destination publication, CLI-only local-redb maintenance compaction, graceful Ctrl-C local-redb shutdown with in-phase interrupt observability across repository-owned long-running work, replay-stable fingerprinting, temporary
 upstream `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, 0.6.x published-profile
 evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
@@ -1128,6 +1128,17 @@ does not trigger the known dirty-close recovery path, and any repository-owned
 mutable refs remain at the last authoritative pre-interrupt state rather than
 reflecting unpublished progress.
 
+For at least one representative case, the interrupted command must be inside a
+repository-owned long-running phase that executes through a synchronous loop or
+blocking/offloaded helper rather than sitting only at an outer interrupt-aware
+await point.
+
+**Pass condition:** while that in-phase repository-owned work is still active,
+the first operator `Ctrl-C` is observed at a repository-owned safe boundary
+inside the active phase quickly enough to stop admitting additional
+repository-owned work before the full scan, traversal, or materialization pass
+completes normally.
+
 **Traces to:** RQ-INDEXER-005E, RQ-INDEXER-008, DSG-LFI-005G
 
 ### VAL-LFI-006
@@ -1502,11 +1513,13 @@ constraints.
 **Pass condition:** the package scopes graceful `Ctrl-C` handling to any
 indexer-owned CLI surface that opens direct `local-redb`, keeps the behavior on
 the short-lived CLI lifecycle rather than inventing an MCP-visible or daemon-
-style cancellation surface, preserves explicit interrupted outcomes instead of
-success-shaped cancellation results, preserves the rule that mutable refs remain
-authoritative only at the existing publication boundary, and does not silently
-broaden the requirement to filesystem, overlay, Azure-backed, or gateway
-profiles.
+style cancellation surface, requires repository-owned long-running
+blocking/offloaded phases to observe the first interrupt within the active
+phase rather than only at an outer await boundary, preserves explicit
+interrupted outcomes instead of success-shaped cancellation results, preserves
+the rule that mutable refs remain authoritative only at the existing
+publication boundary, and does not silently broaden the requirement to
+filesystem, overlay, Azure-backed, or gateway profiles.
 
 **Traces to:** RQ-INDEXER-005E, RQ-INDEXER-009, RQ-INDEXER-010A, DSG-LFI-005G,
 DSG-LFI-009

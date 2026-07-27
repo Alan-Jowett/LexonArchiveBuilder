@@ -6,8 +6,8 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, replay-order preparation efficiency, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v3 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v3-compatible clustering observability projection, user-usable convergence-diagnosis surfacing, latest-LexonGraph constrained v3 working-root adoption at commit `7c8f375137375709bb608ee2609b38cb80e5422c`, issue-83 replay-order memory decoupling from corpus size, bounded replay-batch preparation overlap exploration for issue #88, issue #93 replay batch-size decoupling from CPU concurrency, issue #95 bounded multi-batch replay-prefetch buffering, renewed latest-upstream-main compatibility after post-`7c8f375137375709bb608ee2609b38cb80e5422c` breaking LexonGraph changes, repo-wide redb block-store targeting support after refreshing to a newer LexonGraph `main` revision, rooted block-copy live progress counters on the default heartbeat surface, CLI-only block-store maintenance with local-redb compaction, blind-write rooted-copy checkpoint compaction for direct local-redb destinations, additive worker-threaded rooted block-copy traversal, and graceful Ctrl-C local-redb shutdown across indexer CLI surfaces
-- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, v3-compatible clustering telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, live rooted-copy progress reporting, worker-threaded rooted-copy traversal over the shared queue-based block walk, CLI-only one-store block-store maintenance with initial local-redb compaction, blind-write copy-time checkpoint compaction for direct local-redb destinations, graceful Ctrl-C local-redb shutdown across indexer CLI surfaces, bounded-residency deterministic replay ordering for deterministic replay submission, efficient replay-order preparation behind the existing replay contract, bounded replay-batch preparation overlap behind the existing replay contract, independent replay batch-sizing versus replay-materialization concurrency control for clustering replay, bounded multi-batch replay-prefetch buffering for clustering replay, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v3 API when the selected published profile is `0.7.0`, upstream-managed request-adjacent v3 working-root derivation for clustering-enabled v3 execution, repeatable adaptation to later upstream-main breaking changes without weakening the current external stage or observability contracts, and first-class redb block-store targeting across archive-sync, block-gateway, indexer, MCP, and repo-owned copy/sync surfaces
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, replay-order preparation efficiency, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v3 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v3-compatible clustering observability projection, user-usable convergence-diagnosis surfacing, latest-LexonGraph constrained v3 working-root adoption at commit `7c8f375137375709bb608ee2609b38cb80e5422c`, issue-83 replay-order memory decoupling from corpus size, bounded replay-batch preparation overlap exploration for issue #88, issue #93 replay batch-size decoupling from CPU concurrency, issue #95 bounded multi-batch replay-prefetch buffering, renewed latest-upstream-main compatibility after post-`7c8f375137375709bb608ee2609b38cb80e5422c` breaking LexonGraph changes, repo-wide redb block-store targeting support after refreshing to a newer LexonGraph `main` revision, rooted block-copy live progress counters on the default heartbeat surface, CLI-only block-store maintenance with local-redb compaction, blind-write rooted-copy checkpoint compaction for direct local-redb destinations, additive worker-threaded rooted block-copy traversal, graceful Ctrl-C local-redb shutdown across indexer CLI surfaces, and in-phase interrupt observability for repository-owned long-running direct local-redb work
+- **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, v3-compatible clustering telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, live rooted-copy progress reporting, worker-threaded rooted-copy traversal over the shared queue-based block walk, CLI-only one-store block-store maintenance with initial local-redb compaction, blind-write copy-time checkpoint compaction for direct local-redb destinations, graceful Ctrl-C local-redb shutdown across indexer CLI surfaces, in-phase interrupt observability across repository-owned long-running direct local-redb execution paths, bounded-residency deterministic replay ordering for deterministic replay submission, efficient replay-order preparation behind the existing replay contract, bounded replay-batch preparation overlap behind the existing replay contract, independent replay batch-sizing versus replay-materialization concurrency control for clustering replay, bounded multi-batch replay-prefetch buffering for clustering replay, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v3 API when the selected published profile is `0.7.0`, upstream-managed request-adjacent v3 working-root derivation for clustering-enabled v3 execution, repeatable adaptation to later upstream-main breaking changes without weakening the current external stage or observability contracts, and first-class redb block-store targeting across archive-sync, block-gateway, indexer, MCP, and repo-owned copy/sync surfaces
 
 ## USER-REQUEST
 
@@ -750,6 +750,17 @@
   mutable-ref and recoverability boundaries, so unpublished or incomplete work
   remains non-authoritative after interruption even when the redb close is
   clean.
+- **UR-345 [KNOWN]:** During a live `lexonarchivebuilder-indexer run` against
+  direct `local-redb`, operator `Ctrl-C` was not honored while repository-owned
+  replay-order preparation work was still running.
+- **UR-346 [KNOWN]:** The requested increment is to make
+  `collect_ordered_replay_block_ids_from_journal_with_limit` cancel-aware.
+- **UR-347 [INFERRED]:** The required behavior should generalize to any
+  repository-owned long-running direct `local-redb` work that can otherwise
+  defer first-interrupt handling until the current phase completes.
+- **UR-348 [INFERRED]:** Graceful interrupt observability must extend across
+  repository-owned blocking or offloaded execution paths, not only async
+  orchestration loops that already wait on interrupt-aware futures.
 
 ## Change Manifest
 
@@ -903,6 +914,7 @@
 | CM-INDEXER-146 | Add | Define a fallback operator-progress contract for long-running direct `local-redb` phases that lack upstream progress callbacks, using truthful phase or liveness reporting on the existing CLI surface rather than silent waits or new telemetry channels | UR-333, UR-336, UR-337, UR-338 |
 | CM-INDEXER-147 | Revise | Extend the CLI-only `maintenance compact` operator contract so local-redb maintenance reports entered redb work and any available upstream progress rather than remaining success or failure-only during multi-minute compaction or repair-adjacent startup | UR-305, UR-307, UR-312, UR-333, UR-334, UR-337 |
 | CM-INDEXER-148 | Add | Require graceful `Ctrl-C` shutdown for every indexer CLI surface that opens direct `local-redb`, so operator cancellation prefers a clean redb close while preserving explicit interrupted outcomes and existing mutable-ref/recovery boundaries | UR-339, UR-340, UR-341, UR-342, UR-343, UR-344 |
+| CM-INDEXER-149 | Revise | Strengthen graceful direct-`local-redb` interrupt requirements so first `Ctrl-C` is observed inside repository-owned long-running work, including blocking/offloaded execution paths, rather than only at outer async orchestration boundaries | UR-339, UR-340, UR-341, UR-345, UR-346, UR-347, UR-348 |
 
 ## Before / After
 
@@ -2881,7 +2893,23 @@ for any `lexonarchivebuilder-indexer` CLI command that opens a direct
   `local-redb`; it SHALL NOT silently redefine filesystem, overlay,
   Azure-backed, or gateway profiles that do not expose the same dirty-close
   recovery cost.
-- **Traceability:** UR-339, UR-340, UR-341, UR-342, UR-343, UR-344
+- **In-phase observability [KNOWN]:** Repository-owned long-running work that
+  executes while a direct `local-redb` store is open SHALL observe the first
+  operator interrupt within the active phase quickly enough to begin graceful
+  shutdown before that phase completes normally.
+- **Execution-path coverage [KNOWN]:** This observability requirement SHALL
+  apply uniformly across async orchestration, synchronous loops, and
+  repository-owned blocking or offloaded helpers used by indexer CLI commands.
+- **Admission control [INFERRED]:** Once the first interrupt is observed,
+  repository-owned code SHALL stop admitting additional units of
+  repository-owned work at the nearest safe boundary it controls, rather than
+  continuing a full batch, scan, traversal, or materialization pass.
+- **Bounded delay [INFERRED]:** Repository-owned interrupt handling SHALL NOT
+  rely solely on outer await points when the active direct `local-redb` phase
+  is capable of running for operator-significant time inside repository-owned
+  code.
+- **Traceability:** UR-339, UR-340, UR-341, UR-342, UR-343, UR-344, UR-345,
+  UR-346, UR-347, UR-348
 
 #### RQ-INDEXER-006 - Embedding provider integration
 
@@ -3986,6 +4014,19 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   every indexer CLI surface that opens direct `local-redb`, so cancellation
   prefers a clean redb close while preserving explicit interrupted outcomes and
   the existing mutable-ref plus recoverability boundaries.
+
+### BA-INDEXER-149
+
+- **Before [KNOWN]:** The graceful direct-`local-redb` interrupt requirement did
+  not explicitly require repository-owned long-running blocking or offloaded
+  phases to observe the first interrupt while that phase was still active, so
+  a run could appear to ignore `Ctrl-C` until the current repository-owned
+  phase completed.
+- **After [KNOWN]:** The requirements now explicitly require repository-owned
+  long-running direct `local-redb` work to observe the first interrupt within
+  the active phase, including synchronous loops and blocking/offloaded helpers,
+  so graceful shutdown begins before a full scan or materialization pass
+  completes.
 
 ### Invariant Impact Assessment
 
