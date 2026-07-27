@@ -2,13 +2,19 @@
 // Copyright (c) 2026 LexonArchiveBuilder contributors
 
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use lexonarchivebuilder_block_store_http3::Http3BlockStore;
 use lexongraph_block::BlockHash;
-use lexongraph_block_store::{BlockBytesBatchEntry, BlockIdStream, BlockStore, BlockStoreError};
+use lexongraph_block_store::{
+    BlockBytesBatchEntry, BlockIdStream, BlockStore, BlockStoreError, BlockStoreTelemetryCallback,
+    BlockStoreTelemetryEvent,
+};
 use lexongraph_block_store_azure_sdk::AzureBlobBlockStore;
 use lexongraph_block_store_azure_table_v2::AzureTableBlockStoreV2;
 use lexongraph_block_store_fs::FilesystemBlockStore;
@@ -19,11 +25,19 @@ use lexongraph_block_store_redb::{RedbBlockStore, RedbBlockStoreDurabilityMode};
 use crate::config::{EnvironmentConfig, ProductionBlockStoreConfig};
 use crate::paths::resolve_path;
 
+const REDB_DATABASE_FILE_NAME: &str = "blocks.redb";
+const REDB_PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+
+pub type OperatorProgressReporter = Arc<dyn Fn(String) + Send + Sync + 'static>;
+
 #[derive(Clone, Debug)]
 pub enum ConfiguredBlockStore {
     GatewayHttp3(Http3BlockStore),
     Local(FilesystemBlockStore),
-    LocalRedb(RedbBlockStore),
+    LocalRedb {
+        store: RedbBlockStore,
+        database_path: PathBuf,
+    },
     Overlay(Arc<OverlayBlockStore>),
     AzureTable(AzureTableBlockStoreV2),
 }
@@ -37,17 +51,32 @@ impl ConfiguredBlockStore {
         request_dir: &Path,
         environment: &EnvironmentConfig,
     ) -> Result<Self, BlockStoreError> {
-        Self::from_environment_with_redb_durability(
+        Self::from_environment_with_redb_durability_and_progress(
             request_dir,
             environment,
             RedbBlockStoreDurabilityMode::Durable,
+            None,
         )
     }
 
-    pub fn from_environment_with_redb_durability(
+    pub fn from_environment_with_redb_progress(
+        request_dir: &Path,
+        environment: &EnvironmentConfig,
+        progress: Option<OperatorProgressReporter>,
+    ) -> Result<Self, BlockStoreError> {
+        Self::from_environment_with_redb_durability_and_progress(
+            request_dir,
+            environment,
+            RedbBlockStoreDurabilityMode::Durable,
+            progress,
+        )
+    }
+
+    pub fn from_environment_with_redb_durability_and_progress(
         request_dir: &Path,
         environment: &EnvironmentConfig,
         redb_durability_mode: RedbBlockStoreDurabilityMode,
+        progress: Option<OperatorProgressReporter>,
     ) -> Result<Self, BlockStoreError> {
         match environment {
             EnvironmentConfig::Local {
@@ -56,11 +85,12 @@ impl ConfiguredBlockStore {
                 .map(Self::Local),
             EnvironmentConfig::LocalRedb {
                 block_store_root, ..
-            } => RedbBlockStore::new_with_durability(
-                resolve_path(request_dir, block_store_root),
+            } => Self::local_redb_store(
+                request_dir,
+                block_store_root,
                 redb_durability_mode,
-            )
-            .map(Self::LocalRedb),
+                progress,
+            ),
             EnvironmentConfig::LocalOverlay { block_store, .. }
             | EnvironmentConfig::Production { block_store, .. } => {
                 Self::production_overlay_store(request_dir, block_store)
@@ -69,6 +99,19 @@ impl ConfiguredBlockStore {
                 Self::production_v2_store(block_store)
             }
         }
+    }
+
+    pub fn from_environment_with_redb_durability(
+        request_dir: &Path,
+        environment: &EnvironmentConfig,
+        redb_durability_mode: RedbBlockStoreDurabilityMode,
+    ) -> Result<Self, BlockStoreError> {
+        Self::from_environment_with_redb_durability_and_progress(
+            request_dir,
+            environment,
+            redb_durability_mode,
+            None,
+        )
     }
 
     fn production_overlay_store(
@@ -109,9 +152,83 @@ impl ConfiguredBlockStore {
         AzureTableBlockStoreV2::new(&config.container_sas_url).map(Self::AzureTable)
     }
 
+    fn local_redb_store(
+        request_dir: &Path,
+        block_store_root: &Path,
+        redb_durability_mode: RedbBlockStoreDurabilityMode,
+        progress: Option<OperatorProgressReporter>,
+    ) -> Result<Self, BlockStoreError> {
+        let store_root = resolve_path(request_dir, block_store_root);
+        let database_path = store_root.join(REDB_DATABASE_FILE_NAME);
+        report_operator_progress(
+            progress.as_ref(),
+            format!(
+                "Opening local-redb block store {}.",
+                database_path.display()
+            ),
+        );
+        let callback_progress = progress.clone();
+        let callback_database_path = database_path.clone();
+        let heartbeat_database_path = database_path.clone();
+        let opened_database_path = database_path.clone();
+        let telemetry_callback = callback_progress
+            .map(|progress| redb_telemetry_callback(progress, callback_database_path));
+        run_with_operator_liveness(
+            progress,
+            move |elapsed| {
+                format!(
+                    "Still opening local-redb block store {} after {}s; waiting on upstream redb work.",
+                    heartbeat_database_path.display(),
+                    elapsed.as_secs()
+                )
+            },
+            move || {
+                RedbBlockStore::new_with_durability_and_telemetry(
+                    store_root,
+                    redb_durability_mode,
+                    telemetry_callback,
+                )
+                .map(|store| Self::LocalRedb {
+                    store,
+                    database_path: opened_database_path,
+                })
+            },
+        )
+    }
+
     pub fn compact_now(&mut self) -> Result<(), BlockStoreError> {
+        self.compact_now_with_progress(None)
+    }
+
+    pub fn compact_now_with_progress(
+        &mut self,
+        progress: Option<OperatorProgressReporter>,
+    ) -> Result<(), BlockStoreError> {
         match self {
-            Self::LocalRedb(store) => store.compact_now(),
+            Self::LocalRedb {
+                store,
+                database_path,
+            } => {
+                let heartbeat_database_path = database_path.clone();
+                report_operator_progress(
+                    progress.as_ref(),
+                    format!(
+                        "Compacting local-redb block store {}.",
+                        database_path.display()
+                    ),
+                );
+                run_with_operator_liveness(
+                    progress,
+                    move |elapsed| {
+                        format!(
+                            "Still compacting local-redb block store {} after {}s.",
+                            heartbeat_database_path.display(),
+                            elapsed.as_secs()
+                        )
+                    },
+                    || store.compact_now(),
+                )
+            }
             Self::GatewayHttp3(_) | Self::Local(_) | Self::Overlay(_) | Self::AzureTable(_) => {
                 Err(BlockStoreError::BackendFailure(
                     "maintenance compact is supported only for the local-redb block-store profile"
@@ -120,6 +237,154 @@ impl ConfiguredBlockStore {
             }
         }
     }
+}
+
+fn report_operator_progress(progress: Option<&OperatorProgressReporter>, message: String) {
+    if let Some(progress) = progress {
+        progress(message);
+    }
+}
+
+fn redb_telemetry_callback(
+    progress: OperatorProgressReporter,
+    fallback_database_path: PathBuf,
+) -> BlockStoreTelemetryCallback {
+    let last_reported_signature = Arc::new(Mutex::new(None::<String>));
+    Arc::new(move |event| {
+        if let Some(message) =
+            project_redb_telemetry_event(&fallback_database_path, &event, &last_reported_signature)
+        {
+            progress(message);
+        }
+    })
+}
+
+fn project_redb_telemetry_event(
+    fallback_database_path: &Path,
+    event: &BlockStoreTelemetryEvent,
+    last_reported_signature: &Mutex<Option<String>>,
+) -> Option<String> {
+    let database_path = event
+        .attributes
+        .get("database_path")
+        .cloned()
+        .unwrap_or_else(|| fallback_database_path.display().to_string());
+    let message = match event.name.as_str() {
+        "repair_status" => {
+            let percent = event
+                .attributes
+                .get("progress")
+                .and_then(|value| parse_repair_progress_percent(value))?;
+            format!(
+                "local-redb repair progress for {}: {}% (upstream coarse milestone).",
+                database_path, percent
+            )
+        }
+        _ => {
+            let message = event.message.as_deref()?;
+            format!("local-redb telemetry for {}: {}.", database_path, message)
+        }
+    };
+
+    let mut last_reported_signature = last_reported_signature
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if last_reported_signature.as_deref() == Some(message.as_str()) {
+        return None;
+    }
+    *last_reported_signature = Some(message.clone());
+    Some(message)
+}
+
+fn parse_repair_progress_percent(value: &str) -> Option<u8> {
+    let progress = value.parse::<f64>().ok()?;
+    if !progress.is_finite() || !(0.0..=1.0).contains(&progress) {
+        return None;
+    }
+    if progress == 1.0 {
+        return Some(100);
+    }
+    Some((progress * 100.0).floor() as u8)
+}
+
+struct OperatorLivenessHeartbeat {
+    keep_running: Arc<AtomicBool>,
+    heartbeat_thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl OperatorLivenessHeartbeat {
+    fn new<F>(
+        progress: Option<OperatorProgressReporter>,
+        heartbeat_interval: Duration,
+        heartbeat_message: F,
+    ) -> Self
+    where
+        F: Fn(Duration) -> String + Send + 'static,
+    {
+        let Some(progress) = progress else {
+            return Self {
+                keep_running: Arc::new(AtomicBool::new(false)),
+                heartbeat_thread: None,
+            };
+        };
+        if heartbeat_interval.is_zero() {
+            return Self {
+                keep_running: Arc::new(AtomicBool::new(false)),
+                heartbeat_thread: None,
+            };
+        }
+
+        let keep_running = Arc::new(AtomicBool::new(true));
+        let heartbeat_keep_running = Arc::clone(&keep_running);
+        let heartbeat_thread = Some(std::thread::spawn(move || {
+            let start = Instant::now();
+            while heartbeat_keep_running.load(Ordering::Acquire) {
+                std::thread::park_timeout(heartbeat_interval);
+                if !heartbeat_keep_running.load(Ordering::Acquire) {
+                    break;
+                }
+                progress(heartbeat_message(start.elapsed()));
+            }
+        }));
+
+        Self {
+            keep_running,
+            heartbeat_thread,
+        }
+    }
+
+    fn stop(&mut self) {
+        self.keep_running.store(false, Ordering::Release);
+        if let Some(heartbeat_thread) = self.heartbeat_thread.take() {
+            heartbeat_thread.thread().unpark();
+            let _ = heartbeat_thread.join();
+        }
+    }
+}
+
+impl Drop for OperatorLivenessHeartbeat {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn run_with_operator_liveness<T, F, H>(
+    progress: Option<OperatorProgressReporter>,
+    heartbeat_message: H,
+    action: F,
+) -> Result<T, BlockStoreError>
+where
+    F: FnOnce() -> Result<T, BlockStoreError>,
+    H: Fn(Duration) -> String + Send + 'static,
+{
+    let mut heartbeat = OperatorLivenessHeartbeat::new(
+        progress,
+        REDB_PROGRESS_HEARTBEAT_INTERVAL,
+        heartbeat_message,
+    );
+    let result = action();
+    heartbeat.stop();
+    result
 }
 
 pub(crate) fn block_on_block_store_future<F>(future: F) -> F::Output
@@ -213,6 +478,19 @@ where
 
 #[async_trait]
 impl BlockStore for ConfiguredBlockStore {
+    fn set_telemetry_callback(
+        &self,
+        telemetry_callback: Option<BlockStoreTelemetryCallback>,
+    ) -> Result<(), BlockStoreError> {
+        match self {
+            Self::GatewayHttp3(store) => store.set_telemetry_callback(telemetry_callback),
+            Self::Local(store) => store.set_telemetry_callback(telemetry_callback),
+            Self::LocalRedb { store, .. } => store.set_telemetry_callback(telemetry_callback),
+            Self::Overlay(store) => store.set_telemetry_callback(telemetry_callback),
+            Self::AzureTable(store) => store.set_telemetry_callback(telemetry_callback),
+        }
+    }
+
     async fn put_block_bytes(
         &self,
         block_id: &BlockHash,
@@ -221,7 +499,7 @@ impl BlockStore for ConfiguredBlockStore {
         match self {
             Self::GatewayHttp3(store) => store.put_block_bytes(block_id, block_bytes).await,
             Self::Local(store) => store.put_block_bytes(block_id, block_bytes).await,
-            Self::LocalRedb(store) => store.put_block_bytes(block_id, block_bytes).await,
+            Self::LocalRedb { store, .. } => store.put_block_bytes(block_id, block_bytes).await,
             Self::Overlay(store) => store.put_block_bytes(block_id, block_bytes).await,
             Self::AzureTable(store) => store.put_block_bytes(block_id, block_bytes).await,
         }
@@ -234,7 +512,7 @@ impl BlockStore for ConfiguredBlockStore {
         match self {
             Self::GatewayHttp3(store) => store.put_block_bytes_batch(entries).await,
             Self::Local(store) => store.put_block_bytes_batch(entries).await,
-            Self::LocalRedb(store) => store.put_block_bytes_batch(entries).await,
+            Self::LocalRedb { store, .. } => store.put_block_bytes_batch(entries).await,
             Self::Overlay(store) => store.put_block_bytes_batch(entries).await,
             Self::AzureTable(store) => store.put_block_bytes_batch(entries).await,
         }
@@ -247,7 +525,7 @@ impl BlockStore for ConfiguredBlockStore {
         match self {
             Self::GatewayHttp3(store) => store.get_block_bytes(block_id).await,
             Self::Local(store) => store.get_block_bytes(block_id).await,
-            Self::LocalRedb(store) => store.get_block_bytes(block_id).await,
+            Self::LocalRedb { store, .. } => store.get_block_bytes(block_id).await,
             Self::Overlay(store) => store.get_block_bytes(block_id).await,
             Self::AzureTable(store) => store.get_block_bytes(block_id).await,
         }
@@ -257,7 +535,7 @@ impl BlockStore for ConfiguredBlockStore {
         match self {
             Self::GatewayHttp3(store) => store.iter_block_ids(),
             Self::Local(store) => store.iter_block_ids(),
-            Self::LocalRedb(store) => store.iter_block_ids(),
+            Self::LocalRedb { store, .. } => store.iter_block_ids(),
             Self::Overlay(store) => store.iter_block_ids(),
             Self::AzureTable(store) => store.iter_block_ids(),
         }
@@ -277,6 +555,14 @@ mod tests {
 
     fn put_block(store: &impl BlockStore, block: &Block) -> BlockHash {
         block_on_block_store_future(store.put(block)).unwrap()
+    }
+
+    fn local_redb_store_for_test(root: &Path) -> ConfiguredBlockStore {
+        let store_root = root.join("blocks");
+        ConfiguredBlockStore::LocalRedb {
+            store: RedbBlockStore::new(&store_root).unwrap(),
+            database_path: store_root.join(REDB_DATABASE_FILE_NAME),
+        }
     }
 
     #[test]
@@ -346,9 +632,7 @@ mod tests {
     #[test]
     fn configured_local_redb_store_delegates_iter_block_ids() {
         let dir = tempdir().unwrap();
-        let store = ConfiguredBlockStore::LocalRedb(
-            RedbBlockStore::new(dir.path().join("blocks")).unwrap(),
-        );
+        let store = local_redb_store_for_test(dir.path());
         let block = sample_block();
         let block_id = put_block(&store, &block);
 
@@ -382,7 +666,7 @@ mod tests {
         .unwrap();
 
         match store {
-            ConfiguredBlockStore::LocalRedb(store) => {
+            ConfiguredBlockStore::LocalRedb { store, .. } => {
                 assert!(format!("{store:?}").contains("Fast"));
             }
             _ => panic!("expected local redb store"),
@@ -392,9 +676,7 @@ mod tests {
     #[test]
     fn configured_local_redb_store_compacts_without_losing_blocks() {
         let dir = tempdir().unwrap();
-        let mut store = ConfiguredBlockStore::LocalRedb(
-            RedbBlockStore::new(dir.path().join("blocks")).unwrap(),
-        );
+        let mut store = local_redb_store_for_test(dir.path());
         let block = sample_block();
         let block_id = put_block(&store, &block);
 
@@ -417,6 +699,140 @@ mod tests {
 
         assert!(matches!(error, BlockStoreError::BackendFailure(_)));
         assert!(error.to_string().contains("local-redb"));
+    }
+
+    #[test]
+    fn repair_status_telemetry_projects_to_cli_progress_message() {
+        let last_reported_signature = Mutex::new(None);
+        let event = BlockStoreTelemetryEvent::new("repair_status")
+            .with_attribute("database_path", r"C:\data\blocks.redb")
+            .with_attribute("progress", "0.600");
+
+        let message = project_redb_telemetry_event(
+            Path::new(r"C:\fallback\blocks.redb"),
+            &event,
+            &last_reported_signature,
+        );
+
+        assert_eq!(
+            message.as_deref(),
+            Some(
+                "local-redb repair progress for C:\\data\\blocks.redb: 60% (upstream coarse milestone)."
+            )
+        );
+    }
+
+    #[test]
+    fn duplicate_repair_status_telemetry_is_suppressed() {
+        let last_reported_signature = Mutex::new(None);
+        let event = BlockStoreTelemetryEvent::new("repair_status")
+            .with_attribute("database_path", r"C:\data\blocks.redb")
+            .with_attribute("progress", "0.300");
+
+        assert!(
+            project_redb_telemetry_event(
+                Path::new(r"C:\fallback\blocks.redb"),
+                &event,
+                &last_reported_signature,
+            )
+            .is_some()
+        );
+        assert!(
+            project_redb_telemetry_event(
+                Path::new(r"C:\fallback\blocks.redb"),
+                &event,
+                &last_reported_signature,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn distinct_non_repair_telemetry_messages_are_not_suppressed() {
+        let last_reported_signature = Mutex::new(None);
+        let first = BlockStoreTelemetryEvent::new("open_status")
+            .with_message("opened metadata tables")
+            .with_attribute("database_path", r"C:\data\blocks.redb");
+        let second = BlockStoreTelemetryEvent::new("open_status")
+            .with_message("validated allocator state")
+            .with_attribute("database_path", r"C:\data\blocks.redb");
+
+        assert_eq!(
+            project_redb_telemetry_event(
+                Path::new(r"C:\fallback\blocks.redb"),
+                &first,
+                &last_reported_signature,
+            )
+            .as_deref(),
+            Some("local-redb telemetry for C:\\data\\blocks.redb: opened metadata tables.")
+        );
+        assert_eq!(
+            project_redb_telemetry_event(
+                Path::new(r"C:\fallback\blocks.redb"),
+                &second,
+                &last_reported_signature,
+            )
+            .as_deref(),
+            Some("local-redb telemetry for C:\\data\\blocks.redb: validated allocator state.")
+        );
+    }
+
+    #[test]
+    fn repair_status_telemetry_preserves_terminal_completion_percentage() {
+        let last_reported_signature = Mutex::new(None);
+        let event = BlockStoreTelemetryEvent::new("repair_status")
+            .with_attribute("database_path", r"C:\data\blocks.redb")
+            .with_attribute("progress", "1.0");
+
+        let message = project_redb_telemetry_event(
+            Path::new(r"C:\fallback\blocks.redb"),
+            &event,
+            &last_reported_signature,
+        );
+
+        assert_eq!(
+            message.as_deref(),
+            Some(
+                "local-redb repair progress for C:\\data\\blocks.redb: 100% (upstream coarse milestone)."
+            )
+        );
+    }
+
+    #[test]
+    fn repair_status_telemetry_does_not_round_incomplete_progress_to_completion() {
+        let last_reported_signature = Mutex::new(None);
+        let event = BlockStoreTelemetryEvent::new("repair_status")
+            .with_attribute("database_path", r"C:\data\blocks.redb")
+            .with_attribute("progress", "0.999");
+
+        let message = project_redb_telemetry_event(
+            Path::new(r"C:\fallback\blocks.redb"),
+            &event,
+            &last_reported_signature,
+        );
+
+        assert_eq!(
+            message.as_deref(),
+            Some(
+                "local-redb repair progress for C:\\data\\blocks.redb: 99% (upstream coarse milestone)."
+            )
+        );
+    }
+
+    #[test]
+    fn repair_status_telemetry_ignores_non_finite_progress_values() {
+        let last_reported_signature = Mutex::new(None);
+        let event = BlockStoreTelemetryEvent::new("repair_status")
+            .with_attribute("database_path", r"C:\data\blocks.redb")
+            .with_attribute("progress", "NaN");
+
+        let message = project_redb_telemetry_event(
+            Path::new(r"C:\fallback\blocks.redb"),
+            &event,
+            &last_reported_signature,
+        );
+
+        assert!(message.is_none());
     }
 
     #[test]
