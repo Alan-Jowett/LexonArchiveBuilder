@@ -25,7 +25,7 @@ automation, v0.7.0 fixed-budget ladder experiment automation, rooted
 block-store copy tooling with live default heartbeat counters plus additive
 worker-threaded traversal and capability-based batched destination
 publication, CLI-only
-local-redb maintenance compaction, upstream embedding-readback API adoption, LAB-owned
+local-redb maintenance compaction, graceful Ctrl-C local-redb shutdown, upstream embedding-readback API adoption, LAB-owned
 replay-journaled split-stage recovery, bounded-residency deterministic replay
 ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, replay batch-size decoupling from CPU concurrency, bounded multi-batch replay-prefetch buffering, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
@@ -67,8 +67,9 @@ replay ordering for clustering replay, independent replay batch-size versus
 replay-materialization concurrency tuning, bounded multi-batch replay-prefetch
 buffering, derived request-adjacent delegated v3 working-root
 support, repeatable adaptation to later upstream-`main` constrained-v3 API
-breakage, repo-wide redb block-store targeting support, and layer-parallel
-delegated block construction for the local/testing profile.
+breakage, repo-wide redb block-store targeting support, graceful Ctrl-C
+local-redb shutdown, and layer-parallel delegated block construction for the
+local/testing profile.
 
 This document is layered on top of:
 
@@ -103,6 +104,8 @@ owned by LexonGraph and its subordinate crates.
   the architecture level
 - Rust implementation, configuration, and test artifacts that realize the
   approved MVP slice in this repository
+- CLI command dispatch, long-running orchestration loops, and operator-visible
+  result handling for indexer-owned tools that open direct `local-redb`
 - CLI parsing, report rendering, and JSON artifact generation for the rooted
   block-tree quality tool
 - rooted-corpus sampling, exact-versus-approximate neighbor comparison, and
@@ -152,6 +155,9 @@ The LexonArchiveBuilder indexer design is intended to be:
 - able to copy rooted immutable block graphs between approved block-store
   targets without redefining block identity, mutable-reference publication, or
   MCP behavior
+- able to honor ordinary operator `Ctrl-C` requests on direct `local-redb`
+  surfaces without turning dirty-close recovery cost into the default local
+  cancellation path
 - chunk-first for email retrieval while preserving full-message and source
   provenance artifacts
 
@@ -1856,6 +1862,44 @@ only the immutable redb-backed block file and does not rewrite, republish, or
 relocate repository-owned mutable refs.
 
 **Traces to:** RQ-INDEXER-005, RQ-INDEXER-005D, RQ-INDEXER-007
+
+### DSG-LFI-005G `Graceful operator interrupt handling for direct local redb`
+
+LexonArchiveBuilder realizes graceful `Ctrl-C` handling for direct `local-redb`
+as a repository-owned CLI-lifecycle concern above the shared `BlockStore`
+boundary.
+
+When an indexer-owned CLI command opens a direct `local-redb` store, the
+process installs one repository-owned operator-interrupt latch for that command
+invocation. On the first operator `Ctrl-C`, repository-owned orchestration
+stops admitting new work that it controls, begins orderly teardown of active
+repository-owned loops, and allows the command's owned direct redb handles to
+drop through the normal process-unwind path rather than being abandoned by an
+abrupt process exit.
+
+That interrupt path is shared across batch `run`, rooted quality, rooted
+search, rooted copy, `maintenance`, and future indexer-owned CLI surfaces that
+open direct `local-redb`, so the graceful-close rule follows the block-store
+selection boundary rather than being re-specified command by command. The same
+path remains narrow:
+
+- it preserves explicit interrupted or unsuccessful operator outcomes rather
+  than manufacturing success-shaped summaries, reports, or maintenance results
+  for abandoned work
+- it does not treat unpublished or incomplete progress as authoritative, so
+  repository-owned mutable refs on the filesystem keep the same publish-on-
+  successful-completion boundary
+- it does not introduce a daemon, background cancellation service, or MCP-
+  visible interrupt API
+- it does not redefine filesystem, overlay, direct-Azure, or gateway-backed
+  profiles that do not expose the same redb dirty-close recovery cost
+
+This design constrains only the repository-owned command lifecycle and teardown
+discipline. It does not redefine LexonGraph-owned block semantics, mutable-ref
+format, or upstream redb internals.
+
+**Traces to:** RQ-INDEXER-005E, RQ-INDEXER-007, RQ-INDEXER-008, RQ-INDEXER-009,
+RQ-INDEXER-010A
 
 ### DSG-LFI-006 `Embedding provider adapter boundary`
 

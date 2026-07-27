@@ -25,6 +25,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::block_store::block_on_block_store_future;
+use crate::interrupt;
 use crate::search::default_traversal_width as default_search_traversal_width;
 use crate::tree_tools::{
     decode_embedding_values, metadata_values_to_text_map, search_with_partial_retry,
@@ -41,6 +42,8 @@ const RTT_CWND_BYTES: usize = 65_536;
 
 #[derive(Debug, Error)]
 pub enum TreeQualityError {
+    #[error(transparent)]
+    Interrupted(#[from] interrupt::InterruptError),
     #[error("root block {root_id} was not found")]
     MissingRootBlock { root_id: String },
     #[error("block {block_id} uses unsupported embedding spec {encoding}/{dims}")]
@@ -437,6 +440,7 @@ pub fn assess_rooted_tree_with_config(
     store: &dyn BlockStore,
     tnn_recall: TnnRecallConfig,
 ) -> Result<TreeQualityReport, TreeQualityError> {
+    interrupt::check_for_interrupt()?;
     if tnn_recall.sample_size == 0 {
         return Err(TreeQualityError::InvalidTnnRecallSampleSize);
     }
@@ -554,6 +558,7 @@ fn assess_random_walk_queries(
     store: &dyn BlockStore,
     config: TnnRecallConfig,
 ) -> Result<TreeQualityReport, TreeQualityError> {
+    interrupt::check_for_interrupt()?;
     let sampled_queries = sample_random_walk_queries(*root_id, root_block, store, config)?;
     let query_accesses = build_random_walk_query_accesses(
         root_id,
@@ -800,6 +805,7 @@ fn traverse_block(
     ancestry: &mut Vec<BlockHash>,
     state: &mut TraversalState,
 ) -> Result<(), TreeQualityError> {
+    interrupt::check_for_interrupt()?;
     if state.visited.contains(&block_id) {
         return Ok(());
     }
@@ -850,6 +856,7 @@ fn traverse_block(
     match block {
         Block::Branch(branch) => {
             for entry in &branch.entries {
+                interrupt::check_for_interrupt()?;
                 state.edge_count += 1;
                 handle_child_entry(block_id, &metrics, entry, depth + 1, store, ancestry, state)?;
             }
@@ -870,6 +877,7 @@ fn handle_child_entry(
     ancestry: &mut Vec<BlockHash>,
     state: &mut TraversalState,
 ) -> Result<(), TreeQualityError> {
+    interrupt::check_for_interrupt()?;
     if ancestry.contains(&entry.child) {
         state.push_finding(TreeQualityFinding {
             severity: FindingSeverity::Error,
@@ -1118,6 +1126,7 @@ fn build_corpus_tnn_recall_report(
     let mut query_accesses = Vec::with_capacity(sampled_queries.len());
 
     for query in sampled_queries {
+        interrupt::check_for_interrupt()?;
         let exact_neighbors = exact_neighbors(&state.corpus_entries, query, max_k)?;
         let (approximate_neighbors, query_access) = approximate_neighbors(
             root_id,
@@ -1286,6 +1295,7 @@ fn sample_random_walk_queries(
         .saturating_mul(32)
         .max(config.sample_size);
     for walk_index in 0..max_attempts {
+        interrupt::check_for_interrupt()?;
         if samples.len() >= config.sample_size {
             break;
         }
@@ -1312,6 +1322,7 @@ fn random_walk_query(
     let mut current_block = Cow::Borrowed(root_block);
     let mut depth = 0usize;
     loop {
+        interrupt::check_for_interrupt()?;
         match current_block.as_ref() {
             Block::Leaf(leaf) => {
                 if leaf.entries.is_empty() {

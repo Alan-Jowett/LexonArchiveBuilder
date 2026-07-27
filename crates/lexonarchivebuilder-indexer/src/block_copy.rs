@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use ciborium::Value;
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -22,6 +23,7 @@ use thiserror::Error;
 use crate::custom_blocks::{
     REPLAY_JOURNAL_BLOCK_TYPE, REPLAY_JOURNAL_MEDIA_TYPE, custom_block_payload,
 };
+use crate::interrupt;
 use crate::mailbox::{NORMALIZED_EMAIL_ARTIFACT_BLOCK_TYPE, NORMALIZED_EMAIL_MEDIA_TYPE};
 use crate::tree_tools::parse_block_hash;
 
@@ -29,6 +31,7 @@ pub const DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITES: usize = 64;
 pub const DEFAULT_COPY_WORKER_THREADS: usize = 1;
 pub const BLIND_WRITE_REDB_COMPACTION_INTERVAL_BLOCKS: usize = 500_000;
 const DEFAULT_MAX_IN_FLIGHT_DESTINATION_WRITE_BYTES: usize = 64 * 1024 * 1024;
+const INTERRUPT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const DESTINATION_STORE_FAILURE_ID: &str = "destination-store";
 const UNSUPPORTED_BATCH_WRITE_MESSAGE: &str =
     "batch writes are not supported by this block store backend";
@@ -271,6 +274,27 @@ impl CopyMetrics {
             progress.note_attempted_write_block();
         }
     }
+}
+
+fn sync_interrupt_requested(stop_requested: &AtomicBool) -> bool {
+    if stop_requested.load(Ordering::SeqCst) {
+        return true;
+    }
+    if interrupt::is_interrupt_requested() {
+        stop_requested.store(true, Ordering::SeqCst);
+        return true;
+    }
+    false
+}
+
+fn request_threaded_shutdown(
+    stop_requested: &AtomicBool,
+    work_queue: &ThreadedWorkQueue,
+    write_queue: &ThreadedWriteQueue,
+) {
+    stop_requested.store(true, Ordering::SeqCst);
+    work_queue.request_shutdown();
+    write_queue.request_shutdown();
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -517,8 +541,12 @@ where
     let mut in_flight_destination_write_bytes = 0usize;
     let mut buffered_write_bytes = 0usize;
     let mut blind_write_checkpoint = blind_write_checkpoint;
+    let stop_requested = AtomicBool::new(interrupt::is_interrupt_requested());
 
     while let Some((request_root_id, block_id)) = queue.pop_front() {
+        if sync_interrupt_requested(&stop_requested) {
+            break;
+        }
         failures.note_block_root(request_root_id, block_id);
         if !visited.insert(block_id) {
             continue;
@@ -616,6 +644,9 @@ where
                         &mut failures,
                     )
                     .await;
+                    if sync_interrupt_requested(&stop_requested) {
+                        break;
+                    }
                     if let Some(checkpoint) = blind_write_checkpoint.as_mut()
                         && let Err(error) = (checkpoint.action)()
                     {
@@ -733,15 +764,22 @@ where
     };
 
     std::thread::scope(|scope| {
+        let interrupt_handle = scope.spawn(|| {
+            while !stop_requested.load(Ordering::SeqCst) {
+                if interrupt::is_interrupt_requested() {
+                    request_threaded_shutdown(&stop_requested, &work_queue, &write_queue);
+                    return;
+                }
+                std::thread::sleep(INTERRUPT_POLL_INTERVAL);
+            }
+        });
         let mut traversal_handles = Vec::new();
         for _ in 0..worker_thread_count.max(1) {
             traversal_handles.push(scope.spawn(|| {
                 if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| {
                     run_threaded_copy_worker(&traversal_context)
                 })) {
-                    stop_requested.store(true, Ordering::SeqCst);
-                    work_queue.request_shutdown();
-                    write_queue.request_shutdown();
+                    request_threaded_shutdown(&stop_requested, &work_queue, &write_queue);
                     panic::resume_unwind(payload);
                 }
             }));
@@ -752,9 +790,7 @@ where
                 if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| {
                     run_threaded_write_worker(&writer_context)
                 })) {
-                    stop_requested.store(true, Ordering::SeqCst);
-                    work_queue.request_shutdown();
-                    write_queue.request_shutdown();
+                    request_threaded_shutdown(&stop_requested, &work_queue, &write_queue);
                     panic::resume_unwind(payload);
                 }
             }));
@@ -763,9 +799,7 @@ where
         let mut panic_payload = None;
         for handle in traversal_handles {
             if let Err(payload) = handle.join() {
-                stop_requested.store(true, Ordering::SeqCst);
-                work_queue.request_shutdown();
-                write_queue.request_shutdown();
+                request_threaded_shutdown(&stop_requested, &work_queue, &write_queue);
                 if panic_payload.is_none() {
                     panic_payload = Some(payload);
                 }
@@ -774,13 +808,14 @@ where
         write_queue.finish_producing(stop_requested.load(Ordering::SeqCst));
         for handle in writer_handles {
             if let Err(payload) = handle.join() {
-                stop_requested.store(true, Ordering::SeqCst);
-                write_queue.request_shutdown();
+                request_threaded_shutdown(&stop_requested, &work_queue, &write_queue);
                 if panic_payload.is_none() {
                     panic_payload = Some(payload);
                 }
             }
         }
+        stop_requested.store(true, Ordering::SeqCst);
+        let _ = interrupt_handle.join();
         if let Some(payload) = panic_payload {
             panic::resume_unwind(payload);
         }

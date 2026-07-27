@@ -6,6 +6,7 @@ pub mod block_store;
 pub mod config;
 mod custom_blocks;
 pub mod embedding;
+pub mod interrupt;
 pub mod mailbox;
 mod paths;
 pub mod quality;

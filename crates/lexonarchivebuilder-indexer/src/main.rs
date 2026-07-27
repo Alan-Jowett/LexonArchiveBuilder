@@ -2,6 +2,7 @@
 // Copyright (c) 2026 LexonArchiveBuilder contributors
 
 use std::ffi::OsStr;
+use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -24,6 +25,7 @@ use lexonarchivebuilder_indexer::config::{
     EnvironmentConfig, LocalEmbeddingConfig, ProductionBlockStoreConfig, ProductionEmbeddingConfig,
 };
 use lexonarchivebuilder_indexer::embedding::ConfiguredEmbeddingProvider;
+use lexonarchivebuilder_indexer::interrupt;
 use lexonarchivebuilder_indexer::quality::{
     TnnRecallConfig, assess_rooted_tree_with_config,
     default_report_path as default_quality_report_path, default_tnn_recall_sample_size,
@@ -37,7 +39,7 @@ use lexonarchivebuilder_indexer::search::{
 };
 use lexonarchivebuilder_indexer::tree_tools::parse_block_hash;
 use lexonarchivebuilder_indexer::{
-    ClusteringConfigOverrides, ExecutionStage, run_request_file_with_outputs,
+    BatchRequest, ClusteringConfigOverrides, ExecutionStage, run_request_file_with_outputs,
     validate_request_file_with_overrides, write_summary_file,
 };
 use lexongraph_block_store_redb::RedbBlockStoreDurabilityMode;
@@ -580,6 +582,11 @@ fn initialize_process_logging() {
 async fn main() -> anyhow::Result<()> {
     initialize_process_logging();
     let cli = Cli::parse();
+    let local_redb_interrupt_enabled = command_uses_direct_local_redb(&cli)?;
+    if local_redb_interrupt_enabled {
+        interrupt::arm_ctrl_c_handler()
+            .context("failed to install graceful Ctrl-C handling for direct local-redb command")?;
+    }
 
     match cli.command {
         Command::Run {
@@ -598,6 +605,7 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await
                 .with_context(|| format!("failed to validate request {}", request.display()))?;
+                interrupt::check_for_interrupt()?;
                 println!("Validation OK");
             } else {
                 let summary = run_request_file_with_outputs(
@@ -608,6 +616,7 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await
                 .with_context(|| format!("failed to run request {}", request.display()))?;
+                interrupt::check_for_interrupt()?;
                 let rendered = serde_json::to_string_pretty(&summary)
                     .context("failed to render batch summary")?;
                 if let Some(output_path) = summary_out.as_ref() {
@@ -637,6 +646,7 @@ async fn main() -> anyhow::Result<()> {
                     fast_random_walk,
                 },
             )?;
+            interrupt::check_for_interrupt()?;
             let output_path = json_out.unwrap_or_else(|| default_quality_report_path(&root_id));
             write_quality_report(&output_path, &report)?;
             println!("{}", render_report_summary(&report));
@@ -678,6 +688,7 @@ async fn main() -> anyhow::Result<()> {
                 search_rooted_tree(&store, &provider, &root_id, &query, top_k, traversal_width)
                     .await
                     .context("failed to search rooted tree")?;
+            interrupt::check_for_interrupt()?;
             let output_path =
                 json_out.unwrap_or_else(|| default_search_report_path(&root_id, &query));
             write_search_report(&output_path, &report)?;
@@ -710,7 +721,7 @@ async fn main() -> anyhow::Result<()> {
                 && matches!(&destination_store, ConfiguredBlockStore::LocalRedb(_))
             {
                 let mut checkpoint_store = destination_store.clone();
-                await_with_copy_liveness(
+                let operation = await_with_copy_liveness(
                     copy_rooted_blocks_with_mode_and_limit_and_checkpoint(
                         &source_store,
                         &mut destination_store,
@@ -726,10 +737,10 @@ async fn main() -> anyhow::Result<()> {
                     ),
                     COPY_LIVENESS_HEARTBEAT_INTERVAL,
                     build_copy_liveness_message(root_ids.len(), progress.clone()),
-                )
-                .await
+                );
+                operation.await
             } else {
-                await_with_copy_liveness(
+                let operation = await_with_copy_liveness(
                     copy_rooted_blocks_with_mode_and_limit_and_progress(
                         &source_store,
                         &mut destination_store,
@@ -741,9 +752,10 @@ async fn main() -> anyhow::Result<()> {
                     ),
                     COPY_LIVENESS_HEARTBEAT_INTERVAL,
                     build_copy_liveness_message(root_ids.len(), progress.clone()),
-                )
-                .await
+                );
+                operation.await
             };
+            interrupt::check_for_interrupt()?;
             let output_path = json_out.unwrap_or_else(|| default_copy_report_path(&root_ids));
             write_copy_report(&output_path, &report)?;
             println!("{}", render_copy_report_summary(&report));
@@ -760,6 +772,7 @@ async fn main() -> anyhow::Result<()> {
                     "failed to compact block store for profile {}",
                     profile.as_cli_value()
                 ))?;
+                interrupt::check_for_interrupt()?;
                 println!(
                     "Maintenance compact completed for block-store profile {}.",
                     profile.as_cli_value()
@@ -769,6 +782,40 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn request_uses_direct_local_redb(request_path: &Path) -> anyhow::Result<bool> {
+    let request_bytes = fs::read(request_path)
+        .with_context(|| format!("failed to read request {}", request_path.display()))?;
+    let request: BatchRequest = serde_json::from_slice(&request_bytes)
+        .with_context(|| format!("failed to parse request {}", request_path.display()))?;
+    Ok(matches!(
+        request.environment,
+        EnvironmentConfig::LocalRedb { .. }
+    ))
+}
+
+fn command_uses_direct_local_redb(cli: &Cli) -> anyhow::Result<bool> {
+    Ok(match &cli.command {
+        Command::Run { request, .. } => request_uses_direct_local_redb(request)?,
+        Command::Quality { block_store, .. } | Command::Search { block_store, .. } => {
+            block_store.block_store_profile == ReadableBlockStoreProfile::LocalRedb
+        }
+        Command::Copy {
+            source_block_store,
+            destination_block_store,
+            ..
+        } => {
+            source_block_store.source_block_store_profile == ReadableBlockStoreProfile::LocalRedb
+                || destination_block_store.destination_block_store_profile
+                    == WritableBlockStoreProfile::LocalRedb
+        }
+        Command::Maintenance { command } => match command {
+            MaintenanceCommand::Compact { block_store } => {
+                block_store.block_store_profile == ReadableBlockStoreProfile::LocalRedb
+            }
+        },
+    })
 }
 
 fn configured_block_store(args: &BlockStoreArgs) -> anyhow::Result<ConfiguredBlockStore> {
@@ -872,7 +919,9 @@ fn parse_bounded_worker_threads(value: &str) -> Result<usize, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::sync::{Arc, Mutex};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
     use tokio::time::sleep;
@@ -973,6 +1022,51 @@ mod tests {
             Command::Run { validate_only, .. } => assert!(validate_only),
             _ => panic!("expected run command"),
         }
+    }
+
+    #[test]
+    fn command_uses_direct_local_redb_for_run_request_environment() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let request_path = std::env::temp_dir().join(format!("local-redb-request-{unique}.json"));
+        fs::write(
+            &request_path,
+            serde_json::json!({
+                "environment": {
+                    "kind": "local-redb",
+                    "block_store_root": "blocks",
+                    "embedding": {
+                        "base_url": "http://localhost:11434",
+                        "model": "all-MiniLM-L6-v2",
+                        "request_timeout_secs": 30,
+                        "max_retries": 5,
+                        "retry_delay_ms": 1000
+                    }
+                },
+                "embedding_spec": {
+                    "dims": 384,
+                    "encoding": "f32le"
+                },
+                "items": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "run",
+            "--request",
+            request_path.to_str().unwrap(),
+        ])
+        .unwrap();
+
+        let uses_local_redb = command_uses_direct_local_redb(&cli).unwrap();
+        let _ = fs::remove_file(&request_path);
+
+        assert!(uses_local_redb);
     }
 
     #[test]

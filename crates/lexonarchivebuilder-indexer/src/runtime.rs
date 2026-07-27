@@ -56,6 +56,7 @@ use crate::custom_blocks::{
     REPLAY_JOURNAL_BLOCK_TYPE, REPLAY_JOURNAL_MEDIA_TYPE, custom_block_payload,
 };
 use crate::embedding::{ConfiguredEmbeddingProvider, ConfiguredEmbeddingProviderError};
+use crate::interrupt;
 use crate::mailbox::{MailboxExpansionError, expand_mailbox_item_with_stats};
 use crate::paths::resolve_path;
 use crate::resolver::{
@@ -715,6 +716,8 @@ impl StagedBlocks {
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
+    #[error(transparent)]
+    Interrupted(#[from] interrupt::InterruptError),
     #[error("failed to read request file {path}: {source}")]
     ReadRequest {
         path: String,
@@ -3479,6 +3482,7 @@ async fn run_ingestion_only_stage(
     let total_items: usize = replay_batches.iter().map(|batch| batch.items.len()).sum();
     let mut completed_items = 0usize;
     for (batch_index, batch) in replay_batches.into_iter().enumerate() {
+        interrupt::check_for_interrupt()?;
         let batch_number = batch_index + 1;
         let batch_item_count = batch.items.len();
         report_progress(
@@ -3505,7 +3509,7 @@ async fn run_ingestion_only_stage(
                 )
             },
         )
-        .await?;
+        .await??;
         persist_staged_blocks(&constructed.blocks, block_store)?;
         if let Some(mutable_ref_store) = io.mutable_ref_store {
             let records = batch
@@ -3568,6 +3572,7 @@ fn for_each_request_replay_item(
             ),
         );
         for item in document_items {
+            interrupt::check_for_interrupt()?;
             visit(item)?;
             total_items += 1;
         }
@@ -3578,6 +3583,7 @@ fn for_each_request_replay_item(
     }
 
     for item in &request.items {
+        interrupt::check_for_interrupt()?;
         if let BatchItemConfig::Mailbox { path, metadata } = item {
             let resolved = resolve_path(request_dir, path);
             report_progress(
@@ -3608,6 +3614,7 @@ fn for_each_request_replay_item(
                 ),
             );
             for mailbox_item in expansion.items {
+                interrupt::check_for_interrupt()?;
                 visit(mailbox_item)?;
                 total_items += 1;
             }
@@ -3661,7 +3668,7 @@ async fn ingest_replay_batch_to_store(
             )
         },
     )
-    .await?;
+    .await??;
     persist_staged_blocks(&constructed.blocks, block_store)?;
     if let Some(mutable_ref_store) = io.mutable_ref_store {
         let records = batch_items
@@ -3724,6 +3731,7 @@ async fn stream_request_ingestion_to_store(
             ),
         );
         for item in document_items {
+            interrupt::check_for_interrupt()?;
             buffered_items.push(item);
             total_items += 1;
             if buffered_items.len() < chunk_size {
@@ -3750,6 +3758,7 @@ async fn stream_request_ingestion_to_store(
     }
 
     for item in &request.items {
+        interrupt::check_for_interrupt()?;
         if let BatchItemConfig::Mailbox { path, metadata } = item {
             let resolved = resolve_path(request_dir, path);
             report_progress(
@@ -3788,6 +3797,7 @@ async fn stream_request_ingestion_to_store(
                 ),
             );
             for mailbox_item in expansion.items {
+                interrupt::check_for_interrupt()?;
                 buffered_items.push(mailbox_item);
                 total_items += 1;
                 if buffered_items.len() < chunk_size {
@@ -5320,7 +5330,7 @@ where
                 )
             },
         )
-        .await?;
+        .await??;
         completed_items += batch_item_count;
         if let Some(message) = &batch.completion_message {
             report_progress(io.progress, message.clone());
@@ -5544,6 +5554,7 @@ where
     let mut iterator = replay_state.batch_iterator()?;
     let mut batch_number = 0usize;
     while let Some(batch) = iterator.next_batch()? {
+        interrupt::check_for_interrupt()?;
         if batch.items.is_empty() {
             continue;
         }
@@ -5574,7 +5585,7 @@ where
                 )
             },
         )
-        .await?;
+        .await??;
         completed_items += batch_item_count;
         report_progress(
             io.progress,
@@ -5593,6 +5604,7 @@ where
             .submission_progress_kind
             .handoff_message(total_batches, total_items),
     );
+    interrupt::check_for_interrupt()?;
     let pass_report = indexer.finish_pass().map_err(|error| {
         clustering_failure_error(
             error,
@@ -5649,6 +5661,7 @@ where
         io.progress,
         "Streaming planning complete; starting final materialization".into(),
     );
+    interrupt::check_for_interrupt()?;
     let result = indexer
         .finalize(replay_state.finalize_source()?, block_store)
         .await
@@ -5753,6 +5766,7 @@ where
     let batch_size = replay_state.batch_size.max(1);
     let mut batch_number = 0usize;
     loop {
+        interrupt::check_for_interrupt()?;
         let entries = reader.read_next_entries(batch_size)?;
         if entries.is_empty() {
             break;
@@ -5789,7 +5803,7 @@ where
                 )
             },
         )
-        .await
+        .await?
         .map_err(|error| {
             clustering_failure_error(
                 error,
@@ -5825,6 +5839,7 @@ where
             "Submitted all {total_batches} replay batch(es); waiting for delegated v3 finalize progress over {total_items} leaf block id(s)"
         ),
     );
+    interrupt::check_for_interrupt()?;
     let result = indexer
         .finalize(block_store, block_store)
         .await
@@ -5893,7 +5908,7 @@ async fn await_with_periodic_progress<Fut, T, M>(
     progress: &ProgressReporter,
     heartbeat_interval: Duration,
     heartbeat_message: M,
-) -> T
+) -> Result<T, RuntimeError>
 where
     Fut: Future<Output = T>,
     M: Fn(Duration) -> String,
@@ -5902,10 +5917,13 @@ where
     let mut heartbeat = interval_at(TokioInstant::now() + heartbeat_interval, heartbeat_interval);
     heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
     tokio::pin!(operation);
+    let interrupt = interrupt::wait_for_interrupt();
+    tokio::pin!(interrupt);
     loop {
         tokio::select! {
             biased;
-            result = &mut operation => return result,
+            interrupted = &mut interrupt => return Err(interrupted.into()),
+            result = &mut operation => return Ok(result),
             _ = heartbeat.tick() => {
                 report_progress(progress, heartbeat_message(start.elapsed()));
             }
@@ -7265,6 +7283,7 @@ mod tests {
     };
     use serde_json::json;
     use tempfile::tempdir;
+    use tokio::time::sleep;
 
     use crate::config::{
         BatchItemConfig, ClusteringConfigOverrides, EmbeddingSpecConfig, EnvironmentConfig,
@@ -7275,6 +7294,21 @@ mod tests {
 
     fn put_block(store: &ConfiguredBlockStore, block: &Block) -> BlockHash {
         crate::block_store::block_on_block_store_future(store.put(block)).unwrap()
+    }
+
+    struct InterruptResetGuard;
+
+    impl InterruptResetGuard {
+        fn new() -> Self {
+            crate::interrupt::set_interrupt_requested_for_tests(false);
+            Self
+        }
+    }
+
+    impl Drop for InterruptResetGuard {
+        fn drop(&mut self) {
+            crate::interrupt::set_interrupt_requested_for_tests(false);
+        }
     }
 
     fn get_block(
@@ -8411,6 +8445,7 @@ mod tests {
             ),
         )
         .await
+        .unwrap()
         .unwrap();
 
         assert_eq!(result, 7);
@@ -12841,6 +12876,150 @@ mod tests {
         server.join();
     }
 
+    #[tokio::test]
+    async fn interrupted_local_redb_run_reopens_cleanly_and_preserves_mutable_refs() {
+        let _interrupt_guard = InterruptResetGuard::new();
+        let temp = tempdir().unwrap();
+        let document_a = temp.path().join("alpha.txt");
+        let document_b = temp.path().join("beta.txt");
+        fs::write(&document_a, b"alpha\n").unwrap();
+        fs::write(&document_b, b"beta\n").unwrap();
+
+        let seeded_server = spawn_embedding_server(1);
+        let seeded = run_request(
+            temp.path(),
+            BatchRequest {
+                environment: EnvironmentConfig::LocalRedb {
+                    block_store_root: Path::new("blocks").to_path_buf(),
+                    embedding: LocalEmbeddingConfig {
+                        base_url: seeded_server.base_url.clone(),
+                        model: "all-MiniLM-L6-v2".into(),
+                        api_key_env: None,
+                        request_timeout_secs: 5,
+                        max_retries: 0,
+                        retry_delay_ms: 1,
+                    },
+                },
+                embedding_spec: EmbeddingSpecConfig {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                block_size_target: 65_536,
+                stage: ExecutionStage::FullPipeline,
+                profile_version: PUBLISHED_PROFILE_V0_1_0,
+                max_concurrency: Some(1),
+                replay_batch_size: None,
+                ref_name: TEST_REF_NAME.into(),
+                items: vec![BatchItemConfig::Document {
+                    path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
+                    metadata: BTreeMap::new(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+        seeded_server.join();
+
+        let block_store_root = temp.path().join("blocks");
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
+        let refs_before_interrupt = load_mutable_ref_store(&mutable_ref_store).unwrap();
+
+        let interrupted_server = spawn_embedding_server_with_delay(1, Duration::from_millis(250));
+        let interrupted_base_url = interrupted_server.base_url.clone();
+        let request_dir = temp.path().to_path_buf();
+        let interrupted_run = run_request(
+            request_dir.as_path(),
+            BatchRequest {
+                environment: EnvironmentConfig::LocalRedb {
+                    block_store_root: Path::new("blocks").to_path_buf(),
+                    embedding: LocalEmbeddingConfig {
+                        base_url: interrupted_base_url,
+                        model: "all-MiniLM-L6-v2".into(),
+                        api_key_env: None,
+                        request_timeout_secs: 5,
+                        max_retries: 0,
+                        retry_delay_ms: 1,
+                    },
+                },
+                embedding_spec: EmbeddingSpecConfig {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                block_size_target: 65_536,
+                stage: ExecutionStage::FullPipeline,
+                profile_version: PUBLISHED_PROFILE_V0_1_0,
+                max_concurrency: Some(1),
+                replay_batch_size: None,
+                ref_name: TEST_REF_NAME.into(),
+                items: vec![BatchItemConfig::Document {
+                    path: PathBuf::from("beta.txt"),
+                    metadata: BTreeMap::new(),
+                }],
+            },
+        );
+        tokio::pin!(interrupted_run);
+
+        let wait_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if interrupted_server.max_in_flight() > 0 {
+                break;
+            }
+            assert!(
+                Instant::now() < wait_deadline,
+                "timed out waiting for embedding request"
+            );
+            tokio::select! {
+                result = &mut interrupted_run => {
+                    panic!("interrupted run finished before test could signal cancellation: {result:?}");
+                }
+                _ = sleep(Duration::from_millis(10)) => {}
+            }
+        }
+        crate::interrupt::set_interrupt_requested_for_tests(true);
+
+        let error = interrupted_run.as_mut().await.unwrap_err();
+        drop(interrupted_run);
+        assert!(matches!(error, RuntimeError::Interrupted(_)));
+        interrupted_server.join();
+        crate::interrupt::set_interrupt_requested_for_tests(false);
+
+        let refs_after_interrupt = load_mutable_ref_store(&mutable_ref_store).unwrap();
+        assert_eq!(refs_after_interrupt, refs_before_interrupt);
+
+        let reopen_deadline = Instant::now() + Duration::from_secs(2);
+        let reopened_store = loop {
+            match ConfiguredBlockStore::from_environment(
+                temp.path(),
+                &EnvironmentConfig::LocalRedb {
+                    block_store_root: Path::new("blocks").to_path_buf(),
+                    embedding: LocalEmbeddingConfig {
+                        base_url: "http://unused.local".into(),
+                        model: "all-MiniLM-L6-v2".into(),
+                        api_key_env: None,
+                        request_timeout_secs: 5,
+                        max_retries: 0,
+                        retry_delay_ms: 1,
+                    },
+                },
+            ) {
+                Ok(store) => break store,
+                Err(error) => {
+                    assert!(
+                        Instant::now() < reopen_deadline,
+                        "timed out reopening interrupted local-redb store: {error}"
+                    );
+                    sleep(Duration::from_millis(20)).await;
+                }
+            }
+        };
+        let reopened_report = crate::quality::assess_rooted_tree(
+            &parse_block_hash(&seeded.root_id).unwrap(),
+            &reopened_store,
+        )
+        .unwrap();
+        assert_eq!(reopened_report.root_id, seeded.root_id);
+    }
+
     struct TestServer {
         base_url: String,
         handle: Option<thread::JoinHandle<()>>,
@@ -13115,8 +13294,30 @@ mod tests {
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                         body.len()
                     );
-                    stream.write_all(response.as_bytes()).unwrap();
-                    stream.flush().unwrap();
+                    if let Err(error) = stream.write_all(response.as_bytes()) {
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::BrokenPipe
+                                | std::io::ErrorKind::ConnectionAborted
+                                | std::io::ErrorKind::ConnectionReset
+                        ) {
+                            seen_for_connection.fetch_add(1, Ordering::SeqCst);
+                            return;
+                        }
+                        panic!("failed to write runtime test response: {error}");
+                    }
+                    if let Err(error) = stream.flush() {
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::BrokenPipe
+                                | std::io::ErrorKind::ConnectionAborted
+                                | std::io::ErrorKind::ConnectionReset
+                        ) {
+                            seen_for_connection.fetch_add(1, Ordering::SeqCst);
+                            return;
+                        }
+                        panic!("failed to flush runtime test response: {error}");
+                    }
                     seen_for_connection.fetch_add(1, Ordering::SeqCst);
                 });
             }
