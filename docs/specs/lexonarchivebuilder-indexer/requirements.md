@@ -707,6 +707,29 @@
   behavior must remain encapsulated in the destination-specific publication
   wrapper rather than leaking repository-owned redb-specific mechanics into the
   generic rooted-copy traversal contract.
+- **UR-333 [KNOWN]:** When LexonArchiveBuilder enters long-running direct
+  `local-redb` work such as database open, repair, integrity verification, or
+  maintenance compaction, the operator should receive visible status on the
+  existing CLI progress output rather than a silent apparent hang.
+- **UR-334 [KNOWN]:** LexonArchiveBuilder should wire through any upstream redb
+  reporting callbacks or status seams that already exist instead of
+  re-implementing speculative repository-owned percentage logic where upstream
+  already provides truthful progress evidence.
+- **UR-335 [INFERRED]:** The direct `local-redb` startup path for
+  clustering-enabled and other block-store-backed commands should emit
+  operator-visible status before or during upstream redb recovery or open work
+  when that work happens before the repository's normal progress bootstrap.
+- **UR-336 [KNOWN]:** This increment should keep redb status reporting on the
+  existing CLI progress surface only; it should not introduce a new
+  MCP-visible API, control plane, or machine-readable artifact.
+- **UR-337 [INFERRED]:** The reporting contract should apply consistently to
+  repository-owned CLI workflows that directly open or maintain a `local-redb`
+  block store, including clustering/indexer startup and `maintenance compact`,
+  while leaving unsupported profiles unchanged.
+- **UR-338 [INFERRED]:** When upstream redb exposes only coarse-grained repair
+  milestones or phase callbacks, LexonArchiveBuilder shall project those
+  milestones truthfully and shall not fabricate finer-grained completion
+  percentages or per-page counters it does not actually know.
 
 ## Change Manifest
 
@@ -855,6 +878,10 @@
 | CM-INDEXER-141 | Revise | Refresh the approved LexonGraph integration target to a newer `main` revision whose delegated block-store surface exposes the batched destination-write capability required by rooted block copy | UR-327 |
 | CM-INDEXER-142 | Revise | Allow rooted-copy destination publication to use upstream batched writes for capable approved destination profiles while preserving fallback to the existing non-batched behavior for approved profiles that still lack that capability | UR-328, UR-329, UR-330 |
 | CM-INDEXER-143 | Revise | Keep any destination-specific batching, staging, and backpressure mechanics behind the destination-side block-store abstraction so the generic rooted-copy traversal contract and CLI surface remain backend-neutral | UR-330, UR-331, UR-332 |
+| CM-INDEXER-144 | Revise | Extend repository-owned runtime progress requirements so direct `local-redb` startup and maintenance paths do not remain silent while upstream redb performs long-running repair, integrity, or other open-time recovery work | UR-333, UR-335, UR-336, UR-337 |
+| CM-INDEXER-145 | Add | Require LexonArchiveBuilder to project any upstream redb repair-progress callback evidence onto the existing CLI progress surface without inventing finer-grained percentages than upstream actually provides | UR-333, UR-334, UR-336, UR-338 |
+| CM-INDEXER-146 | Add | Define a fallback operator-progress contract for long-running direct `local-redb` phases that lack upstream progress callbacks, using truthful phase or liveness reporting on the existing CLI surface rather than silent waits or new telemetry channels | UR-333, UR-336, UR-337, UR-338 |
+| CM-INDEXER-147 | Revise | Extend the CLI-only `maintenance compact` operator contract so local-redb maintenance reports entered redb work and any available upstream progress rather than remaining success or failure-only during multi-minute compaction or repair-adjacent startup | UR-305, UR-307, UR-312, UR-333, UR-334, UR-337 |
 
 ## Before / After
 
@@ -2778,14 +2805,27 @@ one configured block store.
   current-root, replay-journal-head, or other repository-owned mutable refs.
 - **Integrity boundary [INFERRED]:** Successful compaction SHALL preserve
   immutable block readability and hash identity for the targeted store.
-- **Output boundary [INFERRED]:** The first maintenance increment MAY limit its
-  operator-visible result to concise human-readable success or failure output
-  and does not require a machine-readable artifact.
+- **Progress boundary [KNOWN]:** When direct `local-redb` maintenance spends
+  extended time opening the target store, recovering it, or executing the
+  subordinate compaction path, the same CLI surface SHALL emit operator-visible
+  entered-phase status instead of remaining silent until final completion.
+- **Upstream-progress projection [KNOWN]:** If the subordinate redb open or
+  repair path exposes callback-based progress evidence, the maintenance surface
+  SHALL project that evidence onto the same operator-visible CLI stream.
+- **Truthfulness rule [INFERRED]:** If the subordinate redb path does not expose
+  a finer-grained progress callback, the maintenance surface SHALL still emit
+  truthful coarse phase or liveness messages and SHALL NOT fabricate exact
+  completion percentages or per-page counts.
+- **Output boundary [INFERRED]:** The first maintenance increment MAY keep its
+  operator-visible result on concise human-readable CLI output only and does
+  not require a machine-readable artifact, but that output SHALL include the
+  in-flight progress visibility required above when the operation is long
+  running.
 - **Surface boundary [KNOWN]:** This maintenance surface is additive to
   indexing, rooted quality, rooted search, rooted copy, archive sync, and MCP
   surfaces and SHALL NOT become a `BatchRequest` feature, indexing stage, or
   MCP-visible API in this increment.
-- **Traceability:** UR-297, UR-298, UR-299, UR-300, UR-301, UR-305, UR-306, UR-307, UR-308, UR-309, UR-310, UR-311, UR-312
+- **Traceability:** UR-297, UR-298, UR-299, UR-300, UR-301, UR-305, UR-306, UR-307, UR-308, UR-309, UR-310, UR-311, UR-312, UR-333, UR-334, UR-336, UR-337, UR-338
 
 #### RQ-INDEXER-006 - Embedding provider integration
 
@@ -2868,6 +2908,20 @@ advances, and clustering or block assembly advances.
   delegated clustering work, the runtime progress stream must emit an explicit
   handoff message so operators can distinguish local submission completion from
   subsequent upstream observer activity.
+- **Early local-redb visibility [KNOWN]:** When a selected CLI workflow must
+  synchronously open or recover a direct `local-redb` block store before the
+  repository's usual indexing bootstrap or replay-submission progress can
+  begin, the same runtime-visible progress stream must emit an early status
+  message identifying that redb-owned startup phase so operators can
+  distinguish long startup work from a hung process.
+- **Repair-callback projection [KNOWN]:** If upstream redb exposes repair
+  callback progress while that startup path runs, LexonArchiveBuilder SHALL
+  project that callback evidence onto the same runtime-visible stream rather
+  than hiding it behind repository-internal behavior.
+- **Startup truthfulness rule [INFERRED]:** If the startup path lacks a
+  fine-grained upstream callback, the runtime SHALL still emit truthful coarse
+  entered-phase or liveness visibility and SHALL NOT invent exact completion
+  percentages or detailed counters that the selected redb path did not expose.
 - **Gap constraint [INFERRED]:** A non-empty ingestion-plus-embedding run SHALL NOT rely on one mailbox-preparation message and then remain silent until the first downstream streaming-status event or final summary; operators must receive continued liveness or completed-work visibility while delegated embedding work remains outstanding.
 - **Cadence boundary [INFERRED]:** The requirements do not fix an exact log-line schema or interval, but the runtime-visible signal must advance by bounded work units or bounded elapsed time rather than only at phase boundaries.
 - **Surface [KNOWN]:** Progress output should be emitted on the normal
@@ -2925,7 +2979,7 @@ advances, and clustering or block assembly advances.
   remains additive to the normal runtime progress stream and SHALL NOT become a
   separate control plane, metrics backend, or MCP-visible surface.
 - **Non-goal [KNOWN]:** This requirement does not introduce a separate control-plane, metrics backend, or MCP-surface change.
-- **Traceability:** UR-32, UR-33, UR-39, UR-41, UR-45, UR-48, UR-59, UR-60, UR-61, UR-62, UR-63, UR-67, UR-68, UR-69, UR-70, UR-71, UR-228, UR-229, UR-230, UR-231, UR-232, UR-233, UR-234, UR-235, UR-236, UR-237, UR-238, UR-287, UR-290
+- **Traceability:** UR-32, UR-33, UR-39, UR-41, UR-45, UR-48, UR-59, UR-60, UR-61, UR-62, UR-63, UR-67, UR-68, UR-69, UR-70, UR-71, UR-228, UR-229, UR-230, UR-231, UR-232, UR-233, UR-234, UR-235, UR-236, UR-237, UR-238, UR-287, UR-290, UR-333, UR-334, UR-335, UR-336, UR-338
 
 #### RQ-INDEXER-008B1 - User-usable convergence diagnosis
 
@@ -3823,6 +3877,49 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   destination-side block-store abstraction so the generic rooted-copy traversal
   contract and CLI remain backend-neutral.
 
+### BA-INDEXER-144
+
+- **Before [KNOWN]:** The requirements defined visible batch progress for
+  mailbox preparation, replay submission, delegated clustering telemetry, and
+  rooted-copy liveness, but they did not yet require any early operator-visible
+  status while a direct `local-redb` store was being opened or repaired before
+  those normal progress surfaces began.
+- **After [KNOWN]:** The requirements now require operator-visible status on the
+  existing CLI progress surface whenever direct `local-redb` startup or
+  maintenance work would otherwise block for an extended period before the
+  repository's normal progress stream begins.
+
+### BA-INDEXER-145
+
+- **Before [KNOWN]:** The requirements did not yet require repository-owned
+  runtime progress to project upstream redb repair callback evidence when such
+  evidence was available during local-redb startup.
+- **After [KNOWN]:** The requirements now require LexonArchiveBuilder to
+  project available upstream redb repair-progress callbacks onto the same
+  runtime-visible CLI progress surface without inventing unsupported precision.
+
+### BA-INDEXER-146
+
+- **Before [KNOWN]:** Existing progress requirements focused on repository-owned
+  indexing and copy lifecycle milestones and did not define how to report
+  long-running backend-owned `local-redb` work when upstream provided only
+  coarse or no incremental progress evidence.
+- **After [KNOWN]:** The requirements now require LexonArchiveBuilder to prefer
+  truthful projection of upstream redb progress when available and otherwise
+  emit coarse repository-owned phase or liveness reporting that identifies the
+  blocked-on redb phase without inventing unsupported precision.
+
+### BA-INDEXER-147
+
+- **Before [KNOWN]:** The maintenance compact requirements allowed concise
+  human-readable success or failure output only and did not yet require
+  in-flight status while upstream redb performed open-time repair or
+  long-running compaction-adjacent work.
+- **After [KNOWN]:** The requirements now require `maintenance compact` to
+  surface entered-phase status plus any upstream redb progress callbacks that
+  are available on the existing CLI output surface, while still remaining a
+  CLI-only one-store maintenance command.
+
 ### Invariant Impact Assessment
 
 - **Content-model abstraction boundaries:** Preserved. The increment extends the
@@ -3857,4 +3954,6 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
 - **Operator workflow clarity:** Preserved and extended. The new generic
   `maintenance` namespace gives operators an explicit one-store maintenance
   entry point without implying a backend-neutral compaction contract or
-  inventing a second administration surface.
+  inventing a second administration surface, and the added `local-redb`
+  startup-progress rules keep long-running repair or open work explainable on
+  that same CLI-visible operator path.

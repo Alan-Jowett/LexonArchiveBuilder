@@ -19,7 +19,7 @@ use lexonarchivebuilder_indexer::block_copy::{
     default_report_path as default_copy_report_path,
     render_report_summary as render_copy_report_summary, write_report as write_copy_report,
 };
-use lexonarchivebuilder_indexer::block_store::ConfiguredBlockStore;
+use lexonarchivebuilder_indexer::block_store::{ConfiguredBlockStore, OperatorProgressReporter};
 use lexonarchivebuilder_indexer::config::{
     EnvironmentConfig, LocalEmbeddingConfig, ProductionBlockStoreConfig, ProductionEmbeddingConfig,
 };
@@ -448,8 +448,16 @@ fn destination_block_store_environment_config(
 fn configured_block_store_from_environment(
     environment: &EnvironmentConfig,
 ) -> anyhow::Result<ConfiguredBlockStore> {
-    ConfiguredBlockStore::from_environment(Path::new("."), environment)
-        .context("failed to configure block store")
+    ConfiguredBlockStore::from_environment_with_redb_progress(
+        Path::new("."),
+        environment,
+        Some(cli_progress_reporter()),
+    )
+    .context("failed to configure block store")
+}
+
+fn cli_progress_reporter() -> OperatorProgressReporter {
+    Arc::new(|message| eprintln!("{message}"))
 }
 
 impl ReadableBlockStoreProfile {
@@ -707,7 +715,7 @@ async fn main() -> anyhow::Result<()> {
             };
             let progress = RootedBlockCopyProgress::new(destination_mode);
             let report = if blind_write
-                && matches!(&destination_store, ConfiguredBlockStore::LocalRedb(_))
+                && matches!(&destination_store, ConfiguredBlockStore::LocalRedb { .. })
             {
                 let mut checkpoint_store = destination_store.clone();
                 await_with_copy_liveness(
@@ -756,10 +764,12 @@ async fn main() -> anyhow::Result<()> {
             MaintenanceCommand::Compact { block_store } => {
                 let profile = block_store.block_store_profile;
                 let mut store = configured_maintenance_block_store(&block_store)?;
-                store.compact_now().context(format!(
-                    "failed to compact block store for profile {}",
-                    profile.as_cli_value()
-                ))?;
+                store
+                    .compact_now_with_progress(Some(cli_progress_reporter()))
+                    .context(format!(
+                        "failed to compact block store for profile {}",
+                        profile.as_cli_value()
+                    ))?;
                 println!(
                     "Maintenance compact completed for block-store profile {}.",
                     profile.as_cli_value()
@@ -816,7 +826,7 @@ fn configured_destination_block_store(
     blind_write: bool,
 ) -> anyhow::Result<ConfiguredBlockStore> {
     let environment = args.to_environment_config();
-    ConfiguredBlockStore::from_environment_with_redb_durability(
+    ConfiguredBlockStore::from_environment_with_redb_durability_and_progress(
         Path::new("."),
         &environment,
         if blind_write {
@@ -824,6 +834,7 @@ fn configured_destination_block_store(
         } else {
             RedbBlockStoreDurabilityMode::Durable
         },
+        Some(cli_progress_reporter()),
     )
     .context("failed to configure block store")
 }

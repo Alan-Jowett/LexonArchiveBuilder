@@ -917,6 +917,9 @@ the selected indexing stage advances.
 
 The first design baseline reports at least:
 
+- direct `local-redb` startup-phase visibility when the selected workflow must
+  open, repair, or otherwise recover the block store before the repository's
+  usual indexing bootstrap or replay-submission progress can begin
 - mailbox-processing start or completion boundaries
 - embedding or leaf-materialization progress after mailbox expansion has
   produced delegated items and before observer-driven streaming status is
@@ -936,6 +939,15 @@ For clustering-enabled execution, the normal runtime-visible stream also emits
 one bootstrap identity message that states the effective selected published
 profile version, the delegated contract family actually chosen for the run, and
 the active dedicated planning-telemetry sink binding when one exists.
+
+When direct `local-redb` startup work precedes that normal bootstrap identity
+message, the same runtime-visible stream first emits a repository-owned
+entered-phase message that identifies the blocked-on redb open, repair, or
+integrity-check path. If upstream redb exposes repair callback progress, the
+runtime projects those coarse milestones onto the same stream. If upstream does
+not expose a finer-grained callback, the runtime still emits truthful coarse
+phase or liveness visibility rather than remaining silent or inventing exact
+completion percentages.
 
 For ingestion-plus-embedding execution, the repository-owned runtime must not
 leave a non-empty delegated item set silent between mailbox-preparation
@@ -2283,6 +2295,14 @@ For this increment the maintenance CLI may render concise human-readable
 success-or-failure output only. The design does not require a machine-readable
 artifact because the subordinate compaction contract communicates success or
 failure without richer stable result detail.
+
+That concise CLI surface is still required to remain visibly active during
+long-running direct `local-redb` work. Before final success or failure is
+known, the command reports that it has entered redb-owned startup, recovery, or
+compaction work on the same operator-facing stream. If upstream redb exposes a
+repair callback during startup, the maintenance command projects those coarse
+milestones directly; otherwise it limits itself to truthful coarse phase or
+liveness messages instead of fabricating exact completion percentages.
 
 **Traces to:** RQ-INDEXER-005D, RQ-INDEXER-009
 
