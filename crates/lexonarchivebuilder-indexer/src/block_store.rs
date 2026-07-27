@@ -274,8 +274,7 @@ fn project_redb_telemetry_event(
             let percent = event
                 .attributes
                 .get("progress")
-                .and_then(|value| value.parse::<f64>().ok())
-                .map(|value| (value * 100.0).round().clamp(0.0, 99.0) as u8)?;
+                .and_then(|value| parse_repair_progress_percent(value))?;
             format!(
                 "local-redb repair progress for {}: {}% (upstream coarse milestone).",
                 database_path, percent
@@ -297,12 +296,22 @@ fn project_redb_telemetry_event(
             .map(String::as_str)
             .unwrap_or("")
     );
-    let mut last_reported_signature = last_reported_signature.lock().unwrap();
+    let mut last_reported_signature = last_reported_signature
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if last_reported_signature.as_deref() == Some(signature.as_str()) {
         return None;
     }
     *last_reported_signature = Some(signature);
     Some(message)
+}
+
+fn parse_repair_progress_percent(value: &str) -> Option<u8> {
+    let progress = value.parse::<f64>().ok()?;
+    if !progress.is_finite() || !(0.0..=1.0).contains(&progress) {
+        return None;
+    }
+    Some((progress * 100.0).round() as u8)
 }
 
 struct OperatorLivenessHeartbeat {
@@ -743,6 +752,43 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn repair_status_telemetry_preserves_terminal_completion_percentage() {
+        let last_reported_signature = Mutex::new(None);
+        let event = BlockStoreTelemetryEvent::new("repair_status")
+            .with_attribute("database_path", r"C:\data\blocks.redb")
+            .with_attribute("progress", "1.0");
+
+        let message = project_redb_telemetry_event(
+            Path::new(r"C:\fallback\blocks.redb"),
+            &event,
+            &last_reported_signature,
+        );
+
+        assert_eq!(
+            message.as_deref(),
+            Some(
+                "local-redb repair progress for C:\\data\\blocks.redb: 100% (upstream coarse milestone)."
+            )
+        );
+    }
+
+    #[test]
+    fn repair_status_telemetry_ignores_non_finite_progress_values() {
+        let last_reported_signature = Mutex::new(None);
+        let event = BlockStoreTelemetryEvent::new("repair_status")
+            .with_attribute("database_path", r"C:\data\blocks.redb")
+            .with_attribute("progress", "NaN");
+
+        let message = project_redb_telemetry_event(
+            Path::new(r"C:\fallback\blocks.redb"),
+            &event,
+            &last_reported_signature,
+        );
+
+        assert!(message.is_none());
     }
 
     #[test]
