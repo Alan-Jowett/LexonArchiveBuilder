@@ -301,7 +301,10 @@ fn parse_repair_progress_percent(value: &str) -> Option<u8> {
     if !progress.is_finite() || !(0.0..=1.0).contains(&progress) {
         return None;
     }
-    Some((progress * 100.0).round() as u8)
+    if progress == 1.0 {
+        return Some(100);
+    }
+    Some((progress * 100.0).floor() as u8)
 }
 
 struct OperatorLivenessHeartbeat {
@@ -791,6 +794,27 @@ mod tests {
             message.as_deref(),
             Some(
                 "local-redb repair progress for C:\\data\\blocks.redb: 100% (upstream coarse milestone)."
+            )
+        );
+    }
+
+    #[test]
+    fn repair_status_telemetry_does_not_round_incomplete_progress_to_completion() {
+        let last_reported_signature = Mutex::new(None);
+        let event = BlockStoreTelemetryEvent::new("repair_status")
+            .with_attribute("database_path", r"C:\data\blocks.redb")
+            .with_attribute("progress", "0.999");
+
+        let message = project_redb_telemetry_event(
+            Path::new(r"C:\fallback\blocks.redb"),
+            &event,
+            &last_reported_signature,
+        );
+
+        assert_eq!(
+            message.as_deref(),
+            Some(
+                "local-redb repair progress for C:\\data\\blocks.redb: 99% (upstream coarse milestone)."
             )
         );
     }
