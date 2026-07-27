@@ -154,7 +154,7 @@ impl ConfiguredBlockStore {
 
     fn local_redb_store(
         request_dir: &Path,
-        block_store_root: &PathBuf,
+        block_store_root: &Path,
         redb_durability_mode: RedbBlockStoreDurabilityMode,
         progress: Option<OperatorProgressReporter>,
     ) -> Result<Self, BlockStoreError> {
