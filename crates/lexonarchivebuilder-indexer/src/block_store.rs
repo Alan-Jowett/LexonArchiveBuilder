@@ -286,23 +286,13 @@ fn project_redb_telemetry_event(
         }
     };
 
-    let signature = format!(
-        "{}|{}|{}",
-        event.name,
-        database_path,
-        event
-            .attributes
-            .get("progress")
-            .map(String::as_str)
-            .unwrap_or("")
-    );
     let mut last_reported_signature = last_reported_signature
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if last_reported_signature.as_deref() == Some(signature.as_str()) {
+    if last_reported_signature.as_deref() == Some(message.as_str()) {
         return None;
     }
-    *last_reported_signature = Some(signature);
+    *last_reported_signature = Some(message.clone());
     Some(message)
 }
 
@@ -751,6 +741,36 @@ mod tests {
                 &last_reported_signature,
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn distinct_non_repair_telemetry_messages_are_not_suppressed() {
+        let last_reported_signature = Mutex::new(None);
+        let first = BlockStoreTelemetryEvent::new("open_status")
+            .with_message("opened metadata tables")
+            .with_attribute("database_path", r"C:\data\blocks.redb");
+        let second = BlockStoreTelemetryEvent::new("open_status")
+            .with_message("validated allocator state")
+            .with_attribute("database_path", r"C:\data\blocks.redb");
+
+        assert_eq!(
+            project_redb_telemetry_event(
+                Path::new(r"C:\fallback\blocks.redb"),
+                &first,
+                &last_reported_signature,
+            )
+            .as_deref(),
+            Some("local-redb telemetry for C:\\data\\blocks.redb: opened metadata tables.")
+        );
+        assert_eq!(
+            project_redb_telemetry_event(
+                Path::new(r"C:\fallback\blocks.redb"),
+                &second,
+                &last_reported_signature,
+            )
+            .as_deref(),
+            Some("local-redb telemetry for C:\\data\\blocks.redb: validated allocator state.")
         );
     }
 
