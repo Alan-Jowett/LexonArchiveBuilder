@@ -57,6 +57,12 @@ pub fn check_for_interrupt() -> Result<(), InterruptError> {
 }
 
 pub async fn wait_for_interrupt() -> InterruptError {
+    #[cfg(not(test))]
+    if INTERRUPT_REQUESTED.get().is_none() {
+        std::future::pending::<()>().await;
+        unreachable!("pending future does not resolve");
+    }
+
     loop {
         if is_interrupt_requested() {
             return InterruptError;

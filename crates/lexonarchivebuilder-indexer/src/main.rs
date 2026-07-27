@@ -692,11 +692,16 @@ async fn main() -> anyhow::Result<()> {
                     },
                 })
                 .context("failed to configure embedding provider")?;
-            let report =
-                search_rooted_tree(&store, &provider, &root_id, &query, top_k, traversal_width)
-                    .await
-                    .context("failed to search rooted tree")?;
-            interrupt::check_for_interrupt()?;
+            let report = interrupt::run_until_interrupt(search_rooted_tree(
+                &store,
+                &provider,
+                &root_id,
+                &query,
+                top_k,
+                traversal_width,
+            ))
+            .await
+            .context("failed to search rooted tree")??;
             let output_path =
                 json_out.unwrap_or_else(|| default_search_report_path(&root_id, &query));
             write_search_report(&output_path, &report)?;
@@ -807,7 +812,11 @@ fn request_uses_direct_local_redb(request_path: &Path) -> anyhow::Result<bool> {
 
 fn command_uses_direct_local_redb(cli: &Cli) -> anyhow::Result<bool> {
     Ok(match &cli.command {
-        Command::Run { request, .. } => request_uses_direct_local_redb(request)?,
+        Command::Run {
+            request,
+            validate_only,
+            ..
+        } => !validate_only && request_uses_direct_local_redb(request)?,
         Command::Quality { block_store, .. } | Command::Search { block_store, .. } => {
             block_store.block_store_profile == ReadableBlockStoreProfile::LocalRedb
         }
@@ -1078,6 +1087,52 @@ mod tests {
         let _ = fs::remove_file(&request_path);
 
         assert!(uses_local_redb);
+    }
+
+    #[test]
+    fn command_uses_direct_local_redb_excludes_validate_only_runs() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let request_path = std::env::temp_dir().join(format!("local-redb-request-{unique}.json"));
+        fs::write(
+            &request_path,
+            serde_json::json!({
+                "environment": {
+                    "kind": "local-redb",
+                    "block_store_root": "blocks",
+                    "embedding": {
+                        "base_url": "http://localhost:11434",
+                        "model": "all-MiniLM-L6-v2",
+                        "request_timeout_secs": 30,
+                        "max_retries": 5,
+                        "retry_delay_ms": 1000
+                    }
+                },
+                "embedding_spec": {
+                    "dims": 384,
+                    "encoding": "f32le"
+                },
+                "items": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "run",
+            "--request",
+            request_path.to_str().unwrap(),
+            "--validate-only",
+        ])
+        .unwrap();
+
+        let uses_local_redb = command_uses_direct_local_redb(&cli).unwrap();
+        let _ = fs::remove_file(&request_path);
+
+        assert!(!uses_local_redb);
     }
 
     #[test]

@@ -12880,7 +12880,7 @@ mod tests {
         server.join();
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn interrupted_local_redb_run_reopens_cleanly_and_preserves_mutable_refs() {
         let _interrupt_guard = InterruptResetGuard::new();
         let temp = tempdir().unwrap();
@@ -12931,58 +12931,59 @@ mod tests {
         let interrupted_server = spawn_embedding_server_with_delay(1, Duration::from_millis(250));
         let interrupted_base_url = interrupted_server.base_url.clone();
         let request_dir = temp.path().to_path_buf();
-        let interrupted_run = run_request(
-            request_dir.as_path(),
-            BatchRequest {
-                environment: EnvironmentConfig::LocalRedb {
-                    block_store_root: Path::new("blocks").to_path_buf(),
-                    embedding: LocalEmbeddingConfig {
-                        base_url: interrupted_base_url,
-                        model: "all-MiniLM-L6-v2".into(),
-                        api_key_env: None,
-                        request_timeout_secs: 5,
-                        max_retries: 0,
-                        retry_delay_ms: 1,
+        let error = {
+            let interrupted_run = run_request(
+                request_dir.as_path(),
+                BatchRequest {
+                    environment: EnvironmentConfig::LocalRedb {
+                        block_store_root: Path::new("blocks").to_path_buf(),
+                        embedding: LocalEmbeddingConfig {
+                            base_url: interrupted_base_url,
+                            model: "all-MiniLM-L6-v2".into(),
+                            api_key_env: None,
+                            request_timeout_secs: 5,
+                            max_retries: 0,
+                            retry_delay_ms: 1,
+                        },
                     },
+                    embedding_spec: EmbeddingSpecConfig {
+                        dims: 2,
+                        encoding: "f32le".into(),
+                    },
+                    block_size_target: 65_536,
+                    stage: ExecutionStage::FullPipeline,
+                    profile_version: PUBLISHED_PROFILE_V0_1_0,
+                    max_concurrency: Some(1),
+                    replay_batch_size: None,
+                    ref_name: TEST_REF_NAME.into(),
+                    items: vec![BatchItemConfig::Document {
+                        path: PathBuf::from("beta.txt"),
+                        metadata: BTreeMap::new(),
+                    }],
                 },
-                embedding_spec: EmbeddingSpecConfig {
-                    dims: 2,
-                    encoding: "f32le".into(),
-                },
-                block_size_target: 65_536,
-                stage: ExecutionStage::FullPipeline,
-                profile_version: PUBLISHED_PROFILE_V0_1_0,
-                max_concurrency: Some(1),
-                replay_batch_size: None,
-                ref_name: TEST_REF_NAME.into(),
-                items: vec![BatchItemConfig::Document {
-                    path: PathBuf::from("beta.txt"),
-                    metadata: BTreeMap::new(),
-                }],
-            },
-        );
-        tokio::pin!(interrupted_run);
-
-        let wait_deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            if interrupted_server.max_in_flight() > 0 {
-                break;
-            }
-            assert!(
-                Instant::now() < wait_deadline,
-                "timed out waiting for embedding request"
             );
-            tokio::select! {
-                result = &mut interrupted_run => {
-                    panic!("interrupted run finished before test could signal cancellation: {result:?}");
-                }
-                _ = sleep(Duration::from_millis(10)) => {}
-            }
-        }
-        crate::interrupt::set_interrupt_requested_for_tests(true);
+            tokio::pin!(interrupted_run);
 
-        let error = interrupted_run.as_mut().await.unwrap_err();
-        drop(interrupted_run);
+            let wait_deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if interrupted_server.max_in_flight() > 0 {
+                    break;
+                }
+                assert!(
+                    Instant::now() < wait_deadline,
+                    "timed out waiting for embedding request"
+                );
+                tokio::select! {
+                    result = &mut interrupted_run => {
+                        panic!("interrupted run finished before test could signal cancellation: {result:?}");
+                    }
+                    _ = sleep(Duration::from_millis(10)) => {}
+                }
+            }
+            crate::interrupt::set_interrupt_requested_for_tests(true);
+
+            interrupted_run.as_mut().await.unwrap_err()
+        };
         assert!(matches!(error, RuntimeError::Interrupted(_)));
         interrupted_server.join();
         crate::interrupt::set_interrupt_requested_for_tests(false);

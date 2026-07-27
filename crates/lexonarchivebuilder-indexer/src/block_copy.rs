@@ -3166,7 +3166,12 @@ mod tests {
             .await
         };
         let observer = std::thread::spawn(move || {
-            observer_destination.wait_until_max_observed();
+            let deadline = std::time::Instant::now() + Duration::from_secs(1);
+            while observer_destination.max_in_flight() == 0 && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            std::thread::sleep(Duration::from_millis(25));
             let observed = observer_destination.max_in_flight();
             observer_destination.release_writes();
             assert!(
@@ -3617,19 +3622,6 @@ mod tests {
                 observed_target_ready: Condvar::new(),
                 release_writes_flag: AtomicBool::new(false),
                 release_writes_notify: tokio::sync::Notify::new(),
-            }
-        }
-
-        fn wait_until_max_observed(&self) {
-            let mut observed = self
-                .observed_target
-                .lock()
-                .expect("blocking write observer mutex poisoned");
-            while !*observed {
-                observed = self
-                    .observed_target_ready
-                    .wait(observed)
-                    .expect("blocking write observer mutex poisoned while waiting");
             }
         }
 
