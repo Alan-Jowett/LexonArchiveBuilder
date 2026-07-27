@@ -3301,7 +3301,11 @@ where
     let clustering = clustering_overrides
         .to_configured_clustering(request.profile_version, &request.environment)?;
     let stage = request.stage;
-    let block_store = ConfiguredBlockStore::from_environment(request_dir, &request.environment)?;
+    let block_store = ConfiguredBlockStore::from_environment_with_redb_progress(
+        request_dir,
+        &request.environment,
+        Some(progress.clone()),
+    )?;
     let mutable_ref_store = request
         .environment
         .resolve_mutable_ref_store(request_dir, &request.ref_name);

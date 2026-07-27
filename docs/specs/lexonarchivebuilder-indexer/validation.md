@@ -1098,12 +1098,17 @@ least one other approved profile that is not direct `local-redb`.
 for the maintenance action and does not require source/destination pairs or
 root block identifiers. When the selected target is direct `local-redb`, the
 tool requests compaction successfully through the subordinate redb capability,
+emits operator-visible entered-phase status before any long-running redb-owned
+startup, repair, or compaction work would otherwise look hung, projects any
+available upstream redb repair callback progress truthfully onto that same CLI
+surface, and otherwise falls back to coarse phase or liveness visibility
+without inventing unsupported exact percentages,
 the previously readable immutable blocks remain readable under the same hash
 identities afterward, and the filesystem-hosted mutable refs remain unchanged.
 When the selected target uses any other approved profile, the tool fails
 explicitly rather than silently succeeding, silently no-oping, or broadening
 compaction into a backend-neutral repository contract. The operator-visible
-result may remain concise human-readable success or failure output only.
+result may remain concise human-readable CLI output only.
 
 **Traces to:** RQ-INDEXER-005D, DSG-LFI-005F, DSG-LFI-007H
 
@@ -1323,6 +1328,26 @@ telemetry surfaces and does not require a new MCP-visible or control-plane
 surface.
 
 **Traces to:** RQ-INDEXER-008B2, RQ-INDEXER-010A, DSG-LFI-002B3
+
+### VAL-LFI-007G5
+
+Run a block-store-backed CLI workflow that targets direct `local-redb` and
+encounters sufficiently slow startup work before the repository's normal batch
+bootstrap or replay-submission progress would otherwise begin, such as repair
+or integrity verification triggered during redb open.
+
+**Pass condition:** the existing runtime-visible CLI progress stream emits an
+early message that identifies the blocked-on redb-owned startup phase before a
+long silent interval would otherwise occur. If upstream redb exposes repair
+callback progress on that path, the same stream surfaces those coarse progress
+milestones truthfully. If upstream redb does not expose a finer-grained
+callback, the runtime still emits coarse phase or liveness visibility without
+inventing exact completion percentages or detailed counters it does not know.
+Once normal repository-owned bootstrap, replay-submission, or observer-driven
+progress becomes available, the same invocation continues on that existing
+unified CLI progress surface rather than switching to a second telemetry path.
+
+**Traces to:** RQ-INDEXER-008B, DSG-LFI-002A
 
 ### VAL-LFI-007H
 
