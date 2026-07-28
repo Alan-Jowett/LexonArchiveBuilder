@@ -26,11 +26,11 @@ use lexongraph_block_store::{BlockStore, BlockStoreError, BlockStoreExt};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_streaming_indexer::{
     BuiltInPlanningDirection, ContentResolver, IndexItem, PlanningStage, PublishedIndexingProfile,
-    PublishedPlanningStrategy, StreamingIndexerError, StreamingIndexingPhase, StreamingIndexingRun,
-    StreamingIndexingRunV3, StreamingIndexingStatus, StreamingIndexingStatusObserver,
-    StreamingIndexingStatusState, StreamingIndexingSuspectedStallReason,
-    StreamingIndexingTrainerSubphase, StreamingV2PendingPartitionStatus,
-    published_indexing_profile,
+    PublishedPlanningStrategy, StreamingIndexerError, StreamingIndexingCancellationHandle,
+    StreamingIndexingPhase, StreamingIndexingRun, StreamingIndexingRunV3, StreamingIndexingStatus,
+    StreamingIndexingStatusObserver, StreamingIndexingStatusState,
+    StreamingIndexingSuspectedStallReason, StreamingIndexingTrainerSubphase,
+    StreamingV2PendingPartitionStatus, published_indexing_profile,
 };
 use reqwest::StatusCode;
 use reqwest::Url;
@@ -66,6 +66,15 @@ use crate::resolver::{
 use crate::tree_tools::{decode_embedding_values, parse_block_hash};
 
 type ProgressReporter = Arc<dyn Fn(String) + Send + Sync + 'static>;
+#[cfg(test)]
+type StatusObserverTestHook = Arc<dyn Fn(&StreamingIndexingStatus) + Send + Sync + 'static>;
+#[cfg(test)]
+type StatusObserverTestHooks = HashMap<std::thread::ThreadId, Vec<StatusObserverTestHook>>;
+
+enum InterruptAwareOutcome<T> {
+    Completed(T),
+    Interrupted(T),
+}
 
 pub const INGESTION_ONLY_ROOT_ID_PLACEHOLDER: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
@@ -85,6 +94,8 @@ const MUTABLE_REF_TABLE_SCHEMA_VERSION: i32 = 1;
 const UNKNOWN_BLOCKED_ON_SUMMARY: &str = "unknown";
 #[cfg(test)]
 const TEST_REF_NAME: &str = "test-branch";
+#[cfg(test)]
+static STATUS_OBSERVER_TEST_HOOKS: OnceLock<Mutex<StatusObserverTestHooks>> = OnceLock::new();
 
 #[derive(Clone, Copy)]
 struct RuntimeIo<'a> {
@@ -2943,6 +2954,34 @@ fn clustering_failure_error(
     }
 }
 
+fn interrupt_aware_streaming_result<T, D>(
+    outcome: InterruptAwareOutcome<Result<T, StreamingIndexerError>>,
+    diagnostics: D,
+    progress: &ProgressReporter,
+) -> Result<T, RuntimeError>
+where
+    D: FnOnce() -> Option<ClusteringFailureDiagnostics>,
+{
+    match outcome {
+        InterruptAwareOutcome::Completed(Ok(value)) => Ok(value),
+        InterruptAwareOutcome::Completed(Err(StreamingIndexerError::Cancelled(_)))
+        | InterruptAwareOutcome::Interrupted(Err(StreamingIndexerError::Cancelled(_))) => {
+            Err(interrupt::InterruptError.into())
+        }
+        InterruptAwareOutcome::Completed(Err(error)) => Err(clustering_failure_error(
+            error,
+            diagnostics().as_ref(),
+            progress,
+        )),
+        InterruptAwareOutcome::Interrupted(Ok(_)) => Err(interrupt::InterruptError.into()),
+        InterruptAwareOutcome::Interrupted(Err(error)) => Err(clustering_failure_error(
+            error,
+            diagnostics().as_ref(),
+            progress,
+        )),
+    }
+}
+
 fn persist_clustering_failure_diagnostics(
     diagnostics_path: Option<&Path>,
     error: &RuntimeError,
@@ -5747,6 +5786,7 @@ where
     let clustering_failure_diagnostics = OnceLock::new();
     let diagnostics_resolver = resolver.clone();
     let diagnostics_embedding_provider = embedding_provider.clone();
+    let cancellation = StreamingIndexingCancellationHandle::new();
     let mut indexer = StreamingIndexingRunV3::with_published_profile(
         config.clustering.profile_version,
         embedding_spec.clone(),
@@ -5755,7 +5795,8 @@ where
             .v3_working_root
             .as_deref()
             .ok_or(RuntimeError::MissingV3WorkingRoot)?,
-    )?;
+    )?
+    .with_cancellation_handle(cancellation.clone());
     if let Some(observer) = observer {
         indexer = indexer.with_observer(observer);
     }
@@ -5787,7 +5828,7 @@ where
                 total_items,
             ),
         );
-        await_with_periodic_progress(
+        let ingest_outcome = await_with_periodic_progress_and_cancellation(
             indexer.ingest_block_id_batch(&block_ids),
             io.progress,
             PROGRESS_HEARTBEAT_INTERVAL,
@@ -5801,11 +5842,12 @@ where
                     elapsed.as_millis(),
                 )
             },
+            &cancellation,
         )
-        .await?
-        .map_err(|error| {
-            clustering_failure_error(
-                error,
+        .await?;
+        interrupt_aware_streaming_result(
+            ingest_outcome,
+            || {
                 clustering_failure_diagnostics
                     .get_or_init(|| {
                         build_externalized_clustering_failure_diagnostics(
@@ -5817,10 +5859,10 @@ where
                             embedding_spec,
                         )
                     })
-                    .as_ref(),
-                io.progress,
-            )
-        })?;
+                    .clone()
+            },
+            io.progress,
+        )?;
         completed_items += batch_item_count;
         report_progress(
             io.progress,
@@ -5839,27 +5881,37 @@ where
         ),
     );
     interrupt::check_for_interrupt()?;
-    let result = indexer
-        .finalize(block_store, block_store)
-        .await
-        .map_err(|error| {
-            clustering_failure_error(
-                error,
-                clustering_failure_diagnostics
-                    .get_or_init(|| {
-                        build_externalized_clustering_failure_diagnostics(
-                            &diagnostics_resolver,
-                            &diagnostics_embedding_provider,
-                            lock_unpoisoned(&latest_failed_status).as_ref(),
-                            &config,
-                            &replay_state,
-                            embedding_spec,
-                        )
-                    })
-                    .as_ref(),
-                io.progress,
+    let finalize_outcome = await_with_periodic_progress_and_cancellation(
+        indexer.finalize(block_store, block_store),
+        io.progress,
+        PROGRESS_HEARTBEAT_INTERVAL,
+        |elapsed| {
+            format!(
+                "Delegated v3 finalize still running after {} ms for {total_items} leaf block id(s)",
+                elapsed.as_millis()
             )
-        })?;
+        },
+        &cancellation,
+    )
+    .await?;
+    let result = interrupt_aware_streaming_result(
+        finalize_outcome,
+        || {
+            clustering_failure_diagnostics
+                .get_or_init(|| {
+                    build_externalized_clustering_failure_diagnostics(
+                        &diagnostics_resolver,
+                        &diagnostics_embedding_provider,
+                        lock_unpoisoned(&latest_failed_status).as_ref(),
+                        &config,
+                        &replay_state,
+                        embedding_spec,
+                    )
+                })
+                .clone()
+        },
+        io.progress,
+    )?;
 
     if result.block_ids.is_empty() {
         return Err(RuntimeError::EmptyDelegatedOutput);
@@ -5923,6 +5975,45 @@ where
     }
 }
 
+async fn await_with_periodic_progress_and_cancellation<Fut, T, M>(
+    operation: Fut,
+    progress: &ProgressReporter,
+    heartbeat_interval: Duration,
+    heartbeat_message: M,
+    cancellation: &StreamingIndexingCancellationHandle,
+) -> Result<InterruptAwareOutcome<T>, RuntimeError>
+where
+    Fut: Future<Output = T>,
+    M: Fn(Duration) -> String,
+{
+    let start = std::time::Instant::now();
+    let mut heartbeat = interval_at(TokioInstant::now() + heartbeat_interval, heartbeat_interval);
+    heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    tokio::pin!(operation);
+    let interrupt = interrupt::wait_for_interrupt();
+    tokio::pin!(interrupt);
+    let mut interrupted = false;
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut interrupt, if !interrupted => {
+                cancellation.cancel();
+                interrupted = true;
+            }
+            result = &mut operation => {
+                return Ok(if interrupted {
+                    InterruptAwareOutcome::Interrupted(result)
+                } else {
+                    InterruptAwareOutcome::Completed(result)
+                });
+            }
+            _ = heartbeat.tick() => {
+                report_progress(progress, heartbeat_message(start.elapsed()));
+            }
+        }
+    }
+}
+
 #[allow(dead_code)]
 fn load_replay_batches_from_store(
     store: &ConfiguredBlockStore,
@@ -5960,6 +6051,7 @@ fn for_each_replay_journal_record_newest_first(
 
     let mut visited = HashSet::new();
     loop {
+        interrupt::check_for_interrupt()?;
         if !visited.insert(current_block_id.clone()) {
             return Err(RuntimeError::InvalidReplayJournalHead {
                 block_id: current_block_id,
@@ -5980,6 +6072,7 @@ fn for_each_replay_journal_record_newest_first(
         };
         let decoded = replay_journal_block_body_from_decoded(decoded, &block_hash.to_string())?;
         for entry in decoded.entries.iter().rev() {
+            interrupt::check_for_interrupt()?;
             visit(entry)?;
         }
         match decoded.previous_block_id {
@@ -6012,6 +6105,7 @@ fn collect_ordered_replay_block_ids_from_journal_with_limit(
     progress: &ProgressReporter,
     flush_entry_limit: usize,
 ) -> Result<ReplayOrderStorage, RuntimeError> {
+    interrupt::check_for_interrupt()?;
     prepare_replay_order_scratch_root(replay_order_scratch_root)?;
     let scratch_dir = tempfile::Builder::new()
         .prefix("replay-order-")
@@ -6073,6 +6167,7 @@ fn collect_ordered_replay_block_ids_from_journal_with_limit(
         ),
     );
     let merged_entries_path = scratch_dir.path().join("ordered-replay.bin");
+    interrupt::check_for_interrupt()?;
     let total_items = merge_sorted_replay_order_runs(&run_paths, &merged_entries_path)?;
     if total_items == 0 {
         return Err(RuntimeError::NoClusterableBlocks);
@@ -6096,6 +6191,7 @@ fn flush_sorted_replay_order_run(
     run_index: usize,
     entries: &mut Vec<ReplayOrderEntry>,
 ) -> Result<PathBuf, RuntimeError> {
+    interrupt::check_for_interrupt()?;
     entries.sort_unstable();
     let path = scratch_dir.join(format!("run-{run_index:06}.bin"));
     let file = File::create(&path).map_err(|source| RuntimeError::WriteReplayOrderScratch {
@@ -6105,6 +6201,7 @@ fn flush_sorted_replay_order_run(
     let mut writer = BufWriter::new(file);
     let mut previous_entry: Option<ReplayOrderEntry> = None;
     for entry in entries.iter().copied() {
+        interrupt::check_for_interrupt()?;
         match previous_entry {
             Some(previous) if previous.block_id == entry.block_id => {
                 if previous.digest != entry.digest {
@@ -6149,6 +6246,7 @@ fn merge_sorted_replay_order_runs(
     run_paths: &[PathBuf],
     merged_entries_path: &Path,
 ) -> Result<usize, RuntimeError> {
+    interrupt::check_for_interrupt()?;
     if run_paths.len() <= REPLAY_ORDER_MERGE_FAN_IN {
         return merge_sorted_replay_order_run_group(run_paths, merged_entries_path);
     }
@@ -6166,8 +6264,10 @@ fn merge_sorted_replay_order_runs(
     let mut pass_index = 0usize;
     let mut current_paths = run_paths.to_vec();
     while current_paths.len() > REPLAY_ORDER_MERGE_FAN_IN {
+        interrupt::check_for_interrupt()?;
         let mut next_paths = Vec::new();
         for (group_index, group) in current_paths.chunks(REPLAY_ORDER_MERGE_FAN_IN).enumerate() {
+            interrupt::check_for_interrupt()?;
             let intermediate_path = scratch_dir.join(format!(
                 "merge-pass-{pass_index:02}-run-{group_index:06}.bin"
             ));
@@ -6184,6 +6284,7 @@ fn merge_sorted_replay_order_run_group(
     run_paths: &[PathBuf],
     merged_entries_path: &Path,
 ) -> Result<usize, RuntimeError> {
+    interrupt::check_for_interrupt()?;
     let output = File::create(merged_entries_path).map_err(|source| {
         RuntimeError::WriteReplayOrderScratch {
             path: merged_entries_path.display().to_string(),
@@ -6195,6 +6296,7 @@ fn merge_sorted_replay_order_run_group(
     let mut heap = BinaryHeap::new();
 
     for (run_index, path) in run_paths.iter().enumerate() {
+        interrupt::check_for_interrupt()?;
         let file = File::open(path).map_err(|source| RuntimeError::ReadReplayOrderScratch {
             path: path.display().to_string(),
             source,
@@ -6214,6 +6316,7 @@ fn merge_sorted_replay_order_run_group(
     let mut unique_entries = 0usize;
     let mut previous_entry: Option<ReplayOrderEntry> = None;
     while let Some(cursor) = heap.pop() {
+        interrupt::check_for_interrupt()?;
         let entry = cursor.entry;
         if let Some(previous) = previous_entry {
             if previous.block_id == entry.block_id {
@@ -6522,6 +6625,8 @@ fn make_status_observer(
     planning_telemetry: Option<PlanningTelemetryContext>,
 ) -> StreamingIndexingStatusObserver {
     Arc::new(move |status| {
+        #[cfg(test)]
+        invoke_status_observer_test_hook(&status);
         if status.state == StreamingIndexingStatusState::Failed {
             let mut captured = lock_unpoisoned(&latest_failed_status);
             match captured.as_ref() {
@@ -6546,6 +6651,20 @@ fn make_status_observer(
             report_progress(&progress, diagnosis_message);
         }
     })
+}
+
+#[cfg(test)]
+fn invoke_status_observer_test_hook(status: &StreamingIndexingStatus) {
+    let Some(hooks) = STATUS_OBSERVER_TEST_HOOKS.get() else {
+        return;
+    };
+    let callback = lock_unpoisoned(hooks)
+        .get(&std::thread::current().id())
+        .and_then(|hooks| hooks.last())
+        .cloned();
+    if let Some(callback) = callback {
+        callback(status);
+    }
 }
 
 fn failed_status_specificity(status: &StreamingIndexingStatus) -> usize {
@@ -7300,6 +7419,35 @@ mod tests {
     impl Drop for InterruptResetGuard {
         fn drop(&mut self) {
             crate::interrupt::set_interrupt_requested_for_tests(false);
+        }
+    }
+
+    struct StatusObserverHookGuard {
+        owner_thread: std::thread::ThreadId,
+    }
+
+    impl StatusObserverHookGuard {
+        fn install(hook: StatusObserverTestHook) -> Self {
+            let owner_thread = std::thread::current().id();
+            lock_unpoisoned(STATUS_OBSERVER_TEST_HOOKS.get_or_init(|| Mutex::new(HashMap::new())))
+                .entry(owner_thread)
+                .or_default()
+                .push(hook);
+            Self { owner_thread }
+        }
+    }
+
+    impl Drop for StatusObserverHookGuard {
+        fn drop(&mut self) {
+            let mut hooks = lock_unpoisoned(
+                STATUS_OBSERVER_TEST_HOOKS.get_or_init(|| Mutex::new(HashMap::new())),
+            );
+            if let Some(thread_hooks) = hooks.get_mut(&self.owner_thread) {
+                thread_hooks.pop();
+                if thread_hooks.is_empty() {
+                    hooks.remove(&self.owner_thread);
+                }
+            }
         }
     }
 
@@ -9323,6 +9471,79 @@ mod tests {
         let entries = storage.read_all_entries().unwrap();
         assert_eq!(entries.len(), REPLAY_ORDER_MERGE_FAN_IN + 1);
         assert!(entries.windows(2).all(|pair| pair[0] <= pair[1]));
+    }
+
+    #[test]
+    fn replay_journal_scan_stops_when_interrupt_requested_during_entry_iteration() {
+        let _interrupt_guard = InterruptResetGuard::new();
+        let temp = tempdir().unwrap();
+        let block_store = ConfiguredBlockStore::from_environment(
+            temp.path(),
+            &EnvironmentConfig::LocalRedb {
+                block_store_root: Path::new("blocks").to_path_buf(),
+                embedding: LocalEmbeddingConfig {
+                    base_url: String::new(),
+                    model: "all-MiniLM-L6-v2".into(),
+                    api_key_env: None,
+                    request_timeout_secs: 5,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            },
+        )
+        .unwrap();
+        let block_store_root = temp.path().join("blocks");
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
+        prepare_mutable_ref_store(&mutable_ref_store).unwrap();
+
+        let replay_journal_head_block_id = append_replay_journal_records(
+            &block_store,
+            &mutable_ref_store,
+            &[
+                ReplayJournalRecord::ReplayInput {
+                    step_kind: ReplayJournalStepKind::Embedding,
+                    block_id: BlockHash::from_bytes([1u8; 32]).to_string(),
+                    metadata: vec![],
+                    content_ref: ReplayJournalContentRef::Inline {
+                        media_type: "text/plain".into(),
+                        body: b"alpha".to_vec(),
+                    },
+                },
+                ReplayJournalRecord::ReplayInput {
+                    step_kind: ReplayJournalStepKind::Embedding,
+                    block_id: BlockHash::from_bytes([2u8; 32]).to_string(),
+                    metadata: vec![],
+                    content_ref: ReplayJournalContentRef::Inline {
+                        media_type: "text/plain".into(),
+                        body: b"beta".to_vec(),
+                    },
+                },
+            ],
+        )
+        .unwrap();
+        update_mutable_ref_store(
+            &mutable_ref_store,
+            MutableRefStoreUpdate {
+                replay_journal_head_block_id,
+                ..MutableRefStoreUpdate::default()
+            },
+        )
+        .unwrap();
+
+        let mut visited = 0usize;
+        let error =
+            for_each_replay_journal_record_newest_first(&block_store, &mutable_ref_store, |_| {
+                visited += 1;
+                if visited == 1 {
+                    crate::interrupt::set_interrupt_requested_for_tests(true);
+                }
+                Ok(())
+            })
+            .unwrap_err();
+
+        assert!(matches!(error, RuntimeError::Interrupted(_)));
+        assert_eq!(visited, 1);
+        crate::interrupt::set_interrupt_requested_for_tests(false);
     }
 
     #[test]
@@ -13049,7 +13270,15 @@ mod tests {
         crate::interrupt::set_interrupt_requested_for_tests(false);
 
         let refs_after_interrupt = load_mutable_ref_store(&mutable_ref_store).unwrap();
-        assert_eq!(refs_after_interrupt, refs_before_interrupt);
+        assert_eq!(
+            refs_after_interrupt.current_root_block_id,
+            refs_before_interrupt.current_root_block_id
+        );
+        assert!(refs_after_interrupt.replay_journal_head_block_id.is_some());
+        assert_eq!(
+            refs_after_interrupt.metadata,
+            refs_before_interrupt.metadata
+        );
 
         let reopen_deadline = Instant::now() + Duration::from_secs(10);
         let reopened_store = loop {
@@ -13072,6 +13301,146 @@ mod tests {
                     assert!(
                         Instant::now() < reopen_deadline,
                         "timed out reopening interrupted local-redb store: {error}"
+                    );
+                    sleep(Duration::from_millis(20)).await;
+                }
+            }
+        };
+        let reopened_report = crate::quality::assess_rooted_tree(
+            &parse_block_hash(&seeded.root_id).unwrap(),
+            &reopened_store,
+        )
+        .unwrap();
+        assert_eq!(reopened_report.root_id, seeded.root_id);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn interrupted_local_redb_v3_run_cancels_delegated_streaming_work() {
+        let _interrupt_guard = InterruptResetGuard::new();
+        let temp = tempdir().unwrap();
+        let document_a = temp.path().join("alpha.txt");
+        let document_b = temp.path().join("beta.txt");
+        fs::write(&document_a, b"alpha\n").unwrap();
+        fs::write(&document_b, b"beta\n").unwrap();
+
+        let seeded_server = spawn_embedding_server(1);
+        let seeded = run_request(
+            temp.path(),
+            BatchRequest {
+                environment: EnvironmentConfig::LocalRedb {
+                    block_store_root: Path::new("blocks").to_path_buf(),
+                    embedding: LocalEmbeddingConfig {
+                        base_url: seeded_server.base_url.clone(),
+                        model: "all-MiniLM-L6-v2".into(),
+                        api_key_env: None,
+                        request_timeout_secs: 5,
+                        max_retries: 0,
+                        retry_delay_ms: 1,
+                    },
+                },
+                embedding_spec: EmbeddingSpecConfig {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                block_size_target: 65_536,
+                stage: ExecutionStage::FullPipeline,
+                profile_version: PUBLISHED_PROFILE_V0_7_0,
+                max_concurrency: Some(1),
+                replay_batch_size: None,
+                ref_name: TEST_REF_NAME.into(),
+                items: vec![BatchItemConfig::Document {
+                    path: document_a.strip_prefix(temp.path()).unwrap().to_path_buf(),
+                    metadata: BTreeMap::new(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+        seeded_server.join();
+
+        let block_store_root = temp.path().join("blocks");
+        let mutable_ref_store = local_mutable_ref_store_location(&block_store_root, TEST_REF_NAME);
+        let refs_before_interrupt = load_mutable_ref_store(&mutable_ref_store).unwrap();
+        let _observer_hook_guard = StatusObserverHookGuard::install(Arc::new(|status| {
+            if matches!(
+                status.phase,
+                StreamingIndexingPhase::BottomUpAssembly { .. }
+            ) && status.state == StreamingIndexingStatusState::Started
+            {
+                crate::interrupt::set_interrupt_requested_for_tests(true);
+            }
+        }));
+
+        let interrupted_server = spawn_embedding_server(1);
+        let error = run_request(
+            temp.path(),
+            BatchRequest {
+                environment: EnvironmentConfig::LocalRedb {
+                    block_store_root: Path::new("blocks").to_path_buf(),
+                    embedding: LocalEmbeddingConfig {
+                        base_url: interrupted_server.base_url.clone(),
+                        model: "all-MiniLM-L6-v2".into(),
+                        api_key_env: None,
+                        request_timeout_secs: 5,
+                        max_retries: 0,
+                        retry_delay_ms: 1,
+                    },
+                },
+                embedding_spec: EmbeddingSpecConfig {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                block_size_target: 65_536,
+                stage: ExecutionStage::FullPipeline,
+                profile_version: PUBLISHED_PROFILE_V0_7_0,
+                max_concurrency: Some(1),
+                replay_batch_size: None,
+                ref_name: TEST_REF_NAME.into(),
+                items: vec![BatchItemConfig::Document {
+                    path: document_b.strip_prefix(temp.path()).unwrap().to_path_buf(),
+                    metadata: BTreeMap::new(),
+                }],
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, RuntimeError::Interrupted(_)));
+        interrupted_server.join();
+        crate::interrupt::set_interrupt_requested_for_tests(false);
+
+        let refs_after_interrupt = load_mutable_ref_store(&mutable_ref_store).unwrap();
+        assert_eq!(
+            refs_after_interrupt.current_root_block_id,
+            refs_before_interrupt.current_root_block_id
+        );
+        assert!(refs_after_interrupt.replay_journal_head_block_id.is_some());
+        assert_eq!(
+            refs_after_interrupt.metadata,
+            refs_before_interrupt.metadata
+        );
+
+        let reopen_deadline = Instant::now() + Duration::from_secs(10);
+        let reopened_store = loop {
+            match ConfiguredBlockStore::from_environment(
+                temp.path(),
+                &EnvironmentConfig::LocalRedb {
+                    block_store_root: Path::new("blocks").to_path_buf(),
+                    embedding: LocalEmbeddingConfig {
+                        base_url: "http://unused.local".into(),
+                        model: "all-MiniLM-L6-v2".into(),
+                        api_key_env: None,
+                        request_timeout_secs: 5,
+                        max_retries: 0,
+                        retry_delay_ms: 1,
+                    },
+                },
+            ) {
+                Ok(store) => break store,
+                Err(error) => {
+                    assert!(
+                        Instant::now() < reopen_deadline,
+                        "timed out reopening interrupted v3 local-redb store: {error}"
                     );
                     sleep(Duration::from_millis(20)).await;
                 }

@@ -25,7 +25,7 @@ automation, v0.7.0 fixed-budget ladder experiment automation, rooted
 block-store copy tooling with live default heartbeat counters plus additive
 worker-threaded traversal and capability-based batched destination
 publication, CLI-only
-local-redb maintenance compaction, graceful Ctrl-C local-redb shutdown, upstream embedding-readback API adoption, LAB-owned
+local-redb maintenance compaction, graceful Ctrl-C local-redb shutdown with in-phase interrupt observability across repository-owned long-running work and delegated constrained-v3 cancel notification, upstream embedding-readback API adoption, LAB-owned
 replay-journaled split-stage recovery, bounded-residency deterministic replay
 ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, replay batch-size decoupling from CPU concurrency, bounded multi-batch replay-prefetch buffering, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
@@ -1889,6 +1889,25 @@ repository-owned loops, and allows the command's owned direct redb handles to
 drop through the normal process-unwind path rather than being abandoned by an
 abrupt process exit.
 
+That first-interrupt path must remain observable within repository-owned
+long-running phases, not just at outer async await boundaries. When a direct
+`local-redb` command enters a repository-owned synchronous scan, materialized
+replay preparation pass, or blocking/offloaded helper that can run for
+operator-significant time, that phase re-checks the shared interrupt latch at
+its nearest safe admission boundaries so it can stop admitting additional
+repository-owned work and unwind before the full phase completes normally.
+
+When the same direct `local-redb` command hands off clustering-enabled work to
+an upstream `lexongraph-streaming-indexer` path that exposes cooperative
+cancellation, currently the constrained v3 path added by LexonGraph commit
+`f9818730c3f4d02290a617ec6fd7e9f8829eaafd`, LexonArchiveBuilder creates one
+run-scoped upstream `StreamingIndexingCancellationHandle` from the same
+repository-owned interrupt latch and passes it into the delegated run before
+active upstream work begins. On the first operator `Ctrl-C`, the repository
+therefore cancels both its own active loops and the live delegated v3 run
+through the same short-lived CLI-scoped shutdown path rather than waiting for
+delegated finalize, planning, or assembly work to finish on its own.
+
 That interrupt path is shared across batch `run`, rooted quality, rooted
 search, rooted copy, `maintenance`, and future indexer-owned CLI surfaces that
 open direct `local-redb`, so the graceful-close rule follows the block-store
@@ -1898,6 +1917,12 @@ path remains narrow:
 - it preserves explicit interrupted or unsuccessful operator outcomes rather
   than manufacturing success-shaped summaries, reports, or maintenance results
   for abandoned work
+- it applies uniformly across async orchestration, synchronous loops, and
+  repository-owned blocking/offloaded helpers rather than relying solely on an
+  outer interrupt-aware await point
+- it treats delegated constrained-v3 cancellation as part of the same
+  repository-owned CLI shutdown contract rather than as a separate control
+  plane or independently managed background cancellation channel
 - it does not treat unpublished or incomplete progress as authoritative, so
   repository-owned mutable refs on the filesystem keep the same publish-on-
   successful-completion boundary
