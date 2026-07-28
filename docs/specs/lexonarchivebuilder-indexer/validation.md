@@ -17,7 +17,7 @@ effective-profile identity signaling,
 clustering-failure diagnostics, rooted
 block-tree quality assessment with rooted TNN-recall diagnostics, rooted
 query access-cost reporting, rooted
-CLI search over stored trees, rooted block-store copy tooling with live default heartbeat counters plus additive worker-threaded traversal and capability-based batched destination publication, CLI-only local-redb maintenance compaction, graceful Ctrl-C local-redb shutdown with in-phase interrupt observability across repository-owned long-running work, replay-stable fingerprinting, temporary
+CLI search over stored trees, rooted block-store copy tooling with live default heartbeat counters plus additive worker-threaded traversal and capability-based batched destination publication, CLI-only local-redb maintenance compaction, graceful Ctrl-C local-redb shutdown with in-phase interrupt observability across repository-owned long-running work plus delegated constrained-v3 cancel notification, replay-stable fingerprinting, temporary
 upstream `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, 0.6.x published-profile
 evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder
@@ -525,12 +525,15 @@ to `0.7.0`, with earlier `0.5.x` alignment retained only as prior comparison
 context and `0.4.x` retained as historical context, or else any missing
 capability is classified explicitly as an upstream regression or compatibility
 finding rather than being silently dropped. For effective profile `0.7.0`,
-this also includes preserving the upstream constrained v3 leaf-block-id
-ingestion plus finalize lifecycle rather than reintroducing repository-local
-content-ref rematerialization for the v3 boundary, and preserving additive
-pass-end convergence telemetry that identifies the effective profile,
-delegated contract family, and exposed pass metrics needed to judge
-convergence. The same upgrade boundary must also preserve automatic derivation
+this also includes wiring the cooperative v3 cancel-notification capability
+added by commit `f9818730c3f4d02290a617ec6fd7e9f8829eaafd` into the
+direct-`local-redb` cancellation path without inventing a new caller-visible
+cancel control, preserving the upstream constrained v3 leaf-block-id ingestion
+plus finalize lifecycle rather than reintroducing repository-local content-ref
+rematerialization for the v3 boundary, and preserving additive pass-end
+convergence telemetry that identifies the effective profile, delegated contract
+family, and exposed pass metrics needed to judge convergence. The same upgrade
+boundary must also preserve automatic derivation
 of the upstream-required delegated v3 working root from existing request-adjacent
 artifact/output locations, with no new caller-visible selector and explicit
 failure when that derived root is unusable.
@@ -1139,6 +1142,16 @@ inside the active phase quickly enough to stop admitting additional
 repository-owned work before the full scan, traversal, or materialization pass
 completes normally.
 
+For at least one representative effective-`0.7.0` direct-`local-redb` case,
+the interrupted command must also be inside active delegated upstream
+streaming-indexer v3 work after the repository-owned handoff has occurred.
+
+**Pass condition:** once that delegated v3 work is active, the same first
+operator `Ctrl-C` is propagated through the upstream cooperative cancellation
+surface introduced by commit `f9818730c3f4d02290a617ec6fd7e9f8829eaafd`, and
+the command ends as an explicit interrupted or unsuccessful operator-visible
+outcome without waiting for the delegated v3 step to finish normally.
+
 **Traces to:** RQ-INDEXER-005E, RQ-INDEXER-008, DSG-LFI-005G
 
 ### VAL-LFI-006
@@ -1518,8 +1531,10 @@ blocking/offloaded phases to observe the first interrupt within the active
 phase rather than only at an outer await boundary, preserves explicit
 interrupted outcomes instead of success-shaped cancellation results, preserves
 the rule that mutable refs remain authoritative only at the existing
-publication boundary, and does not silently broaden the requirement to
-filesystem, overlay, Azure-backed, or gateway profiles.
+publication boundary, treats any delegated cooperative cancellation bridge as
+part of that same CLI-scoped shutdown path rather than a new caller-visible
+surface, and does not silently broaden the requirement to filesystem, overlay,
+Azure-backed, or gateway profiles.
 
 **Traces to:** RQ-INDEXER-005E, RQ-INDEXER-009, RQ-INDEXER-010A, DSG-LFI-005G,
 DSG-LFI-009
