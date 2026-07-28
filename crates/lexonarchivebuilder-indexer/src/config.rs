@@ -9,7 +9,8 @@ use clap::{Args, ValueEnum};
 use lexongraph_block::EmbeddingSpec;
 use lexongraph_streaming_indexer::{IndexItem, Metadata};
 pub use lexongraph_streaming_indexer::{
-    PUBLISHED_PROFILE_V0_1_0, PUBLISHED_PROFILE_V0_7_0, PublishedProfileVersion,
+    PUBLISHED_PROFILE_V0_1_0, PUBLISHED_PROFILE_V0_7_0, PUBLISHED_PROFILE_V0_8_0,
+    PublishedProfileVersion,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -89,9 +90,11 @@ impl ClusteringConfigOverrides {
         {
             return Err(ConfigError::LocalTestingClusterCountRequiresLocalEnvironment);
         }
-        if self.local_testing_cluster_count.is_some() && profile_version == PUBLISHED_PROFILE_V0_7_0
+        if self.local_testing_cluster_count.is_some()
+            && (profile_version == PUBLISHED_PROFILE_V0_7_0
+                || profile_version == PUBLISHED_PROFILE_V0_8_0)
         {
-            return Err(ConfigError::LocalTestingClusterCountUnsupportedForPublishedProfileV0_7_0);
+            return Err(ConfigError::LocalTestingClusterCountUnsupportedForV3Profile);
         }
         Ok(ConfiguredClustering {
             profile_version,
@@ -278,9 +281,9 @@ pub enum ConfigError {
     )]
     LocalTestingClusterCountRequiresLocalEnvironment,
     #[error(
-        "local testing cluster_count override is not supported for published profile 0.7.0 because that profile now runs through the constrained streaming-indexer v3 path"
+        "local testing cluster_count override is not supported for profiles 0.7.0 and 0.8.0 because those profiles run through the constrained streaming-indexer v3 path"
     )]
-    LocalTestingClusterCountUnsupportedForPublishedProfileV0_7_0,
+    LocalTestingClusterCountUnsupportedForV3Profile,
 }
 
 impl BatchRequest {
@@ -612,7 +615,7 @@ fn default_block_size_target() -> usize {
 }
 
 fn default_profile_version() -> PublishedProfileVersion {
-    PUBLISHED_PROFILE_V0_7_0
+    PUBLISHED_PROFILE_V0_8_0
 }
 
 fn default_local_model() -> String {
@@ -952,7 +955,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(request.stage, ExecutionStage::FullPipeline);
-        assert_eq!(request.profile_version, PUBLISHED_PROFILE_V0_7_0);
+        assert_eq!(request.profile_version, PUBLISHED_PROFILE_V0_8_0);
         assert_eq!(request.replay_batch_size, None);
     }
 
@@ -1650,7 +1653,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(clustering.profile_version, PUBLISHED_PROFILE_V0_7_0);
+        assert_eq!(clustering.profile_version, PUBLISHED_PROFILE_V0_8_0);
         assert_eq!(clustering.local_testing_cluster_count, None);
     }
 
@@ -1763,7 +1766,7 @@ mod tests {
     }
 
     #[test]
-    fn clustering_override_rejects_local_testing_cluster_count_for_published_profile_v0_7_0() {
+    fn clustering_override_rejects_local_testing_cluster_count_for_default_v0_8_0_profile() {
         let error = ClusteringConfigOverrides {
             profile_version: None,
             local_testing_cluster_count: Some(32),
@@ -1786,12 +1789,12 @@ mod tests {
 
         assert!(matches!(
             error,
-            ConfigError::LocalTestingClusterCountUnsupportedForPublishedProfileV0_7_0
+            ConfigError::LocalTestingClusterCountUnsupportedForV3Profile
         ));
     }
 
     #[test]
-    fn clustering_override_rejects_local_testing_cluster_count_when_cli_selects_v0_7_0_over_request_non_v2()
+    fn clustering_override_rejects_local_testing_cluster_count_when_cli_selects_v0_7_0_over_request_non_v3()
      {
         let error = ClusteringConfigOverrides {
             profile_version: Some(PublishedProfileVersion::new(0, 7, 0)),
@@ -1815,7 +1818,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            ConfigError::LocalTestingClusterCountUnsupportedForPublishedProfileV0_7_0
+            ConfigError::LocalTestingClusterCountUnsupportedForV3Profile
         ));
     }
 

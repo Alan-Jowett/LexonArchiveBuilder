@@ -30,7 +30,7 @@ replay-journaled split-stage recovery, bounded-residency deterministic replay
 ordering, efficient replay-order preparation, bounded replay-batch preparation overlap, replay batch-size decoupling from CPU concurrency, bounded multi-batch replay-prefetch buffering, and layer-parallel
 block-construction evolution, and v2 custom-block adoption for repository-owned
 non-search artifacts, plus conditional streaming-indexer v3 adoption with
-repository-default published profile `0.7.0`, derived request-adjacent
+repository-default published profile `0.8.0`, with `0.7.0` retained, derived request-adjacent
 delegated v3 working-root support, renewed compatibility with later
 upstream-`main` constrained-v3 breaking changes, and repo-wide redb
 block-store targeting support, in
@@ -46,7 +46,7 @@ indexer requirements, including the email-ingestion refinement from `.mail` and
 units plus the local filesystem block-store interoperability correction,
 replay-based streaming delegated indexing adoption, stage-selectable execution,
 standalone clustering input discovery, delegated published-profile adoption,
-caller-selectable published-profile configuration with default `0.7.0`,
+caller-selectable published-profile configuration with default `0.8.0`,
 latest published-profile and telemetry compatibility, temporary upstream
 `main` tracking for rapid profile validation, upstream
 wgpu-acceleration revision compatibility, upstream regression assessment,
@@ -674,14 +674,15 @@ have to infer non-v3-versus-v3 routing from omitted defaults or source code.
 
 **[KNOWN]:** The upstream published-profile surface exposes this increment's
 approved contract through `PublishedProfileVersion`, the current default
-constant `PUBLISHED_PROFILE_V0_7_0`, and the higher-level
+constant `PUBLISHED_PROFILE_V0_8_0` plus retained `PUBLISHED_PROFILE_V0_7_0`,
+and the higher-level
 `with_published_profile(...)` construction path.
 
 When the temporarily tracked upstream `main` branch publishes additional
 profile versions in the active `0.6.x` experiment series, LexonArchiveBuilder
 refreshes its adopted dependency state so that the same selector surface can
 target those versions immediately, without changing the repository default
-away from `0.7.0`. Earlier `0.5.x` alignment remains prior comparison context
+away from `0.8.0`. Earlier `0.5.x` alignment remains prior comparison context
 for evaluation, while `0.4.x` remains historical context for older
 experiments, not the current named selector target.
 
@@ -696,7 +697,7 @@ indexer.
 In this increment, that normalization means:
 
 - clustering-enabled execution resolves to one selected published profile
-  version, defaulting to `0.7.0` when the caller omits the selector
+  version, defaulting to `0.8.0` when the caller omits the selector
 - refreshing the adopted upstream dependency state may add newly published
   selector targets in the active `0.6.x` series, but does not change
   omitted-selector behavior unless a later approved increment changes the
@@ -742,11 +743,11 @@ upgrade whenever the latest upstream contract still supports them semantically:
 - the external stage contract
 - deterministic split-stage replay
 - adoption of the published-profile API for clustering-enabled execution
-- defaulting to published profile `0.7.0` while permitting explicit selection
+- defaulting to published profile `0.8.0` while permitting explicit selection
   of another upstream-published profile version for evaluation
-- conditional use of the upstream streaming-indexer v3 API only when the
-  effective selected profile version is `0.7.0`
-- preserving explicit non-`0.7.0` published-profile selections on the existing
+- conditional use of the upstream streaming-indexer v3 API when the
+  effective selected profile version is `0.7.0` or `0.8.0`
+- preserving explicit profiles other than `0.7.0` and `0.8.0` on the existing
   non-v3 delegated path until broader v3 adoption is approved
 - refreshing the adopted upstream dependency state so newly published versions
   in the active `0.6.x` series become selectable without redefining the
@@ -791,15 +792,15 @@ repository-local clustering-mode switch.
 
 In this increment:
 
-- effective profile `0.7.0` routes clustering-enabled execution through
+- effective profile `0.7.0` or `0.8.0` routes clustering-enabled execution through
   `StreamingIndexingRunV3`
-- explicitly selected non-`0.7.0` profiles continue to use the existing
+- explicitly selected profiles other than `0.7.0` and `0.8.0` continue to use the existing
   non-v3 streaming-indexer integration path
 - the effective profile is resolved from the existing CLI-override,
   request-file, then repository-default precedence before delegated surface
-  selection, so a CLI-selected non-`0.7.0` profile remains non-v3 and a
-  CLI-selected `0.7.0` profile remains v3
-- once effective profile `0.7.0` selects the v3 surface, repository-owned
+- selection, so a CLI-selected profile outside `{0.7.0, 0.8.0}` remains
+  non-v3 and a CLI-selected `0.7.0` or `0.8.0` profile remains v3
+- once effective profile `0.7.0` or `0.8.0` selects the v3 surface, repository-owned
   orchestration feeds deterministic replayable leaf block ids into the
   delegated v3 ingestion boundary and then completes clustering plus block
   assembly through the delegated `finalize(...)` transition
@@ -815,8 +816,8 @@ In this increment:
   used the non-v3 path while another used `StreamingIndexingRunV3`
 
 This preserves the caller-visible published-profile contract while letting the
-repository adopt the upstream constrained v3 surface only where the upstream
-contract currently supports it, without silently narrowing non-`0.7.0`
+repository adopt the upstream constrained v3 surface for the two supported
+profiles, without silently narrowing other
 evaluation or adding a new caller-visible working-root selector.
 
 **Traces to:** RQ-INDEXER-003F, RQ-INDEXER-003G, RQ-INDEXER-003I, RQ-INDEXER-003A3, RQ-INDEXER-010A
@@ -2096,7 +2097,7 @@ The approved operator-facing behavior is:
 - callers continue to choose whether clustering runs by selecting the execution
   stage
 - callers may also select the published profile version for clustering-enabled
-  stages, with omission resolving to the default `0.7.0` profile
+  stages, with omission resolving to the default `0.8.0` profile
 - the request-file-driven runtime shape remains preserved for batch items,
   environment selection, stage selection, and profile-version selection
 - any legacy low-level clustering flags that remain in old automation fail

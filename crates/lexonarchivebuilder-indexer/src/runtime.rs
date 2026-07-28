@@ -50,7 +50,7 @@ use crate::config::MUTABLE_REF_ROOT_DIR;
 use crate::config::{
     BatchItemConfig, BatchRequest, BatchSummary, ClusteringConfigOverrides, ConfigError,
     ConfiguredClustering, ExecutionStage, MutableRefStoreLocation, PUBLISHED_PROFILE_V0_7_0,
-    metadata_to_text_map,
+    PUBLISHED_PROFILE_V0_8_0, metadata_to_text_map,
 };
 use crate::custom_blocks::{
     REPLAY_JOURNAL_BLOCK_TYPE, REPLAY_JOURNAL_MEDIA_TYPE, custom_block_payload,
@@ -1554,6 +1554,7 @@ fn resolved_published_profile(
 
 fn uses_streaming_indexer_v3(clustering: &ConfiguredClustering) -> bool {
     clustering.profile_version == PUBLISHED_PROFILE_V0_7_0
+        || clustering.profile_version == PUBLISHED_PROFILE_V0_8_0
 }
 
 #[cfg(test)]
@@ -7390,7 +7391,8 @@ mod tests {
     use ciborium::value::Value;
     use lexongraph_block::Content;
     use lexongraph_streaming_indexer::{
-        PUBLISHED_PROFILE_V0_1_0, PUBLISHED_PROFILE_V0_7_0, PublishedProfileVersion,
+        PUBLISHED_PROFILE_V0_1_0, PUBLISHED_PROFILE_V0_7_0, PUBLISHED_PROFILE_V0_8_0,
+        PublishedProfileVersion,
     };
     use serde_json::json;
     use tempfile::tempdir;
@@ -9143,9 +9145,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            RuntimeError::Config(
-                ConfigError::LocalTestingClusterCountUnsupportedForPublishedProfileV0_7_0
-            )
+            RuntimeError::Config(ConfigError::LocalTestingClusterCountUnsupportedForV3Profile)
         ));
     }
 
@@ -10654,10 +10654,10 @@ mod tests {
     }
 
     #[test]
-    fn streaming_indexer_v2_selection_follows_effective_profile_precedence() {
+    fn streaming_indexer_v3_selection_follows_effective_profile_precedence() {
         let default_v3 = ClusteringConfigOverrides::default()
             .to_configured_clustering(
-                PUBLISHED_PROFILE_V0_7_0,
+                PUBLISHED_PROFILE_V0_8_0,
                 &local_test_environment(String::new()),
             )
             .expect("v3 published profile config");
@@ -10667,6 +10667,15 @@ mod tests {
                 &local_test_environment(String::new()),
             )
             .expect("non-v3 published profile config");
+        let explicit_v0_7 = ClusteringConfigOverrides {
+            profile_version: Some(PUBLISHED_PROFILE_V0_7_0),
+            local_testing_cluster_count: None,
+        }
+        .to_configured_clustering(
+            PUBLISHED_PROFILE_V0_8_0,
+            &local_test_environment(String::new()),
+        )
+        .expect("explicit v0.7 published profile config");
         let cli_to_v3 = ClusteringConfigOverrides {
             profile_version: Some(PUBLISHED_PROFILE_V0_7_0),
             local_testing_cluster_count: None,
@@ -10687,6 +10696,7 @@ mod tests {
         .expect("cli-selected non-v3 published profile config");
 
         assert!(uses_streaming_indexer_v3(&default_v3));
+        assert!(uses_streaming_indexer_v3(&explicit_v0_7));
         assert!(!uses_streaming_indexer_v3(&default_non_v3));
         assert!(uses_streaming_indexer_v3(&cli_to_v3));
         assert!(!uses_streaming_indexer_v3(&cli_to_non_v3));

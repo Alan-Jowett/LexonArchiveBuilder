@@ -3580,10 +3580,11 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 
 ## Open Questions / Discovery Gaps
 
-- **Q-INDEXER-061 [UNKNOWN]:** After `0.7.0` becomes the only approved v3-backed
-  profile in this increment, should future increments widen the v3 surface to
-  additional published profiles, or keep non-`0.7.0` selections on the
-  existing non-v3 path until each profile is explicitly approved?
+- **Q-INDEXER-061 [UNKNOWN]:** After `0.7.0` and `0.8.0` become the approved
+  v3-backed profiles in this increment, should future increments widen the v3
+  surface to additional published profiles, or keep profiles outside
+  `{0.7.0, 0.8.0}` on the existing non-v3 path until each profile is
+  explicitly approved?
 - **Q-INDEXER-062 [UNKNOWN]:** Does the latest upstream v3 status-observer
   contract expose enough information for LexonArchiveBuilder to preserve its
   current replay-submission handoff and long-running liveness messages without
@@ -4101,6 +4102,25 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   constrained-v3 streaming execution to propagate first interrupt through the
   upstream streaming cancel-notification surface so delegated work can begin
   stopping before that active upstream phase completes on its own.
+
+### BA-INDEXER-152
+
+- **Before [KNOWN]:** The workspace pinned LexonGraph crates to
+  `3fa2220cccf601d83f181564aed01cbf40ffcbea`, with published profile `0.7.0`
+  as the repository default.
+- **After [KNOWN]:** The workspace refreshes to LexonGraph
+  `55f0082b71a098dbd21dadbafc3e7a9d77b6cea4`, exposes upstream profile
+  `0.8.0`, and resolves omitted profile selection to `0.8.0` while retaining
+  explicit `0.7.0` selection.
+
+### BA-INDEXER-153
+
+- **Before [KNOWN]:** Only effective profile `0.7.0` selected the constrained
+  streaming-indexer v3 path.
+- **After [KNOWN]:** Effective profiles `0.7.0` and `0.8.0` select v3;
+  profiles outside that set remain on the existing non-v3 path. Both v3-backed
+  profiles reject local `cluster_count` overrides and preserve the existing
+  stage, replay, telemetry, storage, embedding, and MCP contracts.
 
 ### Invariant Impact Assessment
 

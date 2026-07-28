@@ -41,7 +41,7 @@ LexonArchiveBuilder-owned indexer boundary, including local filesystem
 and local redb block-store interoperability, replay-based streaming delegated indexing,
 stage-selectable execution, standalone clustering input discovery,
 published-profile API adoption, caller-selectable published-profile
-configuration with default `0.7.0`, latest published-profile and telemetry
+configuration with default `0.8.0` and v3-backed `0.7.0`/`0.8.0`, latest published-profile and telemetry
 compatibility, temporary upstream `main` tracking for rapid profile
 validation, upstream wgpu-acceleration revision compatibility, 0.6.x
 published-profile evaluation, local testing sweep automation, v0.7.0
@@ -543,18 +543,19 @@ failure when that derived root is unusable.
 ### VAL-LFI-002N3
 
 Exercise clustering-enabled execution once with omitted profile selection,
-once with explicit `0.7.0`, and once with one explicit supported non-`0.7.0`
+once with explicit `0.7.0`, once with explicit `0.8.0`, and once with one
+explicit supported profile outside `{0.7.0, 0.8.0}`
 profile version, including at least one case where the selected version comes
 from the CLI override rather than the request file.
 
-**Pass condition:** omitted selection and explicit `0.7.0` both resolve to the
-same effective profile and use the same v3-backed delegated path, while the
-explicit non-`0.7.0` run preserves the same caller-visible selector contract
-but uses the existing non-v3 delegated path instead. No run silently coerces an
-explicit non-`0.7.0` selection back to `0.7.0`, and the delegated-surface
+**Pass condition:** omitted selection resolves to `0.8.0`, and explicit
+`0.7.0` and `0.8.0` selections use the v3-backed delegated path, while the
+explicit profile outside `{0.7.0, 0.8.0}` preserves the same caller-visible
+selector contract but uses the existing non-v3 delegated path instead. No run
+silently coerces an explicit selection, and the delegated-surface
 choice is identical whether the effective selected profile came from the CLI,
 the request file, or the omitted-selector default. When the effective selected
-profile is `0.7.0`, the same v3-backed path must ingest deterministic replayable
+profile is `0.7.0` or `0.8.0`, the same v3-backed path must ingest deterministic replayable
 leaf block ids without rematerializing content references for the delegated v3
 boundary and must keep using the derived request-adjacent working root.
 The operator-visible run identity must match each resolved effective
