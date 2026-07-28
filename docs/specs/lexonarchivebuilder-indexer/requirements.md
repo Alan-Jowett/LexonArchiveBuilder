@@ -3580,10 +3580,11 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
 
 ## Open Questions / Discovery Gaps
 
-- **Q-INDEXER-061 [UNKNOWN]:** After `0.7.0` becomes the only approved v3-backed
-  profile in this increment, should future increments widen the v3 surface to
-  additional published profiles, or keep non-`0.7.0` selections on the
-  existing non-v3 path until each profile is explicitly approved?
+- **Q-INDEXER-061 [UNKNOWN]:** After `0.7.0` and `0.8.0` become the approved
+  v3-backed profiles in this increment, should future increments widen the v3
+  surface to additional published profiles, or keep profiles outside
+  `{0.7.0, 0.8.0}` on the existing non-v3 path until each profile is
+  explicitly approved?
 - **Q-INDEXER-062 [UNKNOWN]:** Does the latest upstream v3 status-observer
   contract expose enough information for LexonArchiveBuilder to preserve its
   current replay-submission handoff and long-running liveness messages without

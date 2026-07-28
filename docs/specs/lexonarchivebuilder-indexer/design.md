@@ -2097,7 +2097,7 @@ The approved operator-facing behavior is:
 - callers continue to choose whether clustering runs by selecting the execution
   stage
 - callers may also select the published profile version for clustering-enabled
-  stages, with omission resolving to the default `0.7.0` profile
+  stages, with omission resolving to the default `0.8.0` profile
 - the request-file-driven runtime shape remains preserved for batch items,
   environment selection, stage selection, and profile-version selection
 - any legacy low-level clustering flags that remain in old automation fail

@@ -41,7 +41,7 @@ LexonArchiveBuilder-owned indexer boundary, including local filesystem
 and local redb block-store interoperability, replay-based streaming delegated indexing,
 stage-selectable execution, standalone clustering input discovery,
 published-profile API adoption, caller-selectable published-profile
-configuration with default `0.8.0` and v3-backed `0.7.0`, latest published-profile and telemetry
+configuration with default `0.8.0` and v3-backed `0.7.0`/`0.8.0`, latest published-profile and telemetry
 compatibility, temporary upstream `main` tracking for rapid profile
 validation, upstream wgpu-acceleration revision compatibility, 0.6.x
 published-profile evaluation, local testing sweep automation, v0.7.0
