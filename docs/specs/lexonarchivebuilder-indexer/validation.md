@@ -647,6 +647,26 @@ targeting scope.
 
 **Traces to:** RQ-INDEXER-003G, RQ-INDEXER-005, RQ-INDEXER-007, RQ-INDEXER-009, DSG-LFI-001I3, DSG-LFI-007H
 
+### VAL-LFI-002N9
+
+Inspect the constrained-v3 partition-working Redb integration after refreshing
+the LexonGraph dependency target to
+`d3b0f145015ff51a434ae68c884cacf9a2048e13`, and exercise a representative
+clustering-enabled run that performs partition mutations.
+
+**Pass condition:** initialization and every run-scoped v3 partition write
+transaction use the upstream non-durable mode; active-process reads retain
+transactional visibility; an interrupted temporary partition database is
+treated as restart-from-beginning state rather than repaired or resumed; and
+production block stores, final result blocks, mutable refs, replay-audit
+artifacts, non-v3 delegated paths, and MCP search behavior retain their
+existing durability and contract meanings. The validation also confirms that
+no repository-owned caller-visible durability selector was introduced.
+
+**Traces to:** UR-358, UR-359, UR-360, UR-361, UR-362, UR-363, UR-364,
+RQ-INDEXER-003G, RQ-INDEXER-003I, RQ-INDEXER-009, RQ-INDEXER-010A,
+DSG-LFI-001I4, DSG-LFI-009, DSG-LFI-010
+
 ### VAL-LFI-002N1
 
 Run the repository-local published-profile sweep automation against a

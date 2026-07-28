@@ -889,6 +889,29 @@ search semantics, or Azure-backed profile behavior.
 
 **Traces to:** RQ-INDEXER-003G, RQ-INDEXER-005, RQ-INDEXER-005B, RQ-INDEXER-007, RQ-INDEXER-009, RQ-INDEXER-010A
 
+### DSG-LFI-001I4 `Non-durable constrained-v3 partition working state`
+
+When LexonArchiveBuilder refreshes the LexonGraph dependency target to
+`d3b0f145015ff51a434ae68c884cacf9a2048e13`, it consumes the upstream
+constrained-v3 partition-working Redb policy that uses non-durable writes.
+
+This policy applies to initialization and every run-scoped mutation of the
+temporary partition-working database. Redb transaction atomicity and
+active-process read visibility remain required, but pending partition data is
+not required to be forced to stable storage. The partition-working database is
+not a recovery artifact: interruption may leave it incomplete or unusable, and
+the enclosing run restarts from the beginning rather than repairing or
+resuming that temporary state.
+
+The policy is strictly scoped to delegated temporary v3 partition state. It
+does not change durability for production block stores, final result blocks,
+mutable refs, replay-audit artifacts, or other repository-owned durable
+outputs, and it does not add a caller-visible durability selector.
+
+**Traces to:** UR-358, UR-359, UR-360, UR-361, UR-362, UR-363, UR-364,
+RQ-INDEXER-003G, RQ-INDEXER-003I, RQ-INDEXER-009, RQ-INDEXER-010A,
+DSG-LFI-001I2, DSG-LFI-001I3
+
 ### DSG-LFI-002 `Batch runtime shape`
 
 The indexer runtime is a Linux Docker container that executes one batch under a
@@ -2544,6 +2567,10 @@ LexonArchiveBuilder-owned verification artifacts validate:
   duplicate child discovery, and preservation of mutable-reference exclusion
 - correct application and defaulting of the administrator-defined concurrency
   budget
+- correct consumption of non-durable writes for temporary constrained-v3
+  partition-working Redb state, including initialization and every run-scoped
+  partition mutation, while preserving durable production, final-result,
+  mutable-ref, replay-audit, non-v3, and MCP contracts
 - preservation of stable batch contracts across environments
 - explicit preservation of higher-layer parent construction as future work at
   the current upstream API boundary
