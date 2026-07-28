@@ -7420,8 +7420,14 @@ mod tests {
 
     impl StatusObserverHookGuard {
         fn install(hook: StatusObserverTestHook) -> Self {
+            let owner_thread = std::thread::current().id();
+            let scoped_hook: StatusObserverTestHook = Arc::new(move |status| {
+                if std::thread::current().id() == owner_thread {
+                    hook(status);
+                }
+            });
             *lock_unpoisoned(STATUS_OBSERVER_TEST_HOOK.get_or_init(|| Mutex::new(None))) =
-                Some(hook);
+                Some(scoped_hook);
             Self
         }
     }
@@ -13255,7 +13261,10 @@ mod tests {
             refs_before_interrupt.current_root_block_id
         );
         assert!(refs_after_interrupt.replay_journal_head_block_id.is_some());
-        assert_eq!(refs_after_interrupt.metadata, refs_before_interrupt.metadata);
+        assert_eq!(
+            refs_after_interrupt.metadata,
+            refs_before_interrupt.metadata
+        );
 
         let reopen_deadline = Instant::now() + Duration::from_secs(10);
         let reopened_store = loop {
@@ -13392,7 +13401,10 @@ mod tests {
             refs_before_interrupt.current_root_block_id
         );
         assert!(refs_after_interrupt.replay_journal_head_block_id.is_some());
-        assert_eq!(refs_after_interrupt.metadata, refs_before_interrupt.metadata);
+        assert_eq!(
+            refs_after_interrupt.metadata,
+            refs_before_interrupt.metadata
+        );
 
         let reopen_deadline = Instant::now() + Duration::from_secs(10);
         let reopened_store = loop {
