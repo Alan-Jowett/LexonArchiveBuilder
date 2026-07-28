@@ -68,6 +68,8 @@ use crate::tree_tools::{decode_embedding_values, parse_block_hash};
 type ProgressReporter = Arc<dyn Fn(String) + Send + Sync + 'static>;
 #[cfg(test)]
 type StatusObserverTestHook = Arc<dyn Fn(&StreamingIndexingStatus) + Send + Sync + 'static>;
+#[cfg(test)]
+type StatusObserverTestHooks = HashMap<std::thread::ThreadId, Vec<StatusObserverTestHook>>;
 
 enum InterruptAwareOutcome<T> {
     Completed(T),
@@ -93,7 +95,7 @@ const UNKNOWN_BLOCKED_ON_SUMMARY: &str = "unknown";
 #[cfg(test)]
 const TEST_REF_NAME: &str = "test-branch";
 #[cfg(test)]
-static STATUS_OBSERVER_TEST_HOOK: OnceLock<Mutex<Option<StatusObserverTestHook>>> = OnceLock::new();
+static STATUS_OBSERVER_TEST_HOOKS: OnceLock<Mutex<StatusObserverTestHooks>> = OnceLock::new();
 
 #[derive(Clone, Copy)]
 struct RuntimeIo<'a> {
@@ -2962,15 +2964,16 @@ where
 {
     match outcome {
         InterruptAwareOutcome::Completed(Ok(value)) => Ok(value),
+        InterruptAwareOutcome::Completed(Err(StreamingIndexerError::Cancelled(_)))
+        | InterruptAwareOutcome::Interrupted(Err(StreamingIndexerError::Cancelled(_))) => {
+            Err(interrupt::InterruptError.into())
+        }
         InterruptAwareOutcome::Completed(Err(error)) => Err(clustering_failure_error(
             error,
             diagnostics().as_ref(),
             progress,
         )),
         InterruptAwareOutcome::Interrupted(Ok(_)) => Err(interrupt::InterruptError.into()),
-        InterruptAwareOutcome::Interrupted(Err(StreamingIndexerError::Cancelled(_))) => {
-            Err(interrupt::InterruptError.into())
-        }
         InterruptAwareOutcome::Interrupted(Err(error)) => Err(clustering_failure_error(
             error,
             diagnostics().as_ref(),
@@ -6652,10 +6655,13 @@ fn make_status_observer(
 
 #[cfg(test)]
 fn invoke_status_observer_test_hook(status: &StreamingIndexingStatus) {
-    let Some(hook) = STATUS_OBSERVER_TEST_HOOK.get() else {
+    let Some(hooks) = STATUS_OBSERVER_TEST_HOOKS.get() else {
         return;
     };
-    let callback = lock_unpoisoned(hook).clone();
+    let callback = lock_unpoisoned(hooks)
+        .get(&std::thread::current().id())
+        .and_then(|hooks| hooks.last())
+        .cloned();
     if let Some(callback) = callback {
         callback(status);
     }
@@ -7416,25 +7422,32 @@ mod tests {
         }
     }
 
-    struct StatusObserverHookGuard;
+    struct StatusObserverHookGuard {
+        owner_thread: std::thread::ThreadId,
+    }
 
     impl StatusObserverHookGuard {
         fn install(hook: StatusObserverTestHook) -> Self {
             let owner_thread = std::thread::current().id();
-            let scoped_hook: StatusObserverTestHook = Arc::new(move |status| {
-                if std::thread::current().id() == owner_thread {
-                    hook(status);
-                }
-            });
-            *lock_unpoisoned(STATUS_OBSERVER_TEST_HOOK.get_or_init(|| Mutex::new(None))) =
-                Some(scoped_hook);
-            Self
+            lock_unpoisoned(STATUS_OBSERVER_TEST_HOOKS.get_or_init(|| Mutex::new(HashMap::new())))
+                .entry(owner_thread)
+                .or_default()
+                .push(hook);
+            Self { owner_thread }
         }
     }
 
     impl Drop for StatusObserverHookGuard {
         fn drop(&mut self) {
-            *lock_unpoisoned(STATUS_OBSERVER_TEST_HOOK.get_or_init(|| Mutex::new(None))) = None;
+            let mut hooks = lock_unpoisoned(
+                STATUS_OBSERVER_TEST_HOOKS.get_or_init(|| Mutex::new(HashMap::new())),
+            );
+            if let Some(thread_hooks) = hooks.get_mut(&self.owner_thread) {
+                thread_hooks.pop();
+                if thread_hooks.is_empty() {
+                    hooks.remove(&self.owner_thread);
+                }
+            }
         }
     }
 
@@ -9462,6 +9475,7 @@ mod tests {
 
     #[test]
     fn replay_journal_scan_stops_when_interrupt_requested_during_entry_iteration() {
+        let _interrupt_guard = InterruptResetGuard::new();
         let temp = tempdir().unwrap();
         let block_store = ConfiguredBlockStore::from_environment(
             temp.path(),
