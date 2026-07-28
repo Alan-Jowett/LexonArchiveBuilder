@@ -50,8 +50,7 @@ use crate::config::MUTABLE_REF_ROOT_DIR;
 use crate::config::{
     BatchItemConfig, BatchRequest, BatchSummary, ClusteringConfigOverrides, ConfigError,
     ConfiguredClustering, ExecutionStage, MutableRefStoreLocation, PUBLISHED_PROFILE_V0_7_0,
-    PUBLISHED_PROFILE_V0_8_0,
-    metadata_to_text_map,
+    PUBLISHED_PROFILE_V0_8_0, metadata_to_text_map,
 };
 use crate::custom_blocks::{
     REPLAY_JOURNAL_BLOCK_TYPE, REPLAY_JOURNAL_MEDIA_TYPE, custom_block_payload,
@@ -9146,9 +9145,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            RuntimeError::Config(
-                ConfigError::LocalTestingClusterCountUnsupportedForV3Profile
-            )
+            RuntimeError::Config(ConfigError::LocalTestingClusterCountUnsupportedForV3Profile)
         ));
     }
 
