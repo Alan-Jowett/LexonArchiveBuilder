@@ -786,6 +786,29 @@
 - **UR-357 [KNOWN]:** LexonGraph commit
   `f9818730c3f4d02290a617ec6fd7e9f8829eaafd` added cooperative cancellation
   for the constrained streaming-indexer v3 path.
+- **UR-358 [KNOWN]:** Refresh the shared LexonGraph dependency set to the
+  latest `main` revision identified for this increment:
+  `d3b0f145015ff51a434ae68c884cacf9a2048e13`
+  (`Use non-durable V3 partition storage`).
+- **UR-359 [KNOWN]:** The upstream revision changes the delegated constrained
+  streaming-indexer v3 partition-working Redb database to use non-durable write
+  transactions for initialization and run-scoped partition mutations.
+- **UR-360 [KNOWN]:** LexonArchiveBuilder shall consume the refreshed upstream
+  dependency set without weakening the existing external stage, published
+  profile, replay, progress, block-store, or MCP search contracts.
+- **UR-361 [KNOWN]:** Non-durable write behavior applies only to temporary,
+  run-scoped v3 partition-working state; production block stores, final result
+  blocks, mutable refs, and other durable artifacts retain their existing
+  durability contracts.
+- **UR-362 [INFERRED]:** Because v3 partition-working state is not a recovery
+  artifact, an interrupted or incomplete temporary database must be treated as
+  restart-from-beginning state rather than repaired or resumed state.
+- **UR-363 [KNOWN]:** The repository must not introduce a new caller-visible
+  durability selector or a repository-owned replacement for the delegated
+  upstream partition-storage policy.
+- **UR-364 [KNOWN]:** Verification must cover initialization and every v3
+  partition write path, while confirming active-process transactional visibility
+  and preservation of non-v3 and final-result durability behavior.
 
 ## Change Manifest
 
@@ -942,6 +965,9 @@
 | CM-INDEXER-149 | Revise | Strengthen graceful direct-`local-redb` interrupt requirements so first `Ctrl-C` is observed inside repository-owned long-running work, including blocking/offloaded execution paths, rather than only at outer async orchestration boundaries | UR-339, UR-340, UR-341, UR-345, UR-346, UR-347, UR-348 |
 | CM-INDEXER-150 | Revise | Refresh the LexonGraph workspace dependency set from the current repository pin `6148d2cc01c2a1017178489bec75aea567297212` to upstream `main` head `3fa2220cccf601d83f181564aed01cbf40ffcbea` and absorb required delegated API changes without weakening approved indexer contracts | UR-349, UR-350, UR-351, UR-352 |
 | CM-INDEXER-151 | Revise | Extend direct-`local-redb` graceful-cancel requirements so the delegated constrained streaming-indexer v3 execution step uses the newly available upstream cancel-notification surface and can begin interruption while upstream streaming work is active | UR-349, UR-353, UR-354, UR-355, UR-356, UR-357 |
+| CM-INDEXER-152 | Revise | Refresh the LexonGraph workspace dependency set to `main` commit `d3b0f145015ff51a434ae68c884cacf9a2048e13` so v3 partition-working writes use the upstream non-durable Redb mode | UR-358, UR-359, UR-360 |
+| CM-INDEXER-153 | Add | Constrain non-durable durability to temporary v3 partition-working state and preserve durable production, final-result, and mutable-ref contracts with restart-from-beginning recovery semantics | UR-361, UR-362, UR-363 |
+| CM-INDEXER-154 | Add | Require validation of non-durable v3 partition initialization and mutation paths, including transaction visibility and unchanged non-v3/final-result durability behavior | UR-359, UR-361, UR-364 |
 
 ## Before / After
 
@@ -4122,6 +4148,16 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   profiles reject local `cluster_count` overrides and preserve the existing
   stage, replay, telemetry, storage, embedding, and MCP contracts.
 
+### BA-INDEXER-154
+
+- **Before [KNOWN]:** The workspace is pinned to LexonGraph commit
+  `55f0082b71a098dbd21dadbafc3e7a9d77b6cea4`, whose v3 partition-working Redb
+  writes use the default durability behavior.
+- **After [KNOWN]:** The requirements authorize refreshing the workspace to
+  `d3b0f145015ff51a434ae68c884cacf9a2048e13`, where temporary v3 partition
+  initialization and mutations use non-durable writes while production and
+  final-result durability contracts remain unchanged.
+
 ### Invariant Impact Assessment
 
 - **Content-model abstraction boundaries:** Preserved. The increment extends the
@@ -4144,6 +4180,12 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   hidden side effects of indexing or default copy workflows. Graceful `Ctrl-C`
   shutdown for direct `local-redb` strengthens cancellation hygiene without
   treating incomplete work as committed state.
+- **Temporary v3 partition durability:** Intentionally changed only within the
+  delegated run-scoped partition-working database. Non-durable writes preserve
+  transaction atomicity and active-process visibility, while interruption is
+  handled by restarting the run rather than repairing or resuming temporary
+  state. Production stores, final result blocks, and mutable refs remain
+  outside this change.
 - **Rooted-copy concurrency control separation:** Preserved and extended. The
   new worker-thread control remains additive to the existing destination-write
   bound, so traversal concurrency expands without collapsing the established
