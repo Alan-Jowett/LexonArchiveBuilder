@@ -5167,11 +5167,25 @@ fn replay_input_count_from_batches(batches: &[ReplayBatch]) -> usize {
     batches.iter().map(|batch| batch.items.len()).sum()
 }
 
-fn replay_journal_indexing_outcome_record(
+fn replay_journal_indexing_outcome_records(
     input_block_count: usize,
     generated_block_ids: &[BlockHash],
     root_id: &BlockHash,
-) -> ReplayJournalRecord {
+) -> Result<Vec<ReplayJournalRecord>, RuntimeError> {
+    replay_journal_indexing_outcome_records_with_limit(
+        input_block_count,
+        generated_block_ids,
+        root_id,
+        REPLAY_JOURNAL_BLOCK_MAX_BYTES,
+    )
+}
+
+fn replay_journal_indexing_outcome_records_with_limit(
+    input_block_count: usize,
+    generated_block_ids: &[BlockHash],
+    root_id: &BlockHash,
+    payload_limit: usize,
+) -> Result<Vec<ReplayJournalRecord>, RuntimeError> {
     let mut generated_block_ids = generated_block_ids
         .iter()
         .map(ToString::to_string)
@@ -5179,13 +5193,88 @@ fn replay_journal_indexing_outcome_record(
     generated_block_ids.sort();
     generated_block_ids.dedup();
 
-    ReplayJournalRecord::IndexingOutcome {
+    let predecessor_id = "0".repeat(64);
+    let mut records = Vec::new();
+    let mut current_ids = Vec::new();
+    let mut current_encoded_ids_size = 0usize;
+    for generated_block_id in generated_block_ids {
+        current_encoded_ids_size += cbor_encoded_text_size(generated_block_id.len());
+        current_ids.push(generated_block_id);
+        let current_input_block_count = if records.is_empty() {
+            input_block_count
+        } else {
+            0
+        };
+        let encoded_size = replay_journal_indexing_outcome_record_size(
+            current_input_block_count,
+            root_id,
+            current_ids.len(),
+            current_encoded_ids_size,
+        )?;
+        let block_size =
+            replay_journal_block_body_size(&[encoded_size], encoded_size, Some(&predecessor_id))?;
+        if block_size > payload_limit {
+            let overflow = current_ids.pop().expect("current_ids was just pushed");
+            current_encoded_ids_size -= cbor_encoded_text_size(overflow.len());
+            if current_ids.is_empty() {
+                return Err(RuntimeError::WriteReplayJournal {
+                    block_id: root_id.to_string(),
+                    source: io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!(
+                            "replay journal indexing outcome exceeded {}-byte maximum payload",
+                            payload_limit
+                        ),
+                    ),
+                });
+            }
+            records.push(ReplayJournalRecord::IndexingOutcome {
+                step_kind: ReplayJournalStepKind::Indexing,
+                input_block_ids: Vec::new(),
+                input_block_count: current_input_block_count,
+                generated_block_ids: std::mem::take(&mut current_ids),
+                root_block_id: root_id.to_string(),
+            });
+            current_ids.push(overflow);
+            current_encoded_ids_size += cbor_encoded_text_size(current_ids[0].len());
+        }
+    }
+
+    records.push(ReplayJournalRecord::IndexingOutcome {
+        step_kind: ReplayJournalStepKind::Indexing,
+        input_block_ids: Vec::new(),
+        input_block_count: if records.is_empty() {
+            input_block_count
+        } else {
+            0
+        },
+        generated_block_ids: current_ids,
+        root_block_id: root_id.to_string(),
+    });
+    Ok(records)
+}
+
+fn replay_journal_indexing_outcome_record_size(
+    input_block_count: usize,
+    root_id: &BlockHash,
+    generated_block_id_count: usize,
+    generated_block_ids_size: usize,
+) -> Result<usize, RuntimeError> {
+    let base = ReplayJournalRecord::IndexingOutcome {
         step_kind: ReplayJournalStepKind::Indexing,
         input_block_ids: Vec::new(),
         input_block_count,
-        generated_block_ids,
+        generated_block_ids: Vec::new(),
         root_block_id: root_id.to_string(),
-    }
+    };
+    let encoded_base_size = encode_replay_journal_record(&base)?.len();
+    Ok(encoded_base_size - cbor_array_header_size(0)
+        + cbor_array_header_size(generated_block_id_count)
+        + generated_block_ids_size)
+}
+
+fn cbor_encoded_text_size(len: usize) -> usize {
+    cbor_array_header_size(len) + len
 }
 
 async fn build_leaf_blocks_concurrently(
@@ -5494,11 +5583,11 @@ where
         } else {
             replay_input_count_from_batches(&replay_batches)
         };
-        records.push(replay_journal_indexing_outcome_record(
+        records.extend(replay_journal_indexing_outcome_records(
             input_block_count,
             &result.block_ids,
             &result.root_id,
-        ));
+        )?);
         publish_replay_journal_and_mutable_refs_async(
             block_store.clone(),
             mutable_ref_store.clone(),
@@ -5735,11 +5824,11 @@ where
     }
 
     if let Some(mutable_ref_store) = io.mutable_ref_store {
-        let records = vec![replay_journal_indexing_outcome_record(
+        let records = replay_journal_indexing_outcome_records(
             replay_state.total_items,
             &result.block_ids,
             &result.root_id,
-        )];
+        )?;
         publish_replay_journal_and_mutable_refs_async(
             block_store.clone(),
             mutable_ref_store.clone(),
@@ -5919,11 +6008,11 @@ where
     }
 
     if let Some(mutable_ref_store) = io.mutable_ref_store {
-        let records = vec![replay_journal_indexing_outcome_record(
+        let records = replay_journal_indexing_outcome_records(
             replay_state.total_items,
             &result.block_ids,
             &result.root_id,
-        )];
+        )?;
         publish_replay_journal_and_mutable_refs_async(
             block_store.clone(),
             mutable_ref_store.clone(),
@@ -11670,6 +11759,67 @@ mod tests {
         let longer_key = replay_sort_key_sql(&longer).unwrap();
         assert!(replay_sort_key(&shorter) < replay_sort_key(&longer));
         assert!(shorter_key < longer_key);
+    }
+
+    #[test]
+    fn indexing_outcome_records_are_split_at_payload_limit() {
+        let generated_block_ids = (0..24)
+            .map(|index| BlockHash::from_bytes([index as u8; 32]))
+            .collect::<Vec<_>>();
+        let root_id = BlockHash::from_bytes([99u8; 32]);
+        let records = replay_journal_indexing_outcome_records_with_limit(
+            24,
+            &generated_block_ids,
+            &root_id,
+            512,
+        )
+        .unwrap();
+
+        assert!(records.len() > 1);
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| match record {
+                    ReplayJournalRecord::IndexingOutcome {
+                        input_block_count, ..
+                    } => *input_block_count,
+                    ReplayJournalRecord::ReplayInput { .. } => unreachable!(),
+                })
+                .collect::<Vec<_>>(),
+            {
+                let mut expected = vec![24];
+                expected.extend(std::iter::repeat_n(0, records.len() - 1));
+                expected
+            }
+        );
+
+        let expected_ids = generated_block_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let actual_ids = records
+            .iter()
+            .flat_map(|record| match record {
+                ReplayJournalRecord::IndexingOutcome {
+                    generated_block_ids,
+                    ..
+                } => generated_block_ids.clone(),
+                ReplayJournalRecord::ReplayInput { .. } => unreachable!(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual_ids, expected_ids);
+
+        let predecessor_id = "0".repeat(64);
+        for record in &records {
+            let encoded_size = encode_replay_journal_record(record).unwrap().len();
+            let block_size = replay_journal_block_body_size(
+                &[encoded_size],
+                encoded_size,
+                Some(&predecessor_id),
+            )
+            .unwrap();
+            assert!(block_size <= 512);
+        }
     }
 
     #[test]
