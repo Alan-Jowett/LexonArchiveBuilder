@@ -1063,6 +1063,13 @@ repository-owned submission has handed off control, the runtime keeps those
 telemetry events on the same progress stream but does not let them replace the
 repository-owned invocation-total context established earlier in the run.
 
+When a delegated phase may perform synchronous or blocking work while exposed
+through an async API, LexonArchiveBuilder isolates that work from the Tokio
+executor that services the runtime progress heartbeat. The existing progress
+surface remains active during delegated v3 finalization and equivalent blocking
+final-materialization phases. If no delegated counters are available, the
+runtime emits truthful elapsed-time liveness only.
+
 When the last repository-owned replay batch has been submitted and control moves
 from local submission into waiting for upstream planning-pass completion, the
 same runtime-visible progress stream emits an explicit handoff marker. That
@@ -1071,7 +1078,7 @@ planning-pass completion" from the later upstream observer heartbeats so
 operators can tell whether LexonArchiveBuilder is still feeding the streaming API
 or is already blocked on downstream work.
 
-**Traces to:** RQ-INDEXER-001, RQ-INDEXER-008B
+**Traces to:** RQ-INDEXER-001, RQ-INDEXER-008B, RQ-STATUS-001, RQ-STATUS-003
 
 ### DSG-LFI-002B `Streaming status signaling`
 
@@ -1097,6 +1104,12 @@ repository-owned submission progress and upstream phase progress. It does not
 reinterpret upstream `InProgress` heartbeats as proof that additional replay
 batches are still being submitted once the repository-owned handoff marker has
 been emitted.
+
+Observer-driven status projection and repository-owned liveness are
+complementary. A delegated operation that blocks the executor before producing
+another observer event cannot suppress the repository-owned heartbeat; the
+heartbeat remains independently schedulable while the delegated operation is
+awaited.
 
 For the latest known upstream contract, the translation layer maps planning
 passes, hierarchy-planning stages, final materialization replay, bottom-up
@@ -1126,7 +1139,8 @@ understandable even when upstream observer events intentionally reuse one status
 shape across multiple telemetry contexts.
 
 
-**Traces to:** RQ-INDEXER-008B, RQ-INDEXER-010A
+**Traces to:** RQ-INDEXER-008B, RQ-INDEXER-010A, RQ-STATUS-001, RQ-STATUS-002,
+RQ-STATUS-003
 
 ### DSG-LFI-002B1 `Completed-pass convergence telemetry when exposed`
 

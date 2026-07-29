@@ -5436,6 +5436,8 @@ where
         Arc::clone(io.progress),
         Arc::clone(&latest_failed_status),
         io.planning_telemetry.cloned(),
+        None,
+        std::thread::current().id(),
     ));
     let total_batches = replay_batches.len();
     let total_items: usize = replay_batches.iter().map(|batch| batch.items.len()).sum();
@@ -5681,6 +5683,8 @@ where
         Arc::clone(io.progress),
         Arc::clone(&latest_failed_status),
         io.planning_telemetry.cloned(),
+        None,
+        std::thread::current().id(),
     ));
     let total_batches = replay_state.total_batches();
     let total_items = replay_state.total_items;
@@ -5881,17 +5885,19 @@ where
     EP: EmbeddingProvider + ClusteringFailureEmbeddingSource + Clone,
 {
     let latest_failed_status = Arc::new(Mutex::new(None));
+    let cancellation = StreamingIndexingCancellationHandle::new();
     let observer = Some(make_status_observer(
         Arc::clone(io.progress),
         Arc::clone(&latest_failed_status),
         io.planning_telemetry.cloned(),
+        Some(cancellation.clone()),
+        std::thread::current().id(),
     ));
     let total_batches = replay_state.total_batches();
     let total_items = replay_state.total_items;
     let clustering_failure_diagnostics = OnceLock::new();
     let diagnostics_resolver = resolver.clone();
     let diagnostics_embedding_provider = embedding_provider.clone();
-    let cancellation = StreamingIndexingCancellationHandle::new();
     let mut indexer = StreamingIndexingRunV3::with_published_profile(
         config.clustering.profile_version,
         embedding_spec.clone(),
@@ -5986,8 +5992,12 @@ where
         ),
     );
     interrupt::check_for_interrupt()?;
+    let finalize_store = block_store.clone();
+    let runtime_handle = tokio::runtime::Handle::current();
     let finalize_outcome = await_with_periodic_progress_and_cancellation(
-        indexer.finalize(block_store, block_store),
+        tokio::task::spawn_blocking(move || {
+            runtime_handle.block_on(indexer.finalize(&finalize_store, &finalize_store))
+        }),
         io.progress,
         PROGRESS_HEARTBEAT_INTERVAL,
         |elapsed| {
@@ -5999,6 +6009,15 @@ where
         &cancellation,
     )
     .await?;
+    let finalize_outcome = match finalize_outcome {
+        InterruptAwareOutcome::Completed(result) => InterruptAwareOutcome::Completed(
+            result.map_err(RuntimeError::BlockingMutableRefTaskJoin)?,
+        ),
+        InterruptAwareOutcome::Interrupted(result) => InterruptAwareOutcome::Interrupted(
+            result.map_err(RuntimeError::BlockingMutableRefTaskJoin)?,
+        ),
+    };
+    interrupt::check_for_interrupt()?;
     let result = interrupt_aware_streaming_result(
         finalize_outcome,
         || {
@@ -6728,10 +6747,18 @@ fn make_status_observer(
     progress: ProgressReporter,
     latest_failed_status: Arc<Mutex<Option<StreamingIndexingStatus>>>,
     planning_telemetry: Option<PlanningTelemetryContext>,
+    cancellation: Option<StreamingIndexingCancellationHandle>,
+    test_hook_owner: std::thread::ThreadId,
 ) -> StreamingIndexingStatusObserver {
     Arc::new(move |status| {
         #[cfg(test)]
-        invoke_status_observer_test_hook(&status);
+        invoke_status_observer_test_hook(&status, test_hook_owner);
+        #[cfg(test)]
+        if interrupt::is_interrupt_requested() {
+            if let Some(cancellation) = cancellation.as_ref() {
+                cancellation.cancel();
+            }
+        }
         if status.state == StreamingIndexingStatusState::Failed {
             let mut captured = lock_unpoisoned(&latest_failed_status);
             match captured.as_ref() {
@@ -6759,12 +6786,16 @@ fn make_status_observer(
 }
 
 #[cfg(test)]
-fn invoke_status_observer_test_hook(status: &StreamingIndexingStatus) {
+fn invoke_status_observer_test_hook(
+    status: &StreamingIndexingStatus,
+    owner_thread: std::thread::ThreadId,
+) {
     let Some(hooks) = STATUS_OBSERVER_TEST_HOOKS.get() else {
         return;
     };
-    let callback = lock_unpoisoned(hooks)
-        .get(&std::thread::current().id())
+    let hooks = lock_unpoisoned(hooks);
+    let callback = hooks
+        .get(&owner_thread)
         .and_then(|hooks| hooks.last())
         .cloned();
     if let Some(callback) = callback {
