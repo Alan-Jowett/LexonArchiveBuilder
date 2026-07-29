@@ -645,6 +645,33 @@ workflows.
 
 **Traces to:** RQ-INDEXER-003D, RQ-INDEXER-003E5, RQ-INDEXER-010
 
+### DSG-LFI-001F5 `Bounded indexing-outcome audit publication`
+
+An indexing outcome SHALL NOT require one replay-journal entry to contain an
+unbounded generated-output list.
+
+LexonArchiveBuilder may represent a large generated-output set as multiple
+bounded outcome-fragment entries or as a bounded outcome entry that references
+a durable immutable manifest. In either form:
+
+- every journal entry and immutable journal block remains below the approved
+  payload limit
+- the root/result identity remains directly discoverable
+- the complete generated-output set remains reconstructable with
+  integrity-preserving linkage
+- publication remains append-only and predecessor-linked
+- the mutable journal head advances only after all required fragments or
+  manifest blocks are durable
+- incomplete publication leaves the previous journal head authoritative
+- small outcomes may retain the existing compact representation
+
+This is a repository-owned orchestration change only. It does not redefine
+LexonGraph block identity, alter replay ordering, add an MCP surface, or change
+local versus production `BlockStore` selection.
+
+**Traces to:** CM-INDEXER-155, CM-INDEXER-157, CM-INDEXER-158,
+RQ-INDEXER-003E1, RQ-INDEXER-003E2, RQ-INDEXER-003E4
+
 ### DSG-LFI-001G `Published-profile planning seam`
 
 For any execution stage that includes clustering, LexonArchiveBuilder resolves

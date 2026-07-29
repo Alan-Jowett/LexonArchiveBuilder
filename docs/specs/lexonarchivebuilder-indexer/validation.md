@@ -224,6 +224,33 @@ published root when present, and publication metadata.
 **Traces to:** RQ-INDEXER-003D, RQ-INDEXER-003E5, DSG-LFI-001D,
 DSG-LFI-001F4
 
+### VAL-LFI-002H4
+
+Run ingestion-plus-clustering or clustering-only execution where the final
+result contains enough generated block identities to exceed the replay-journal
+payload limit if serialized into one indexing-outcome entry.
+
+**Pass condition:** publication succeeds; every journal record and immutable
+journal block remains within the payload limit; the mutable head advances only
+after the complete outcome audit is durable; the root identity and complete
+generated-output set or integrity-equivalent manifest are recoverable; and
+interruption during multi-entry publication leaves the prior authoritative head
+valid.
+
+**Traces to:** CM-INDEXER-155, CM-INDEXER-157, DSG-LFI-001F1,
+DSG-LFI-001F3, DSG-LFI-001F5
+
+### VAL-LFI-002H5
+
+Run a representative result whose generated-output set fits within one
+indexing-outcome entry.
+
+**Pass condition:** the compact audit representation remains readable and
+semantically equivalent, with no unnecessary fragmentation or manifest
+publication required for small results.
+
+**Traces to:** CM-INDEXER-158, DSG-LFI-001F3, DSG-LFI-001F5
+
 ### VAL-LFI-002I
 
 Run the clustering-plus-block-assembly stage against a configured block store
@@ -428,6 +455,19 @@ its place.
 
 **Traces to:** RQ-INDEXER-003A4, RQ-INDEXER-003A8, DSG-LFI-001A4,
 DSG-LFI-001A8
+
+### VAL-LFI-002I10
+
+Run a clustering-only request with an empty `items` collection against a valid
+replay-journal head and a large generated-output result.
+
+**Pass condition:** the request does not require request-era inputs, does not
+fall back to whole-store discovery, completes bounded outcome publication, and
+preserves the existing `BatchSummary`, mutable-ref, replay, and MCP/search
+contracts.
+
+**Traces to:** CM-INDEXER-156, CM-INDEXER-158, DSG-LFI-001E,
+DSG-LFI-001F2, DSG-LFI-001F5
 
 ### VAL-LFI-002J
 
