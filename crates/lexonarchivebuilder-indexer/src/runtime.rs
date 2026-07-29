@@ -5194,28 +5194,38 @@ fn replay_journal_indexing_outcome_records_with_limit(
     generated_block_ids.dedup();
 
     let predecessor_id = "0".repeat(64);
+    let initial_base_encoded_size =
+        replay_journal_indexing_outcome_record_base_size(input_block_count, root_id)?;
+    let continuation_base_encoded_size =
+        replay_journal_indexing_outcome_record_base_size(0, root_id)?;
     let mut records = Vec::new();
     let mut current_ids = Vec::new();
     let mut current_encoded_ids_size = 0usize;
     for generated_block_id in generated_block_ids {
         current_encoded_ids_size += cbor_encoded_text_size(generated_block_id.len());
         current_ids.push(generated_block_id);
-        let current_input_block_count = if records.is_empty() {
+        let is_initial_fragment = records.is_empty();
+        let current_input_block_count = if is_initial_fragment {
             input_block_count
         } else {
             0
         };
+        let base_encoded_size = if is_initial_fragment {
+            initial_base_encoded_size
+        } else {
+            continuation_base_encoded_size
+        };
         let encoded_size = replay_journal_indexing_outcome_record_size(
-            current_input_block_count,
-            root_id,
+            base_encoded_size,
             current_ids.len(),
             current_encoded_ids_size,
-        )?;
+        );
         let block_size =
             replay_journal_block_body_size(&[encoded_size], encoded_size, Some(&predecessor_id))?;
         if block_size > payload_limit {
             let overflow = current_ids.pop().expect("current_ids was just pushed");
-            current_encoded_ids_size -= cbor_encoded_text_size(overflow.len());
+            let overflow_encoded_size = cbor_encoded_text_size(overflow.len());
+            current_encoded_ids_size -= overflow_encoded_size;
             if current_ids.is_empty() {
                 return Err(RuntimeError::WriteReplayJournal {
                     block_id: root_id.to_string(),
@@ -5236,7 +5246,7 @@ fn replay_journal_indexing_outcome_records_with_limit(
                 root_block_id: root_id.to_string(),
             });
             current_ids.push(overflow);
-            current_encoded_ids_size += cbor_encoded_text_size(current_ids[0].len());
+            current_encoded_ids_size += overflow_encoded_size;
         }
     }
 
@@ -5254,11 +5264,9 @@ fn replay_journal_indexing_outcome_records_with_limit(
     Ok(records)
 }
 
-fn replay_journal_indexing_outcome_record_size(
+fn replay_journal_indexing_outcome_record_base_size(
     input_block_count: usize,
     root_id: &BlockHash,
-    generated_block_id_count: usize,
-    generated_block_ids_size: usize,
 ) -> Result<usize, RuntimeError> {
     let base = ReplayJournalRecord::IndexingOutcome {
         step_kind: ReplayJournalStepKind::Indexing,
@@ -5267,10 +5275,17 @@ fn replay_journal_indexing_outcome_record_size(
         generated_block_ids: Vec::new(),
         root_block_id: root_id.to_string(),
     };
-    let encoded_base_size = encode_replay_journal_record(&base)?.len();
-    Ok(encoded_base_size - cbor_array_header_size(0)
+    encode_replay_journal_record(&base).map(|encoded| encoded.len())
+}
+
+fn replay_journal_indexing_outcome_record_size(
+    encoded_base_size: usize,
+    generated_block_id_count: usize,
+    generated_block_ids_size: usize,
+) -> usize {
+    encoded_base_size - cbor_array_header_size(0)
         + cbor_array_header_size(generated_block_id_count)
-        + generated_block_ids_size)
+        + generated_block_ids_size
 }
 
 fn cbor_encoded_text_size(len: usize) -> usize {
