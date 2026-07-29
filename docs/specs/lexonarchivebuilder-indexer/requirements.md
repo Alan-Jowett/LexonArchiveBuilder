@@ -968,6 +968,10 @@
 | CM-INDEXER-152 | Revise | Refresh the LexonGraph workspace dependency set to `main` commit `d3b0f145015ff51a434ae68c884cacf9a2048e13` so v3 partition-working writes use the upstream non-durable Redb mode | UR-358, UR-359, UR-360 |
 | CM-INDEXER-153 | Add | Constrain non-durable durability to temporary v3 partition-working state and preserve durable production, final-result, and mutable-ref contracts with restart-from-beginning recovery semantics | UR-361, UR-362, UR-363 |
 | CM-INDEXER-154 | Add | Require validation of non-durable v3 partition initialization and mutation paths, including transaction visibility and unchanged non-v3/final-result durability behavior | UR-359, UR-361, UR-364 |
+| CM-INDEXER-155 | Revise | For Issue #115, require replay-audit publication to represent generated indexing outputs through bounded records or an equivalent bounded manifest/reference so no single record or immutable journal block exceeds the approved payload limit | UR-160, UR-161, UR-164, UR-167 |
+| CM-INDEXER-156 | Preserve | Preserve clustering-only requests with empty `items` as journal-driven executions that do not require request-supplied content or whole-store discovery fallback | UR-163, UR-166 |
+| CM-INDEXER-157 | Revise | Preserve complete generated-output auditability, root identity, and indexing-step traceability when generated output identities are split across bounded replay-audit records or an integrity-preserving equivalent | UR-161, UR-167, UR-168 |
+| CM-INDEXER-158 | Preserve | Keep the Issue #115 correction inside replay-journal orchestration without changing MCP/search behavior, request-stage semantics, storage profiles, or LexonGraph-owned block identity contracts | UR-136, UR-162, UR-166 |
 
 ## Before / After
 
