@@ -797,6 +797,8 @@ pub enum RuntimeError {
     LeafTaskJoin(#[from] JoinError),
     #[error("blocking mutable-ref task failed: {0}")]
     BlockingMutableRefTaskJoin(JoinError),
+    #[error("blocking v3 finalization task failed: {0}")]
+    BlockingV3FinalizeTaskJoin(JoinError),
     #[error("blocking replay-prefetch task failed: {0}")]
     BlockingReplayPrefetchTaskJoin(JoinError),
     #[error("failed to write batch summary {path}: {source}")]
@@ -6011,10 +6013,10 @@ where
     .await?;
     let finalize_outcome = match finalize_outcome {
         InterruptAwareOutcome::Completed(result) => InterruptAwareOutcome::Completed(
-            result.map_err(RuntimeError::BlockingMutableRefTaskJoin)?,
+            result.map_err(RuntimeError::BlockingV3FinalizeTaskJoin)?,
         ),
         InterruptAwareOutcome::Interrupted(result) => InterruptAwareOutcome::Interrupted(
-            result.map_err(RuntimeError::BlockingMutableRefTaskJoin)?,
+            result.map_err(RuntimeError::BlockingV3FinalizeTaskJoin)?,
         ),
     };
     interrupt::check_for_interrupt()?;
@@ -6743,6 +6745,7 @@ fn replay_item_from_validated_block(
     )))
 }
 
+#[cfg_attr(not(test), allow(unused_variables))]
 fn make_status_observer(
     progress: ProgressReporter,
     latest_failed_status: Arc<Mutex<Option<StreamingIndexingStatus>>>,
@@ -6754,10 +6757,10 @@ fn make_status_observer(
         #[cfg(test)]
         invoke_status_observer_test_hook(&status, test_hook_owner);
         #[cfg(test)]
-        if interrupt::is_interrupt_requested() {
-            if let Some(cancellation) = cancellation.as_ref() {
-                cancellation.cancel();
-            }
+        if interrupt::is_interrupt_requested()
+            && let Some(cancellation) = cancellation.as_ref()
+        {
+            cancellation.cancel();
         }
         if status.state == StreamingIndexingStatusState::Failed {
             let mut captured = lock_unpoisoned(&latest_failed_status);
