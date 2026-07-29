@@ -90,6 +90,43 @@ This document does not redefine the indexing protocol, block identity rules,
 the `BlockStore` contract, or the `EmbeddingProvider` contract. Those remain
 owned by LexonGraph and its subordinate crates.
 
+## Incremental Design Patch: LexonGraph Revision Refresh
+
+### DSG-REFRESH-001 `Immutable upstream baseline`
+
+The workspace dependency set is refreshed as one coordinated LexonGraph
+baseline at commit `c7623e35716e5e0bc042a878a1f2d9b4c5346c10`. All currently
+declared LexonGraph packages remain on the same revision so delegated block,
+storage, embedding, search, and streaming-indexer contracts cannot drift
+within one workspace resolution.
+
+**Traces to:** RQ-REFRESH-001
+
+### DSG-REFRESH-002 `Compatibility adapter boundary`
+
+LexonArchiveBuilder continues to adapt the refreshed LexonGraph APIs at the
+existing indexer-owned orchestration boundary. Compatibility changes, if
+required, remain inside the delegated indexing, storage, embedding, and search
+adapter surfaces and SHALL NOT redefine MCP search semantics, local-versus-
+production selection, or content-type ownership.
+
+Historical LexonGraph commit references in this document remain evidence of
+prior compatibility increments; they are not active dependency targets for this
+refresh.
+
+**Traces to:** RQ-REFRESH-002, RQ-REFRESH-003
+
+### DSG-REFRESH-003 `Failure-visible upstream drift`
+
+When the refreshed upstream revision lacks a capability required by the
+approved repository contract, the implementation and validation layers SHALL
+record the gap as an explicit compatibility finding or upstream regression.
+They SHALL NOT silently narrow the external stage contract, suppress required
+progress or recovery behavior, or introduce a repository-local substitute
+without a separately approved requirement.
+
+**Traces to:** RQ-REFRESH-003
+
 ## Impact Map
 
 ### Directly affected artifacts

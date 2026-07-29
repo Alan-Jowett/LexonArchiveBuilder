@@ -6,7 +6,7 @@
 ## Document Status
 
 - **Phase:** Phase 1 - Requirements Discovery
-- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, replay-order preparation efficiency, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v3 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v3-compatible clustering observability projection, user-usable convergence-diagnosis surfacing, latest-LexonGraph constrained v3 working-root adoption at commit `7c8f375137375709bb608ee2609b38cb80e5422c`, issue-83 replay-order memory decoupling from corpus size, bounded replay-batch preparation overlap exploration for issue #88, issue #93 replay batch-size decoupling from CPU concurrency, issue #95 bounded multi-batch replay-prefetch buffering, renewed latest-upstream-main compatibility after post-`7c8f375137375709bb608ee2609b38cb80e5422c` breaking LexonGraph changes, repo-wide redb block-store targeting support after refreshing to a newer LexonGraph `main` revision, rooted block-copy live progress counters on the default heartbeat surface, CLI-only block-store maintenance with local-redb compaction, blind-write rooted-copy checkpoint compaction for direct local-redb destinations, additive worker-threaded rooted block-copy traversal, graceful Ctrl-C local-redb shutdown across indexer CLI surfaces, in-phase interrupt observability for repository-owned long-running direct local-redb work, latest-LexonGraph workspace refresh to upstream `main` head `3fa2220cccf601d83f181564aed01cbf40ffcbea`, and delegated streaming cancel-notification wiring
+- **Status:** Approved streaming-indexer migration baseline with incremental requirements patches for LexonGraph published-profile API adoption, published-profile version selection, latest telemetry compatibility, upstream regression assessment, clustering-failure diagnostics, rooted block-tree quality assessment discovery plus quality-metric refinement, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search discovery, upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation, local testing sweep automation, v0.7.0 fixed-budget ladder experiment automation, upstream embedding-readback API adoption, immutable block-backed replay-audit journaling, mutable current-root publication, rooted block-store copy tooling, bounded-residency deterministic replay ordering, replay-order preparation efficiency, v2 custom-block adoption for repository-owned non-search artifacts, conditional streaming-indexer v3 adoption with repository-default published profile `0.7.0`, pass-level convergence telemetry with explicit contract/profile identity logging, v3-compatible clustering observability projection, user-usable convergence-diagnosis surfacing, latest-LexonGraph constrained v3 working-root adoption at commit `7c8f375137375709bb608ee2609b38cb80e5422c`, issue-83 replay-order memory decoupling from corpus size, bounded replay-batch preparation overlap exploration for issue #88, issue #93 replay batch-size decoupling from CPU concurrency, issue #95 bounded multi-batch replay-prefetch buffering, renewed latest-upstream-main compatibility after post-`7c8f375137375709bb608ee2609b38cb80e5422c` breaking LexonGraph changes, repo-wide redb block-store targeting support after refreshing to a newer LexonGraph `main` revision, rooted block-copy live progress counters on the default heartbeat surface, CLI-only block-store maintenance with local-redb compaction, blind-write rooted-copy checkpoint compaction for direct local-redb destinations, additive worker-threaded rooted block-copy traversal, graceful Ctrl-C local-redb shutdown across indexer CLI surfaces, in-phase interrupt observability for repository-owned long-running direct local-redb work, historical LexonGraph workspace refresh to upstream `main` head `3fa2220cccf601d83f181564aed01cbf40ffcbea`, active LexonGraph revision refresh to `c7623e35716e5e0bc042a878a1f2d9b4c5346c10`, and delegated streaming cancel-notification wiring
 - **Scope:** LexonArchiveBuilder indexer integration boundary plus incremental email-artifact, chunk-indexing, local block-store interoperability, replay-based streaming delegated indexing, stage-selectable execution, standalone clustering input discovery, LAB-owned immutable replay-audit journaling for split-stage recovery, repository-owned mutable current-root publication, published-profile-based clustering configuration with caller-selectable profile versions, latest published-profile and telemetry compatibility, upstream regression assessment, embedding-phase, replay-submission and streaming-status observability, pass-level convergence telemetry, v3-compatible clustering telemetry projection, user-usable convergence diagnosis for clustering-enabled runs, contract/profile identity logging for clustering-enabled runs, clustering-failure diagnosability, rooted block-tree quality assessment with refined per-layer quality metrics, rooted TNN-recall diagnostics, rooted query access-cost reporting, rooted CLI search over stored trees, rooted block-store copy between approved storage targets, live rooted-copy progress reporting, worker-threaded rooted-copy traversal over the shared queue-based block walk, CLI-only one-store block-store maintenance with initial local-redb compaction, blind-write copy-time checkpoint compaction for direct local-redb destinations, graceful Ctrl-C local-redb shutdown across indexer CLI surfaces, in-phase interrupt observability across repository-owned long-running direct local-redb execution paths, delegated streaming cancel notification across active streaming-indexer execution, bounded-residency deterministic replay ordering for deterministic replay submission, efficient replay-order preparation behind the existing replay contract, bounded replay-batch preparation overlap behind the existing replay contract, independent replay batch-sizing versus replay-materialization concurrency control for clustering replay, bounded multi-batch replay-prefetch buffering for clustering replay, temporary upstream main-tracking for rapid profile validation, upstream wgpu-acceleration revision compatibility, 0.6.x published-profile evaluation through repository-local testing automation, v0.7.0 fixed-budget ladder experiments through repository-local testing automation, upstream-owned embedding readback for stored-tree consumers, layer-parallel block-construction evolution, v2 custom-block adoption for repository-owned non-search artifacts, conditional use of the upstream streaming-indexer v3 API when the selected published profile is `0.7.0`, upstream-managed request-adjacent v3 working-root derivation for clustering-enabled v3 execution, repeatable adaptation to later upstream-main breaking changes without weakening the current external stage or observability contracts, and first-class redb block-store targeting across archive-sync, block-gateway, indexer, MCP, and repo-owned copy/sync surfaces
 
 ## USER-REQUEST
@@ -963,7 +963,7 @@
 | CM-INDEXER-147 | Revise | Extend the CLI-only `maintenance compact` operator contract so local-redb maintenance reports entered redb work and any available upstream progress rather than remaining success or failure-only during multi-minute compaction or repair-adjacent startup | UR-305, UR-307, UR-312, UR-333, UR-334, UR-337 |
 | CM-INDEXER-148 | Add | Require graceful `Ctrl-C` shutdown for every indexer CLI surface that opens direct `local-redb`, so operator cancellation prefers a clean redb close while preserving explicit interrupted outcomes and existing mutable-ref/recovery boundaries | UR-339, UR-340, UR-341, UR-342, UR-343, UR-344 |
 | CM-INDEXER-149 | Revise | Strengthen graceful direct-`local-redb` interrupt requirements so first `Ctrl-C` is observed inside repository-owned long-running work, including blocking/offloaded execution paths, rather than only at outer async orchestration boundaries | UR-339, UR-340, UR-341, UR-345, UR-346, UR-347, UR-348 |
-| CM-INDEXER-150 | Revise | Refresh the LexonGraph workspace dependency set from the current repository pin `6148d2cc01c2a1017178489bec75aea567297212` to upstream `main` head `3fa2220cccf601d83f181564aed01cbf40ffcbea` and absorb required delegated API changes without weakening approved indexer contracts | UR-349, UR-350, UR-351, UR-352 |
+| CM-INDEXER-150 | Revise | Historical: refreshed the LexonGraph workspace dependency set from the then-current repository pin `6148d2cc01c2a1017178489bec75aea567297212` to upstream `main` head `3fa2220cccf601d83f181564aed01cbf40ffcbea` and absorbed required delegated API changes without weakening approved indexer contracts | UR-349, UR-350, UR-351, UR-352 |
 | CM-INDEXER-151 | Revise | Extend direct-`local-redb` graceful-cancel requirements so the delegated constrained streaming-indexer v3 execution step uses the newly available upstream cancel-notification surface and can begin interruption while upstream streaming work is active | UR-349, UR-353, UR-354, UR-355, UR-356, UR-357 |
 | CM-INDEXER-152 | Revise | Refresh the LexonGraph workspace dependency set to `main` commit `d3b0f145015ff51a434ae68c884cacf9a2048e13` so v3 partition-working writes use the upstream non-durable Redb mode | UR-358, UR-359, UR-360 |
 | CM-INDEXER-153 | Add | Constrain non-durable durability to temporary v3 partition-working state and preserve durable production, final-result, and mutable-ref contracts with restart-from-beginning recovery semantics | UR-361, UR-362, UR-363 |
@@ -2526,10 +2526,10 @@ behavior.
   wgpu acceleration without requiring a caller-surface change, LexonArchiveBuilder
   SHALL pick that up through the same temporary `main` tracking rather than by
   introducing repository-local API or contract changes for this increment.
-- **Current adopted head [KNOWN]:** For this increment, the approved adopted
-  LexonGraph dependency target is upstream `main` head
-  `3fa2220cccf601d83f181564aed01cbf40ffcbea`, replacing the current workspace
-  pin `6148d2cc01c2a1017178489bec75aea567297212`.
+- **Historical adopted head [KNOWN]:** A prior increment approved upstream
+  `main` head `3fa2220cccf601d83f181564aed01cbf40ffcbea`, replacing the then-
+  current workspace pin `6148d2cc01c2a1017178489bec75aea567297212`. The active
+  baseline for the present refresh is defined by `RQ-REFRESH-001`.
 - **Streaming cancellation capability [KNOWN]:** When the adopted upstream
   dependency set exposes delegated streaming cancel notification, currently the
   constrained v3 path added by commit
@@ -4207,3 +4207,83 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   inventing a second administration surface, and the added `local-redb`
   startup-progress rules keep long-running repair or open work explainable on
   that same CLI-visible operator path.
+
+## Incremental Requirements Patch: LexonGraph Revision Refresh
+
+### USER-REQUEST
+
+- **UR-REFRESH-001 [KNOWN]:** Switch the LexonGraph dependency set to commit
+  `c7623e35716e5e0bc042a878a1f2d9b4c5346c10`.
+- **UR-REFRESH-002 [KNOWN]:** Update both Cargo resolution artifacts and the
+  repository specifications to reflect the requested LexonGraph baseline.
+- **UR-REFRESH-003 [INFERRED]:** Preserve existing LexonArchiveBuilder
+  indexing, MCP, storage, embedding, and content-type extensibility contracts
+  unless compatibility analysis proves a concrete upstream incompatibility.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-REFRESH-001 | Revise | Adopt LexonGraph commit `c7623e35716e5e0bc042a878a1f2d9b4c5346c10` as the active dependency baseline | UR-REFRESH-001 |
+| CM-REFRESH-002 | Revise | Align the indexer requirements, design, and validation artifacts with the active LexonGraph baseline while retaining historical revision references as historical | UR-REFRESH-002 |
+| CM-REFRESH-003 | Preserve | Keep the existing external stage contract, MCP behavior, adapter boundaries, idempotence, recoverability, and future content-type seam unchanged unless incompatibility is demonstrated | UR-REFRESH-003 |
+
+### Before / After
+
+#### BA-REFRESH-001
+
+- **Before [KNOWN]:** The workspace dependency resolution and indexer
+  specification history identify earlier LexonGraph revisions, with the
+  currently resolved workspace revision differing from the latest active
+  revision claims in the requirements narrative.
+- **After [KNOWN]:** The active LexonGraph baseline for this increment is
+  commit `c7623e35716e5e0bc042a878a1f2d9b4c5346c10`; earlier commits remain
+  traceable historical references.
+
+#### BA-REFRESH-002
+
+- **Before [KNOWN]:** The specifications require upstream compatibility
+  adaptation but do not identify the requested commit as the next active
+  baseline.
+- **After [KNOWN]:** The specifications require compatibility assessment
+  against the requested commit and preserve existing repository-visible
+  behavior unless a concrete incompatibility is documented.
+
+### Requirements
+
+#### RQ-REFRESH-001 - Active upstream baseline
+
+The LexonArchiveBuilder workspace SHALL use LexonGraph commit
+`c7623e35716e5e0bc042a878a1f2d9b4c5346c10` as the active immutable dependency
+baseline for all currently declared LexonGraph packages.
+
+- **Traceability:** UR-REFRESH-001, UR-REFRESH-002
+
+#### RQ-REFRESH-002 - Compatibility-preserving refresh
+
+The refresh SHALL preserve the existing caller-visible indexing stage contract,
+MCP search and retrieval behavior for already-indexed content, environment
+selection boundaries, immutable-block idempotence, replay recoverability, and
+future content-type extensibility unless the requested upstream revision makes
+one of those contracts impossible to preserve.
+
+- **Traceability:** UR-REFRESH-003
+
+#### RQ-REFRESH-003 - Explicit incompatibility handling
+
+If the requested LexonGraph revision removes or reshapes a repository-required
+capability, the incompatibility SHALL be surfaced explicitly in the downstream
+design, implementation, and validation artifacts rather than being hidden by
+silently dropping behavior.
+
+- **Traceability:** UR-REFRESH-003
+
+### Invariant Impact
+
+- **Indexing/search separation:** Preserved [KNOWN].
+- **MCP contract:** Preserved [KNOWN].
+- **Local/prod storage and embedding adapters:** Preserved [KNOWN].
+- **Content-type extensibility:** Preserved [KNOWN].
+- **Idempotence and recoverability:** Preserved [KNOWN].
+- **Potential upstream API impact:** [INFERRED] Requires Phase 5 compatibility
+  verification; no implementation change is authorized by this patch alone.
