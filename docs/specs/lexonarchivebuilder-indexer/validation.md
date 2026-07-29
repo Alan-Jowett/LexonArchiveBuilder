@@ -1626,3 +1626,41 @@ document-specific or future content-specific artifact and chunking policies.
 
 **Traces to:** RQ-INDEXER-002, RQ-INDEXER-010, DSG-LFI-003, DSG-LFI-004,
 DSG-LFI-008
+
+## Incremental Validation Patch: LexonGraph Revision Refresh
+
+### VAL-REFRESH-001
+
+Inspect the workspace dependency declarations and lockfile after the
+LexonGraph refresh.
+
+**Pass condition:** every currently declared LexonGraph package resolves to
+commit `c7623e35716e5e0bc042a878a1f2d9b4c5346c10`, and no active workspace
+resolution entry points at the superseded revision.
+
+**Traces to:** RQ-REFRESH-001, DSG-REFRESH-001
+
+### VAL-REFRESH-002
+
+Run the existing targeted Rust verification for the affected indexer and MCP
+integration surfaces against the refreshed dependency set.
+
+**Pass condition:** the workspace either passes the existing relevant
+verification commands or reports a concrete upstream compatibility failure;
+the result does not silently omit an existing contract.
+
+**Traces to:** RQ-REFRESH-002, DSG-REFRESH-002
+
+### VAL-REFRESH-003
+
+Inspect the refreshed indexer and MCP behavior against the preserved
+repository contracts.
+
+**Pass condition:** the external indexing stage contract, already-indexed MCP
+search/retrieval behavior, environment-specific adapter boundaries,
+idempotence/recoverability expectations, and future content-type extension seam
+remain represented in the implementation and verification artifacts. Any
+missing capability is recorded as an explicit compatibility finding.
+
+**Traces to:** RQ-REFRESH-002, RQ-REFRESH-003, DSG-REFRESH-002,
+DSG-REFRESH-003
