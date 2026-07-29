@@ -1474,6 +1474,22 @@ diagnostics surface.
 
 **Traces to:** RQ-INDEXER-005C, DSG-LFI-002G
 
+### VAL-LFI-007J
+
+Run a clustering-enabled v3 workload whose delegated finalization performs
+long-running work beyond the normal progress heartbeat interval, using a block
+store that exercises the finalization read path.
+
+**Pass condition:** The process remains active and the existing runtime-visible
+progress stream emits periodic truthful liveness messages while delegated v3
+finalization is incomplete. The validation demonstrates that progress
+continues even when no new upstream observer event is emitted during the
+interval. Finalization result/error handling and cancellation remain
+unchanged, and no second telemetry or MCP surface is required.
+
+**Traces to:** RQ-STATUS-001, RQ-STATUS-003, RQ-STATUS-004, DSG-LFI-002A,
+DSG-LFI-002B
+
 ### VAL-LFI-008
 
 Inspect the repository's indexer specification package against MCP server

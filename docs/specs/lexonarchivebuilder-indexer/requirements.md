@@ -3209,6 +3209,43 @@ analysis.
   convergence-diagnosis state through the search-serving surface.
 - **Traceability:** UR-240, UR-241, UR-243
 
+#### RQ-STATUS-001 - Executor-safe delegated finalization liveness
+
+LexonArchiveBuilder SHALL keep its repository-owned progress heartbeat
+schedulable while delegated v3 finalization performs synchronous or blocking
+work.
+
+- **Applicability [KNOWN]:** This requirement applies to clustering-enabled v3
+  finalization and equivalent delegated final-materialization waits.
+- **Non-goal [KNOWN]:** This requirement does not change the delegated
+  finalization API or require LexonGraph changes.
+- **Traceability:** USER-REQUEST-STATUS-UPDATE, RQ-INDEXER-008B
+
+#### RQ-STATUS-002 - Observer and repository liveness composition
+
+LexonArchiveBuilder SHALL treat observer-driven status projection and
+repository-owned liveness as complementary signals. A lack of a new upstream
+observer event SHALL NOT suppress repository-owned heartbeat output while the
+delegated operation remains incomplete.
+
+- **Traceability:** USER-REQUEST-STATUS-UPDATE, RQ-INDEXER-008B
+
+#### RQ-STATUS-003 - Truthful coarse liveness
+
+When delegated finalization does not expose exact progress counters, the
+runtime SHALL emit truthful elapsed-time liveness messages and SHALL NOT invent
+percentages, completed-work counts, or stall diagnoses.
+
+- **Traceability:** USER-REQUEST-STATUS-UPDATE, RQ-INDEXER-008B
+
+#### RQ-STATUS-004 - Contract and cancellation preservation
+
+The liveness fix SHALL preserve existing finalization result handling, explicit
+error propagation, cancellation behavior, runtime-visible output surface, and
+all unrelated indexing, storage, embedding, replay, and MCP contracts.
+
+- **Traceability:** USER-REQUEST-STATUS-UPDATE, RQ-INDEXER-008B
+
 #### RQ-INDEXER-008C - Diagnosable clustering failures
 
 When a clustering-enabled execution fails after LexonArchiveBuilder has determined
