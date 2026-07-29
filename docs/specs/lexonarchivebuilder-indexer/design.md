@@ -90,15 +90,16 @@ This document does not redefine the indexing protocol, block identity rules,
 the `BlockStore` contract, or the `EmbeddingProvider` contract. Those remain
 owned by LexonGraph and its subordinate crates.
 
-## Incremental Design Patch: LexonGraph Revision Refresh
+## Incremental Design Patch: LexonGraph Revision Refresh (Historical — superseded)
 
 ### DSG-REFRESH-001 `Immutable upstream baseline`
 
-The workspace dependency set is refreshed as one coordinated LexonGraph
-baseline at commit `c7623e35716e5e0bc042a878a1f2d9b4c5346c10`. All currently
-declared LexonGraph packages remain on the same revision so delegated block,
-storage, embedding, search, and streaming-indexer contracts cannot drift
-within one workspace resolution.
+The historical workspace dependency set was refreshed as one coordinated
+LexonGraph baseline at commit
+`c7623e35716e5e0bc042a878a1f2d9b4c5346c10`. All then-declared LexonGraph
+packages remained on the same revision so delegated block, storage, embedding,
+search, and streaming-indexer contracts could not drift within one workspace
+resolution. This baseline is superseded by `DSG-REFRESH-004`.
 
 **Traces to:** RQ-REFRESH-001
 
@@ -126,6 +127,41 @@ progress or recovery behavior, or introduce a repository-local substitute
 without a separately approved requirement.
 
 **Traces to:** RQ-REFRESH-003
+
+## Incremental Design Patch: LexonGraph Upgrade to `caa5249`
+
+### DSG-REFRESH-004 `Coordinated upstream revision`
+
+The workspace SHALL refresh all currently declared LexonGraph packages as one
+coordinated dependency set at commit
+`caa5249e641d1361998bb2410e79893579262bc5`. Earlier revision pins remain
+historical evidence and SHALL NOT be treated as active targets.
+
+**Traces to:** RQ-REFRESH-004, RQ-REFRESH-005
+
+### DSG-REFRESH-005 `Preserved repository boundary`
+
+LexonArchiveBuilder SHALL continue adapting LexonGraph at the existing
+indexer-owned orchestration and integration boundaries. Any compatibility
+changes SHALL remain limited to the delegated indexing, storage, embedding,
+search, and status-projection surfaces and SHALL NOT redefine MCP semantics,
+environment selection, content-type ownership, or repository-owned liveness
+contracts.
+
+**Traces to:** RQ-REFRESH-005
+
+### DSG-REFRESH-006 `Telemetry behavior is an explicit compatibility surface`
+
+The upgrade assessment SHALL treat upstream status-observer cadence and count
+semantics as compatibility surfaces, not merely compile-time API details.
+Validation SHALL compare the new revision's emissions during long-running
+planning, block loading, training, classification, and materialization work
+with the repository's existing runtime and request-adjacent telemetry
+projection. A missing capability SHALL become an explicit compatibility
+finding or upstream regression rather than being silently masked.
+
+**Traces to:** RQ-REFRESH-006, RQ-REFRESH-007, RQ-STATUS-001,
+RQ-STATUS-002, RQ-STATUS-003, RQ-STATUS-004
 
 ## Impact Map
 

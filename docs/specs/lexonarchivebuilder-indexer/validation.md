@@ -1643,16 +1643,16 @@ document-specific or future content-specific artifact and chunking policies.
 **Traces to:** RQ-INDEXER-002, RQ-INDEXER-010, DSG-LFI-003, DSG-LFI-004,
 DSG-LFI-008
 
-## Incremental Validation Patch: LexonGraph Revision Refresh
+## Incremental Validation Patch: LexonGraph Revision Refresh (Historical — superseded)
 
 ### VAL-REFRESH-001
 
-Inspect the workspace dependency declarations and lockfile after the
-LexonGraph refresh.
+Historically inspect the workspace dependency declarations and lockfile after
+the `c7623e...` LexonGraph refresh.
 
-**Pass condition:** every currently declared LexonGraph package resolves to
-commit `c7623e35716e5e0bc042a878a1f2d9b4c5346c10`, and no active workspace
-resolution entry points at the superseded revision.
+**Historical pass condition:** every then-declared LexonGraph package resolved
+to commit `c7623e35716e5e0bc042a878a1f2d9b4c5346c10`; this criterion is
+superseded by `VAL-REFRESH-004`.
 
 **Traces to:** RQ-REFRESH-001, DSG-REFRESH-001
 
@@ -1680,3 +1680,40 @@ missing capability is recorded as an explicit compatibility finding.
 
 **Traces to:** RQ-REFRESH-002, RQ-REFRESH-003, DSG-REFRESH-002,
 DSG-REFRESH-003
+
+## Incremental Validation Patch: LexonGraph Upgrade to `caa5249`
+
+### VAL-REFRESH-004
+
+Inspect the workspace dependency declarations and lockfile after the upgrade.
+
+**Pass condition:** every currently declared LexonGraph package resolves to
+commit `caa5249e641d1361998bb2410e79893579262bc5`, and no active workspace
+resolution entry points at the superseded revision.
+
+**Traces to:** RQ-REFRESH-004, DSG-REFRESH-004
+
+### VAL-REFRESH-005
+
+Run the existing targeted Rust verification for the affected indexer, MCP, and
+status-projection integration surfaces against the upgraded dependency set.
+
+**Pass condition:** the relevant existing verification commands pass, or a
+concrete upstream compatibility failure is recorded; no existing contract is
+silently omitted.
+
+**Traces to:** RQ-REFRESH-005, RQ-REFRESH-006, DSG-REFRESH-005
+
+### VAL-REFRESH-006
+
+Inspect upgraded runtime and request-adjacent telemetry behavior for long
+running delegated planning, block loading, training, classification, and
+materialization operations.
+
+**Pass condition:** fine-grained upstream status emissions remain available
+with compatible count semantics, or any change is explicitly classified as an
+adapter requirement or upstream regression. Repository-owned heartbeat,
+cancellation, and failure propagation behavior remains represented.
+
+**Traces to:** RQ-REFRESH-005, RQ-REFRESH-007, RQ-STATUS-001,
+RQ-STATUS-002, RQ-STATUS-003, RQ-STATUS-004, DSG-REFRESH-006
