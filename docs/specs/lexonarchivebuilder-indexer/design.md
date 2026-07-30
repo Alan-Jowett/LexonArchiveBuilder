@@ -169,7 +169,7 @@ RQ-STATUS-002, RQ-STATUS-003, RQ-STATUS-004
 
 The workspace SHALL refresh all currently declared LexonGraph packages as one
 coordinated dependency set at commit
-`7144de075132b38b37646039f9d68f76ee66e2be`. Earlier revision pins, including
+`864274cdd90191499b2219bddc77f6f7c6e23ce8`. Earlier revision pins, including
 `caa5249e641d1361998bb2410e79893579262bc5`, remain historical evidence and
 SHALL NOT be treated as active targets.
 
