@@ -1718,14 +1718,14 @@ cancellation, and failure propagation behavior remains represented.
 **Traces to:** RQ-REFRESH-005, RQ-REFRESH-007, RQ-STATUS-001,
 RQ-STATUS-002, RQ-STATUS-003, RQ-STATUS-004, DSG-REFRESH-006
 
-## Incremental Validation Patch: LexonGraph Revision Refresh to `7144de0`
+## Incremental Validation Patch: LexonGraph Revision Refresh to `7ce519b9`
 
 ### VAL-REFRESH-007
 
 Inspect the workspace dependency declarations and lockfile after the refresh.
 
 **Pass condition:** every currently declared LexonGraph package resolves to
-commit `864274cdd90191499b2219bddc77f6f7c6e23ce8`, and no active workspace
+commit `7ce519b9fa267065b9b0acfcfc2cb180db5abaaf`, and no active workspace
 resolution entry points at the superseded revision (`caa5249e641d1361998bb2410e79893579262bc5`).
 
 **Traces to:** RQ-REFRESH-008, RQ-REFRESH-009, DSG-REFRESH-007

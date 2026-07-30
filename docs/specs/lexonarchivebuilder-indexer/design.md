@@ -163,13 +163,13 @@ finding or upstream regression rather than being silently masked.
 **Traces to:** RQ-REFRESH-006, RQ-REFRESH-007, RQ-STATUS-001,
 RQ-STATUS-002, RQ-STATUS-003, RQ-STATUS-004
 
-## Incremental Design Patch: LexonGraph Revision Refresh to `7144de0`
+## Incremental Design Patch: LexonGraph Revision Refresh to `7ce519b9`
 
 ### DSG-REFRESH-007 `Coordinated active upstream revision`
 
 The workspace SHALL refresh all currently declared LexonGraph packages as one
 coordinated dependency set at commit
-`864274cdd90191499b2219bddc77f6f7c6e23ce8`. Earlier revision pins, including
+`7ce519b9fa267065b9b0acfcfc2cb180db5abaaf`. Earlier revision pins, including
 `caa5249e641d1361998bb2410e79893579262bc5`, remain historical evidence and
 SHALL NOT be treated as active targets.
 
