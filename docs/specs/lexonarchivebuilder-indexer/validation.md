@@ -1718,7 +1718,7 @@ cancellation, and failure propagation behavior remains represented.
 **Traces to:** RQ-REFRESH-005, RQ-REFRESH-007, RQ-STATUS-001,
 RQ-STATUS-002, RQ-STATUS-003, RQ-STATUS-004, DSG-REFRESH-006
 
-## Incremental Validation Patch: LexonGraph Revision Refresh to `7144de0`
+## Incremental Validation Patch: LexonGraph Revision Refresh to `7ce519b9`
 
 ### VAL-REFRESH-007
 

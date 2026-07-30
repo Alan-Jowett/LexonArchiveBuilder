@@ -163,7 +163,7 @@ finding or upstream regression rather than being silently masked.
 **Traces to:** RQ-REFRESH-006, RQ-REFRESH-007, RQ-STATUS-001,
 RQ-STATUS-002, RQ-STATUS-003, RQ-STATUS-004
 
-## Incremental Design Patch: LexonGraph Revision Refresh to `7144de0`
+## Incremental Design Patch: LexonGraph Revision Refresh to `7ce519b9`
 
 ### DSG-REFRESH-007 `Coordinated active upstream revision`
 

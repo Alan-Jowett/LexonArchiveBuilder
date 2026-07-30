@@ -4425,7 +4425,7 @@ compatible, requiring an adapter change, or an explicit upstream regression.
 - **Implementation changes:** [UNKNOWN] until the requested revision is
   resolved and compiled; no code change is presumed necessary.
 
-## Incremental Requirements Patch: LexonGraph Revision Refresh to `7144de0`
+## Incremental Requirements Patch: LexonGraph Revision Refresh to `7ce519b9`
 
 ### USER-REQUEST
 
