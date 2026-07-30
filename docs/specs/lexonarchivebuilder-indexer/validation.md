@@ -1725,7 +1725,7 @@ RQ-STATUS-002, RQ-STATUS-003, RQ-STATUS-004, DSG-REFRESH-006
 Inspect the workspace dependency declarations and lockfile after the refresh.
 
 **Pass condition:** every currently declared LexonGraph package resolves to
-commit `7144de075132b38b37646039f9d68f76ee66e2be`, and no active workspace
+commit `864274cdd90191499b2219bddc77f6f7c6e23ce8`, and no active workspace
 resolution entry points at the superseded revision (`caa5249e641d1361998bb2410e79893579262bc5`).
 
 **Traces to:** RQ-REFRESH-008, RQ-REFRESH-009, DSG-REFRESH-007
