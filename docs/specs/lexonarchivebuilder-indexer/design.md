@@ -128,7 +128,7 @@ without a separately approved requirement.
 
 **Traces to:** RQ-REFRESH-003
 
-## Incremental Design Patch: LexonGraph Upgrade to `caa5249`
+## Incremental Design Patch: LexonGraph Upgrade to `caa5249` (Historical — superseded)
 
 ### DSG-REFRESH-004 `Coordinated upstream revision`
 
@@ -162,6 +162,29 @@ finding or upstream regression rather than being silently masked.
 
 **Traces to:** RQ-REFRESH-006, RQ-REFRESH-007, RQ-STATUS-001,
 RQ-STATUS-002, RQ-STATUS-003, RQ-STATUS-004
+
+## Incremental Design Patch: LexonGraph Revision Refresh to `7144de0`
+
+### DSG-REFRESH-007 `Coordinated active upstream revision`
+
+The workspace SHALL refresh all currently declared LexonGraph packages as one
+coordinated dependency set at commit
+`7144de075132b38b37646039f9d68f76ee66e2be`. Earlier revision pins, including
+`caa5249e641d1361998bb2410e79893579262bc5`, remain historical evidence and
+SHALL NOT be treated as active targets.
+
+**Traces to:** RQ-REFRESH-008, RQ-REFRESH-009
+
+### DSG-REFRESH-008 `Preserved integration boundaries`
+
+LexonArchiveBuilder SHALL continue adapting the refreshed LexonGraph APIs at
+the existing indexer-owned orchestration and integration boundaries. Any
+compatibility changes SHALL remain limited to delegated indexing, storage,
+embedding, search, and status-projection surfaces and SHALL NOT redefine MCP
+semantics, environment selection, content-type ownership, or repository-owned
+liveness and recovery contracts.
+
+**Traces to:** RQ-REFRESH-010, RQ-REFRESH-011
 
 ## Impact Map
 

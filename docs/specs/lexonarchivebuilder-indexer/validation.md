@@ -1681,7 +1681,7 @@ missing capability is recorded as an explicit compatibility finding.
 **Traces to:** RQ-REFRESH-002, RQ-REFRESH-003, DSG-REFRESH-002,
 DSG-REFRESH-003
 
-## Incremental Validation Patch: LexonGraph Upgrade to `caa5249`
+## Incremental Validation Patch: LexonGraph Upgrade to `caa5249` (Historical — superseded)
 
 ### VAL-REFRESH-004
 
@@ -1717,3 +1717,39 @@ cancellation, and failure propagation behavior remains represented.
 
 **Traces to:** RQ-REFRESH-005, RQ-REFRESH-007, RQ-STATUS-001,
 RQ-STATUS-002, RQ-STATUS-003, RQ-STATUS-004, DSG-REFRESH-006
+
+## Incremental Validation Patch: LexonGraph Revision Refresh to `7144de0`
+
+### VAL-REFRESH-007
+
+Inspect the workspace dependency declarations and lockfile after the refresh.
+
+**Pass condition:** every currently declared LexonGraph package resolves to
+commit `7144de075132b38b37646039f9d68f76ee66e2be`, and no active workspace
+resolution entry points at the superseded revision.
+
+**Traces to:** RQ-REFRESH-008, RQ-REFRESH-009, DSG-REFRESH-007
+
+### VAL-REFRESH-008
+
+Run the existing targeted Rust verification for the affected indexer, MCP,
+storage, and status-projection integration surfaces against the refreshed
+dependency set.
+
+**Pass condition:** the relevant existing verification commands pass, or a
+concrete upstream compatibility failure is recorded; no existing contract is
+silently omitted.
+
+**Traces to:** RQ-REFRESH-010, RQ-REFRESH-011, DSG-REFRESH-008
+
+### VAL-REFRESH-009
+
+Inspect refreshed runtime behavior for repository-owned liveness, cancellation,
+failure propagation, immutable-block idempotence, replay recovery, and
+already-indexed MCP search and retrieval.
+
+**Pass condition:** the preserved contracts remain represented in the
+implementation and verification artifacts, or any incompatibility is
+explicitly classified as an adapter requirement or upstream regression.
+
+**Traces to:** RQ-REFRESH-010, RQ-REFRESH-011, DSG-REFRESH-008
