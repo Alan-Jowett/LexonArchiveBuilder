@@ -50,14 +50,14 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 
 lexonarchivebuilder-block-store-http3 = { path = "crates/lexonarchivebuilder-block-store-http3" }
 lexonarchivebuilder-indexer = { path = "crates/lexonarchivebuilder-indexer" }
-lexongraph-block = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "7ce519b9fa267065b9b0acfcfc2cb180db5abaaf", package = "lexongraph-block" }
-lexongraph-block-store = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "7ce519b9fa267065b9b0acfcfc2cb180db5abaaf", package = "lexongraph-block-store" }
-lexongraph-block-store-azure-sdk = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "7ce519b9fa267065b9b0acfcfc2cb180db5abaaf", package = "lexongraph-block-store-azure-sdk" }
-lexongraph-block-store-azure-table-v2 = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "7ce519b9fa267065b9b0acfcfc2cb180db5abaaf", package = "lexongraph-block-store-azure-table-v2" }
-lexongraph-block-store-fs = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "7ce519b9fa267065b9b0acfcfc2cb180db5abaaf", package = "lexongraph-block-store-fs" }
-lexongraph-block-store-memory = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "7ce519b9fa267065b9b0acfcfc2cb180db5abaaf", package = "lexongraph-block-store-memory" }
-lexongraph-block-store-overlay = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "7ce519b9fa267065b9b0acfcfc2cb180db5abaaf", package = "lexongraph-block-store-overlay" }
-lexongraph-block-store-redb = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "7ce519b9fa267065b9b0acfcfc2cb180db5abaaf", package = "lexongraph-block-store-redb" }
-lexongraph-embeddings-trait = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "7ce519b9fa267065b9b0acfcfc2cb180db5abaaf", package = "lexongraph-embeddings-trait" }
-lexongraph-search = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "7ce519b9fa267065b9b0acfcfc2cb180db5abaaf", package = "lexongraph-search" }
-lexongraph-streaming-indexer = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "7ce519b9fa267065b9b0acfcfc2cb180db5abaaf", package = "lexongraph-streaming-indexer" }
+lexongraph-block = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "8a24c7cbe48a9c7f47997ec655f4aa6f9fea7dd9", package = "lexongraph-block" }
+lexongraph-block-store = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "8a24c7cbe48a9c7f47997ec655f4aa6f9fea7dd9", package = "lexongraph-block-store" }
+lexongraph-block-store-azure-sdk = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "8a24c7cbe48a9c7f47997ec655f4aa6f9fea7dd9", package = "lexongraph-block-store-azure-sdk" }
+lexongraph-block-store-azure-table-v2 = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "8a24c7cbe48a9c7f47997ec655f4aa6f9fea7dd9", package = "lexongraph-block-store-azure-table-v2" }
+lexongraph-block-store-fs = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "8a24c7cbe48a9c7f47997ec655f4aa6f9fea7dd9", package = "lexongraph-block-store-fs" }
+lexongraph-block-store-memory = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "8a24c7cbe48a9c7f47997ec655f4aa6f9fea7dd9", package = "lexongraph-block-store-memory" }
+lexongraph-block-store-overlay = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "8a24c7cbe48a9c7f47997ec655f4aa6f9fea7dd9", package = "lexongraph-block-store-overlay" }
+lexongraph-block-store-redb = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "8a24c7cbe48a9c7f47997ec655f4aa6f9fea7dd9", package = "lexongraph-block-store-redb" }
+lexongraph-embeddings-trait = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "8a24c7cbe48a9c7f47997ec655f4aa6f9fea7dd9", package = "lexongraph-embeddings-trait" }
+lexongraph-search = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "8a24c7cbe48a9c7f47997ec655f4aa6f9fea7dd9", package = "lexongraph-search" }
+lexongraph-streaming-indexer = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "8a24c7cbe48a9c7f47997ec655f4aa6f9fea7dd9", package = "lexongraph-streaming-indexer" }

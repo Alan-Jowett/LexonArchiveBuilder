@@ -336,3 +336,10 @@ without redefining the top-level workflow boundary or the root-publication
 contract.
 
 **Traces to:** RQ-ARCHIVE-015, RQ-ARCHIVE-018, DSG-LAS-011
+
+## Incremental Validation Patch: Read-only redb source
+
+Run archive-sync with a local-redb source and writable destination.
+
+**Pass condition:** source reads do not mutate redb and destination artifacts
+are persisted successfully.

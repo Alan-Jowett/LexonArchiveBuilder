@@ -271,3 +271,8 @@ The gateway SHALL remain block-oriented and content-type-neutral so future conte
 
 - **Excluded from this phase [KNOWN]:**
   - Rust implementation, host packaging, deployment automation, and tests
+
+## Incremental Requirements Patch: Read-only redb serving
+
+The local-redb gateway profile SHALL open its immutable block store read-only
+and SHALL not repair, compact, or persist blocks in the served database.

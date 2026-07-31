@@ -144,7 +144,7 @@ fn build_local_redb_store(config: &GatewayConfig) -> anyhow::Result<RedbBlockSto
         .block_store_root
         .as_ref()
         .expect("local-redb validation should require a block store root");
-    RedbBlockStore::new(store_root).with_context(|| {
+    RedbBlockStore::new_read_only(store_root).with_context(|| {
         format!(
             "failed to initialize local redb block store at {}",
             store_root.display()

@@ -234,3 +234,8 @@ This preserves the broader repository direction while making the new exception
 explicit rather than implicit.
 
 **Traces to:** RQ-BGW-002, RQ-BGW-010, RQ-BGW-011, RQ-BGW-013, RQ-BGW-014
+
+## Incremental Design Patch: Read-only redb serving
+
+The gateway local-redb profile constructs `RedbBlockStore` through the upstream
+read-only constructor while preserving the retrieval-only HTTP contract.

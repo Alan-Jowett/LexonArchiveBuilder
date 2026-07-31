@@ -248,3 +248,9 @@ LexonGraph's own search semantics or dependency-trait contracts beyond proving
 that LexonArchiveBuilder consumes them correctly.
 
 **Traces to:** RQ-MCP-005A, RQ-MCP-007A, RQ-MCP-011, RQ-MCP-012
+
+## Incremental Design Patch: Read-only redb access
+
+The MCP runtime uses the shared read-only block-store constructor for local-redb
+search and retrieval without changing delegated search semantics or response
+projection.

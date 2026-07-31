@@ -450,7 +450,7 @@ fn destination_block_store_environment_config(
 fn configured_block_store_from_environment(
     environment: &EnvironmentConfig,
 ) -> anyhow::Result<ConfiguredBlockStore> {
-    ConfiguredBlockStore::from_environment_with_redb_progress(
+    ConfiguredBlockStore::from_environment_read_only(
         Path::new("."),
         environment,
         Some(cli_progress_reporter()),
@@ -859,7 +859,12 @@ fn configured_maintenance_block_store(
                 .expect("gateway-http3 dns name is required by clap"),
         )
         .context("failed to configure gateway-http3 block store"),
-        _ => configured_block_store_from_environment(&args.try_environment_config()?),
+        _ => ConfiguredBlockStore::from_environment_with_redb_progress(
+            Path::new("."),
+            &args.try_environment_config()?,
+            Some(cli_progress_reporter()),
+        )
+        .context("failed to configure block store"),
     }
 }
 

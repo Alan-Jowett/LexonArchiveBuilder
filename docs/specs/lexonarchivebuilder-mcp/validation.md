@@ -182,3 +182,10 @@ and response contracts without requiring OS-specific request semantics or
 response interpretation.
 
 **Traces to:** RQ-MCP-009, DSG-LFM-007
+
+## Incremental Validation Patch: Read-only redb access
+
+Run local-redb MCP search against a populated store.
+
+**Pass condition:** indexed content is returned through the existing MCP
+response shape while the runtime uses read-only redb access.

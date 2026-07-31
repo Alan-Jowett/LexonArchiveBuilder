@@ -2727,3 +2727,11 @@ DSG-LFI-001G, DSG-LFI-001H, DSG-LFI-001I, DSG-LFI-002A, DSG-LFI-002B, DSG-LFI-00
 DSG-LFI-002C, DSG-LFI-002D, DSG-LFI-002G, DSG-LFI-004G, DSG-LFI-005A, DSG-LFI-005B,
 DSG-LFI-005C, DSG-LFI-005D, DSG-LFI-005E, DSG-LFI-006A, DSG-LFI-007A, DSG-LFI-007B,
 DSG-LFI-007C, DSG-LFI-007D, DSG-LFI-007E, DSG-LFI-007G
+
+## Incremental Design Patch: Read-only redb access
+
+The shared block-store adapter selects redb access mode from operation
+capability. Read-only consumers use `RedbBlockStore::new_read_only`; writable
+consumers retain the existing durable or fast writable constructors. Archive-sync
+keeps source access read-only and destination access writable through its
+existing `BlockStore` boundary.

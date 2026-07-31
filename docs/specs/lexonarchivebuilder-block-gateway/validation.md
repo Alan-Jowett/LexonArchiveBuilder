@@ -133,3 +133,10 @@ search serving, free of central-control-plane behavior, and content-type-neutral
 despite introducing a narrow server-side immutable-block retrieval exception.
 
 **Traces to:** RQ-BGW-010, RQ-BGW-011, RQ-BGW-013, RQ-BGW-014, DSG-BGW-008
+
+## Incremental Validation Patch: Read-only redb serving
+
+Exercise local-redb gateway configuration and immutable block serving.
+
+**Pass condition:** existing blocks are served through read-only redb access
+and mutation is not permitted.
