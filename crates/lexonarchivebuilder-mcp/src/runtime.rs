@@ -200,8 +200,11 @@ impl McpRuntime {
         let embedding_spec: EmbeddingSpec = (&config.embedding_spec).into();
         let embedding_provider =
             ConfiguredEmbeddingProvider::from_environment(&config.environment)?;
-        let block_store =
-            ConfiguredBlockStore::from_environment(&request_dir, &config.environment)?;
+        let block_store = ConfiguredBlockStore::from_environment_with_redb_read_only(
+            &request_dir,
+            &config.environment,
+            None,
+        )?;
         let target_embedding = embedding_provider
             .embed(
                 &EmbeddingInput {

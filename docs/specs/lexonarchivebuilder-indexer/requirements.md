@@ -4567,3 +4567,16 @@ substitute.
 - **Implementation changes:** [UNKNOWN] until the requested revision is
   resolved and compiled; no Rust API adaptation is presumed by this
   requirements patch alone.
+
+## Incremental Requirements Patch: Read-only redb access
+
+- **UR-READONLY-001 [KNOWN]:** Adopt LexonGraph commit `8a24c7cbe48a9c7f47997ec655f4aa6f9fea7dd9`.
+- **UR-READONLY-002 [KNOWN]:** Open redb read-only whenever the operation does not modify it.
+- **UR-READONLY-003 [KNOWN]:** Apply this to MCP, quality, proxy/gateway serving, and copy sources.
+- **UR-READONLY-004 [KNOWN]:** Archive-sync sources are read-only while destinations remain writable.
+
+Redb access SHALL be selected by operation capability. Non-mutating consumers
+including MCP, gateway serving, quality, rooted search, inspection, and copy
+sources SHALL use read-only access. Indexing, maintenance, archive-sync
+destinations, and copy destinations SHALL retain writable access. Mutation
+attempts through read-only handles SHALL fail explicitly.

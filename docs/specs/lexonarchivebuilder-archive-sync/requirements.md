@@ -655,3 +655,9 @@ New information SHALL be represented by new immutable artifacts.
   - Design-level journal schema, checkpoint serialization, and retry policy
   - Validation-level pass conditions and test assets
   - Rust implementation files, Docker Compose runtime assets, Azure deployment plumbing, and operational secrets
+
+## Incremental Requirements Patch: Read-only redb source
+
+Archive-sync SHALL open a local-redb source read-only when synchronizing
+content. Any redb destination receiving synchronized blocks or manifests SHALL
+remain writable.

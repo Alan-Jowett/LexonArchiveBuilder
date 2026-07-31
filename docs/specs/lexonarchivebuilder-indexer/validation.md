@@ -1764,6 +1764,13 @@ silently omitted.
 
 **Traces to:** RQ-REFRESH-010, RQ-REFRESH-011, DSG-REFRESH-008
 
+## Incremental Validation Patch: Read-only redb access
+
+Verify that populated local-redb stores can be read through the read-only
+environment path, that writes fail explicitly, and that MCP, gateway, quality,
+rooted search, copy-source, indexing, maintenance, archive-sync destination,
+and copy-destination paths preserve their respective read/write behavior.
+
 ### VAL-REFRESH-009
 
 Inspect refreshed runtime behavior for repository-owned liveness, cancellation,

@@ -280,3 +280,8 @@ LexonArchiveBuilder SHALL keep environment-specific storage, embedding, and othe
 - **Excluded for now [KNOWN]:**
   - Rust implementation file paths, crate manifests, and test artifacts for `lexonarchivebuilder-mcp`, because no repository-local crate or implementation files exist yet
   - external LexonGraph crate source for exact search API and trait names, because that source is not vendored in this repository and was not required to state the repository-local requirements boundary
+
+## Incremental Requirements Patch: Read-only redb access
+
+MCP search and retrieval SHALL open local-redb block stores read-only, preserve
+the existing MCP contract, and surface mutation attempts explicitly.

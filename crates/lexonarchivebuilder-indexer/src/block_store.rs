@@ -72,6 +72,29 @@ impl ConfiguredBlockStore {
         )
     }
 
+    pub fn from_environment_with_redb_read_only(
+        request_dir: &Path,
+        environment: &EnvironmentConfig,
+        progress: Option<OperatorProgressReporter>,
+    ) -> Result<Self, BlockStoreError> {
+        match environment {
+            EnvironmentConfig::Local {
+                block_store_root, ..
+            } => FilesystemBlockStore::new(resolve_path(request_dir, block_store_root))
+                .map(Self::Local),
+            EnvironmentConfig::LocalRedb {
+                block_store_root, ..
+            } => Self::local_redb_store_read_only(request_dir, block_store_root, progress),
+            EnvironmentConfig::LocalOverlay { block_store, .. }
+            | EnvironmentConfig::Production { block_store, .. } => {
+                Self::production_overlay_store(request_dir, block_store)
+            }
+            EnvironmentConfig::ProductionV2 { block_store, .. } => {
+                Self::production_v2_store(block_store)
+            }
+        }
+    }
+
     pub fn from_environment_with_redb_durability_and_progress(
         request_dir: &Path,
         environment: &EnvironmentConfig,
@@ -189,6 +212,40 @@ impl ConfiguredBlockStore {
                     telemetry_callback,
                 )
                 .map(|store| Self::LocalRedb {
+                    store,
+                    database_path: opened_database_path,
+                })
+            },
+        )
+    }
+
+    fn local_redb_store_read_only(
+        request_dir: &Path,
+        block_store_root: &Path,
+        progress: Option<OperatorProgressReporter>,
+    ) -> Result<Self, BlockStoreError> {
+        let store_root = resolve_path(request_dir, block_store_root);
+        let database_path = store_root.join(REDB_DATABASE_FILE_NAME);
+        report_operator_progress(
+            progress.as_ref(),
+            format!(
+                "Opening local-redb block store read-only {}.",
+                database_path.display()
+            ),
+        );
+        let heartbeat_database_path = database_path.clone();
+        let opened_database_path = database_path.clone();
+        run_with_operator_liveness(
+            progress,
+            move |elapsed| {
+                format!(
+                    "Still opening local-redb block store read-only {} after {}s.",
+                    heartbeat_database_path.display(),
+                    elapsed.as_secs()
+                )
+            },
+            move || {
+                RedbBlockStore::new_read_only(store_root).map(|store| Self::LocalRedb {
                     store,
                     database_path: opened_database_path,
                 })
@@ -642,6 +699,42 @@ mod tests {
         .unwrap();
 
         assert_eq!(block_ids, vec![block_id]);
+    }
+
+    #[test]
+    fn configured_local_redb_read_only_store_reads_without_writes() {
+        let dir = tempdir().unwrap();
+        let environment = EnvironmentConfig::LocalRedb {
+            block_store_root: PathBuf::from("blocks"),
+            embedding: LocalEmbeddingConfig {
+                base_url: "http://unused.local".into(),
+                model: "unused".into(),
+                api_key_env: None,
+                request_timeout_secs: 1,
+                max_retries: 0,
+                retry_delay_ms: 1,
+            },
+        };
+        let writable = local_redb_store_for_test(dir.path());
+        let block = sample_block();
+        let block_id = put_block(&writable, &block);
+        drop(writable);
+
+        let read_only = ConfiguredBlockStore::from_environment_with_redb_read_only(
+            dir.path(),
+            &environment,
+            None,
+        )
+        .unwrap();
+
+        let serialized = serialize_block(&block).unwrap();
+        assert_eq!(
+            block_on_block_store_future(read_only.get_block_bytes(&block_id)).unwrap(),
+            Some(serialized.bytes)
+        );
+        let replacement = sample_block();
+        let error = block_on_block_store_future(read_only.put(&replacement)).unwrap_err();
+        assert!(error.to_string().contains("read-only mode"));
     }
 
     #[test]
