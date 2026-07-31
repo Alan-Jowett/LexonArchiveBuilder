@@ -465,8 +465,8 @@ orchestration but cannot complete an end-to-end production realization.
   this section should be revised before implementation begins so repository work
   remains aligned to the approved boundary design.
 
-  ## Incremental Design Patch: Read-only redb source
+## Incremental Design Patch: Read-only redb source
 
-  Archive-sync preserves a source/destination capability split: source stores are
-  read-only and destination stores are writable. Concrete backend selection
-  remains behind the existing `BlockStore` injection boundary.
+Archive-sync preserves a source/destination capability split: source stores are
+read-only and destination stores are writable. Concrete backend selection
+remains behind the existing `BlockStore` injection boundary.

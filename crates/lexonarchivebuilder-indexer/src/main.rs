@@ -450,7 +450,7 @@ fn destination_block_store_environment_config(
 fn configured_block_store_from_environment(
     environment: &EnvironmentConfig,
 ) -> anyhow::Result<ConfiguredBlockStore> {
-    ConfiguredBlockStore::from_environment_read_only(
+    ConfiguredBlockStore::from_environment_with_redb_read_only(
         Path::new("."),
         environment,
         Some(cli_progress_reporter()),

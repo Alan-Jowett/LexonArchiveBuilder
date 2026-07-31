@@ -72,7 +72,7 @@ impl ConfiguredBlockStore {
         )
     }
 
-    pub fn from_environment_read_only(
+    pub fn from_environment_with_redb_read_only(
         request_dir: &Path,
         environment: &EnvironmentConfig,
         progress: Option<OperatorProgressReporter>,
@@ -720,9 +720,12 @@ mod tests {
         let block_id = put_block(&writable, &block);
         drop(writable);
 
-        let read_only =
-            ConfiguredBlockStore::from_environment_read_only(dir.path(), &environment, None)
-                .unwrap();
+        let read_only = ConfiguredBlockStore::from_environment_with_redb_read_only(
+            dir.path(),
+            &environment,
+            None,
+        )
+        .unwrap();
 
         let serialized = serialize_block(&block).unwrap();
         assert_eq!(
