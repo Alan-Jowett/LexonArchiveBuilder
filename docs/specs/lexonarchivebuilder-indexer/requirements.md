@@ -809,6 +809,25 @@
 - **UR-364 [KNOWN]:** Verification must cover initialization and every v3
   partition write path, while confirming active-process transactional visibility
   and preservation of non-v3 and final-result durability behavior.
+- **UR-365 [KNOWN]:** Rooted corpus-based TNN-recall evaluation must not retain
+  the complete reachable embedding corpus in process memory.
+- **UR-366 [KNOWN]:** The quality tool must preserve uniform seeded sampling by
+  ranking stable corpus-entry identities with a seed-derived pseudorandom key
+  and retaining the configured number of lowest-ranked entries.
+- **UR-367 [KNOWN]:** Exact TNN-recall evaluation must use a second rooted pass
+  over the corpus and maintain only the configured top ten exact neighbors for
+  each sampled query.
+- **UR-368 [KNOWN]:** The bounded TNN workflow must preserve rooted-corpus
+  scope, exact sampled-query results, tie-breaking, and Recall@1, Recall@5,
+  Recall@10 aggregate semantics.
+- **UR-369 [INFERRED]:** The exact-neighbor pass may process corpus embeddings
+  in bounded batches and compute a bounded score tile across all sampled
+  queries without changing exact results.
+- **UR-370 [KNOWN]:** Normal quality mode must require no more than two complete
+  rooted corpus passes for block-quality analysis plus exact corpus TNN recall.
+- **UR-371 [INFERRED]:** The quality report or operator surface should expose
+  enough phase/liveness information to distinguish the rooted analysis pass from
+  the exact-neighbor pass during large-corpus runs.
 
 ## Change Manifest
 
@@ -972,6 +991,7 @@
 | CM-INDEXER-156 | Preserve | Preserve clustering-only requests with empty `items` as journal-driven executions that do not require request-supplied content or whole-store discovery fallback | UR-163, UR-166 |
 | CM-INDEXER-157 | Revise | Preserve complete generated-output auditability, root identity, and indexing-step traceability when generated output identities are split across bounded replay-audit records or an integrity-preserving equivalent | UR-161, UR-167, UR-168 |
 | CM-INDEXER-158 | Preserve | Keep the Issue #115 correction inside replay-journal orchestration without changing MCP/search behavior, request-stage semantics, storage profiles, or LexonGraph-owned block identity contracts | UR-136, UR-162, UR-166 |
+| CM-INDEXER-159 | Revise | Replace corpus-sized rooted TNN-recall retention with seeded bounded priority sampling, a second rooted exact-neighbor pass, and bounded score batching while preserving recall semantics | UR-365, UR-366, UR-367, UR-368, UR-369, UR-370 |
 
 ## Before / After
 
@@ -3410,6 +3430,22 @@ Recall@10.
 - **Traversal-width control [KNOWN]:** The approximate-neighbor retrieval path
   used for corpus-based TNN-recall SHALL expose configurable traversal width so
   operators can measure recall at different widths.
+- **Bounded evaluation [KNOWN]:** The quality tool SHALL avoid retaining the
+  complete rooted embedding corpus in memory. It SHALL use no more than two
+  complete rooted passes: the first pass performs block-quality analysis and
+  retains only the configured sample, and the second pass computes exact
+  neighbors for that sample.
+- **Seeded priority sampling [KNOWN]:** Each stable corpus-entry identity SHALL
+  receive a deterministic seed-derived pseudorandom ranking key. The sample
+  SHALL consist of the configured number of lowest-ranked eligible entries,
+  with deterministic identity tie-breaking.
+- **Bounded exact baseline [KNOWN]:** During the second pass, the tool SHALL
+  retain no more than the ten closest exact neighbors for each sampled query,
+  excluding the query itself and preserving the existing exact-neighbor
+  ordering.
+- **Batching allowance [INFERRED]:** The exact-neighbor pass MAY decode corpus
+  embeddings and compute scores in bounded batches or score tiles spanning all
+  sampled queries, provided exact results and bounded memory are preserved.
 - **Aggregate outputs [KNOWN]:** Mean recall, recall standard deviation, and
   recall histograms SHALL be computed from this corpus-based mode.
 - **Metric family [KNOWN]:** The required recall outputs for this increment are
@@ -4198,6 +4234,16 @@ This metric SHALL be used to detect multimodal blocks and ineffective splits."
   `d3b0f145015ff51a434ae68c884cacf9a2048e13`, where temporary v3 partition
   initialization and mutations use non-durable writes while production and
   final-result durability contracts remain unchanged.
+
+### BA-INDEXER-155
+
+- **Before [KNOWN]:** Rooted corpus-based TNN recall retained every reachable
+  corpus embedding in memory and computed each sampled query's exact baseline
+  from that corpus-sized collection.
+- **After [KNOWN]:** Rooted corpus-based TNN recall uses seeded priority
+  sampling during the existing quality traversal, retains only the configured
+  sample, computes exact top-ten neighbors during one second rooted pass, and
+  permits bounded score batching without changing aggregate recall semantics.
 
 ### Invariant Impact Assessment
 

@@ -1362,7 +1362,7 @@ fn tnn_recall_metrics(k: usize, denominator: usize, counts: &[usize]) -> TnnReca
 
 fn selected_corpus_sample(state: &TraversalState) -> Vec<CorpusLeafEntry> {
     let mut ordered = state.sample_candidates.iter().collect::<Vec<_>>();
-    ordered.sort_by(|left, right| left.cmp(right));
+    ordered.sort();
     ordered
         .into_iter()
         .map(|candidate| candidate.entry.clone())

@@ -1058,6 +1058,28 @@ KiB congestion-window model.
 
 **Traces to:** RQ-INDEXER-008D4, RQ-INDEXER-008D5, DSG-LFI-002D3, DSG-LFI-005B, DSG-LFI-007D
 
+### VAL-LFI-005B4
+
+Run rooted corpus-based TNN quality assessment against a corpus large enough
+that retaining every decoded embedding would exceed the configured memory
+budget.
+
+**Pass condition:** the quality tool completes the block-quality analysis and
+exact corpus-baseline evaluation using no more than two complete rooted passes;
+the first pass retains only the configured sample selected by seeded priority
+ranking over stable corpus-entry identities; the second pass retains no more
+than ten exact neighbors per sampled query; and no corpus-sized embedding
+collection or unbounded score matrix is retained. Repeating the run with the
+same root, sample size, and seed selects the same queries, while changing the
+seed changes the priority ranking without depending on lexical block-ID order.
+The exact top-ten results and aggregate Recall@1, Recall@5, and Recall@10
+match a reference implementation, including deterministic tie-breaking and
+query-self exclusion. Bounded score batching may be used, but must not change
+the exact results.
+
+**Traces to:** UR-365, UR-366, UR-367, UR-368, UR-369, UR-370,
+RQ-INDEXER-008D1, DSG-LFI-002D1
+
 ### VAL-LFI-005C
 
 Run the rooted CLI search tool against a representative stored tree whose
