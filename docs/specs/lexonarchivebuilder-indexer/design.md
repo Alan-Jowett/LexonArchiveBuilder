@@ -1491,6 +1491,29 @@ rather than to the entire configured block store. The selected traversal width
 is carried in the emitted recall artifact so experiment results remain
 traceable.
 
+The rooted quality traversal SHALL not materialize the complete corpus for
+TNN evaluation. During the first rooted pass, each eligible corpus entry is
+assigned a deterministic priority key derived from the caller-selected seed
+and stable entry identity. A bounded max-heap retains only the configured
+number of lowest-priority entries, producing the same reproducible uniform
+sample without requiring the total corpus size.
+
+After the structural and embedding-space analysis completes, the quality tool
+performs one second rooted pass. Each decoded corpus embedding is compared
+against every sampled query, while a bounded top-ten exact-neighbor heap is
+maintained per query. Corpus entries are decoded in bounded batches and may
+be scored as a batch or score tile across the sampled-query matrix; the full
+corpus and full score matrix are never retained. Exact-neighbor ordering
+continues to use descending similarity with deterministic leaf-block and entry
+identity tie-breaking, and the sampled query itself is excluded.
+
+This two-pass flow preserves exact sampled-query TNN recall and the existing
+aggregate metrics while changing memory growth from corpus-sized embedding
+retention to sampled-query, bounded-neighbor, and bounded-batch state. The
+implementation may expose phase/liveness progress so operators can distinguish
+the first rooted analysis pass from the second exact-neighbor pass during
+large-corpus runs.
+
 **Traces to:** RQ-INDEXER-008D1, RQ-INDEXER-008D3, RQ-INDEXER-008D4, RQ-INDEXER-008D5, RQ-INDEXER-010
 
 ### DSG-LFI-002D2 `User-query diagnostic recall mode`

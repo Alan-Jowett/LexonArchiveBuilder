@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -36,6 +36,8 @@ const DEFAULT_TNN_RECALL_SAMPLE_SIZE: usize = 100;
 const DEFAULT_TNN_RECALL_SEED: u64 = 0;
 const FAST_RANDOM_WALK_QUERY_SOURCE: &str = "random-walk-sampled";
 const REQUIRED_RECALL_AT: [usize; 3] = [1, 5, 10];
+const MAX_EXACT_NEIGHBORS: usize = 10;
+const EXACT_SCORING_BATCH_SIZE: usize = 1024;
 const POWER_ITERATION_STEPS: usize = 8;
 const EPSILON: f32 = 1.0e-6;
 const RTT_CWND_BYTES: usize = 65_536;
@@ -76,6 +78,13 @@ pub enum TreeQualityError {
     ZeroMagnitudeEmbedding { block_id: String },
     #[error("tnn recall search failed: {message}")]
     Search { message: String },
+    #[error(
+        "tnn exact-neighbor score batch dimensions overflow: {corpus_entries} corpus entries x {queries} queries"
+    )]
+    ExactScoreBatchTooLarge {
+        corpus_entries: usize,
+        queries: usize,
+    },
     #[error(transparent)]
     BlockStore(#[from] BlockStoreError),
     #[error("failed to render tree quality report")]
@@ -286,7 +295,10 @@ pub struct TreeQualityReport {
 #[derive(Clone, Debug)]
 struct TraversalState {
     blocks: Vec<BlockQualityMetrics>,
-    corpus_entries: Vec<CorpusLeafEntry>,
+    sample_size: usize,
+    sample_seed: u64,
+    corpus_size: usize,
+    sample_candidates: BinaryHeap<SampleCandidate>,
     findings: Vec<TreeQualityFinding>,
     metrics_by_id: HashMap<BlockHash, BlockQualityMetrics>,
     child_ids_by_parent: HashMap<BlockHash, Vec<BlockHash>>,
@@ -321,6 +333,85 @@ struct CorpusLeafEntry {
     neighbor_id: String,
     leaf_block_id: BlockHash,
     embedding: Vec<f32>,
+}
+
+#[derive(Clone, Debug)]
+struct SampleCandidate {
+    key: [u8; 32],
+    entry: CorpusLeafEntry,
+}
+
+impl PartialEq for SampleCandidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+            && self.entry.neighbor_id == other.entry.neighbor_id
+            && self.entry.leaf_block_id == other.entry.leaf_block_id
+    }
+}
+
+impl Eq for SampleCandidate {}
+
+impl PartialOrd for SampleCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SampleCandidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key
+            .cmp(&other.key)
+            .then_with(|| self.entry.neighbor_id.cmp(&other.entry.neighbor_id))
+            .then_with(|| {
+                self.entry
+                    .leaf_block_id
+                    .as_bytes()
+                    .cmp(other.entry.leaf_block_id.as_bytes())
+            })
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ExactNeighborCandidate {
+    score: f64,
+    leaf_block_id: BlockHash,
+    neighbor_id: String,
+}
+
+impl PartialEq for ExactNeighborCandidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.score == other.score
+            && self.leaf_block_id == other.leaf_block_id
+            && self.neighbor_id == other.neighbor_id
+    }
+}
+
+impl Eq for ExactNeighborCandidate {}
+
+impl PartialOrd for ExactNeighborCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ExactNeighborCandidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .score
+            .partial_cmp(&self.score)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| {
+                self.leaf_block_id
+                    .as_bytes()
+                    .cmp(other.leaf_block_id.as_bytes())
+            })
+            .then_with(|| self.neighbor_id.cmp(&other.neighbor_id))
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ExactNeighbor {
+    neighbor_id: String,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -466,7 +557,10 @@ pub fn assess_rooted_tree_with_config(
 
     let mut state = TraversalState {
         blocks: Vec::new(),
-        corpus_entries: Vec::new(),
+        sample_size: tnn_recall.sample_size,
+        sample_seed: tnn_recall.seed,
+        corpus_size: 0,
+        sample_candidates: BinaryHeap::new(),
         findings: Vec::new(),
         metrics_by_id: HashMap::new(),
         child_ids_by_parent: HashMap::new(),
@@ -1092,7 +1186,7 @@ fn build_corpus_tnn_recall_report(
     config: TnnRecallConfig,
 ) -> Result<CorpusTnnRecallReport, TreeQualityError> {
     let traversal_width = config.traversal_width;
-    let corpus_size = state.corpus_entries.len();
+    let corpus_size = state.corpus_size;
     let can_compute_recall = corpus_size >= 2
         && !has_embedding_spec_mismatch(state)
         && !state.has_zero_magnitude_tnn_entry;
@@ -1111,13 +1205,32 @@ fn build_corpus_tnn_recall_report(
         ));
     }
 
-    let sampled_queries = select_corpus_sample(&state.corpus_entries, config);
+    let sampled_queries = selected_corpus_sample(state);
     let max_k = REQUIRED_RECALL_AT
         .iter()
         .copied()
         .max()
-        .unwrap_or(1)
+        .unwrap_or(MAX_EXACT_NEIGHBORS)
+        .min(MAX_EXACT_NEIGHBORS)
         .min(corpus_size.saturating_sub(1));
+    let mut exact_neighbor_heaps = (0..sampled_queries.len())
+        .map(|_| BinaryHeap::with_capacity(MAX_EXACT_NEIGHBORS))
+        .collect::<Vec<BinaryHeap<ExactNeighborCandidate>>>();
+    collect_exact_neighbors(*root_id, &sampled_queries, store, &mut exact_neighbor_heaps)?;
+
+    let exact_neighbors = exact_neighbor_heaps
+        .into_iter()
+        .map(|heap| {
+            let mut ranked = heap.into_vec();
+            ranked.sort();
+            ranked
+                .into_iter()
+                .map(|entry| ExactNeighbor {
+                    neighbor_id: entry.neighbor_id,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
     let searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
     let mut recalls_by_k = REQUIRED_RECALL_AT
         .into_iter()
@@ -1125,9 +1238,8 @@ fn build_corpus_tnn_recall_report(
         .collect::<BTreeMap<_, _>>();
     let mut query_accesses = Vec::with_capacity(sampled_queries.len());
 
-    for query in sampled_queries {
+    for (query, exact_neighbors) in sampled_queries.iter().zip(exact_neighbors.iter()) {
         interrupt::check_for_interrupt()?;
-        let exact_neighbors = exact_neighbors(&state.corpus_entries, query, max_k)?;
         let (approximate_neighbors, query_access) = approximate_neighbors(
             root_id,
             root_query_embedding_spec,
@@ -1255,23 +1367,12 @@ fn tnn_recall_metrics(k: usize, denominator: usize, counts: &[usize]) -> TnnReca
     }
 }
 
-fn select_corpus_sample(
-    entries: &[CorpusLeafEntry],
-    config: TnnRecallConfig,
-) -> Vec<&CorpusLeafEntry> {
-    let mut ordered = entries
-        .iter()
-        .map(|entry| (sample_key(&entry.neighbor_id, config.seed), entry))
-        .collect::<Vec<_>>();
-    ordered.sort_by(|left, right| {
-        left.0
-            .cmp(&right.0)
-            .then_with(|| left.1.neighbor_id.cmp(&right.1.neighbor_id))
-    });
+fn selected_corpus_sample(state: &TraversalState) -> Vec<CorpusLeafEntry> {
+    let mut ordered = state.sample_candidates.iter().collect::<Vec<_>>();
+    ordered.sort();
     ordered
         .into_iter()
-        .take(config.sample_size.min(entries.len()))
-        .map(|(_, entry)| entry)
+        .map(|candidate| candidate.entry.clone())
         .collect()
 }
 
@@ -1420,36 +1521,101 @@ fn build_random_walk_query_accesses(
         .collect()
 }
 
-fn exact_neighbors<'a>(
-    corpus_entries: &'a [CorpusLeafEntry],
-    query: &CorpusLeafEntry,
-    max_k: usize,
-) -> Result<Vec<&'a CorpusLeafEntry>, TreeQualityError> {
-    let mut ranked = corpus_entries
-        .iter()
-        .filter(|entry| entry.neighbor_id != query.neighbor_id)
-        .map(|entry| {
-            cosine_similarity(&query.embedding, &entry.embedding).map(|score| (score, entry))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    ranked.sort_by(|left, right| {
-        right
-            .0
-            .partial_cmp(&left.0)
-            .unwrap_or(Ordering::Equal)
-            .then_with(|| {
-                left.1
-                    .leaf_block_id
-                    .as_bytes()
-                    .cmp(right.1.leaf_block_id.as_bytes())
-            })
-            .then_with(|| left.1.neighbor_id.cmp(&right.1.neighbor_id))
-    });
-    Ok(ranked
-        .into_iter()
-        .take(max_k)
-        .map(|(_, entry)| entry)
-        .collect())
+fn collect_exact_neighbors(
+    root_id: BlockHash,
+    queries: &[CorpusLeafEntry],
+    store: &dyn BlockStore,
+    heaps: &mut [BinaryHeap<ExactNeighborCandidate>],
+) -> Result<(), TreeQualityError> {
+    let mut visited = HashSet::new();
+    collect_exact_neighbors_from_block(root_id, queries, store, heaps, &mut visited)
+}
+
+fn collect_exact_neighbors_from_block(
+    block_id: BlockHash,
+    queries: &[CorpusLeafEntry],
+    store: &dyn BlockStore,
+    heaps: &mut [BinaryHeap<ExactNeighborCandidate>],
+    visited: &mut HashSet<BlockHash>,
+) -> Result<(), TreeQualityError> {
+    interrupt::check_for_interrupt()?;
+    if !visited.insert(block_id) {
+        return Ok(());
+    }
+    let Some(validated) = block_on_block_store_future(store.get(&block_id))? else {
+        return Ok(());
+    };
+    match validated.block {
+        Block::Branch(branch) => {
+            for entry in branch.entries {
+                collect_exact_neighbors_from_block(entry.child, queries, store, heaps, visited)?;
+            }
+        }
+        Block::Leaf(leaf) => {
+            for entries in leaf.entries.chunks(EXACT_SCORING_BATCH_SIZE) {
+                let mut batch = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    match corpus_entry_from_leaf_result(block_id, entry, &leaf.embedding_spec) {
+                        Ok(entry) => batch.push(entry),
+                        Err(TreeQualityError::ZeroMagnitudeEmbedding { .. }) => {}
+                        Err(other) => return Err(other),
+                    }
+                }
+                score_exact_batch(&batch, queries, heaps)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn score_exact_batch(
+    corpus_entries: &[CorpusLeafEntry],
+    queries: &[CorpusLeafEntry],
+    heaps: &mut [BinaryHeap<ExactNeighborCandidate>],
+) -> Result<(), TreeQualityError> {
+    if corpus_entries.is_empty() || queries.is_empty() {
+        return Ok(());
+    }
+
+    let score_count = corpus_entries.len().checked_mul(queries.len()).ok_or(
+        TreeQualityError::ExactScoreBatchTooLarge {
+            corpus_entries: corpus_entries.len(),
+            queries: queries.len(),
+        },
+    )?;
+    let mut scores = vec![0.0f64; score_count];
+    for (corpus_index, corpus_entry) in corpus_entries.iter().enumerate() {
+        interrupt::check_for_interrupt()?;
+        for (query_index, query) in queries.iter().enumerate() {
+            if corpus_entry.neighbor_id != query.neighbor_id {
+                scores[corpus_index * queries.len() + query_index] =
+                    cosine_similarity(&query.embedding, &corpus_entry.embedding)?;
+            }
+        }
+    }
+
+    for (corpus_index, corpus_entry) in corpus_entries.iter().enumerate() {
+        for (query_index, query) in queries.iter().enumerate() {
+            if corpus_entry.neighbor_id == query.neighbor_id {
+                continue;
+            }
+            let candidate = ExactNeighborCandidate {
+                score: scores[corpus_index * queries.len() + query_index],
+                leaf_block_id: corpus_entry.leaf_block_id,
+                neighbor_id: corpus_entry.neighbor_id.clone(),
+            };
+            let heap = &mut heaps[query_index];
+            let replace = heap.len() < MAX_EXACT_NEIGHBORS
+                || heap.peek().is_some_and(|worst| candidate < *worst);
+            if replace {
+                if heap.len() == MAX_EXACT_NEIGHBORS {
+                    heap.pop();
+                }
+                heap.push(candidate);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn approximate_neighbors(
@@ -1638,7 +1804,14 @@ fn collect_corpus_entries(
 ) -> Result<(), TreeQualityError> {
     for entry in &leaf.entries {
         match corpus_entry_from_leaf_result(block_id, entry, &leaf.embedding_spec) {
-            Ok(entry) => state.corpus_entries.push(entry),
+            Ok(entry) => {
+                state.corpus_size += 1;
+                let candidate = SampleCandidate {
+                    key: sample_key(&entry.neighbor_id, state.sample_seed),
+                    entry,
+                };
+                push_bounded_sample(&mut state.sample_candidates, candidate, state.sample_size);
+            }
             Err(TreeQualityError::ZeroMagnitudeEmbedding { .. }) => {
                 state.has_zero_magnitude_tnn_entry = true;
             }
@@ -1646,6 +1819,20 @@ fn collect_corpus_entries(
         }
     }
     Ok(())
+}
+
+fn push_bounded_sample(
+    heap: &mut BinaryHeap<SampleCandidate>,
+    candidate: SampleCandidate,
+    sample_size: usize,
+) {
+    let replace = heap.len() < sample_size || heap.peek().is_some_and(|worst| candidate < *worst);
+    if replace {
+        if heap.len() == sample_size {
+            heap.pop();
+        }
+        heap.push(candidate);
+    }
 }
 
 fn corpus_entry_from_leaf_result(
@@ -2721,6 +2908,41 @@ mod tests {
         assert!(rendered.contains("\"splits\""));
         assert!(rendered.contains("\"occupancies\""));
         assert!(!rendered.contains("\"centroid\""));
+    }
+
+    #[test]
+    fn corpus_sample_selection_is_independent_of_insertion_order() {
+        let entries = (0..8)
+            .map(|index| CorpusLeafEntry {
+                neighbor_id: format!("neighbor-{index}"),
+                leaf_block_id: BlockHash::from_bytes([index as u8; BlockHash::LEN]),
+                embedding: vec![1.0, 0.0],
+            })
+            .collect::<Vec<_>>();
+
+        let sample_ids = |entries: Vec<CorpusLeafEntry>| {
+            let mut heap = BinaryHeap::new();
+            for entry in entries {
+                push_bounded_sample(
+                    &mut heap,
+                    SampleCandidate {
+                        key: sample_key(&entry.neighbor_id, 23),
+                        entry,
+                    },
+                    3,
+                );
+            }
+            let mut selected = heap.into_vec();
+            selected.sort();
+            selected
+                .into_iter()
+                .map(|candidate| candidate.entry.neighbor_id)
+                .collect::<Vec<_>>()
+        };
+
+        let mut reversed = entries.clone();
+        reversed.reverse();
+        assert_eq!(sample_ids(entries), sample_ids(reversed));
     }
 
     #[test]
