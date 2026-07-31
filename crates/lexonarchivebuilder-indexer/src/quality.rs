@@ -78,6 +78,13 @@ pub enum TreeQualityError {
     ZeroMagnitudeEmbedding { block_id: String },
     #[error("tnn recall search failed: {message}")]
     Search { message: String },
+    #[error(
+        "tnn exact-neighbor score batch dimensions overflow: {corpus_entries} corpus entries x {queries} queries"
+    )]
+    ExactScoreBatchTooLarge {
+        corpus_entries: usize,
+        queries: usize,
+    },
     #[error(transparent)]
     BlockStore(#[from] BlockStoreError),
     #[error("failed to render tree quality report")]
@@ -1570,8 +1577,15 @@ fn score_exact_batch(
         return Ok(());
     }
 
-    let mut scores = vec![0.0f64; corpus_entries.len() * queries.len()];
+    let score_count = corpus_entries.len().checked_mul(queries.len()).ok_or(
+        TreeQualityError::ExactScoreBatchTooLarge {
+            corpus_entries: corpus_entries.len(),
+            queries: queries.len(),
+        },
+    )?;
+    let mut scores = vec![0.0f64; score_count];
     for (corpus_index, corpus_entry) in corpus_entries.iter().enumerate() {
+        interrupt::check_for_interrupt()?;
         for (query_index, query) in queries.iter().enumerate() {
             if corpus_entry.neighbor_id != query.neighbor_id {
                 scores[corpus_index * queries.len() + query_index] =
