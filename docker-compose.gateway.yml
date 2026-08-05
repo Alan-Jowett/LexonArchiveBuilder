@@ -26,5 +26,3 @@ services:
   stapi:
     image: ghcr.io/substratusai/stapi:v2.2.2-3
     restart: unless-stopped
-    expose:
-      - "8080"

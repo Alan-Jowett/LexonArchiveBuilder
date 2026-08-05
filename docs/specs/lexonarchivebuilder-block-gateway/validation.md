@@ -145,7 +145,7 @@ and mutation is not permitted.
 
 ### VAL-BGW-COMPOSE-001
 
-Inspect the standalone Debian-host Compose file.
+Inspect `docker-compose.gateway.yml`, the standalone Debian-host Compose file.
 
 **Pass condition:** it declares exactly `block-gateway` and `stapi` services,
 uses `ghcr.io/alan-jowett/lexonarchivebuilder-block-gateway:main` and
