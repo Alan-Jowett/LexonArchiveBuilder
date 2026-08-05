@@ -366,13 +366,15 @@ local-redb deployment.
   cache-capacity, or local-redb configuration.
 - **Traceability:** UR-BGW-COMPOSE-1, RQ-BGW-005, RQ-BGW-005A
 
-#### RQ-BGW-COMPOSE-006 - STAPI isolation
+#### RQ-BGW-COMPOSE-006 - Optional STAPI dependency
 
-The Compose stack SHALL run the requested STAPI image without configuring the
-gateway to depend on, invoke, or expose an embedding-specific contract.
+The Compose stack SHALL run the requested STAPI image without requiring the
+gateway to depend on, invoke, or expose an embedding-specific contract for
+block retrieval.
 
-- **Constraint [KNOWN]:** The current gateway is a block retrieval service and
-  has no embedding-service startup configuration.
+- **Constraint [KNOWN]:** When `--embedding-base-url` is configured, the
+  gateway MAY use the STAPI service as its embedding upstream.
+- **Constraint [KNOWN]:** STAPI has no published host port.
 - **Traceability:** UR-BGW-COMPOSE-1, RQ-BGW-011
 
 ### Invariant Impact Assessment
@@ -414,3 +416,154 @@ provided by required Compose variables named
 - **Constraint [KNOWN]:** The container-side mount targets remain fixed and
   read-only so the gateway command is unchanged.
 - **Traceability:** UR-BGW-COMPOSE-5, RQ-BGW-COMPOSE-002
+
+## Incremental Requirements Patch: Optional STAPI embedding proxy
+
+### USER-REQUEST
+
+- **UR-BGW-EMBED-1 [KNOWN]:** Extend
+  `crates/lexonarchivebuilder-block-gateway` to proxy embedding requests to an
+  instance of `ghcr.io/substratusai/stapi:v2.2.2-3` at an operator-provided
+  URL.
+- **UR-BGW-EMBED-2 [KNOWN]:** Expose the proxy as an OpenAI-compatible
+  `POST /v1/embeddings` endpoint.
+- **UR-BGW-EMBED-3 [KNOWN]:** Configure the upstream through an optional
+  `serve` argument that accepts an STAPI base URL; the gateway appends
+  `/v1/embeddings`.
+- **UR-BGW-EMBED-4 [KNOWN]:** Return `404` for `POST /v1/embeddings` when the
+  optional upstream argument is absent.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-BGW-EMBED-001 | Add | Define an optional OpenAI-compatible embeddings proxy in the gateway boundary | UR-BGW-EMBED-1, UR-BGW-EMBED-2 |
+| CM-BGW-EMBED-002 | Add | Bind the STAPI base URL as an optional startup-only `serve` argument | UR-BGW-EMBED-1, UR-BGW-EMBED-3 |
+| CM-BGW-EMBED-003 | Add | Keep embedding proxying disabled, with `404` for the embedding route, when no upstream is configured | UR-BGW-EMBED-4 |
+| CM-BGW-EMBED-004 | Revise | Replace the Compose-specific STAPI isolation constraint with an optional gateway-to-STAPI dependency | UR-BGW-EMBED-1, UR-BGW-EMBED-3, RQ-BGW-COMPOSE-006 |
+
+### Before / After
+
+### BA-BGW-EMBED-001
+
+- **Before [KNOWN]:** The block gateway exposes only immutable block retrieval,
+  and `RQ-BGW-COMPOSE-006` prohibits gateway-to-STAPI runtime coupling.
+- **After [KNOWN]:** The gateway additionally supports a narrowly scoped,
+  optional OpenAI-compatible embedding-proxy route when configured with an
+  STAPI base URL.
+
+### BA-BGW-EMBED-002
+
+- **Before [KNOWN]:** STAPI is an isolated Compose service and is not a
+  gateway dependency.
+- **After [KNOWN]:** STAPI is an optional gateway dependency for embedding
+  proxying only; block retrieval does not require an STAPI URL.
+
+### Requirements
+
+#### RQ-BGW-015 - Optional embedding-proxy boundary
+
+The gateway SHALL optionally expose an OpenAI-compatible embedding-proxy route
+at `POST /v1/embeddings`.
+
+- **Constraint [KNOWN]:** The embedding route is additive to, and does not
+  alter, the `/block/<block_id>` retrieval contract.
+- **Constraint [INFERRED]:** The gateway SHALL not add indexing, search, block
+  mutation, or content-type-specific behavior as part of embedding proxying.
+- **Traceability:** UR-BGW-EMBED-1, UR-BGW-EMBED-2
+
+#### RQ-BGW-016 - Optional startup-time STAPI configuration
+
+The gateway `serve` command SHALL accept an optional `--embedding-base-url`
+argument. When supplied, the gateway SHALL derive the embedding upstream
+endpoint by appending `/v1/embeddings` to that base URL.
+
+- **Constraint [KNOWN]:** The upstream URL is bound at startup and is not
+  supplied by embedding callers.
+- **Constraint [KNOWN]:** The gateway SHALL accept base URLs with or without a
+  trailing slash and derive exactly one `/v1/embeddings` path.
+- **Constraint [INFERRED]:** The STAPI URL is an operator configuration value
+  and remains separate from request payloads and block-store configuration.
+- **Traceability:** UR-BGW-EMBED-1, UR-BGW-EMBED-3
+
+#### RQ-BGW-017 - Transparent OpenAI-compatible embedding forwarding
+
+When the STAPI base URL is configured, the gateway SHALL proxy
+`POST /v1/embeddings` requests to the derived STAPI embeddings endpoint using
+the OpenAI-compatible request and response protocol.
+
+- **Constraint [INFERRED]:** The proxy SHALL preserve the embedding request
+  body and the upstream response semantics rather than defining a
+  gateway-specific embedding schema or response envelope.
+- **Constraint [KNOWN]:** The proxy target is the configured STAPI instance,
+  not a new repository-owned embedding implementation.
+- **Constraint [KNOWN]:** If the gateway cannot reach the configured upstream,
+  it SHALL return HTTP `502 Bad Gateway`.
+- **Traceability:** UR-BGW-EMBED-1, UR-BGW-EMBED-2, UR-BGW-EMBED-3
+
+#### RQ-BGW-018 - Disabled embedding-proxy behavior
+
+When the STAPI base-URL argument is absent, `POST /v1/embeddings` SHALL return
+HTTP `404`.
+
+- **Constraint [KNOWN]:** Absence of embedding configuration disables only the
+  embedding route and does not prevent the gateway from serving blocks.
+- **Traceability:** UR-BGW-EMBED-4
+
+#### RQ-BGW-019 - Conditional Compose STAPI coupling
+
+`RQ-BGW-COMPOSE-006` is revised: the Compose stack MAY configure the gateway
+to use its STAPI service through the optional startup argument, but it SHALL
+not require that configuration for block retrieval.
+
+- **Constraint [INFERRED]:** The Compose topology remains limited to the
+  existing gateway and STAPI services; it does not introduce an indexer, MCP
+  server, database, or control-plane service for embedding proxying.
+- **Traceability:** UR-BGW-EMBED-1, UR-BGW-EMBED-3, RQ-BGW-COMPOSE-001,
+  RQ-BGW-COMPOSE-006
+
+### Invariant Impact Assessment
+
+| Invariant | Impact | Assessment |
+|---|---|---|
+| Gateway remains retrieval-only | Revised with a bounded embedding-proxy exception | The gateway forwards embeddings only and does not index, search, mutate blocks, or define an embedding schema |
+| `/block/<block_id>` contract remains stable | Preserved | The embedding route and optional upstream configuration do not alter block lookup, payload, cache, or error semantics |
+| MCP and indexer remain separate | Preserved | The proxy does not add an MCP tool or indexer behavior |
+| No central control plane is introduced | Preserved | The configured upstream is a direct STAPI dependency with no repository-owned coordination service |
+| Environment-specific adapters stay behind stable seams | Revised | The optional STAPI endpoint is a startup-bound embedding adapter; it does not alter Azure Table storage-profile selection |
+| Future content-type neutrality remains possible | Preserved | Embedding forwarding does not inspect or encode email, document, or future content types |
+
+### Open Questions / Discovery Gaps
+
+- **Q-BGW-EMBED-002 [UNKNOWN]:** Does the public gateway require client
+  authentication, request-size limits, or rate limiting for the new
+  embedding route?
+
+### Coverage Notes
+
+- **Covered sources [KNOWN]:**
+  - `docs/specs/lexonarchivebuilder-block-gateway/requirements.md`:
+    `RQ-BGW-COMPOSE-006` defines the prior STAPI isolation constraint.
+  - `docs/specs/lexonarchivebuilder-block-gateway/design.md`:
+    `DSG-BGW-COMPOSE-004` records that STAPI is not currently a gateway
+    dependency.
+  - `docs/specs/lexonarchivebuilder-block-gateway/validation.md`:
+    `VAL-BGW-COMPOSE-004` validates that prior non-coupling behavior.
+  - `docker-compose.gateway.yml` declares the requested
+    `ghcr.io/substratusai/stapi:v2.2.2-3` service.
+  - `README.md` describes STAPI as the local OpenAI-compatible embedding
+    service.
+
+- **Sampled claim re-checks [KNOWN]:**
+  - `RQ-BGW-COMPOSE-006` expressly prohibits embedding endpoint
+    configuration and runtime coupling, so this patch explicitly revises that
+    requirement rather than silently contradicting it.
+  - `DSG-BGW-COMPOSE-004` identifies the lack of gateway embedding endpoint
+    input as the reason for STAPI non-coupling, which the optional startup
+    argument changes.
+  - `VAL-BGW-COMPOSE-004` tests the prior isolation condition and therefore
+    requires a downstream validation revision.
+
+- **Excluded from this phase [KNOWN]:**
+  - Rust implementation, CLI definition, HTTP routing, Compose changes,
+    design and validation artifacts, and tests.
