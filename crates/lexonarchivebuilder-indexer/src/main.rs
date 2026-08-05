@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use anyhow::Context;
+use anyhow::{Context, anyhow, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use env_logger::Env;
 use lexonarchivebuilder_indexer::block_copy::{
@@ -105,7 +105,7 @@ enum Command {
             long,
             help = "Base URL for an OpenAI-compatible embedding service. A full /v1/embeddings URL is also accepted."
         )]
-        embedding_endpoint: String,
+        embedding_endpoint: Option<String>,
         #[arg(long, default_value = DEFAULT_LOCAL_MODEL)]
         embedding_model: String,
         #[arg(long)]
@@ -679,19 +679,16 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let root_id = parse_block_hash(&root_id)?;
             let store = configured_block_store(&block_store)?;
-            let provider =
-                ConfiguredEmbeddingProvider::from_environment(&EnvironmentConfig::Local {
-                    block_store_root: PathBuf::from("."),
-                    embedding: LocalEmbeddingConfig {
-                        base_url: normalize_embedding_base_url(&embedding_endpoint),
-                        model: embedding_model,
-                        api_key_env: embedding_api_key_env,
-                        request_timeout_secs: embedding_request_timeout_secs,
-                        max_retries: embedding_max_retries,
-                        retry_delay_ms: embedding_retry_delay_ms,
-                    },
-                })
-                .context("failed to configure embedding provider")?;
+            let provider = configured_search_embedding_provider(
+                &block_store,
+                embedding_endpoint,
+                embedding_model,
+                embedding_api_key_env,
+                embedding_request_timeout_secs,
+                embedding_max_retries,
+                embedding_retry_delay_ms,
+            )
+            .context("failed to configure embedding provider")?;
             let report = interrupt::run_until_interrupt(search_rooted_tree(
                 &store,
                 &provider,
@@ -908,6 +905,66 @@ fn unused_local_embedding() -> LocalEmbeddingConfig {
         request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
         max_retries: DEFAULT_MAX_RETRIES,
         retry_delay_ms: DEFAULT_RETRY_DELAY_MS,
+    }
+}
+
+fn configured_search_embedding_provider(
+    block_store: &BlockStoreArgs,
+    embedding_endpoint: Option<String>,
+    embedding_model: String,
+    embedding_api_key_env: Option<String>,
+    embedding_request_timeout_secs: u64,
+    embedding_max_retries: u32,
+    embedding_retry_delay_ms: u64,
+) -> anyhow::Result<ConfiguredEmbeddingProvider> {
+    match block_store.block_store_profile {
+        ReadableBlockStoreProfile::GatewayHttp3 => {
+            if embedding_endpoint.is_some() {
+                bail!(
+                    "--embedding-endpoint is not supported with --block-store-profile gateway-http3"
+                );
+            }
+            if embedding_api_key_env.is_some() {
+                bail!(
+                    "--embedding-api-key-env is not supported with --block-store-profile gateway-http3"
+                );
+            }
+            let dns_name = block_store
+                .block_store_gateway_dns_name
+                .as_deref()
+                .ok_or_else(|| {
+                    anyhow!(
+                        "--block-store-gateway-dns-name is required with --block-store-profile gateway-http3"
+                    )
+                })?;
+            ConfiguredEmbeddingProvider::gateway_http3(
+                dns_name,
+                embedding_model,
+                embedding_max_retries,
+                embedding_retry_delay_ms,
+                embedding_request_timeout_secs,
+            )
+            .map_err(Into::into)
+        }
+        _ => {
+            let endpoint = embedding_endpoint.as_deref().ok_or_else(|| {
+                anyhow!(
+                    "--embedding-endpoint is required unless --block-store-profile gateway-http3 is selected"
+                )
+            })?;
+            ConfiguredEmbeddingProvider::from_environment(&EnvironmentConfig::Local {
+                block_store_root: PathBuf::from("."),
+                embedding: LocalEmbeddingConfig {
+                    base_url: normalize_embedding_base_url(endpoint),
+                    model: embedding_model,
+                    api_key_env: embedding_api_key_env,
+                    request_timeout_secs: embedding_request_timeout_secs,
+                    max_retries: embedding_max_retries,
+                    retry_delay_ms: embedding_retry_delay_ms,
+                },
+            })
+            .map_err(Into::into)
+        }
     }
 }
 
@@ -1507,8 +1564,6 @@ mod tests {
             "hello",
             "--root-id",
             "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-            "--embedding-endpoint",
-            "http://localhost:8080",
             "--block-store-profile",
             "gateway-http3",
             "--block-store-gateway-dns-name",
@@ -1517,7 +1572,11 @@ mod tests {
         .unwrap();
 
         match cli.command {
-            Command::Search { block_store, .. } => {
+            Command::Search {
+                block_store,
+                embedding_endpoint,
+                ..
+            } => {
                 assert_eq!(
                     block_store.block_store_profile,
                     ReadableBlockStoreProfile::GatewayHttp3
@@ -1526,9 +1585,110 @@ mod tests {
                     block_store.block_store_gateway_dns_name,
                     Some("gateway.example.com".to_string())
                 );
+                assert_eq!(embedding_endpoint, None);
             }
             _ => panic!("expected search command"),
         }
+    }
+
+    #[test]
+    fn gateway_search_embedding_provider_rejects_explicit_endpoint() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "search",
+            "--query",
+            "hello",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--block-store-profile",
+            "gateway-http3",
+            "--block-store-gateway-dns-name",
+            "gateway.example.com",
+        ])
+        .unwrap();
+
+        let Command::Search { block_store, .. } = cli.command else {
+            panic!("expected search command");
+        };
+        let error = configured_search_embedding_provider(
+            &block_store,
+            Some("http://localhost:8080".into()),
+            DEFAULT_LOCAL_MODEL.into(),
+            None,
+            DEFAULT_REQUEST_TIMEOUT_SECS,
+            DEFAULT_MAX_RETRIES,
+            DEFAULT_RETRY_DELAY_MS,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("--embedding-endpoint is not supported"));
+    }
+
+    #[test]
+    fn gateway_search_embedding_provider_rejects_api_key_environment() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "search",
+            "--query",
+            "hello",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--block-store-profile",
+            "gateway-http3",
+            "--block-store-gateway-dns-name",
+            "gateway.example.com",
+        ])
+        .unwrap();
+
+        let Command::Search { block_store, .. } = cli.command else {
+            panic!("expected search command");
+        };
+        let error = configured_search_embedding_provider(
+            &block_store,
+            None,
+            DEFAULT_LOCAL_MODEL.into(),
+            Some("EMBEDDING_API_KEY".into()),
+            DEFAULT_REQUEST_TIMEOUT_SECS,
+            DEFAULT_MAX_RETRIES,
+            DEFAULT_RETRY_DELAY_MS,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("--embedding-api-key-env is not supported"));
+    }
+
+    #[test]
+    fn non_gateway_search_embedding_provider_requires_endpoint() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "search",
+            "--query",
+            "hello",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--block-store-root",
+            "blocks",
+        ])
+        .unwrap();
+
+        let Command::Search { block_store, .. } = cli.command else {
+            panic!("expected search command");
+        };
+        let error = configured_search_embedding_provider(
+            &block_store,
+            None,
+            DEFAULT_LOCAL_MODEL.into(),
+            None,
+            DEFAULT_REQUEST_TIMEOUT_SECS,
+            DEFAULT_MAX_RETRIES,
+            DEFAULT_RETRY_DELAY_MS,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("--embedding-endpoint is required"));
     }
 
     #[test]

@@ -19,6 +19,7 @@ ctrlc = "3.4.5"
 env_logger.workspace = true
 futures.workspace = true
 half.workspace = true
+http.workspace = true
 lexonarchivebuilder-block-store-http3.workspace = true
 lexongraph-block.workspace = true
 lexongraph-block-store.workspace = true

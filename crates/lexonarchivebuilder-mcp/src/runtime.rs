@@ -9,17 +9,19 @@ use std::path::{Path, PathBuf};
 use lexonarchivebuilder_indexer::BatchSummary;
 use lexonarchivebuilder_indexer::INGESTION_ONLY_ROOT_ID_PLACEHOLDER;
 use lexonarchivebuilder_indexer::block_store::ConfiguredBlockStore;
-use lexonarchivebuilder_indexer::embedding::ConfiguredEmbeddingProvider;
+use lexonarchivebuilder_indexer::embedding::{
+    ConfiguredEmbeddingProvider, decode_logical_f32_embedding, logical_f32_embedding_spec,
+};
 use lexonarchivebuilder_indexer::tree_tools::{
     metadata_values_to_text_map, parse_block_hash, search_with_partial_retry,
     source_name_from_metadata,
 };
-use lexongraph_block::{BlockHash, EmbeddingSpec};
-use lexongraph_block_store::BlockStoreError;
+use lexongraph_block::{Block, BlockHash};
+use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_search::{
-    DefaultCandidateScorer, DefaultEmbeddingCompatibility, EncodedTargetEmbedding, SearchError,
-    Searcher,
+    DefaultCandidateScorer, DefaultEmbeddingCompatibility, SearchError, Searcher,
+    prepare_target_embedding,
 };
 use rmcp::schemars;
 use rmcp::schemars::JsonSchema;
@@ -132,6 +134,12 @@ pub enum RuntimeError {
     Provider(#[from] lexonarchivebuilder_indexer::embedding::ConfiguredEmbeddingProviderError),
     #[error(transparent)]
     BlockStore(#[from] BlockStoreError),
+    #[error("root block {root_id} was not found")]
+    MissingRootBlock { root_id: String },
+    #[error("root block {root_id} is a leaf and cannot be searched by the format-neutral MCP path")]
+    LeafRoot { root_id: String },
+    #[error("failed to prepare rooted search target: {message}")]
+    TargetPreparation { message: String },
     #[error(transparent)]
     Search(#[from] SearchError),
 }
@@ -197,24 +205,40 @@ impl McpRuntime {
         }
 
         let root_id = resolve_root_id_async(&request_dir, &config).await?;
-        let embedding_spec: EmbeddingSpec = (&config.embedding_spec).into();
-        let embedding_provider =
-            ConfiguredEmbeddingProvider::from_environment(&config.environment)?;
         let block_store = ConfiguredBlockStore::from_environment_with_redb_read_only(
             &request_dir,
             &config.environment,
             None,
         )?;
+        let Some(root) = block_store.get(&root_id).await? else {
+            return Err(RuntimeError::MissingRootBlock {
+                root_id: root_id.to_string(),
+            });
+        };
+        let Block::Branch(branch) = &root.block else {
+            return Err(RuntimeError::LeafRoot {
+                root_id: root_id.to_string(),
+            });
+        };
+        let embedding_provider =
+            ConfiguredEmbeddingProvider::from_environment(&config.environment)?;
+        let provider_spec = logical_f32_embedding_spec(branch.embedding_spec.dims);
         let target_embedding = embedding_provider
             .embed(
                 &EmbeddingInput {
                     media_type: "text/plain".into(),
                     body: request.query.into_bytes(),
                 },
-                &embedding_spec,
+                &provider_spec,
             )
             .await?;
-        let target = EncodedTargetEmbedding::new(target_embedding, embedding_spec);
+        let logical_embedding =
+            decode_logical_f32_embedding(&target_embedding, provider_spec.dims)?;
+        let target = prepare_target_embedding(&root, &logical_embedding)
+            .map_err(|error| RuntimeError::TargetPreparation {
+                message: error.to_string(),
+            })?
+            .target;
         let root_id_text = root_id.to_string();
         let searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
         let result = search_with_partial_retry(
@@ -354,18 +378,105 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    use lexonarchivebuilder_indexer::block_store::ConfiguredBlockStore;
     use lexonarchivebuilder_indexer::config::{
         BatchItemConfig, BatchRequest, EmbeddingSpecConfig, EnvironmentConfig, ExecutionStage,
         LocalEmbeddingConfig,
     };
     use lexonarchivebuilder_indexer::{run_request, write_summary_file};
+    use lexongraph_block::{
+        Block, BranchBlock, BranchEntry, Content, EmbeddingSpec, LeafBlock, LeafEntry, VERSION_1,
+    };
+    use lexongraph_block_store::BlockStore;
     use tempfile::tempdir;
 
     use super::*;
     use crate::config::IndexConfig;
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn search_chunks_returns_indexed_chunk_content_from_local_profile() {
+    async fn search_chunks_uses_upstream_target_preparation_for_branch_roots() {
+        let temp = tempdir().unwrap();
+        let server = spawn_embedding_server(1);
+        let environment = EnvironmentConfig::Local {
+            block_store_root: PathBuf::from("block-store"),
+            embedding: LocalEmbeddingConfig {
+                base_url: server.base_url.clone(),
+                model: "all-MiniLM-L6-v2".into(),
+                api_key_env: None,
+                request_timeout_secs: 5,
+                max_retries: 0,
+                retry_delay_ms: 1,
+            },
+        };
+        let store = ConfiguredBlockStore::from_environment(temp.path(), &environment).unwrap();
+        let leaf = store
+            .put(&Block::Leaf(LeafBlock {
+                version: VERSION_1,
+                level: 0,
+                embedding_spec: EmbeddingSpec {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                entries: vec![LeafEntry {
+                    embedding: f32_bytes(&[1.0, 0.0]),
+                    metadata: Vec::new(),
+                    content: Content {
+                        media_type: "text/plain".into(),
+                        body: b"branch-root result".to_vec(),
+                    },
+                }],
+                ext: None,
+            }))
+            .await
+            .unwrap();
+        let root = store
+            .put(&Block::Branch(BranchBlock {
+                version: VERSION_1,
+                level: 1,
+                embedding_spec: EmbeddingSpec {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                entries: vec![BranchEntry {
+                    embedding: f32_bytes(&[1.0, 0.0]),
+                    child: leaf,
+                }],
+                ext: None,
+            }))
+            .await
+            .unwrap();
+        let runtime = McpRuntime::new(
+            temp.path().to_path_buf(),
+            McpConfig {
+                environment,
+                embedding_spec: EmbeddingSpecConfig {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                index: IndexConfig::RootId {
+                    root_id: root.to_string(),
+                },
+                top_k: 1,
+                traversal_width: 1,
+            },
+        )
+        .unwrap();
+
+        let response = runtime
+            .search_chunks(SearchChunksRequest {
+                query: "branch".into(),
+                top_k: None,
+                traversal_width: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(response.results[0].text, "branch-root result");
+        server.join();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn search_chunks_rejects_leaf_root_from_local_profile() {
         let temp = tempdir().unwrap();
         let document_path = temp.path().join("overview.txt");
         fs::write(
@@ -374,7 +485,7 @@ mod tests {
         )
         .unwrap();
 
-        let server = spawn_embedding_server(2);
+        let server = spawn_embedding_server(1);
         let batch_request = BatchRequest {
             environment: EnvironmentConfig::Local {
                 block_store_root: PathBuf::from("block-store"),
@@ -436,32 +547,21 @@ mod tests {
         )
         .unwrap();
 
-        let response = runtime
+        let error = runtime
             .search_chunks(SearchChunksRequest {
                 query: "runtime document".into(),
                 top_k: None,
                 traversal_width: None,
             })
             .await
-            .unwrap();
+            .unwrap_err();
 
-        assert_eq!(response.root_id, summary.root_id);
-        assert_eq!(response.top_k, 5);
-        assert!(!response.results.is_empty());
-        assert!(response.results.iter().any(|hit| {
-            hit.text
-                .contains("LexonArchiveBuilder MCP runtime document body")
-        }));
-        assert!(response.results.iter().any(|hit| {
-            hit.source_path
-                .as_deref()
-                .is_some_and(|path| path.ends_with("overview.txt"))
-        }));
+        assert!(matches!(error, RuntimeError::LeafRoot { .. }));
         server.join();
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn search_chunks_returns_indexed_chunk_content_from_local_redb_profile() {
+    async fn search_chunks_rejects_leaf_root_from_local_redb_profile() {
         let temp = tempdir().unwrap();
         let document_path = temp.path().join("overview.txt");
         fs::write(
@@ -470,7 +570,7 @@ mod tests {
         )
         .unwrap();
 
-        let server = spawn_embedding_server(2);
+        let server = spawn_embedding_server(1);
         let batch_request = BatchRequest {
             environment: EnvironmentConfig::LocalRedb {
                 block_store_root: PathBuf::from("block-store"),
@@ -532,25 +632,21 @@ mod tests {
         )
         .unwrap();
 
-        let response = runtime
+        let error = runtime
             .search_chunks(SearchChunksRequest {
                 query: "runtime redb document".into(),
                 top_k: None,
                 traversal_width: None,
             })
             .await
-            .unwrap();
+            .unwrap_err();
 
-        assert_eq!(response.root_id, summary.root_id);
-        assert!(response.results.iter().any(|hit| {
-            hit.text
-                .contains("LexonArchiveBuilder MCP runtime redb document body")
-        }));
+        assert!(matches!(error, RuntimeError::LeafRoot { .. }));
         server.join();
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn search_chunks_surfaces_email_chunk_provenance_metadata() {
+    async fn search_chunks_rejects_leaf_root_from_mailbox_profile() {
         let temp = tempdir().unwrap();
         let mailbox_path = temp.path().join("2026-01.mbox");
         fs::write(
@@ -567,7 +663,7 @@ mod tests {
         )
         .unwrap();
 
-        let server = spawn_embedding_server(2);
+        let server = spawn_embedding_server(1);
         let batch_request = BatchRequest {
             environment: EnvironmentConfig::Local {
                 block_store_root: PathBuf::from("block-store"),
@@ -629,29 +725,16 @@ mod tests {
         )
         .unwrap();
 
-        let response = runtime
+        let error = runtime
             .search_chunks(SearchChunksRequest {
                 query: "searchable provenance".into(),
                 top_k: None,
                 traversal_width: None,
             })
             .await
-            .unwrap();
+            .unwrap_err();
 
-        assert_eq!(response.root_id, summary.root_id);
-        let hit = response
-            .results
-            .iter()
-            .find(|hit| hit.text.contains("searchable email body"))
-            .expect("expected mailbox-derived chunk hit");
-        assert_eq!(hit.source_kind.as_deref(), Some("email"));
-        assert!(hit.metadata.contains_key("email_artifact_ref"));
-        assert!(hit.metadata.contains_key("mailbox_artifact_ref"));
-        assert!(hit.metadata.contains_key("chunk_locator"));
-        assert_eq!(
-            hit.metadata.get("email_subject"),
-            Some(&"LexonArchiveBuilder mail chunk".to_string())
-        );
+        assert!(matches!(error, RuntimeError::LeafRoot { .. }));
         server.join();
     }
 
@@ -698,6 +781,13 @@ mod tests {
         assert!(matches!(document.status, NamedRetrievalStatus::Unsupported));
         assert!(matches!(email.status, NamedRetrievalStatus::Unsupported));
         assert!(matches!(thread.status, NamedRetrievalStatus::Unsupported));
+    }
+
+    fn f32_bytes(values: &[f32]) -> Vec<u8> {
+        values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect()
     }
 
     #[test]

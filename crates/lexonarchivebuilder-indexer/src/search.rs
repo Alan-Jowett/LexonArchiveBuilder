@@ -9,13 +9,14 @@ use lexongraph_block::{Block, BlockHash, EmbeddingSpec};
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_search::{
-    DefaultCandidateScorer, DefaultEmbeddingCompatibility, EncodedTargetEmbedding, SearchError,
-    Searcher,
+    DefaultCandidateScorer, DefaultEmbeddingCompatibility, SearchError, Searcher,
+    prepare_target_embedding,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::embedding::{decode_logical_f32_embedding, logical_f32_embedding_spec};
 use crate::tree_tools::{
     metadata_values_to_text_map, search_with_partial_retry, source_name_from_metadata,
 };
@@ -36,6 +37,8 @@ pub enum RootedSearchError {
     Search(SearchError),
     #[error("embedding provider failed: {message}")]
     Provider { message: String },
+    #[error("failed to prepare rooted search target: {message}")]
+    TargetPreparation { message: String },
     #[error("failed to render rooted search report: {message}")]
     Render { message: String },
     #[error("failed to write rooted search report {path}: {source}")]
@@ -102,20 +105,30 @@ where
             root_id: root_id.to_string(),
         });
     };
-    let embedding_spec = embedding_spec_for_block(&root.block);
+    let provider_spec = logical_f32_embedding_spec(embedding_spec_for_block(&root.block).dims);
     let target_embedding = embedding_provider
         .embed(
             &EmbeddingInput {
                 media_type: "text/plain".into(),
                 body: query.as_bytes().to_vec(),
             },
-            &embedding_spec,
+            &provider_spec,
         )
         .await
         .map_err(|error| RootedSearchError::Provider {
             message: error.to_string(),
         })?;
-    let target = EncodedTargetEmbedding::new(target_embedding, embedding_spec.clone());
+    let logical_embedding = decode_logical_f32_embedding(&target_embedding, provider_spec.dims)
+        .map_err(|error| RootedSearchError::Provider {
+            message: error.to_string(),
+        })?;
+    let prepared = prepare_target_embedding(&root, &logical_embedding).map_err(|error| {
+        RootedSearchError::TargetPreparation {
+            message: error.to_string(),
+        }
+    })?;
+    let embedding_spec = prepared.comparison_spec;
+    let target = prepared.target;
     let searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
     let result =
         search_with_partial_retry(&searcher, root_id, &target, traversal_width, top_k, store)

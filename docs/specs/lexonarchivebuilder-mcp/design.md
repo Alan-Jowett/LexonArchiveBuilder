@@ -239,6 +239,7 @@ LexonArchiveBuilder-owned verification artifacts validate:
   and the indexer-aligned Docker-containerized embedding profile
 - correct preservation of the shared two-mode local-versus-overlay block-store
   targeting contract across `search_chunks` and the named retrieval tools
+
 - explicit unsupported or unavailable named-retrieval outcomes when no
   delegated name-based retrieval contract exists for the requested item class
 - preservation of one stable MCP contract across environments
@@ -254,3 +255,32 @@ that LexonArchiveBuilder consumes them correctly.
 The MCP runtime uses the shared read-only block-store constructor for local-redb
 search and retrieval without changing delegated search semantics or response
 projection.
+
+## Incremental Design Patch: Format-neutral rooted MCP targets
+
+### DSG-MCP-FORMAT-001 `Format-neutral MCP target preparation`
+
+For `search_chunks`, the MCP runtime loads the validated root through its
+configured block store, requests a logical `f32` query vector through its
+existing provider boundary, and passes both values to
+`lexongraph_search::prepare_target_embedding`.
+
+The returned upstream target is supplied to the existing default
+`lexongraph-search` searcher. The MCP runtime does not create an
+`EncodedTargetEmbedding` from the configured root format, branch on encoding
+names, parse EBCP descriptors, or encode physical target bytes.
+
+**Traces to:** RQ-MCP-013, RQ-MCP-002, RQ-MCP-011
+
+### DSG-MCP-FORMAT-002 `MCP contract preservation`
+
+Target preparation is an internal runtime substitution. `search_chunks` keeps
+the same tool request, top-k and traversal-width rules, storage/provider
+selection, result projection, and runtime-error propagation. An upstream
+target-preparation error is returned through the existing MCP failure path and
+does not trigger a local format fallback.
+
+A leaf root is returned as the same explicit runtime failure. The runtime does
+not introduce a leaf-specific encoding or search path.
+
+**Traces to:** RQ-MCP-013, RQ-MCP-003, RQ-MCP-004

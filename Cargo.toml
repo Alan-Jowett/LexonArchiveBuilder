@@ -32,6 +32,7 @@ h3 = "0.0.8"
 h3-axum = "0.2.0"
 h3-quinn = "0.0.10"
 half = "2.7.1"
+http = "1.3.1"
 num_cpus = "1.17.0"
 quinn = { version = "0.11.11", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
 reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "json", "rustls-tls"] }
@@ -50,14 +51,14 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 
 lexonarchivebuilder-block-store-http3 = { path = "crates/lexonarchivebuilder-block-store-http3" }
 lexonarchivebuilder-indexer = { path = "crates/lexonarchivebuilder-indexer" }
-lexongraph-block = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "526ceecde890840d2aa40d5d35e3fa07feb0c8f7", package = "lexongraph-block" }
-lexongraph-block-store = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "526ceecde890840d2aa40d5d35e3fa07feb0c8f7", package = "lexongraph-block-store" }
-lexongraph-block-store-azure-sdk = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "526ceecde890840d2aa40d5d35e3fa07feb0c8f7", package = "lexongraph-block-store-azure-sdk" }
-lexongraph-block-store-azure-table-v2 = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "526ceecde890840d2aa40d5d35e3fa07feb0c8f7", package = "lexongraph-block-store-azure-table-v2" }
-lexongraph-block-store-fs = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "526ceecde890840d2aa40d5d35e3fa07feb0c8f7", package = "lexongraph-block-store-fs" }
-lexongraph-block-store-memory = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "526ceecde890840d2aa40d5d35e3fa07feb0c8f7", package = "lexongraph-block-store-memory" }
-lexongraph-block-store-overlay = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "526ceecde890840d2aa40d5d35e3fa07feb0c8f7", package = "lexongraph-block-store-overlay" }
-lexongraph-block-store-redb = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "526ceecde890840d2aa40d5d35e3fa07feb0c8f7", package = "lexongraph-block-store-redb" }
-lexongraph-embeddings-trait = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "526ceecde890840d2aa40d5d35e3fa07feb0c8f7", package = "lexongraph-embeddings-trait" }
-lexongraph-search = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "526ceecde890840d2aa40d5d35e3fa07feb0c8f7", package = "lexongraph-search" }
-lexongraph-streaming-indexer = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "526ceecde890840d2aa40d5d35e3fa07feb0c8f7", package = "lexongraph-streaming-indexer" }
+lexongraph-block = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9", package = "lexongraph-block" }
+lexongraph-block-store = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9", package = "lexongraph-block-store" }
+lexongraph-block-store-azure-sdk = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9", package = "lexongraph-block-store-azure-sdk" }
+lexongraph-block-store-azure-table-v2 = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9", package = "lexongraph-block-store-azure-table-v2" }
+lexongraph-block-store-fs = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9", package = "lexongraph-block-store-fs" }
+lexongraph-block-store-memory = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9", package = "lexongraph-block-store-memory" }
+lexongraph-block-store-overlay = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9", package = "lexongraph-block-store-overlay" }
+lexongraph-block-store-redb = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9", package = "lexongraph-block-store-redb" }
+lexongraph-embeddings-trait = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9", package = "lexongraph-embeddings-trait" }
+lexongraph-search = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9", package = "lexongraph-search" }
+lexongraph-streaming-indexer = { git = "https://github.com/Alan-Jowett/LexonGraph", rev = "90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9", package = "lexongraph-streaming-indexer" }

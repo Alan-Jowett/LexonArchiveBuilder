@@ -125,6 +125,7 @@ preserved `local-overlay` testing shape, the fixed overlay of memory cache
 plus local filesystem cache plus Azure Blob SAS-backed access, and preserved
 `production-v2` compatibility where the shared configuration family already
 exposes it. No MCP tool introduces a plain Azure Blob-only block-store targeting
+
 mode outside that approved family.
 
 **Traces to:** RQ-MCP-006, RQ-MCP-007, DSG-LFM-006, DSG-LFM-007, DSG-LFM-011
@@ -189,3 +190,35 @@ Run local-redb MCP search against a populated store.
 
 **Pass condition:** indexed content is returned through the existing MCP
 response shape while the runtime uses read-only redb access.
+
+## Incremental Validation Patch: Format-neutral rooted MCP targets
+
+### VAL-MCP-FORMAT-001
+
+Inspect `search_chunks` target preparation.
+
+**Pass condition:** the runtime loads the root and supplies the provider's
+logical vector to `lexongraph_search::prepare_target_embedding`; no MCP-owned
+root encoding-name branch, descriptor parser, or physical target codec exists.
+
+**Traces to:** RQ-MCP-013, DSG-MCP-FORMAT-001
+
+### VAL-MCP-FORMAT-002
+
+Run MCP `search_chunks` against a rooted fixture whose physical root format is
+resolved by the LexonGraph target-preparation API.
+
+**Pass condition:** search returns the existing chunk result shape without an
+MCP `UnsupportedEncoding` failure. An upstream target-preparation failure is
+returned as a runtime error without fallback.
+
+**Traces to:** RQ-MCP-013, DSG-MCP-FORMAT-001, DSG-MCP-FORMAT-002
+
+### VAL-MCP-FORMAT-003
+
+Run `search_chunks` with an index root that resolves to a leaf block.
+
+**Pass condition:** the operation returns an explicit runtime error and does
+not use a leaf-specific local encoding or search fallback.
+
+**Traces to:** RQ-MCP-013, DSG-MCP-FORMAT-002

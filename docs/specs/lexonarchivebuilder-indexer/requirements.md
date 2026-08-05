@@ -3538,9 +3538,9 @@ for each rooted query executed by the quality tool.
 #### RQ-INDEXER-008E - Rooted CLI search over stored trees
 
 LexonArchiveBuilder SHALL provide a CLI-only operator tool that accepts a text
-query, a caller-supplied embedding endpoint, a caller-supplied rooted tree, and
-`k`, then generates a query embedding and searches the rooted stored tree
-through `lexongraph-search` to return the top `k` matching leaf nodes.
+query, an approved query-embedding configuration, a caller-supplied rooted
+tree, and `k`, then generates a query embedding and searches the rooted stored
+tree through `lexongraph-search` to return the top `k` matching leaf nodes.
 
 - **Invocation scope [KNOWN]:** The search runs against a caller-supplied root
   block or rooted tree rather than against all searchable content visible in the
@@ -3552,8 +3552,9 @@ through `lexongraph-search` to return the top `k` matching leaf nodes.
   readback needed by this rooted-tree operator surface SHALL reuse the upstream
   LexonGraph embedding readback or reconstruction API rather than maintaining a
   separate repository-local decoder.
-- **Embedding boundary [KNOWN]:** The tool SHALL accept a caller-supplied
-  embedding endpoint for query embedding generation rather than requiring Rust
+- **Embedding boundary [KNOWN]:** The tool SHALL select query embedding through
+  either a caller-supplied embedding endpoint or an approved gateway authority,
+  according to the selected block-store profile, rather than requiring Rust
   code changes for each endpoint choice.
 - **Result shape [KNOWN]:** The tool must return the top `k` matching leaf nodes
   for the rooted search invocation.
@@ -3568,7 +3569,9 @@ through `lexongraph-search` to return the top `k` matching leaf nodes.
 - **Content-type neutrality [INFERRED]:** The tool must operate on searchable leaf
   nodes reachable from the rooted tree without assuming mailbox-only or
   document-only content semantics.
-- **Traceability:** UR-88, UR-89, UR-90, UR-91, UR-92
+- **Traceability:** UR-88, UR-89, UR-90, UR-91, UR-92,
+  UR-INDEXER-GW-EMBED-001, UR-INDEXER-GW-EMBED-002,
+  UR-INDEXER-GW-EMBED-003
 
 ### Boundary and Invariant Requirements
 
@@ -3703,8 +3706,14 @@ LexonArchiveBuilder SHALL keep content resolution, block storage, and embedding-
   assembly updates?
 - **Q-INDEXER-065 [UNKNOWN]:** After the approved intra-block dispersion, sibling-centroid separation, PCA-axis strength, quantile-occupancy, and parent-child dispersion-delta metrics land, which additional quantitative embedding-space shape measures would improve the rooted quality signal in a future increment without overfitting too early?
 - **Q-INDEXER-066 [UNKNOWN]:** Future increments may revisit whether any rooted-quality heuristics beyond hard structural violations should influence process exit status, but this increment keeps the heuristic inversion count and layer statistics advisory-only.
-- **Q-INDEXER-067 [UNKNOWN]:** Beyond the required query text, embedding endpoint, root, and `k`, does the rooted CLI search tool need repository-approved filters, score thresholds, or output-field selection in this increment?
-- **Q-INDEXER-068 [UNKNOWN]:** Should the rooted CLI search tool treat the caller-supplied embedding endpoint as the complete query-embedding configuration, or must it also accept repository-specific embedding-spec inputs such as dimensions or encoding overrides at the CLI boundary?
+- **Q-INDEXER-067 [UNKNOWN]:** Beyond the required query text,
+  profile-selected embedding configuration, root, and `k`, does the rooted CLI
+  search tool need repository-approved filters, score thresholds, or
+  output-field selection in this increment?
+- **Q-INDEXER-068 [UNKNOWN]:** Should the rooted CLI search tool treat its
+  selected embedding provider configuration as complete, or must it also accept
+  repository-specific embedding-spec inputs such as dimensions or encoding
+  overrides at the CLI boundary?
 - **Q-INDEXER-069 [UNKNOWN]:** For corpus-based TNN-recall histograms, should a future increment keep repository-owned default histogram buckets or expose bucket configuration as an operator-visible parameter?
 - **Q-INDEXER-070 [UNKNOWN]:** Does published profile `0.7.0` on the constrained
   v3 path preserve repository-acceptable tree-shape, retrieval-quality, and
@@ -4580,3 +4589,231 @@ including MCP, gateway serving, quality, rooted search, inspection, and copy
 sources SHALL use read-only access. Indexing, maintenance, archive-sync
 destinations, and copy destinations SHALL retain writable access. Mutation
 attempts through read-only handles SHALL fail explicitly.
+
+## Incremental Requirements Patch: Gateway-backed rooted-search embeddings
+
+### USER-REQUEST
+
+- **UR-INDEXER-GW-EMBED-001 [KNOWN]:** Extend
+  `lexonarchivebuilder-indexer search` so it can generate query embeddings
+  through the existing block gateway.
+- **UR-INDEXER-GW-EMBED-002 [KNOWN]:** Use one existing gateway address for
+  both block retrieval and query-embedding generation, reusing
+  `--block-store-gateway-dns-name`.
+- **UR-INDEXER-GW-EMBED-003 [KNOWN]:** When the `gateway-http3` block-store
+  profile is selected, gateway-backed embedding is automatic and a separately
+  supplied `--embedding-endpoint` is rejected.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-INDEXER-GW-EMBED-001 | Revise | Make rooted CLI search select its query-embedding transport from the approved block-store profile | UR-INDEXER-GW-EMBED-001, UR-INDEXER-GW-EMBED-002 |
+| CM-INDEXER-GW-EMBED-002 | Add | Reuse the gateway DNS name for both immutable-block retrieval and OpenAI-compatible query embeddings in the `gateway-http3` profile | UR-INDEXER-GW-EMBED-002 |
+| CM-INDEXER-GW-EMBED-003 | Revise | Make `--embedding-endpoint` optional and reject it for gateway-backed search | UR-INDEXER-GW-EMBED-003 |
+
+### Before / After
+
+#### BA-INDEXER-GW-EMBED-001
+
+- **Before [KNOWN]:** Rooted CLI search uses a caller-supplied
+  `--embedding-endpoint` for query embeddings independently of its selected
+  block-store profile.
+- **After [KNOWN]:** With `gateway-http3`, rooted CLI search derives both
+  immutable-block retrieval and query embeddings from the same
+  `--block-store-gateway-dns-name` authority.
+
+#### BA-INDEXER-GW-EMBED-002
+
+- **Before [KNOWN]:** A gateway-addressed block store and a query-embedding
+  endpoint are configured independently.
+- **After [KNOWN]:** Gateway-backed search rejects a separately supplied
+  `--embedding-endpoint`, preventing two competing embedding authorities.
+
+### Requirements
+
+#### RQ-INDEXER-008F - Profile-selected query embedding transport
+
+The rooted `search` command SHALL select its query-embedding transport from
+the approved block-store profile.
+
+- **Gateway profile [KNOWN]:** When
+  `--block-store-profile gateway-http3` is selected, the command SHALL send
+  the OpenAI-compatible query-embedding request to the same HTTPS-over-QUIC
+  gateway authority identified by `--block-store-gateway-dns-name`, at
+  `/v1/embeddings`.
+- **Non-gateway profiles [INFERRED]:** Existing non-gateway profiles SHALL
+  continue to use a caller-supplied OpenAI-compatible embedding endpoint.
+- **Traceability:** UR-INDEXER-GW-EMBED-001, UR-INDEXER-GW-EMBED-002,
+  UR-INDEXER-GW-EMBED-003
+
+#### RQ-INDEXER-008G - Unambiguous embedding configuration
+
+`--embedding-endpoint` SHALL be optional for rooted `search`.
+
+- **Gateway profile [KNOWN]:** The command SHALL reject
+  `--embedding-endpoint` when the `gateway-http3` profile is selected, because
+  the block gateway DNS name is the sole authority for both block and
+  embedding requests.
+- **Non-gateway profiles [INFERRED]:** The command SHALL require
+  `--embedding-endpoint` when the selected profile does not supply a gateway
+  authority.
+- **Constraint [INFERRED]:** The selected gateway path SHALL preserve the
+  existing query text, embedding model, timeout, retry, rooted traversal,
+  top-k, result rendering, and JSON-report contracts.
+- **Traceability:** UR-INDEXER-GW-EMBED-002, UR-INDEXER-GW-EMBED-003
+
+### Invariant Impact Assessment
+
+| Invariant | Impact | Assessment |
+|---|---|---|
+| Rooted search remains additive to MCP | Preserved | The change is limited to indexer CLI query-embedding transport selection |
+| Block-store profile remains the storage boundary | Revised consistently | `gateway-http3` now supplies the paired query-embedding authority as well as immutable-block retrieval |
+| Query and result semantics remain stable | Preserved | Existing query text, embedding model, rooted traversal, top-k, and output contracts remain unchanged |
+| Local and non-gateway workflows remain usable | Preserved | Non-gateway profiles retain the caller-supplied OpenAI-compatible endpoint |
+| No central control plane is introduced | Preserved | The indexer makes direct HTTP/3 requests to the existing gateway |
+| Future content-type extensibility remains possible | Preserved | The transport choice is content-type-neutral |
+
+### Open Questions / Discovery Gaps
+
+- **Q-INDEXER-GW-EMBED-001 [UNKNOWN]:** Should a future increment permit a
+  distinct gateway authority for embeddings, or must one gateway authority
+  remain mandatory for the lifetime of the `gateway-http3` profile?
+
+### Coverage Notes
+
+- **Covered sources [KNOWN]:**
+  - `docs/specs/lexonarchivebuilder-indexer/requirements.md`:
+    `RQ-INDEXER-008E` defines rooted CLI search and the existing
+    `gateway-http3` profile requirements define DNS-addressed
+    HTTPS-over-QUIC block retrieval.
+  - `docs/specs/lexonarchivebuilder-indexer/design.md`:
+    `DSG-LFI-002E`, `DSG-LFI-006`, and `DSG-LFI-007E` define the existing
+    rooted-search flow, embedding-provider boundary, and CLI surface.
+  - `docs/specs/lexonarchivebuilder-block-gateway/requirements.md`:
+    `RQ-BGW-015` through `RQ-BGW-018` define the conditional
+    `/v1/embeddings` gateway route.
+
+- **Sampled claim re-checks [KNOWN]:**
+  - The current `search` command separately accepts an embedding endpoint and
+    a block-store profile, so profile-selected embedding transport is a
+    deliberate contract change rather than an implicit implementation detail.
+  - The current gateway profile is DNS-addressed and HTTPS-over-QUIC, making
+    the same authority suitable for the requested paired block and embedding
+    requests.
+  - The gateway requirements already define an OpenAI-compatible
+    `/v1/embeddings` route, so this patch does not invent a second embedding
+    protocol.
+
+- **Excluded from this phase [KNOWN]:**
+  - Rust implementation, CLI parsing, HTTP/3 embedding-client construction,
+    tests, design and validation artifacts, and deployment configuration.
+
+## Incremental Requirements Patch: Upstream embedding-format rooted-search targets
+
+### USER-REQUEST
+
+- **UR-INDEXER-AMBIENT-EBCP-001 [KNOWN]:** Add the support required for
+  `lexonarchivebuilder-indexer search` to search rooted trees in every
+  embedding format supported by its active LexonGraph search dependency.
+- **UR-INDEXER-AMBIENT-EBCP-003 [KNOWN]:** The indexer SHALL have no
+  format-specific knowledge or implementation dependency for rooted-search
+  target preparation.
+- **UR-INDEXER-AMBIENT-EBCP-004 [KNOWN]:** Update every declared LexonGraph
+  workspace dependency to commit
+  `90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9` and use its format-neutral
+  rooted-search target API.
+- **UR-INDEXER-AMBIENT-EBCP-002 [KNOWN]:** The live HTTP/3 gateway search
+  against root
+  `adbc431aed97ab541ce73d65ce735552821c6c31f9434a4864333013a278fa78`
+  reached query embedding generation but failed because the indexer attempted
+  to encode the query as the physical `ambient-delta-uq` representation.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-INDEXER-AMBIENT-EBCP-001 | Revise | Delegate rooted-search target preparation to the active LexonGraph embedding-format contract | UR-INDEXER-AMBIENT-EBCP-001, UR-INDEXER-AMBIENT-EBCP-002, UR-INDEXER-AMBIENT-EBCP-003 |
+| CM-INDEXER-AMBIENT-EBCP-002 | Preserve | Keep embedding-format parsing, conversion, and candidate reconstruction owned by LexonGraph | UR-INDEXER-AMBIENT-EBCP-001, UR-INDEXER-AMBIENT-EBCP-003 |
+| CM-INDEXER-AMBIENT-EBCP-003 | Revise | Adopt the LexonGraph revision exporting format-neutral default-search target preparation | UR-INDEXER-AMBIENT-EBCP-004 |
+
+### Before / After
+
+#### BA-INDEXER-AMBIENT-EBCP-001
+
+- **Before [KNOWN]:** Rooted search passes the root block's physical
+  `EmbeddingSpec` directly to the query-embedding provider, and repository
+  code explicitly recognizes only `f32le` and `f16le`.
+- **After [KNOWN]:** Rooted search delegates target-specification discovery,
+  embedding conversion, and search-target construction to LexonGraph's
+  format-agnostic contract. The indexer neither branches on encoding names nor
+  implements physical embedding codecs.
+
+#### BA-INDEXER-AMBIENT-EBCP-002
+
+- **Before [KNOWN]:** The workspace is pinned to LexonGraph commit
+  `526ceecde890840d2aa40d5d35e3fa07feb0c8f7`, which does not export
+  format-neutral default-search target preparation.
+- **After [KNOWN]:** Every declared LexonGraph package is pinned to commit
+  `90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9`, which exports
+  `lexongraph_search::prepare_target_embedding`.
+
+### Requirements
+
+#### RQ-INDEXER-008H - Upstream-owned query-target compatibility
+
+Rooted CLI search SHALL support every root embedding format supported by the
+active LexonGraph search dependency.
+
+- **Format-agnostic boundary [KNOWN]:** LexonArchiveBuilder SHALL use an
+  upstream LexonGraph API to derive the query target from the loaded root and
+  the embedding service's logical vector response. It SHALL NOT inspect,
+  branch on, or encode named embedding formats itself.
+- **Upstream ownership [KNOWN]:** LexonGraph SHALL remain responsible for
+  descriptor parsing, logical/physical embedding conversion, target
+  construction, and candidate reconstruction.
+- **Failure behavior [INFERRED]:** If LexonGraph rejects the root's embedding
+  metadata or cannot prepare a target, rooted search SHALL surface that error
+  explicitly and SHALL NOT send an incorrectly encoded query target to the
+  searcher.
+- **Compatibility [KNOWN]:** Existing `f32le` and `f16le` rooted searches
+  SHALL continue through the same format-agnostic upstream path.
+- **Traceability:** UR-INDEXER-AMBIENT-EBCP-001,
+  UR-INDEXER-AMBIENT-EBCP-002, UR-INDEXER-AMBIENT-EBCP-003,
+  RQ-INDEXER-008E
+
+#### RQ-INDEXER-008I - Format-neutral API baseline
+
+The workspace SHALL pin every declared LexonGraph dependency to
+`90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9`.
+
+Rooted search SHALL use
+`lexongraph_search::prepare_target_embedding` with the validated loaded root
+and the provider's logical `f32` vector. It SHALL pass the returned target to
+the default LexonGraph searcher without inspecting its comparison encoding.
+
+- **Traceability:** UR-INDEXER-AMBIENT-EBCP-004,
+  UR-INDEXER-AMBIENT-EBCP-003, RQ-INDEXER-008H
+
+### Invariant Impact Assessment
+
+| Invariant | Impact | Assessment |
+|---|---|---|
+| Rooted-search algorithm ownership | Preserved | LexonGraph owns format discovery, target preparation, and candidate scoring |
+| Gateway embedding transport | Preserved | The HTTP/3 route and request schema remain unchanged |
+| MCP search surface | Preserved | The change is limited to the indexer's rooted CLI search |
+| Existing rooted search | Preserved | It enters the same upstream target-preparation path |
+| Future encoding extensibility | Improved | New upstream formats require no repository-local format switch |
+
+### Coverage Notes
+
+- **Covered sources [KNOWN]:**
+  - `crates/lexonarchivebuilder-indexer/src/search.rs` currently derives the
+    provider target directly from the root block's physical specification.
+  - `crates/lexonarchivebuilder-indexer/src/embedding.rs` currently has a
+    repository-local `f32le`/`f16le` output-format switch.
+  - The active LexonGraph dependency currently owns EBCP descriptor parsing
+    and branch reconstruction; this requirement extends that ownership to the
+    format-agnostic target-preparation boundary.
+- **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
+  validation artifacts, dependency changes, and deployment configuration.
