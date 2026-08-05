@@ -924,6 +924,11 @@ fn configured_search_embedding_provider(
                     "--embedding-endpoint is not supported with --block-store-profile gateway-http3"
                 );
             }
+            if embedding_api_key_env.is_some() {
+                bail!(
+                    "--embedding-api-key-env is not supported with --block-store-profile gateway-http3"
+                );
+            }
             ConfiguredEmbeddingProvider::gateway_http3(
                 block_store
                     .block_store_gateway_dns_name
@@ -1545,8 +1550,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn search_command_parses_gateway_http3_args() {
+    #[test]
+    fn search_command_parses_gateway_http3_args() {
         let cli = Cli::try_parse_from([
             "lexonarchivebuilder-indexer",
             "search",
@@ -1576,19 +1581,6 @@ mod tests {
                     Some("gateway.example.com".to_string())
                 );
                 assert_eq!(embedding_endpoint, None);
-                assert!(matches!(
-                    configured_search_embedding_provider(
-                        &block_store,
-                        embedding_endpoint,
-                        DEFAULT_LOCAL_MODEL.into(),
-                        None,
-                        DEFAULT_REQUEST_TIMEOUT_SECS,
-                        DEFAULT_MAX_RETRIES,
-                        DEFAULT_RETRY_DELAY_MS,
-                    )
-                    .unwrap(),
-                    ConfiguredEmbeddingProvider::GatewayHttp3(_)
-                ));
             }
             _ => panic!("expected search command"),
         }
@@ -1626,6 +1618,40 @@ mod tests {
         .to_string();
 
         assert!(error.contains("--embedding-endpoint is not supported"));
+    }
+
+    #[test]
+    fn gateway_search_embedding_provider_rejects_api_key_environment() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-indexer",
+            "search",
+            "--query",
+            "hello",
+            "--root-id",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "--block-store-profile",
+            "gateway-http3",
+            "--block-store-gateway-dns-name",
+            "gateway.example.com",
+        ])
+        .unwrap();
+
+        let Command::Search { block_store, .. } = cli.command else {
+            panic!("expected search command");
+        };
+        let error = configured_search_embedding_provider(
+            &block_store,
+            None,
+            DEFAULT_LOCAL_MODEL.into(),
+            Some("EMBEDDING_API_KEY".into()),
+            DEFAULT_REQUEST_TIMEOUT_SECS,
+            DEFAULT_MAX_RETRIES,
+            DEFAULT_RETRY_DELAY_MS,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("--embedding-api-key-env is not supported"));
     }
 
     #[test]

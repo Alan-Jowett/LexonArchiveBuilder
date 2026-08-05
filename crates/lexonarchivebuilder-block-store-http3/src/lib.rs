@@ -434,12 +434,22 @@ impl GatewayTransport for Http3GatewayTransport {
             Ok(response) => Ok(response),
             Err(error) => {
                 self.reset_connection().await;
+                if !allows_transport_retry(&request.method) {
+                    return Err(error);
+                }
                 self.request_with_timeout(dns_name, request)
                     .await
                     .map_err(|retry_error| format!("{error}; retry failed: {retry_error}"))
             }
         }
     }
+}
+
+fn allows_transport_retry(method: &Method) -> bool {
+    matches!(
+        *method,
+        Method::GET | Method::HEAD | Method::OPTIONS | Method::PUT | Method::DELETE | Method::TRACE
+    )
 }
 
 #[async_trait]
@@ -631,6 +641,14 @@ mod tests {
             let error = Http3BlockStore::new(dns_name).unwrap_err();
             assert!(matches!(error, BlockStoreError::BackendFailure(_)));
         }
+    }
+
+    #[test]
+    fn transport_retry_is_limited_to_idempotent_methods() {
+        assert!(allows_transport_retry(&Method::GET));
+        assert!(allows_transport_retry(&Method::PUT));
+        assert!(!allows_transport_retry(&Method::POST));
+        assert!(!allows_transport_retry(&Method::PATCH));
     }
 
     #[tokio::test]
