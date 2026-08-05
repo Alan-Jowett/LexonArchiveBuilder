@@ -54,6 +54,8 @@ pub enum ConfiguredEmbeddingProviderError {
     MissingVector,
     #[error("embedding vector length {actual} does not match requested dims {expected}")]
     InvalidDimensions { expected: u64, actual: u64 },
+    #[error("embedding provider returned {actual} bytes; expected {expected} logical f32 bytes")]
+    InvalidLogicalF32Bytes { expected: usize, actual: usize },
     #[error("unsupported embedding encoding {0}; the first MVP supports f32le and f16le")]
     UnsupportedEncoding(String),
     #[error("embedding request failed after {attempts} attempts: {message}")]
@@ -383,6 +385,41 @@ fn should_retry(status: Option<StatusCode>, attempt: u32, max_attempts: u32) -> 
             | Some(StatusCode::GATEWAY_TIMEOUT)
             | None
     )
+}
+
+pub fn logical_f32_embedding_spec(dims: u64) -> EmbeddingSpec {
+    EmbeddingSpec {
+        dims,
+        encoding: "f32le".into(),
+    }
+}
+
+pub fn decode_logical_f32_embedding(
+    bytes: &[u8],
+    dims: u64,
+) -> Result<Vec<f32>, ConfiguredEmbeddingProviderError> {
+    let dims =
+        usize::try_from(dims).map_err(|_| ConfiguredEmbeddingProviderError::RequestFailed {
+            attempts: 0,
+            message: "logical embedding dimensions do not fit in usize".into(),
+        })?;
+    let expected = dims.checked_mul(std::mem::size_of::<f32>()).ok_or(
+        ConfiguredEmbeddingProviderError::RequestFailed {
+            attempts: 0,
+            message: "logical embedding byte length overflowed".into(),
+        },
+    )?;
+    if bytes.len() != expected {
+        return Err(ConfiguredEmbeddingProviderError::InvalidLogicalF32Bytes {
+            expected,
+            actual: bytes.len(),
+        });
+    }
+
+    Ok(bytes
+        .chunks_exact(std::mem::size_of::<f32>())
+        .map(|chunk| f32::from_le_bytes(chunk.try_into().expect("chunk size is fixed")))
+        .collect())
 }
 
 fn encode_embedding(

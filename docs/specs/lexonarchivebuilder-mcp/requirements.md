@@ -285,3 +285,70 @@ LexonArchiveBuilder SHALL keep environment-specific storage, embedding, and othe
 
 MCP search and retrieval SHALL open local-redb block stores read-only, preserve
 the existing MCP contract, and surface mutation attempts explicitly.
+
+## Incremental Requirements Patch: Format-neutral rooted MCP targets
+
+### USER-REQUEST
+
+- **UR-MCP-FORMAT-001 [KNOWN]:** Update the MCP server to support the same
+  format-neutral rooted-search target preparation as the indexer CLI.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-MCP-FORMAT-001 | Revise | Delegate MCP `search_chunks` target preparation to the LexonGraph format-neutral API | UR-MCP-FORMAT-001 |
+| CM-MCP-FORMAT-002 | Preserve | Keep the MCP tool schema, storage selection, provider transport, result shape, and ranking delegated to existing boundaries | UR-MCP-FORMAT-001 |
+
+### Before / After
+
+#### BA-MCP-FORMAT-001
+
+- **Before [KNOWN]:** `search_chunks` uses the configured physical embedding
+  specification to encode the provider response and directly constructs an
+  `EncodedTargetEmbedding`.
+- **After [KNOWN]:** `search_chunks` loads the root and passes its provider's
+  logical `f32` vector plus the validated root to
+  `lexongraph_search::prepare_target_embedding`.
+
+### Requirements
+
+#### RQ-MCP-013 - Format-neutral rooted query targets
+
+The MCP `search_chunks` operation SHALL use the format-neutral
+`lexongraph_search::prepare_target_embedding` API for every rooted search.
+
+- **Format boundary [KNOWN]:** The MCP crate SHALL not inspect root embedding
+  encoding names, parse descriptors, or implement physical embedding codecs.
+- **Provider boundary [KNOWN]:** The existing environment-selected embedding
+  provider continues to obtain the logical query vector; its request schema
+  and configured transport remain unchanged.
+- **Contract preservation [KNOWN]:** `SearchChunksRequest`,
+  `SearchChunksResponse`, top-k and traversal-width validation, result
+  metadata, and named-retrieval behavior remain unchanged.
+- **Failure behavior [INFERRED]:** Upstream target-preparation failure SHALL
+  be surfaced as an MCP runtime error rather than falling back to a
+  repository-local encoding path.
+- **Single-leaf roots [KNOWN]:** `search_chunks` SHALL reject a root that is a
+  leaf block. Supporting it would require a separate target-preparation path,
+  which is out of scope for the format-neutral MCP contract.
+- **Traceability:** UR-MCP-FORMAT-001, RQ-MCP-002, RQ-MCP-011
+
+### Invariant Impact Assessment
+
+| Invariant | Impact | Assessment |
+|---|---|---|
+| Actual search semantics remain owned by LexonGraph | Preserved | Target preparation and search execution remain upstream-owned |
+| MCP tool contract | Preserved | No request or response schema changes |
+| Storage and embedding adapters | Preserved | Existing environment/provider selection is unchanged |
+| Future format extensibility | Improved | New supported root formats do not require MCP format switches |
+
+### Coverage Notes
+
+- **Covered sources [KNOWN]:**
+  - `crates/lexonarchivebuilder-mcp/src/runtime.rs` currently constructs the
+    target from configured physical embedding metadata.
+  - `lexongraph_search::prepare_target_embedding` is available through the
+    workspace's LexonGraph `90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9` pin.
+- **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
+  validation artifacts, gateway configuration, and MCP tool-schema changes.

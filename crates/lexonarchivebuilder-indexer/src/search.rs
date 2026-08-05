@@ -16,6 +16,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::embedding::{decode_logical_f32_embedding, logical_f32_embedding_spec};
 use crate::tree_tools::{
     metadata_values_to_text_map, search_with_partial_retry, source_name_from_metadata,
 };
@@ -104,7 +105,7 @@ where
             root_id: root_id.to_string(),
         });
     };
-    let provider_spec = logical_f32_embedding_spec(&root.block);
+    let provider_spec = logical_f32_embedding_spec(embedding_spec_for_block(&root.block).dims);
     let target_embedding = embedding_provider
         .embed(
             &EmbeddingInput {
@@ -118,7 +119,9 @@ where
             message: error.to_string(),
         })?;
     let logical_embedding = decode_logical_f32_embedding(&target_embedding, provider_spec.dims)
-        .map_err(|message| RootedSearchError::Provider { message })?;
+        .map_err(|error| RootedSearchError::Provider {
+            message: error.to_string(),
+        })?;
     let prepared = prepare_target_embedding(&root, &logical_embedding).map_err(|error| {
         RootedSearchError::TargetPreparation {
             message: error.to_string(),
@@ -219,32 +222,6 @@ fn embedding_spec_for_block(block: &Block) -> EmbeddingSpec {
         Block::Branch(branch) => branch.embedding_spec.clone(),
         Block::Leaf(leaf) => leaf.embedding_spec.clone(),
     }
-}
-
-fn logical_f32_embedding_spec(block: &Block) -> EmbeddingSpec {
-    EmbeddingSpec {
-        dims: embedding_spec_for_block(block).dims,
-        encoding: "f32le".into(),
-    }
-}
-
-fn decode_logical_f32_embedding(bytes: &[u8], dims: u64) -> Result<Vec<f32>, String> {
-    let dims = usize::try_from(dims)
-        .map_err(|_| "logical embedding dimensions do not fit in usize".to_string())?;
-    let expected_bytes = dims
-        .checked_mul(std::mem::size_of::<f32>())
-        .ok_or_else(|| "logical embedding byte length overflowed".to_string())?;
-    if bytes.len() != expected_bytes {
-        return Err(format!(
-            "embedding provider returned {} bytes; expected {expected_bytes} f32 bytes",
-            bytes.len()
-        ));
-    }
-
-    Ok(bytes
-        .chunks_exact(std::mem::size_of::<f32>())
-        .map(|chunk| f32::from_le_bytes(chunk.try_into().expect("chunk size is fixed")))
-        .collect())
 }
 
 #[cfg(test)]
