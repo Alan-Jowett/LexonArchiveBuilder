@@ -1755,6 +1755,68 @@ execution, human-readable summary, and JSON report remain unchanged.
 
 **Traces to:** RQ-INDEXER-008F, RQ-INDEXER-008G, RQ-INDEXER-009
 
+## Incremental Design Patch: Upstream embedding-format rooted-search targets
+
+### Impact Map
+
+#### Directly affected artifacts
+
+- `docs/specs/lexonarchivebuilder-indexer/requirements.md`
+- `docs/specs/lexonarchivebuilder-indexer/design.md`
+- `docs/specs/lexonarchivebuilder-indexer/validation.md`
+- `crates/lexonarchivebuilder-indexer/src/search.rs`
+- `crates/lexonarchivebuilder-indexer/src/embedding.rs`
+- the active LexonGraph `lexongraph-block` and `lexongraph-search` public API
+
+#### Indirectly affected artifacts
+
+- rooted-search unit and integration fixtures for upstream-supported formats
+- the pinned LexonGraph dependency revision, if the required upstream API is
+  introduced after the current revision
+
+#### Unaffected artifacts
+
+- HTTP/3 gateway authority selection and `/v1/embeddings` request schema
+- MCP search surface
+- indexing, clustering, publication, and stored-block layouts
+- operator-selected model, timeout, retry, result rendering, and JSON report
+  contracts
+
+### DSG-LFI-UPSTREAM-FORMAT-001 `Format-neutral upstream query target`
+
+LexonArchiveBuilder SHALL pass the loaded root plus the logical vector returned
+by its embedding provider to one LexonGraph-owned format-neutral query-target
+API. That API SHALL derive the effective comparison specification and produce
+the `lexongraph-search` target accepted by the active searcher.
+
+The API is responsible for every embedding-format concern: root metadata
+interpretation, descriptor parsing, logical/physical conversion, target
+encoding, and compatibility with candidate reconstruction. The indexer SHALL
+not contain an encoding-name match, a physical-codec implementation, or an
+EBCP-specific branch in its rooted-search path.
+
+**Upstream availability [KNOWN]:** LexonGraph commit
+`90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9` exports
+`lexongraph_search::prepare_target_embedding` for the default search policies.
+LexonArchiveBuilder pins every declared LexonGraph package to that revision and
+shall not substitute a local codec.
+
+**Traces to:** RQ-INDEXER-008H, RQ-INDEXER-008I, RQ-INDEXER-008E,
+RQ-INDEXER-010A
+
+### DSG-LFI-UPSTREAM-FORMAT-002 `Provider-vector boundary`
+
+The existing local and gateway embedding providers SHALL continue to submit the
+same OpenAI-compatible request and validate the returned logical vector's
+dimension. They SHALL pass that logical vector to the upstream query-target API
+without selecting a rooted-tree physical format.
+
+This preserves provider transport ownership in LexonArchiveBuilder while
+placing format conversion solely at the LexonGraph boundary. Gateway HTTP/3
+selection and non-gateway endpoint selection remain unchanged.
+
+**Traces to:** RQ-INDEXER-008H, RQ-INDEXER-008F, RQ-INDEXER-008G
+
 ## Adapter Design
 
 ### DSG-LFI-004 `Content resolution adapter`

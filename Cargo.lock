@@ -16,18 +16,18 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "aho-corasick"
-version = "1.1.4"
+version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddd31a130427c27518df266943a5308ed92d4b226cc639f5a8f1002816174301"
+checksum = "c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba"
 dependencies = [
  "memchr",
 ]
 
 [[package]]
 name = "android_system_properties"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "819e7219dbd41043ac279b19830f2efc897156490d7fd6ea916720117ee66311"
+checksum = "ae221649c9976a6f6c56ae1facf410f3ddb33cc661c4b7b61020a912d4237fbc"
 dependencies = [
  "libc",
 ]
@@ -110,9 +110,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.42"
+version = "0.4.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e79b3f8a79cccc2898f31920fc69f304859b3bd567490f75ebf51ae1c792a9ac"
+checksum = "3976abdc8fe7d1133d43d304afd42abdf5bc3e1319d263d223bde07b5efc4be8"
 dependencies = [
  "compression-codecs",
  "compression-core",
@@ -220,7 +220,7 @@ dependencies = [
  "bytes",
  "form_urlencoded",
  "futures-util",
- "http 1.4.2",
+ "http 1.5.0",
  "http-body 1.1.0",
  "http-body-util",
  "hyper 1.11.0",
@@ -251,7 +251,7 @@ checksum = "08c78f31d7b1291f7ee735c1c6780ccde7785daae9a9206026862dab7d8792d1"
 dependencies = [
  "bytes",
  "futures-core",
- "http 1.4.2",
+ "http 1.5.0",
  "http-body 1.1.0",
  "http-body-util",
  "mime",
@@ -403,9 +403,9 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "base64"
-version = "0.23.0"
+version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b25655df2c3cdd83c5e5b293b88acd880332b2ddadd7c30ac43144fdc0033da9"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bitflags"
@@ -550,9 +550,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.4"
+version = "4.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d91e0c145792ef73a6ad36d27c75ac09f1832222a3c209689d90f534685ee5b7"
+checksum = "301b56658598e48f3648647ac6fc887be7e7108eddfa4e9b63fcf3ec58c0cadf"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -560,9 +560,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.6.2"
+version = "4.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f09628afdcc538b57f3c6341e9c8e9970f18e4a481690a64974d7023bd33548b"
+checksum = "94a65403d1a1bd28f7dc68eb8506e8874808ee5eecb59298de588e2e1407a078"
 dependencies = [
  "anstream",
  "anstyle",
@@ -795,9 +795,9 @@ dependencies = [
 
 [[package]]
 name = "data-encoding"
-version = "2.11.0"
+version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
+checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
 name = "defmt"
@@ -875,13 +875,13 @@ dependencies = [
 
 [[package]]
 name = "displaydoc"
-version = "0.2.6"
+version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ac70aa55017e108007fbaf5aa0f54b021c98f92ff8af59d42eda9da96e3dd4f"
+checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -1199,9 +1199,9 @@ checksum = "f70749695b063ecbf6b62949ccccde2e733ec3ecbbd71d467dca4e5c6c97cca0"
 
 [[package]]
 name = "glam"
-version = "0.33.2"
+version = "0.33.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f22fb22f065b308be0d8724e3706c7fa3fc2a6c7d6899df4cad7860e7a75436"
+checksum = "7360bd2cd76e0cd9032d42cf2922155cecea2685b0cfa4630c3246df030bcfd6"
 
 [[package]]
 name = "h2"
@@ -1231,7 +1231,7 @@ dependencies = [
  "bytes",
  "fastrand 2.5.0",
  "futures-util",
- "http 1.4.2",
+ "http 1.5.0",
  "pin-project-lite",
  "tokio",
 ]
@@ -1246,7 +1246,7 @@ dependencies = [
  "bytes",
  "h3",
  "h3-quinn",
- "http 1.4.2",
+ "http 1.5.0",
  "http-body-util",
  "tower",
 ]
@@ -1316,9 +1316,9 @@ dependencies = [
 
 [[package]]
 name = "http"
-version = "1.4.2"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6970f50e31d6fc17d3fa27329444bfa74e196cf62e95052a3f6fee181dba6425"
+checksum = "918d3568bebf352712bc2ef3d46a8bcf1a75b373be6539de198e9105cbbf9ce0"
 dependencies = [
  "bytes",
  "itoa",
@@ -1342,7 +1342,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca2a8f2913ee65f60facd6a5905613afaa448497a0230cc41ce022d93290bc2c"
 dependencies = [
  "bytes",
- "http 1.4.2",
+ "http 1.5.0",
 ]
 
 [[package]]
@@ -1353,7 +1353,7 @@ checksum = "e9f41fd6a08e4d4ec69df65976da761afd5ad5e58a9d4acb46bd1c953a9e3ff2"
 dependencies = [
  "bytes",
  "futures-core",
- "http 1.4.2",
+ "http 1.5.0",
  "http-body 1.1.0",
  "pin-project-lite",
 ]
@@ -1392,9 +1392,9 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hybrid-array"
-version = "0.4.13"
+version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "818356c5132c1fede50f837ca96afbe78ff42413047f4abb886217845e1b6c8c"
+checksum = "707114b52a152fa7bdb290cd7cd5912d9467273b6d74e21b8d81aca1f8533f6b"
 dependencies = [
  "typenum",
 ]
@@ -1433,7 +1433,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-core",
- "http 1.4.2",
+ "http 1.5.0",
  "http-body 1.1.0",
  "httparse",
  "httpdate",
@@ -1464,10 +1464,10 @@ version = "0.27.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33ca68d021ef39cf6463ab54c1d0f5daf03377b70561305bb89a8f83aab66e0f"
 dependencies = [
- "http 1.4.2",
+ "http 1.5.0",
  "hyper 1.11.0",
  "hyper-util",
- "rustls 0.23.42",
+ "rustls 0.23.43",
  "tokio",
  "tokio-rustls 0.26.4",
  "tower-service",
@@ -1484,7 +1484,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-util",
- "http 1.4.2",
+ "http 1.5.0",
  "http-body 1.1.0",
  "hyper 1.11.0",
  "ipnet",
@@ -1657,9 +1657,9 @@ dependencies = [
 
 [[package]]
 name = "ipnet"
-version = "2.12.0"
+version = "2.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"
+checksum = "6a756c3fac73139e83f14c2d742155dd2b78d3ee56597b419a0579b7bdd6dd78"
 
 [[package]]
 name = "is_terminal_polyfill"
@@ -1824,7 +1824,7 @@ dependencies = [
  "lexongraph-block-store-redb",
  "quinn",
  "reqwest 0.12.28",
- "rustls 0.23.42",
+ "rustls 0.23.43",
  "rustls-pemfile 2.2.0",
  "tokio",
  "tower",
@@ -1840,11 +1840,11 @@ dependencies = [
  "bytes",
  "h3",
  "h3-quinn",
- "http 1.4.2",
+ "http 1.5.0",
  "lexongraph-block",
  "lexongraph-block-store",
  "quinn",
- "rustls 0.23.42",
+ "rustls 0.23.43",
  "rustls-native-certs",
  "tokio",
 ]
@@ -1864,7 +1864,7 @@ dependencies = [
  "env_logger",
  "futures",
  "half",
- "http 1.4.2",
+ "http 1.5.0",
  "lexonarchivebuilder-block-store-http3",
  "lexongraph-block",
  "lexongraph-block-store",
@@ -1911,7 +1911,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-adaptive-planning-policy"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 dependencies = [
  "lexongraph-directional-pca",
  "lexongraph-pca",
@@ -1921,7 +1921,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 dependencies = [
  "ciborium",
  "half",
@@ -1931,7 +1931,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 dependencies = [
  "async-trait",
  "futures",
@@ -1941,7 +1941,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store-azure-sdk"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 dependencies = [
  "async-trait",
  "azure_core 1.1.0",
@@ -1954,10 +1954,10 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store-azure-table-v2"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 dependencies = [
  "async-trait",
- "base64 0.23.0",
+ "base64 0.23.1",
  "futures",
  "httpdate",
  "lexongraph-block",
@@ -1972,7 +1972,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store-fs"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 dependencies = [
  "async-trait",
  "futures",
@@ -1984,7 +1984,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store-memory"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 dependencies = [
  "async-trait",
  "futures",
@@ -1995,7 +1995,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store-overlay"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 dependencies = [
  "async-trait",
  "futures",
@@ -2006,7 +2006,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-block-store-redb"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 dependencies = [
  "async-trait",
  "futures",
@@ -2018,7 +2018,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-dcbc-streaming"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 dependencies = [
  "lexongraph-streaming-clustering",
  "sha2 0.11.0",
@@ -2027,7 +2027,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-directional-pca"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 dependencies = [
  "lexongraph-pca",
  "lexongraph-streaming-clustering",
@@ -2038,7 +2038,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-embeddings-trait"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 dependencies = [
  "lexongraph-block",
  "pollster",
@@ -2047,7 +2047,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-linear-algebra-acceleration"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 dependencies = [
  "serde",
 ]
@@ -2055,7 +2055,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-pca"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 dependencies = [
  "nalgebra",
 ]
@@ -2063,7 +2063,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-search"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 dependencies = [
  "futures",
  "lexongraph-block",
@@ -2073,7 +2073,7 @@ dependencies = [
 [[package]]
 name = "lexongraph-spherical-kmeans"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 dependencies = [
  "lexongraph-linear-algebra-acceleration",
  "lexongraph-streaming-clustering",
@@ -2084,12 +2084,12 @@ dependencies = [
 [[package]]
 name = "lexongraph-streaming-clustering"
 version = "0.1.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 
 [[package]]
 name = "lexongraph-streaming-indexer"
 version = "0.4.0"
-source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=526ceecde890840d2aa40d5d35e3fa07feb0c8f7#526ceecde890840d2aa40d5d35e3fa07feb0c8f7"
+source = "git+https://github.com/Alan-Jowett/LexonGraph?rev=90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9#90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -2232,7 +2232,7 @@ dependencies = [
  "glam 0.30.10",
  "glam 0.31.1",
  "glam 0.32.1",
- "glam 0.33.2",
+ "glam 0.33.3",
  "matrixmultiply",
  "nalgebra-macros",
  "num-complex",
@@ -2523,7 +2523,7 @@ dependencies = [
  "quinn-proto",
  "quinn-udp",
  "rustc-hash",
- "rustls 0.23.42",
+ "rustls 0.23.43",
  "socket2 0.6.5",
  "thiserror 2.0.19",
  "tokio",
@@ -2545,7 +2545,7 @@ dependencies = [
  "rand_pcg",
  "ring",
  "rustc-hash",
- "rustls 0.23.42",
+ "rustls 0.23.43",
  "rustls-pki-types",
  "slab",
  "thiserror 2.0.19",
@@ -2755,9 +2755,9 @@ dependencies = [
 
 [[package]]
 name = "regex-automata"
-version = "0.4.16"
+version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fcfdb36bda0c880c5931cdc7a2bcdc8ba4556847b9d912bca70bc94708711ad"
+checksum = "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -2824,7 +2824,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
- "http 1.4.2",
+ "http 1.5.0",
  "http-body 1.1.0",
  "http-body-util",
  "hyper 1.11.0",
@@ -2835,7 +2835,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "quinn",
- "rustls 0.23.42",
+ "rustls 0.23.43",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -2863,7 +2863,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-util",
- "http 1.4.2",
+ "http 1.5.0",
  "http-body 1.1.0",
  "http-body-util",
  "hyper 1.11.0",
@@ -2874,7 +2874,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "quinn",
- "rustls 0.23.42",
+ "rustls 0.23.43",
  "rustls-pki-types",
  "rustls-platform-verifier",
  "sync_wrapper 1.0.2",
@@ -2982,9 +2982,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.42"
+version = "0.23.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c54fcab019b409d04215d3a17cb438fd7fbf192ee61461f20f4fe18704bc138"
+checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -3047,7 +3047,7 @@ dependencies = [
  "jni",
  "log",
  "once_cell",
- "rustls 0.23.42",
+ "rustls 0.23.43",
  "rustls-native-certs",
  "rustls-platform-verifier-android",
  "rustls-webpki 0.103.13",
@@ -3316,9 +3316,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "simba"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f45c644a9f3a386f9288625d9f0c1e999e1acf07a37df35d0516c7f199d9cb2"
+checksum = "834a9952211d4a60ff10ac1d20cc01640a75bdc0a0c688d62f359ea7d17459f3"
 dependencies = [
  "approx",
  "num-complex",
@@ -3531,9 +3531,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.54"
+version = "0.3.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e1d5e639ff6bab73cb6885cc7e7b1de96c3f32c68ec55f3952614bec1092244"
+checksum = "cdb87b95ec50ddfa440816d227a17b2ccbdda963a316a727fda0fc4334f7d134"
 dependencies = [
  "deranged",
  "libc",
@@ -3603,13 +3603,13 @@ dependencies = [
 
 [[package]]
 name = "tokio-macros"
-version = "2.7.1"
+version = "2.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6328af13490e73a9b4694030fafd93f8c8c6a9dede33e821c3fc63eddf8042ba"
+checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -3628,7 +3628,7 @@ version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
 dependencies = [
- "rustls 0.23.42",
+ "rustls 0.23.43",
  "tokio",
 ]
 
@@ -3673,7 +3673,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-util",
- "http 1.4.2",
+ "http 1.5.0",
  "http-body 1.1.0",
  "http-body-util",
  "pin-project-lite",
@@ -4047,9 +4047,9 @@ dependencies = [
 
 [[package]]
 name = "wide"
-version = "1.5.0"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfdfe6a32973f2d1b268b8895845a8a96cac2f0191e72c27cc929036060dbf89"
+checksum = "be99e8317aa9f08e7d16e13033ca43faab59ab582b1d0feab7b385424c42f8b1"
 dependencies = [
  "bytemuck",
  "safe_arch",

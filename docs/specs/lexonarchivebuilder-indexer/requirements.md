@@ -4708,3 +4708,112 @@ the approved block-store profile.
 - **Excluded from this phase [KNOWN]:**
   - Rust implementation, CLI parsing, HTTP/3 embedding-client construction,
     tests, design and validation artifacts, and deployment configuration.
+
+## Incremental Requirements Patch: Upstream embedding-format rooted-search targets
+
+### USER-REQUEST
+
+- **UR-INDEXER-AMBIENT-EBCP-001 [KNOWN]:** Add the support required for
+  `lexonarchivebuilder-indexer search` to search rooted trees in every
+  embedding format supported by its active LexonGraph search dependency.
+- **UR-INDEXER-AMBIENT-EBCP-003 [KNOWN]:** The indexer SHALL have no
+  format-specific knowledge or implementation dependency for rooted-search
+  target preparation.
+- **UR-INDEXER-AMBIENT-EBCP-004 [KNOWN]:** Update every declared LexonGraph
+  workspace dependency to commit
+  `90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9` and use its format-neutral
+  rooted-search target API.
+- **UR-INDEXER-AMBIENT-EBCP-002 [KNOWN]:** The live HTTP/3 gateway search
+  against root
+  `adbc431aed97ab541ce73d65ce735552821c6c31f9434a4864333013a278fa78`
+  reached query embedding generation but failed because the indexer attempted
+  to encode the query as the physical `ambient-delta-uq` representation.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-INDEXER-AMBIENT-EBCP-001 | Revise | Delegate rooted-search target preparation to the active LexonGraph embedding-format contract | UR-INDEXER-AMBIENT-EBCP-001, UR-INDEXER-AMBIENT-EBCP-002, UR-INDEXER-AMBIENT-EBCP-003 |
+| CM-INDEXER-AMBIENT-EBCP-002 | Preserve | Keep embedding-format parsing, conversion, and candidate reconstruction owned by LexonGraph | UR-INDEXER-AMBIENT-EBCP-001, UR-INDEXER-AMBIENT-EBCP-003 |
+| CM-INDEXER-AMBIENT-EBCP-003 | Revise | Adopt the LexonGraph revision exporting format-neutral default-search target preparation | UR-INDEXER-AMBIENT-EBCP-004 |
+
+### Before / After
+
+#### BA-INDEXER-AMBIENT-EBCP-001
+
+- **Before [KNOWN]:** Rooted search passes the root block's physical
+  `EmbeddingSpec` directly to the query-embedding provider, and repository
+  code explicitly recognizes only `f32le` and `f16le`.
+- **After [KNOWN]:** Rooted search delegates target-specification discovery,
+  embedding conversion, and search-target construction to LexonGraph's
+  format-agnostic contract. The indexer neither branches on encoding names nor
+  implements physical embedding codecs.
+
+#### BA-INDEXER-AMBIENT-EBCP-002
+
+- **Before [KNOWN]:** The workspace is pinned to LexonGraph commit
+  `526ceecde890840d2aa40d5d35e3fa07feb0c8f7`, which does not export
+  format-neutral default-search target preparation.
+- **After [KNOWN]:** Every declared LexonGraph package is pinned to commit
+  `90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9`, which exports
+  `lexongraph_search::prepare_target_embedding`.
+
+### Requirements
+
+#### RQ-INDEXER-008H - Upstream-owned query-target compatibility
+
+Rooted CLI search SHALL support every root embedding format supported by the
+active LexonGraph search dependency.
+
+- **Format-agnostic boundary [KNOWN]:** LexonArchiveBuilder SHALL use an
+  upstream LexonGraph API to derive the query target from the loaded root and
+  the embedding service's logical vector response. It SHALL NOT inspect,
+  branch on, or encode named embedding formats itself.
+- **Upstream ownership [KNOWN]:** LexonGraph SHALL remain responsible for
+  descriptor parsing, logical/physical embedding conversion, target
+  construction, and candidate reconstruction.
+- **Failure behavior [INFERRED]:** If LexonGraph rejects the root's embedding
+  metadata or cannot prepare a target, rooted search SHALL surface that error
+  explicitly and SHALL NOT send an incorrectly encoded query target to the
+  searcher.
+- **Compatibility [KNOWN]:** Existing `f32le` and `f16le` rooted searches
+  SHALL continue through the same format-agnostic upstream path.
+- **Traceability:** UR-INDEXER-AMBIENT-EBCP-001,
+  UR-INDEXER-AMBIENT-EBCP-002, UR-INDEXER-AMBIENT-EBCP-003,
+  RQ-INDEXER-008E
+
+#### RQ-INDEXER-008I - Format-neutral API baseline
+
+The workspace SHALL pin every declared LexonGraph dependency to
+`90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9`.
+
+Rooted search SHALL use
+`lexongraph_search::prepare_target_embedding` with the validated loaded root
+and the provider's logical `f32` vector. It SHALL pass the returned target to
+the default LexonGraph searcher without inspecting its comparison encoding.
+
+- **Traceability:** UR-INDEXER-AMBIENT-EBCP-004,
+  UR-INDEXER-AMBIENT-EBCP-003, RQ-INDEXER-008H
+
+### Invariant Impact Assessment
+
+| Invariant | Impact | Assessment |
+|---|---|---|
+| Rooted-search algorithm ownership | Preserved | LexonGraph owns format discovery, target preparation, and candidate scoring |
+| Gateway embedding transport | Preserved | The HTTP/3 route and request schema remain unchanged |
+| MCP search surface | Preserved | The change is limited to the indexer's rooted CLI search |
+| Existing rooted search | Preserved | It enters the same upstream target-preparation path |
+| Future encoding extensibility | Improved | New upstream formats require no repository-local format switch |
+
+### Coverage Notes
+
+- **Covered sources [KNOWN]:**
+  - `crates/lexonarchivebuilder-indexer/src/search.rs` currently derives the
+    provider target directly from the root block's physical specification.
+  - `crates/lexonarchivebuilder-indexer/src/embedding.rs` currently has a
+    repository-local `f32le`/`f16le` output-format switch.
+  - The active LexonGraph dependency currently owns EBCP descriptor parsing
+    and branch reconstruction; this requirement extends that ownership to the
+    format-agnostic target-preparation boundary.
+- **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
+  validation artifacts, dependency changes, and deployment configuration.

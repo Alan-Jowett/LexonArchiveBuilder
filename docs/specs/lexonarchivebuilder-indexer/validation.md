@@ -1821,3 +1821,57 @@ does not change MCP search behavior or indexer batch behavior.
 
 **Traces to:** RQ-INDEXER-008F, RQ-INDEXER-008G,
 DSG-LFI-GW-EMBED-002, DSG-LFI-GW-EMBED-004
+
+## Incremental Validation Patch: Upstream embedding-format rooted-search targets
+
+### VAL-LFI-UPSTREAM-FORMAT-001
+
+Inspect the rooted-search implementation and its LexonGraph dependency
+boundary.
+
+**Pass condition:** LexonArchiveBuilder passes the loaded root and the
+provider's logical vector to an upstream format-neutral query-target API; no
+repository-owned rooted-search code branches on embedding encoding names or
+implements EBCP, quantization, centroid, packed-payload, or target-encoding
+logic.
+
+**Traces to:** RQ-INDEXER-008H, DSG-LFI-UPSTREAM-FORMAT-001
+
+### VAL-LFI-UPSTREAM-FORMAT-002
+
+Run focused rooted-search tests using fixtures that cover every embedding
+format supported by the selected LexonGraph revision, including the observed
+`ambient-delta-uq` root.
+
+**Pass condition:** each fixture completes query-target preparation through the
+same indexer path and reaches LexonGraph search without an
+`UnsupportedEncoding` error. A malformed upstream descriptor fails explicitly
+at the upstream boundary.
+
+**Traces to:** RQ-INDEXER-008H, DSG-LFI-UPSTREAM-FORMAT-001,
+DSG-LFI-UPSTREAM-FORMAT-002
+
+### VAL-LFI-UPSTREAM-FORMAT-003
+
+Execute the rooted search for root
+`adbc431aed97ab541ce73d65ce735552821c6c31f9434a4864333013a278fa78` through
+`ietf-block-proxy.westus2.cloudapp.azure.com`.
+
+**Pass condition:** a gateway-backed query completes without a
+format-support error and retains the existing top-k summary and JSON-report
+shape.
+
+**Traces to:** RQ-INDEXER-008H, RQ-INDEXER-008F,
+DSG-LFI-UPSTREAM-FORMAT-002
+
+### VAL-LFI-UPSTREAM-FORMAT-004
+
+Inspect the workspace manifest and lockfile after dependency resolution.
+
+**Pass condition:** every declared LexonGraph package resolves to commit
+`90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9`, and rooted search invokes
+`lexongraph_search::prepare_target_embedding` rather than constructing an
+encoded target from an indexer-owned embedding-format switch.
+
+**Traces to:** RQ-INDEXER-008I, RQ-INDEXER-008H,
+DSG-LFI-UPSTREAM-FORMAT-001

@@ -9,8 +9,8 @@ use lexongraph_block::{Block, BlockHash, EmbeddingSpec};
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_search::{
-    DefaultCandidateScorer, DefaultEmbeddingCompatibility, EncodedTargetEmbedding, SearchError,
-    Searcher,
+    DefaultCandidateScorer, DefaultEmbeddingCompatibility, SearchError, Searcher,
+    prepare_target_embedding,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -36,6 +36,8 @@ pub enum RootedSearchError {
     Search(SearchError),
     #[error("embedding provider failed: {message}")]
     Provider { message: String },
+    #[error("failed to prepare rooted search target: {message}")]
+    TargetPreparation { message: String },
     #[error("failed to render rooted search report: {message}")]
     Render { message: String },
     #[error("failed to write rooted search report {path}: {source}")]
@@ -102,20 +104,28 @@ where
             root_id: root_id.to_string(),
         });
     };
-    let embedding_spec = embedding_spec_for_block(&root.block);
+    let provider_spec = logical_f32_embedding_spec(&root.block);
     let target_embedding = embedding_provider
         .embed(
             &EmbeddingInput {
                 media_type: "text/plain".into(),
                 body: query.as_bytes().to_vec(),
             },
-            &embedding_spec,
+            &provider_spec,
         )
         .await
         .map_err(|error| RootedSearchError::Provider {
             message: error.to_string(),
         })?;
-    let target = EncodedTargetEmbedding::new(target_embedding, embedding_spec.clone());
+    let logical_embedding = decode_logical_f32_embedding(&target_embedding, provider_spec.dims)
+        .map_err(|message| RootedSearchError::Provider { message })?;
+    let prepared = prepare_target_embedding(&root, &logical_embedding).map_err(|error| {
+        RootedSearchError::TargetPreparation {
+            message: error.to_string(),
+        }
+    })?;
+    let embedding_spec = prepared.comparison_spec;
+    let target = prepared.target;
     let searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
     let result =
         search_with_partial_retry(&searcher, root_id, &target, traversal_width, top_k, store)
@@ -209,6 +219,32 @@ fn embedding_spec_for_block(block: &Block) -> EmbeddingSpec {
         Block::Branch(branch) => branch.embedding_spec.clone(),
         Block::Leaf(leaf) => leaf.embedding_spec.clone(),
     }
+}
+
+fn logical_f32_embedding_spec(block: &Block) -> EmbeddingSpec {
+    EmbeddingSpec {
+        dims: embedding_spec_for_block(block).dims,
+        encoding: "f32le".into(),
+    }
+}
+
+fn decode_logical_f32_embedding(bytes: &[u8], dims: u64) -> Result<Vec<f32>, String> {
+    let dims = usize::try_from(dims)
+        .map_err(|_| "logical embedding dimensions do not fit in usize".to_string())?;
+    let expected_bytes = dims
+        .checked_mul(std::mem::size_of::<f32>())
+        .ok_or_else(|| "logical embedding byte length overflowed".to_string())?;
+    if bytes.len() != expected_bytes {
+        return Err(format!(
+            "embedding provider returned {} bytes; expected {expected_bytes} f32 bytes",
+            bytes.len()
+        ));
+    }
+
+    Ok(bytes
+        .chunks_exact(std::mem::size_of::<f32>())
+        .map(|chunk| f32::from_le_bytes(chunk.try_into().expect("chunk size is fixed")))
+        .collect())
 }
 
 #[cfg(test)]
