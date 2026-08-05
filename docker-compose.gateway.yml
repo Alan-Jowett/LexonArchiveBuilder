@@ -13,7 +13,9 @@ services:
         "--certificate",
         "/tls/fullchain.pem",
         "--private-key",
-        "/tls/privkey.pem"
+        "/tls/privkey.pem",
+        "--embedding-base-url",
+        "http://stapi:8080"
       ]
     environment:
       LEXONARCHIVEBUILDER_BLOCK_GATEWAY_SAS_URL: "${LEXONARCHIVEBUILDER_BLOCK_GATEWAY_SAS_URL:?Set LEXONARCHIVEBUILDER_BLOCK_GATEWAY_SAS_URL in the host environment or .env file.}"

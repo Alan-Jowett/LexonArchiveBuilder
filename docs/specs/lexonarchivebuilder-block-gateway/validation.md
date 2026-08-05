@@ -180,9 +180,9 @@ repository-tracked secret file.
 
 Inspect the STAPI service and its relationship to the gateway.
 
-**Pass condition:** STAPI has no published host port and the gateway has no
-embedding endpoint configuration, `depends_on`, or other runtime coupling to
-STAPI.
+**Pass condition:** STAPI has no published host port. The gateway may use
+`--embedding-base-url http://stapi:8080`, but does not require that argument
+to serve blocks.
 
 **Traces to:** RQ-BGW-COMPOSE-006, DSG-BGW-COMPOSE-004
 
@@ -196,3 +196,78 @@ required `BLOCK_GATEWAY_CERTIFICATE_PATH` and
 path remains in the Compose file, and the container targets remain read-only.
 
 **Traces to:** RQ-BGW-COMPOSE-007, DSG-BGW-COMPOSE-005
+
+## Incremental Validation Patch: Optional STAPI embedding proxy
+
+### VAL-BGW-EMBED-001
+
+Inspect the gateway `serve` command configuration.
+
+**Pass condition:** `--embedding-base-url` is optional, is bound before
+serving requests, and derives the STAPI target by appending
+`/v1/embeddings` exactly once for base URLs with or without a trailing slash.
+The input is not supplied by an HTTP caller and is separate from gateway
+storage-profile configuration.
+
+**Traces to:** RQ-BGW-016, DSG-BGW-009
+
+### VAL-BGW-EMBED-002
+
+Execute or inspect a representative configured embedding request.
+
+**Pass condition:** `POST /v1/embeddings` forwards the received
+OpenAI-compatible request body to the configured STAPI embeddings endpoint and
+returns the upstream response without a gateway-specific embedding envelope.
+Only end-to-end headers are forwarded in either direction; standard and
+`Connection`-nominated hop-by-hop headers are excluded.
+
+**Traces to:** RQ-BGW-015, RQ-BGW-017, DSG-BGW-010
+
+### VAL-BGW-EMBED-003
+
+Execute or inspect a non-success HTTP response from the configured STAPI
+endpoint.
+
+**Pass condition:** the gateway returns the upstream non-success response
+without normalizing it to a gateway-specific status or response schema.
+
+**Traces to:** RQ-BGW-017, DSG-BGW-010, DSG-BGW-011
+
+### VAL-BGW-EMBED-004
+
+Execute or inspect an embedding request when no embedding base URL is
+configured.
+
+**Pass condition:** `POST /v1/embeddings` returns HTTP `404`, while
+`/block/<block_id>` remains independently available.
+
+**Traces to:** RQ-BGW-018, DSG-BGW-009, DSG-BGW-010
+
+### VAL-BGW-EMBED-005
+
+Execute or inspect an embedding request when the configured STAPI endpoint is
+unreachable.
+
+**Pass condition:** the gateway returns HTTP `502 Bad Gateway` after its
+bounded upstream connection or request timeout.
+
+**Traces to:** RQ-BGW-017, DSG-BGW-011
+
+### VAL-BGW-EMBED-006
+
+Inspect the specification package for architectural non-interference.
+
+**Pass condition:** the optional embedding proxy does not add an MCP tool,
+indexer behavior, block mutation, embedding persistence, storage-profile
+coupling, central control-plane behavior, or content-type-specific handling.
+
+**Traces to:** RQ-BGW-015, RQ-BGW-019, DSG-BGW-012
+
+### VAL-BGW-EMBED-007
+
+Execute or inspect an embedding request whose body exceeds 1 MiB.
+
+**Pass condition:** `POST /v1/embeddings` returns HTTP `413 Payload Too Large`
+without forwarding the oversized body upstream.
+
+**Traces to:** RQ-BGW-017, DSG-BGW-010

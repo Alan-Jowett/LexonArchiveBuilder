@@ -1823,6 +1823,7 @@ dependencies = [
  "lexongraph-block-store-overlay",
  "lexongraph-block-store-redb",
  "quinn",
+ "reqwest 0.12.28",
  "rustls 0.23.42",
  "rustls-pemfile 2.2.0",
  "tokio",

@@ -11,12 +11,12 @@ use std::{fmt, fmt::Formatter};
 
 use anyhow::{Context, anyhow, bail};
 use axum::Router;
-use axum::body::Body;
-use axum::extract::{Path as AxumPath, State};
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
-use axum::http::{HeaderValue, Response, StatusCode};
+use axum::body::{Body, to_bytes};
+use axum::extract::{Path as AxumPath, Request, State};
+use axum::http::header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE};
+use axum::http::{HeaderMap, HeaderValue, Response, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post};
 use bytes::Bytes;
 use clap::ValueEnum;
 use h3_axum::{BoxError, is_graceful_h3_close, serve_h3_with_axum};
@@ -35,6 +35,9 @@ pub const CACHE_CONTROL_VALUE: &str = "public, max-age=31536000, immutable";
 pub const NO_STORE_CACHE_CONTROL_VALUE: &str = "no-store";
 const MAX_CONCURRENT_CONNECTION_TASKS: usize = 256;
 const MAX_CONCURRENT_REQUEST_TASKS_PER_CONNECTION: usize = 32;
+const MAX_EMBEDDING_REQUEST_BODY_BYTES: usize = 1024 * 1024;
+const EMBEDDING_UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const EMBEDDING_UPSTREAM_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 static CACHE_CONTROL_HEADER: HeaderValue = HeaderValue::from_static(CACHE_CONTROL_VALUE);
 static NO_STORE_CACHE_CONTROL_HEADER: HeaderValue =
     HeaderValue::from_static(NO_STORE_CACHE_CONTROL_VALUE);
@@ -67,6 +70,7 @@ pub struct GatewayConfig {
     pub block_store_filesystem_cache_root: Option<PathBuf>,
     pub block_store_memory_cache_max_resident_blocks: Option<usize>,
     pub block_store_prefix: Option<String>,
+    pub embedding_base_url: Option<String>,
     pub certificate_path: std::path::PathBuf,
     pub private_key_path: std::path::PathBuf,
 }
@@ -74,25 +78,72 @@ pub struct GatewayConfig {
 #[derive(Clone)]
 pub struct GatewayState {
     store: Arc<dyn BlockStore + Send + Sync>,
+    embedding_proxy: Option<EmbeddingProxy>,
+}
+
+#[derive(Clone)]
+struct EmbeddingProxy {
+    client: reqwest::Client,
+    endpoint: reqwest::Url,
 }
 
 impl GatewayState {
     pub fn new(store: Arc<dyn BlockStore + Send + Sync>) -> Self {
-        Self { store }
+        Self {
+            store,
+            embedding_proxy: None,
+        }
+    }
+
+    fn with_embedding_base_url(
+        store: Arc<dyn BlockStore + Send + Sync>,
+        embedding_base_url: Option<&str>,
+    ) -> anyhow::Result<Self> {
+        let embedding_proxy = embedding_base_url.map(EmbeddingProxy::new).transpose()?;
+        Ok(Self {
+            store,
+            embedding_proxy,
+        })
+    }
+}
+
+impl EmbeddingProxy {
+    fn new(base_url: &str) -> anyhow::Result<Self> {
+        let normalized_base_url = base_url.trim_end_matches('/');
+        let endpoint = reqwest::Url::parse(&format!("{normalized_base_url}/v1/embeddings"))
+            .context("embedding_base_url must be a valid absolute URL")?;
+        let client = reqwest::Client::builder()
+            .connect_timeout(EMBEDDING_UPSTREAM_CONNECT_TIMEOUT)
+            .timeout(EMBEDDING_UPSTREAM_REQUEST_TIMEOUT)
+            .build()
+            .context("failed to build embedding upstream HTTP client")?;
+        Ok(Self { client, endpoint })
     }
 }
 
 pub fn build_router(store: Arc<dyn BlockStore + Send + Sync>) -> Router {
-    Router::new()
+    build_router_with_embedding(store, None)
+        .expect("a router without an embedding upstream should always build")
+}
+
+pub fn build_router_with_embedding(
+    store: Arc<dyn BlockStore + Send + Sync>,
+    embedding_base_url: Option<&str>,
+) -> anyhow::Result<Router> {
+    Ok(Router::new()
         .route("/block/{block_id}", get(get_block))
-        .with_state(GatewayState::new(store))
+        .route("/v1/embeddings", post(proxy_embeddings))
+        .with_state(GatewayState::with_embedding_base_url(
+            store,
+            embedding_base_url,
+        )?))
 }
 
 pub async fn serve(config: GatewayConfig) -> anyhow::Result<()> {
     install_rustls_provider()?;
 
     let store = build_store(&config)?;
-    let app = build_router(store);
+    let app = build_router_with_embedding(store, config.embedding_base_url.as_deref())?;
     let server_config =
         build_quic_server_config(&config.certificate_path, &config.private_key_path)?;
     let endpoint = quinn::Endpoint::server(server_config, config.listen_addr)
@@ -378,6 +429,95 @@ async fn get_block(
     }
 }
 
+async fn proxy_embeddings(State(state): State<GatewayState>, request: Request) -> Response<Body> {
+    let Some(proxy) = state.embedding_proxy else {
+        return not_found_response();
+    };
+
+    let request_headers = request.headers().clone();
+    let request_body = match to_bytes(request.into_body(), MAX_EMBEDDING_REQUEST_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(error) => {
+            warn!(
+                ?error,
+                "embedding request body exceeded the configured size limit"
+            );
+            return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+        }
+    };
+
+    let upstream_request = proxy
+        .client
+        .post(proxy.endpoint)
+        .headers(copy_end_to_end_headers(&request_headers));
+
+    let upstream_response = match upstream_request.body(request_body).send().await {
+        Ok(response) => response,
+        Err(error) => {
+            warn!(?error, "embedding upstream request failed");
+            return StatusCode::BAD_GATEWAY.into_response();
+        }
+    };
+    let status = StatusCode::from_u16(upstream_response.status().as_u16())
+        .expect("reqwest response status should be valid for axum");
+    let response_headers = upstream_response.headers().clone();
+    let response_body = match upstream_response.bytes().await {
+        Ok(body) => body,
+        Err(error) => {
+            warn!(?error, "failed to read embedding upstream response body");
+            return StatusCode::BAD_GATEWAY.into_response();
+        }
+    };
+
+    let mut response = Response::new(Body::from(response_body));
+    *response.status_mut() = status;
+    copy_end_to_end_headers_into(response.headers_mut(), &response_headers);
+    response
+}
+
+fn is_hop_by_hop_or_framing_header(name: &axum::http::header::HeaderName) -> bool {
+    matches!(
+        name.as_str(),
+        "connection"
+            | "content-length"
+            | "host"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+    )
+}
+
+fn copy_end_to_end_headers(source: &HeaderMap) -> HeaderMap {
+    let mut destination = HeaderMap::new();
+    copy_end_to_end_headers_into(&mut destination, source);
+    destination
+}
+
+fn copy_end_to_end_headers_into(destination: &mut HeaderMap, source: &HeaderMap) {
+    for (name, value) in source {
+        if !is_hop_by_hop_or_framing_header(name) && !is_connection_nominated_header(source, name) {
+            destination.append(name, value.clone());
+        }
+    }
+}
+
+fn is_connection_nominated_header(
+    headers: &HeaderMap,
+    candidate: &axum::http::header::HeaderName,
+) -> bool {
+    headers
+        .get_all(CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .filter_map(|name| axum::http::header::HeaderName::from_bytes(name.trim().as_bytes()).ok())
+        .any(|name| name == *candidate)
+}
+
 fn not_found_response() -> Response<Body> {
     let mut response = StatusCode::NOT_FOUND.into_response();
     response
@@ -442,8 +582,8 @@ async fn handle_request(
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use axum::body::to_bytes;
     use axum::http::Request;
+    use axum::routing::post;
     use lexongraph_block::BlockHash;
     use lexongraph_block_store::{BlockIdStream, BlockStoreError};
     use std::path::PathBuf;
@@ -605,6 +745,7 @@ mod tests {
             block_store_filesystem_cache_root: None,
             block_store_memory_cache_max_resident_blocks: None,
             block_store_prefix: None,
+            embedding_base_url: None,
             certificate_path: PathBuf::from("cert.pem"),
             private_key_path: PathBuf::from("key.pem"),
         }
@@ -730,5 +871,153 @@ mod tests {
 
         validate_storage_profile_config(&config)
             .expect("local-redb profile should accept block_store_root without Azure arguments");
+    }
+
+    #[tokio::test]
+    async fn embedding_route_returns_not_found_without_an_upstream() {
+        let app = build_router(Arc::new(MockStore::default()));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/embeddings")
+                    .body(Body::from(r#"{"input":"hello"}"#))
+                    .expect("request build should succeed"),
+            )
+            .await
+            .expect("router request should succeed");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn embedding_route_forwards_upstream_status_headers_and_body() {
+        let upstream = Router::new().route(
+            "/v1/embeddings",
+            post(|body: String| async move {
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    [
+                        (CONTENT_TYPE.as_str(), "application/json"),
+                        ("x-stapi-status", "rejected"),
+                    ],
+                    body,
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("upstream listener should bind");
+        let base_url = format!(
+            "http://{}",
+            listener.local_addr().expect("listener address")
+        );
+        let upstream_task = tokio::spawn(async move {
+            axum::serve(listener, upstream)
+                .await
+                .expect("upstream server should run");
+        });
+        let app = build_router_with_embedding(
+            Arc::new(MockStore::default()),
+            Some(&format!("{base_url}/")),
+        )
+        .expect("router should build");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/embeddings")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"input":"hello"}"#))
+                    .expect("request build should succeed"),
+            )
+            .await
+            .expect("router request should succeed");
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            response.headers().get("x-stapi-status"),
+            Some(&HeaderValue::from_static("rejected"))
+        );
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE),
+            Some(&HeaderValue::from_static("application/json"))
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        assert_eq!(body.as_ref(), br#"{"input":"hello"}"#);
+        upstream_task.abort();
+    }
+
+    #[tokio::test]
+    async fn embedding_route_returns_bad_gateway_when_upstream_is_unreachable() {
+        let app = build_router_with_embedding(
+            Arc::new(MockStore::default()),
+            Some("http://127.0.0.1:0/"),
+        )
+        .expect("router should build");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/embeddings")
+                    .body(Body::from(r#"{"input":"hello"}"#))
+                    .expect("request build should succeed"),
+            )
+            .await
+            .expect("router request should succeed");
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn embedding_route_rejects_request_bodies_larger_than_the_limit() {
+        let app = build_router_with_embedding(
+            Arc::new(MockStore::default()),
+            Some("http://127.0.0.1:0/"),
+        )
+        .expect("router should build");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/embeddings")
+                    .body(Body::from(vec![0_u8; MAX_EMBEDDING_REQUEST_BODY_BYTES + 1]))
+                    .expect("request build should succeed"),
+            )
+            .await
+            .expect("router request should succeed");
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[test]
+    fn proxy_header_filter_removes_hop_by_hop_and_connection_nominated_headers() {
+        let mut source = HeaderMap::new();
+        source.insert(CONNECTION, HeaderValue::from_static("x-request-hop"));
+        source.insert("x-request-hop", HeaderValue::from_static("remove"));
+        source.insert("keep-alive", HeaderValue::from_static("timeout=5"));
+        source.insert("upgrade", HeaderValue::from_static("h2c"));
+        source.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        source.insert("x-request-id", HeaderValue::from_static("preserve"));
+
+        let headers = copy_end_to_end_headers(&source);
+
+        assert!(headers.get("x-request-hop").is_none());
+        assert!(headers.get("keep-alive").is_none());
+        assert!(headers.get("upgrade").is_none());
+        assert_eq!(
+            headers.get(CONTENT_TYPE),
+            Some(&HeaderValue::from_static("application/json"))
+        );
+        assert_eq!(
+            headers.get("x-request-id"),
+            Some(&HeaderValue::from_static("preserve"))
+        );
     }
 }

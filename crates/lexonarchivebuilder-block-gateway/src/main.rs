@@ -44,6 +44,11 @@ enum Command {
             help = "Reserved for future gateway block store backends. All currently approved gateway profiles reject non-empty prefixes."
         )]
         block_store_prefix: Option<String>,
+        #[arg(
+            long,
+            help = "Base URL for an optional OpenAI-compatible embedding service."
+        )]
+        embedding_base_url: Option<String>,
         #[arg(long)]
         certificate: PathBuf,
         #[arg(long)]
@@ -60,6 +65,7 @@ struct GatewayServeArgs {
     block_store_filesystem_cache_root: Option<PathBuf>,
     block_store_memory_cache_max_resident_blocks: Option<usize>,
     block_store_prefix: Option<String>,
+    embedding_base_url: Option<String>,
     certificate_path: PathBuf,
     private_key_path: PathBuf,
 }
@@ -82,6 +88,7 @@ async fn main() -> anyhow::Result<()> {
             block_store_filesystem_cache_root,
             block_store_memory_cache_max_resident_blocks,
             block_store_prefix,
+            embedding_base_url,
             certificate,
             private_key,
         } => {
@@ -93,6 +100,7 @@ async fn main() -> anyhow::Result<()> {
                 block_store_filesystem_cache_root,
                 block_store_memory_cache_max_resident_blocks,
                 block_store_prefix,
+                embedding_base_url,
                 certificate_path: certificate,
                 private_key_path: private_key,
             })?;
@@ -166,6 +174,7 @@ where
         block_store_filesystem_cache_root,
         block_store_memory_cache_max_resident_blocks,
         block_store_prefix,
+        embedding_base_url: args.embedding_base_url,
         certificate_path: args.certificate_path,
         private_key_path: args.private_key_path,
     })
@@ -188,6 +197,7 @@ mod tests {
                 block_store_filesystem_cache_root: None,
                 block_store_memory_cache_max_resident_blocks: None,
                 block_store_prefix: None,
+                embedding_base_url: None,
                 certificate_path: PathBuf::from("cert.pem"),
                 private_key_path: PathBuf::from("key.pem"),
             },
@@ -230,6 +240,7 @@ mod tests {
                 block_store_filesystem_cache_root: None,
                 block_store_memory_cache_max_resident_blocks: None,
                 block_store_prefix: None,
+                embedding_base_url: None,
                 certificate_path: PathBuf::from("cert.pem"),
                 private_key_path: PathBuf::from("key.pem"),
             },
@@ -342,5 +353,29 @@ mod tests {
         assert!(
             help.contains("All currently approved gateway profiles reject non-empty prefixes.")
         );
+    }
+
+    #[test]
+    fn serve_command_accepts_optional_embedding_base_url() {
+        let cli = Cli::try_parse_from([
+            "lexonarchivebuilder-block-gateway",
+            "serve",
+            "--storage-profile",
+            "production-v2",
+            "--block-store-container-sas-url",
+            "https://example.table.core.windows.net/table?sig=test",
+            "--embedding-base-url",
+            "http://stapi:8080/",
+            "--certificate",
+            "cert.pem",
+            "--private-key",
+            "key.pem",
+        ])
+        .expect("embedding base URL should parse");
+
+        let Command::Serve {
+            embedding_base_url, ..
+        } = cli.command;
+        assert_eq!(embedding_base_url.as_deref(), Some("http://stapi:8080/"));
     }
 }

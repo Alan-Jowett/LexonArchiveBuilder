@@ -23,6 +23,7 @@ lexongraph-block-store-overlay.workspace = true
 lexongraph-block-store-redb.workspace = true
 lexongraph-block-store-azure-table-v2.workspace = true
 quinn.workspace = true
+reqwest.workspace = true
 rustls.workspace = true
 rustls-pemfile.workspace = true
 tokio.workspace = true

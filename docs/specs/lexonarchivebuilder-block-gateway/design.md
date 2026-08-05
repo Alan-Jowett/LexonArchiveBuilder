@@ -306,15 +306,16 @@ value.
 
 **Traces to:** RQ-BGW-COMPOSE-002, RQ-BGW-COMPOSE-004, RQ-IMG-004A
 
-### DSG-BGW-COMPOSE-004 `Embedding-service non-coupling`
+### DSG-BGW-COMPOSE-004 `Optional embedding-service coupling`
 
-The `stapi` service runs the requested model image without `depends_on`,
-gateway environment wiring, or published port. Compose provides ordinary
-service-network reachability, but the gateway does not use it because the
-gateway startup contract has no embedding endpoint input.
+The `stapi` service runs the requested model image without a published host
+port. Compose provides ordinary service-network reachability. The gateway MAY
+be configured with `--embedding-base-url http://stapi:8080` to use that
+service as its embedding upstream.
 
-This preserves the requested two-container operational footprint without
-claiming that STAPI is a gateway dependency.
+The gateway does not require that argument to serve blocks. This preserves the
+two-container operational footprint while making STAPI a conditional dependency
+of the embedding route only.
 
 **Traces to:** RQ-BGW-COMPOSE-006, RQ-BGW-011
 
@@ -329,3 +330,75 @@ both mounts remain read-only. The gateway command therefore continues to refer
 only to stable container paths rather than operator-specific host paths.
 
 **Traces to:** RQ-BGW-COMPOSE-007
+
+## Incremental Design Patch: Optional STAPI embedding proxy
+
+### Impact Map
+
+#### Directly affected artifacts
+
+- `docs/specs/lexonarchivebuilder-block-gateway/requirements.md`
+- `docs/specs/lexonarchivebuilder-block-gateway/design.md`
+- `docs/specs/lexonarchivebuilder-block-gateway/validation.md`
+- gateway command-line configuration and HTTP route implementation
+- `docker-compose.gateway.yml`
+
+#### Indirectly affected artifacts
+
+- gateway operator documentation for optional STAPI configuration
+- gateway HTTP integration tests
+
+#### Unaffected artifacts
+
+- `/block/<block_id>` route behavior and storage-profile selection
+- indexer, MCP, archive-sync, and content-model semantics
+- Azure Blob and Azure OpenAI production adapter selection
+
+### DSG-BGW-009 `Optional embedding upstream binding`
+
+The gateway `serve` command accepts `--embedding-base-url` as an optional
+startup configuration input. When absent, the gateway does not construct an
+embedding upstream dependency. When present, it normalizes the base URL and
+derives the single upstream path `<base-url>/v1/embeddings`.
+
+The base URL is gateway configuration, never caller-controlled input. It is
+independent of the gateway's Azure Table storage-profile configuration.
+
+**Traces to:** RQ-BGW-016, RQ-BGW-018
+
+### DSG-BGW-010 `Transparent embeddings route`
+
+The gateway owns `POST /v1/embeddings` as a conditional route. With an
+embedding upstream configured, the handler forwards the received request body
+to the derived STAPI endpoint and projects the upstream response status,
+headers required by the OpenAI-compatible response, and body without
+introducing a LexonArchiveBuilder-specific embedding schema or envelope.
+
+When no embedding upstream is configured, the handler returns `404`. The
+block-fetch route continues to be served independently of this selection.
+The handler accepts at most 1 MiB of request-body bytes and returns `413 Payload
+Too Large` for a larger request. In both directions, it forwards only
+end-to-end headers, omitting standard hop-by-hop headers and any header named
+by a `Connection` header.
+
+**Traces to:** RQ-BGW-015, RQ-BGW-017, RQ-BGW-018
+
+### DSG-BGW-011 `Upstream connection-failure projection`
+
+The embedding HTTP client uses a 5-second connection timeout and a 60-second
+overall request timeout. If the configured STAPI endpoint cannot be reached
+within those bounds, the embedding handler returns `502 Bad Gateway`. An HTTP
+response received from STAPI, including a non-success response, is projected
+transparently rather than normalized by the gateway.
+
+**Traces to:** RQ-BGW-017
+
+### DSG-BGW-012 `Scoped embedding-proxy exception`
+
+The embedding route is a narrow direct-adapter exception to the gateway's
+former block-only boundary. It does not add indexing, graph search, MCP
+operations, storage mutation, embedding persistence, batching orchestration,
+or content-type-specific behavior. The gateway remains a stateless proxy with
+no central control-plane role.
+
+**Traces to:** RQ-BGW-015, RQ-BGW-019, RQ-BGW-011, RQ-BGW-013, RQ-BGW-014
