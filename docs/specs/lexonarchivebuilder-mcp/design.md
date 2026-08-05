@@ -376,3 +376,61 @@ file, local block-store path, Docker network alias, or a local
 embedding-service process.
 
 **Traces to:** RQ-MCP-015, RQ-MCP-014, RQ-MCP-013
+
+## Incremental Design Patch: Leaf-addressed email retrieval
+
+### DSG-MCP-EMAIL-001 `Leaf-addressed email resolution`
+
+`get_email` SHALL parse its existing `name` parameter as a `BlockHash` and use
+the same `configured_block_store` selection path as `search_chunks`. It does
+not load an index summary, root, embedding provider, or searcher.
+
+The runtime SHALL retrieve only the named block:
+
+1. A malformed block ID returns the existing invalid-block-ID runtime failure.
+2. A missing block returns an explicit missing-email-leaf runtime failure.
+3. A branch block returns an explicit non-leaf runtime failure.
+4. A leaf block's sole entry is projected only when
+   `source_kind == "email"`.
+5. A non-email leaf returns an explicit no-email-entries runtime failure.
+
+No root traversal, metadata scan outside the selected leaf, subject comparison,
+or Message-ID comparison is allowed.
+
+**Traces to:** RQ-MCP-016, RQ-MCP-005A, RQ-MCP-006
+
+### DSG-MCP-EMAIL-002 `Email result projection`
+
+`get_email` SHALL return an `EmailRetrievalResponse`:
+
+```text
+{
+  leaf_block_id: String,
+  entry: SearchChunkHit
+}
+```
+
+The entry reuses the existing `SearchChunkHit` projection:
+
+- `position` is `0`, the position of the sole entry within the selected leaf.
+- `leaf_block_id` is the requested leaf ID.
+- `media_type`, `text`, and `metadata` are taken from the stored entry.
+- `source_kind`, `source_path`, and `source_name` are projected by the same
+  helpers used by `search_chunks`.
+
+This type is returned only on successful email retrieval. `get_document` and
+`get_thread` retain `NamedRetrievalResponse` and their explicit
+`unsupported` outcome. MCP tool failures are mapped through the existing
+server error path rather than returned as success-shaped
+`EmailRetrievalResponse` values.
+
+**Traces to:** RQ-MCP-016, RQ-MCP-003, RQ-MCP-004
+
+### DSG-MCP-EMAIL-003 `Read-only environment reuse`
+
+Email retrieval calls the existing read-only block-store selector exactly once
+per request. Therefore local, local-redb, local-overlay, production,
+production-v2, and `gateway-http3` use their existing storage integrations.
+No embedding request is made by `get_email`.
+
+**Traces to:** RQ-MCP-016, RQ-MCP-007, RQ-MCP-012

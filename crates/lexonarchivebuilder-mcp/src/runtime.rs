@@ -16,7 +16,7 @@ use lexonarchivebuilder_indexer::tree_tools::{
     metadata_values_to_text_map, parse_block_hash, search_with_partial_retry,
     source_name_from_metadata,
 };
-use lexongraph_block::{Block, BlockHash};
+use lexongraph_block::{Block, BlockHash, LeafEntry};
 use lexongraph_block_store::{BlockStore, BlockStoreError};
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use lexongraph_search::{
@@ -92,6 +92,12 @@ pub struct NamedRetrievalResponse {
     pub message: String,
 }
 
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+pub struct EmailRetrievalResponse {
+    pub leaf_block_id: String,
+    pub entry: SearchChunkHit,
+}
+
 #[derive(Debug, Error)]
 pub enum RuntimeError {
     #[error("failed to read MCP config {path}: {source}")]
@@ -126,6 +132,8 @@ pub enum RuntimeError {
     },
     #[error("failed to parse root_id {value}")]
     InvalidRootId { value: String },
+    #[error("failed to parse email leaf_block_id {value}")]
+    InvalidEmailLeafBlockId { value: String },
     #[error(
         "index summary {path} was produced by ingestion-only execution and does not contain a searchable root"
     )]
@@ -138,6 +146,12 @@ pub enum RuntimeError {
     MissingRootBlock { root_id: String },
     #[error("root block {root_id} is a leaf and cannot be searched by the format-neutral MCP path")]
     LeafRoot { root_id: String },
+    #[error("email leaf block {leaf_block_id} was not found")]
+    MissingEmailLeafBlock { leaf_block_id: String },
+    #[error("email block {block_id} is not a leaf")]
+    EmailBlockIsNotLeaf { block_id: String },
+    #[error("email leaf block {leaf_block_id} contains no email entries")]
+    EmailLeafContainsNoEmailEntries { leaf_block_id: String },
     #[error("failed to prepare rooted search target: {message}")]
     TargetPreparation { message: String },
     #[error(transparent)]
@@ -255,16 +269,7 @@ impl McpRuntime {
                 .into_iter()
                 .map(|leaf| {
                     let metadata = metadata_values_to_text_map(&leaf.entry.metadata);
-                    SearchChunkHit {
-                        position: leaf.position,
-                        leaf_block_id: leaf.leaf_block_id.to_string(),
-                        media_type: leaf.entry.content.media_type,
-                        text: String::from_utf8_lossy(&leaf.entry.content.body).into_owned(),
-                        source_kind: metadata.get("source_kind").cloned(),
-                        source_path: metadata.get("source_path").cloned(),
-                        source_name: source_name_from_metadata(&metadata),
-                        metadata,
-                    }
+                    project_leaf_entry(&leaf.leaf_block_id, leaf.position, &leaf.entry, metadata)
                 })
                 .collect(),
         })
@@ -308,12 +313,63 @@ impl McpRuntime {
         }
     }
 
-    pub fn get_email(&self, request: NamedRetrievalRequest) -> NamedRetrievalResponse {
-        unsupported_named_retrieval(NamedItemKind::Email, request.name)
+    pub async fn get_email(
+        &self,
+        request: NamedRetrievalRequest,
+    ) -> Result<EmailRetrievalResponse, RuntimeError> {
+        let leaf_block_id =
+            parse_block_hash(&request.name).map_err(|_| RuntimeError::InvalidEmailLeafBlockId {
+                value: request.name.clone(),
+            })?;
+        let block_store = configured_block_store(&self.request_dir, &self.config.environment)?;
+        let Some(block) = block_store.get(&leaf_block_id).await? else {
+            return Err(RuntimeError::MissingEmailLeafBlock {
+                leaf_block_id: leaf_block_id.to_string(),
+            });
+        };
+        let Block::Leaf(leaf) = block.block else {
+            return Err(RuntimeError::EmailBlockIsNotLeaf {
+                block_id: leaf_block_id.to_string(),
+            });
+        };
+        let Some(entry) = leaf.entries.first() else {
+            return Err(RuntimeError::EmailLeafContainsNoEmailEntries {
+                leaf_block_id: leaf_block_id.to_string(),
+            });
+        };
+        let metadata = metadata_values_to_text_map(&entry.metadata);
+        if metadata.get("source_kind").map(String::as_str) != Some("email") {
+            return Err(RuntimeError::EmailLeafContainsNoEmailEntries {
+                leaf_block_id: leaf_block_id.to_string(),
+            });
+        }
+
+        Ok(EmailRetrievalResponse {
+            leaf_block_id: leaf_block_id.to_string(),
+            entry: project_leaf_entry(&leaf_block_id, 0, entry, metadata),
+        })
     }
 
     pub fn get_thread(&self, request: NamedRetrievalRequest) -> NamedRetrievalResponse {
         unsupported_named_retrieval(NamedItemKind::Thread, request.name)
+    }
+}
+
+fn project_leaf_entry(
+    leaf_block_id: &BlockHash,
+    position: usize,
+    entry: &LeafEntry,
+    metadata: BTreeMap<String, String>,
+) -> SearchChunkHit {
+    SearchChunkHit {
+        position,
+        leaf_block_id: leaf_block_id.to_string(),
+        media_type: entry.content.media_type.clone(),
+        text: String::from_utf8_lossy(&entry.content.body).into_owned(),
+        source_kind: metadata.get("source_kind").cloned(),
+        source_path: metadata.get("source_path").cloned(),
+        source_name: source_name_from_metadata(&metadata),
+        metadata,
     }
 }
 
@@ -410,6 +466,7 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    use ciborium::Value;
     use lexonarchivebuilder_indexer::block_store::ConfiguredBlockStore;
     use lexonarchivebuilder_indexer::config::{
         BatchItemConfig, BatchRequest, EmbeddingSpecConfig, EnvironmentConfig, ExecutionStage,
@@ -794,7 +851,7 @@ mod tests {
     }
 
     #[test]
-    fn named_retrieval_operations_return_explicit_unsupported_outcome() {
+    fn document_and_thread_retrieval_return_explicit_unsupported_outcome() {
         let runtime = McpRuntime::new(
             PathBuf::from("C:\\request-root"),
             McpConfig {
@@ -826,16 +883,170 @@ mod tests {
         let document = runtime.get_document(NamedRetrievalRequest {
             name: "overview.txt".into(),
         });
-        let email = runtime.get_email(NamedRetrievalRequest {
-            name: "hello@example.com".into(),
-        });
         let thread = runtime.get_thread(NamedRetrievalRequest {
             name: "thread-1".into(),
         });
 
         assert!(matches!(document.status, NamedRetrievalStatus::Unsupported));
-        assert!(matches!(email.status, NamedRetrievalStatus::Unsupported));
         assert!(matches!(thread.status, NamedRetrievalStatus::Unsupported));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_email_returns_the_selected_leaf_email_entry() {
+        let temp = tempdir().unwrap();
+        let environment = local_environment();
+        let store = ConfiguredBlockStore::from_environment(temp.path(), &environment).unwrap();
+        let leaf_block_id = store
+            .put(&Block::Leaf(LeafBlock {
+                version: VERSION_1,
+                level: 0,
+                embedding_spec: EmbeddingSpec {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                entries: vec![test_leaf_entry("email", b"email")],
+                ext: None,
+            }))
+            .await
+            .unwrap();
+        let runtime = local_runtime(temp.path(), environment);
+
+        let response = runtime
+            .get_email(NamedRetrievalRequest {
+                name: leaf_block_id.to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(response.leaf_block_id, leaf_block_id.to_string());
+        assert_eq!(response.entry.position, 0);
+        assert_eq!(response.entry.text, "email");
+        assert_eq!(response.entry.source_kind.as_deref(), Some("email"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_email_rejects_invalid_missing_branch_and_non_email_leaves() {
+        let temp = tempdir().unwrap();
+        let environment = local_environment();
+        let store = ConfiguredBlockStore::from_environment(temp.path(), &environment).unwrap();
+        let non_email_leaf = store
+            .put(&Block::Leaf(LeafBlock {
+                version: VERSION_1,
+                level: 0,
+                embedding_spec: EmbeddingSpec {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                entries: vec![test_leaf_entry("document", b"document")],
+                ext: None,
+            }))
+            .await
+            .unwrap();
+        let branch = store
+            .put(&Block::Branch(BranchBlock {
+                version: VERSION_1,
+                level: 1,
+                embedding_spec: EmbeddingSpec {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                entries: vec![BranchEntry {
+                    embedding: f32_bytes(&[1.0, 0.0]),
+                    child: non_email_leaf,
+                }],
+                ext: None,
+            }))
+            .await
+            .unwrap();
+        let runtime = local_runtime(temp.path(), environment);
+
+        let invalid = runtime
+            .get_email(NamedRetrievalRequest {
+                name: "not-a-block-id".into(),
+            })
+            .await
+            .unwrap_err();
+        let missing = runtime
+            .get_email(NamedRetrievalRequest {
+                name: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".into(),
+            })
+            .await
+            .unwrap_err();
+        let non_leaf = runtime
+            .get_email(NamedRetrievalRequest {
+                name: branch.to_string(),
+            })
+            .await
+            .unwrap_err();
+        let no_email_entries = runtime
+            .get_email(NamedRetrievalRequest {
+                name: non_email_leaf.to_string(),
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            invalid,
+            RuntimeError::InvalidEmailLeafBlockId { .. }
+        ));
+        assert!(matches!(
+            missing,
+            RuntimeError::MissingEmailLeafBlock { .. }
+        ));
+        assert!(matches!(non_leaf, RuntimeError::EmailBlockIsNotLeaf { .. }));
+        assert!(matches!(
+            no_email_entries,
+            RuntimeError::EmailLeafContainsNoEmailEntries { .. }
+        ));
+    }
+
+    fn local_environment() -> EnvironmentConfig {
+        EnvironmentConfig::Local {
+            block_store_root: PathBuf::from("block-store"),
+            embedding: LocalEmbeddingConfig {
+                base_url: "http://localhost:8080".into(),
+                model: "all-MiniLM-L6-v2".into(),
+                api_key_env: None,
+                request_timeout_secs: 5,
+                max_retries: 0,
+                retry_delay_ms: 1,
+            },
+        }
+    }
+
+    fn local_runtime(request_dir: &Path, environment: EnvironmentConfig) -> McpRuntime {
+        McpRuntime::new(
+            request_dir.to_path_buf(),
+            McpConfig {
+                environment: McpEnvironmentConfig::Shared(environment),
+                embedding_spec: EmbeddingSpecConfig {
+                    dims: 2,
+                    encoding: "f32le".into(),
+                },
+                index: IndexConfig::RootId {
+                    root_id: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                        .into(),
+                },
+                top_k: 1,
+                traversal_width: 1,
+            },
+        )
+        .unwrap()
+    }
+
+    fn test_leaf_entry(source_kind: &str, body: &[u8]) -> LeafEntry {
+        LeafEntry {
+            embedding: f32_bytes(&[1.0, 0.0]),
+            metadata: vec![
+                ("source_kind".into(), Value::Text(source_kind.into())),
+                ("source_path".into(), Value::Text("source-path".into())),
+                ("email_name".into(), Value::Text("email-name".into())),
+            ],
+            content: Content {
+                media_type: "text/plain".into(),
+                body: body.to_vec(),
+            },
+        }
     }
 
     fn f32_bytes(values: &[f32]) -> Vec<u8> {

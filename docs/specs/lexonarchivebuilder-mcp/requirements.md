@@ -459,3 +459,103 @@ operator-provided gateway authority and root ID
     existing gateway embedding-provider implementation.
 - **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
   validation artifacts, and README/config-example changes.
+
+## Incremental Requirements Patch: Leaf-addressed email retrieval
+
+### USER-REQUEST
+
+- **UR-MCP-EMAIL-001 [KNOWN]:** Implement the `get_email` MCP tool.
+- **UR-MCP-EMAIL-002 [KNOWN]:** `get_email.name` is the `leaf_block_id`
+  returned by `search_chunks`.
+- **UR-MCP-EMAIL-003 [KNOWN, superseded]:** When that leaf contains multiple
+  email entries, return all of them. This cannot occur because of the
+  subsequently discovered LexonGraph leaf-block invariant.
+- **UR-MCP-EMAIL-004 [KNOWN]:** LexonGraph leaf blocks contain exactly one
+  entry; `get_email` returns that sole entry when it is an email and rejects a
+  non-email leaf.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-MCP-EMAIL-001 | Revise | Give `get_email` a deterministic, leaf-addressed retrieval contract | UR-MCP-EMAIL-001, UR-MCP-EMAIL-002 |
+| CM-MCP-EMAIL-002 | Revise | Permit direct block lookup for `get_email` while retaining the ban on metadata-scanning fallback retrieval | UR-MCP-EMAIL-001, UR-MCP-EMAIL-002 |
+| CM-MCP-EMAIL-003 | Revise | Return the selected leaf's sole email entry, consistent with the LexonGraph leaf-block invariant | UR-MCP-EMAIL-003, UR-MCP-EMAIL-004 |
+
+### Before / After
+
+#### BA-MCP-EMAIL-001
+
+- **Before [KNOWN]:** `get_email` accepts an ambiguous `name` string and
+  always returns an explicit `unsupported` response.
+- **After [KNOWN]:** `get_email.name` accepts a `leaf_block_id` previously
+  returned by `search_chunks` and retrieves that leaf's sole email entry when
+  it is an email.
+
+#### BA-MCP-EMAIL-002
+
+- **Before [KNOWN]:** The named-retrieval boundary prohibits all
+  repository-local retrieval fallback behavior because no delegated
+  name-based lookup contract exists.
+- **After [INFERRED]:** `get_email` performs a direct, content-addressed block
+  lookup rather than metadata scanning or fuzzy matching. This narrow lookup is
+  an explicit exception to RQ-MCP-005A and does not define email-name matching
+  semantics.
+
+### Requirements
+
+#### RQ-MCP-016 - Leaf-addressed email retrieval
+
+`get_email` SHALL interpret `NamedRetrievalRequest.name` as the exact
+`leaf_block_id` emitted by `search_chunks`.
+
+- **Lookup boundary [KNOWN]:** The tool SHALL parse the supplied identifier as
+  a block hash and use the configured read-only block store to retrieve that
+  one block. It SHALL not run semantic search, scan unrelated leaves, or
+  perform subject, Message-ID, or metadata matching.
+- **Entry selection [KNOWN]:** The tool SHALL require a leaf block containing
+  exactly one entry. It SHALL return that entry only when its `source_kind`
+  metadata value is `email`; otherwise it SHALL reject the leaf.
+- **Result projection [INFERRED]:** The returned email entry SHALL preserve
+  the leaf entry's content, media type, metadata, source path, and source name
+  using the same projection rules as `search_chunks`.
+- **Failure behavior [INFERRED]:** Invalid block IDs, missing blocks,
+  non-leaf blocks, and leaves with no email entries SHALL produce explicit MCP
+  tool failures or explicit not-found outcomes. They SHALL not be represented
+  as successful empty email retrieval or as an `unsupported` response.
+- **Environment boundary [KNOWN]:** The lookup SHALL use the same configured
+  read-only block-store profile as `search_chunks`, including `gateway-http3`,
+  and SHALL not require query embeddings.
+- **Compatibility [KNOWN]:** The existing MCP tool name and `name` request
+  field remain unchanged. `get_document` and `get_thread` remain unsupported
+  in this increment.
+- **Traceability:** UR-MCP-EMAIL-001, UR-MCP-EMAIL-002, UR-MCP-EMAIL-003,
+  UR-MCP-EMAIL-004,
+  RQ-MCP-005, RQ-MCP-005A, RQ-MCP-006, RQ-MCP-007, RQ-MCP-011
+
+### Invariant Impact Assessment
+
+| Invariant | Impact | Assessment |
+|---|---|---|
+| Indexing remains separate from search serving | Preserved | `get_email` reads an existing content-addressed leaf and does not alter indexing |
+| Actual search semantics remain owned by LexonGraph | Preserved | Retrieval neither invokes nor redefines search or ranking semantics |
+| No repository-local metadata-scanning fallback | Preserved with narrow exception | Retrieval directly addresses one caller-supplied leaf and filters only its entries |
+| Environment-specific dependencies stay behind stable interfaces | Preserved | The existing configured read-only block-store selection is reused |
+| Future content-type extensibility | Preserved | Email-specific leaf validation is isolated to `get_email`; no shared search contract changes |
+
+### Coverage Notes
+
+- **Covered sources [KNOWN]:**
+  - `crates/lexonarchivebuilder-mcp/src/server.rs`, which registers
+    `get_email` with `NamedRetrievalRequest`.
+  - `crates/lexonarchivebuilder-mcp/src/runtime.rs`, where `get_email`
+    currently returns `unsupported` and `search_chunks` already resolves and
+    reads leaves through the configured block store.
+  - `crates/lexonarchivebuilder-indexer/src/mailbox.rs`, which writes
+    `source_kind`, `email_name`, and `email_message_id` metadata.
+  - `crates/lexonarchivebuilder-indexer/src/tree_tools.rs`, which preserves
+    `email_name` as a source-name metadata value.
+  - the LexonGraph `LeafBlock` validation reached through the workspace pin,
+    which rejects leaves containing more than one entry.
+- **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
+  validation artifacts, and documentation changes.

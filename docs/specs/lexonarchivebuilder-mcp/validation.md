@@ -274,3 +274,37 @@ authority.
 
 **Traces to:** RQ-MCP-014, RQ-MCP-015, DSG-MCP-GATEWAY-002,
 DSG-MCP-GATEWAY-003
+
+## Incremental Validation Patch: Leaf-addressed email retrieval
+
+### VAL-MCP-EMAIL-001
+
+Invoke `get_email` with the `leaf_block_id` returned by a representative
+`search_chunks` result whose sole leaf entry is an email.
+
+**Pass condition:** the response is an `EmailRetrievalResponse` containing the
+requested leaf ID and its sole email entry. The entry preserves the existing
+search chunk projection fields.
+
+**Traces to:** RQ-MCP-016, DSG-MCP-EMAIL-001, DSG-MCP-EMAIL-002
+
+### VAL-MCP-EMAIL-002
+
+Invoke `get_email` with malformed and missing block IDs, a branch block ID,
+and a leaf whose sole entry is not an email.
+
+**Pass condition:** each case returns the documented MCP error path and never
+an `unsupported` response, a successful empty entry list, or a lookup outside
+the requested block.
+
+**Traces to:** RQ-MCP-016, DSG-MCP-EMAIL-001, DSG-MCP-EMAIL-002
+
+### VAL-MCP-EMAIL-003
+
+Invoke `get_email` against local and gateway HTTP/3 MCP configurations.
+
+**Pass condition:** both paths use their selected read-only block-store
+integration, return the same response shape for the same leaf content, and
+make no embedding request.
+
+**Traces to:** RQ-MCP-016, DSG-MCP-EMAIL-003

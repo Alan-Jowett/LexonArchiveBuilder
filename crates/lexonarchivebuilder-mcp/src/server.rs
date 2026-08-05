@@ -13,8 +13,8 @@ use rmcp::{
 };
 
 use crate::runtime::{
-    McpRuntime, NamedRetrievalRequest, NamedRetrievalResponse, SearchChunksRequest,
-    SearchChunksResponse,
+    EmailRetrievalResponse, McpRuntime, NamedRetrievalRequest, NamedRetrievalResponse,
+    SearchChunksRequest, SearchChunksResponse,
 };
 
 #[derive(Clone)]
@@ -61,13 +61,17 @@ impl LexonArchiveBuilderMcpServer {
 
     #[tool(
         name = "get_email",
-        description = "Request a named email from the configured LexonArchiveBuilder index"
+        description = "Retrieve email entries from a search result leaf_block_id"
     )]
     pub async fn get_email(
         &self,
         params: Parameters<NamedRetrievalRequest>,
-    ) -> Result<Json<NamedRetrievalResponse>, String> {
-        Ok(Json(self.runtime.get_email(params.0)))
+    ) -> Result<Json<EmailRetrievalResponse>, String> {
+        self.runtime
+            .get_email(params.0)
+            .await
+            .map(Json)
+            .map_err(|error| error.to_string())
     }
 
     #[tool(

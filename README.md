@@ -392,8 +392,9 @@ The MVP exposes four MCP tools:
 - `get_email`
 - `get_thread`
 
-The search tool is executable end to end in the local profile. The named
-retrieval tools are present in the MVP surface and currently return an explicit
+The search tool is executable end to end in the local profile. `get_email`
+accepts a `leaf_block_id` returned by `search_chunks` and returns that leaf's
+sole email entry. `get_document` and `get_thread` return an explicit
 `unsupported` outcome until LexonGraph exposes a delegated retrieval-by-name
 contract for those item classes.
 
