@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use lexongraph_block::{Block, BlockHash, EmbeddingSpec};
 use lexongraph_block_store::{BlockStore, BlockStoreError};
@@ -68,12 +69,22 @@ pub struct EmbeddingSpecReport {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct RootedSearchTimingReport {
+    pub root_load_ms: u64,
+    pub embedding_ms: u64,
+    pub target_preparation_ms: u64,
+    pub traversal_ms: u64,
+    pub total_ms: u64,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct RootedSearchReport {
     pub root_id: String,
     pub query: String,
     pub top_k: usize,
     pub traversal_width: usize,
     pub embedding_spec: EmbeddingSpecReport,
+    pub timing: RootedSearchTimingReport,
     pub results: Vec<RootedSearchHit>,
 }
 
@@ -96,6 +107,8 @@ where
         return Err(RootedSearchError::InvalidTraversalWidth);
     }
 
+    let total_started = Instant::now();
+    let root_load_started = Instant::now();
     let Some(root) = store
         .get(root_id)
         .await
@@ -105,19 +118,21 @@ where
             root_id: root_id.to_string(),
         });
     };
+    let root_load_ms = elapsed_ms(root_load_started);
     let provider_spec = logical_f32_embedding_spec(embedding_spec_for_block(&root.block).dims);
+    let embedding_input = EmbeddingInput {
+        media_type: "text/plain".into(),
+        body: query.as_bytes().to_vec(),
+    };
+    let embedding_started = Instant::now();
     let target_embedding = embedding_provider
-        .embed(
-            &EmbeddingInput {
-                media_type: "text/plain".into(),
-                body: query.as_bytes().to_vec(),
-            },
-            &provider_spec,
-        )
+        .embed(&embedding_input, &provider_spec)
         .await
         .map_err(|error| RootedSearchError::Provider {
             message: error.to_string(),
         })?;
+    let embedding_ms = elapsed_ms(embedding_started);
+    let target_preparation_started = Instant::now();
     let logical_embedding = decode_logical_f32_embedding(&target_embedding, provider_spec.dims)
         .map_err(|error| RootedSearchError::Provider {
             message: error.to_string(),
@@ -127,13 +142,16 @@ where
             message: error.to_string(),
         }
     })?;
+    let target_preparation_ms = elapsed_ms(target_preparation_started);
     let embedding_spec = prepared.comparison_spec;
     let target = prepared.target;
     let searcher = Searcher::new(DefaultEmbeddingCompatibility, DefaultCandidateScorer);
+    let traversal_started = Instant::now();
     let result =
         search_with_partial_retry(&searcher, root_id, &target, traversal_width, top_k, store)
             .await
             .map_err(RootedSearchError::Search)?;
+    let traversal_ms = elapsed_ms(traversal_started);
 
     Ok(RootedSearchReport {
         root_id: root_id.to_string(),
@@ -143,6 +161,13 @@ where
         embedding_spec: EmbeddingSpecReport {
             dims: embedding_spec.dims,
             encoding: embedding_spec.encoding,
+        },
+        timing: RootedSearchTimingReport {
+            root_load_ms,
+            embedding_ms,
+            target_preparation_ms,
+            traversal_ms,
+            total_ms: elapsed_ms(total_started),
         },
         results: result
             .leaves
@@ -162,6 +187,10 @@ where
             })
             .collect(),
     })
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 pub fn default_report_path(root_id: &BlockHash, query: &str) -> PathBuf {
@@ -194,6 +223,14 @@ pub fn render_report_summary(report: &RootedSearchReport) -> String {
             report.root_id, report.top_k, report.traversal_width
         ),
         format!("Query: {}", report.query),
+        format!(
+            "Timing: root_load={}ms, embedding={}ms, target_preparation={}ms, traversal={}ms, total={}ms",
+            report.timing.root_load_ms,
+            report.timing.embedding_ms,
+            report.timing.target_preparation_ms,
+            report.timing.traversal_ms,
+            report.timing.total_ms,
+        ),
     ];
     for hit in &report.results {
         let label = hit
@@ -323,7 +360,16 @@ mod tests {
 
         assert_eq!(report.results.len(), 1);
         assert_eq!(report.results[0].text, "alpha body");
-        assert!(render_report_summary(&report).contains("alpha body"));
+        assert!(
+            report.timing.total_ms
+                >= report.timing.root_load_ms
+                    + report.timing.embedding_ms
+                    + report.timing.target_preparation_ms
+                    + report.timing.traversal_ms
+        );
+        let summary = render_report_summary(&report);
+        assert!(summary.contains("Timing: root_load="));
+        assert!(summary.contains("alpha body"));
     }
 
     #[test]
@@ -398,6 +444,34 @@ mod tests {
             report.results[0].leaf_block_id
         )));
         assert!(rendered.contains("\"text\": \"alpha body\""));
+        assert!(rendered.contains("\"timing\": {"));
+        assert!(rendered.contains("\"root_load_ms\":"));
+        assert!(rendered.contains("\"embedding_ms\":"));
+        assert!(rendered.contains("\"target_preparation_ms\":"));
+        assert!(rendered.contains("\"traversal_ms\":"));
+        assert!(rendered.contains("\"total_ms\":"));
+    }
+
+    #[tokio::test]
+    async fn rooted_search_failure_returns_no_partial_timing_report() {
+        let dir = tempdir().unwrap();
+        let store = FilesystemBlockStore::new(dir.path().join("blocks")).unwrap();
+        let root = BlockHash::from_bytes([7u8; BlockHash::LEN]);
+
+        let error = search_rooted_tree(
+            &store,
+            &FakeProvider {
+                bytes: encode_f32(&[1.0, 0.0]),
+            },
+            &root,
+            "alpha",
+            0,
+            1,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, RootedSearchError::InvalidTopK));
     }
 
     fn leaf_block(name: &str, embedding: &[f32; 2], body: &str) -> Block {

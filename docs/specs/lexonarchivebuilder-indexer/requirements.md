@@ -4817,3 +4817,81 @@ the default LexonGraph searcher without inspecting its comparison encoding.
     format-agnostic target-preparation boundary.
 - **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
   validation artifacts, dependency changes, and deployment configuration.
+
+## Incremental Requirements Patch: Rooted-search timing breakdown
+
+### USER-REQUEST
+
+- **UR-INDEXER-SEARCH-TIMING-001 [KNOWN]:** Add elapsed-time reporting to the
+  `lexonarchivebuilder-indexer.exe search` command so operators can compare
+  embedding time with search time.
+- **UR-INDEXER-SEARCH-TIMING-002 [KNOWN]:** Publish granular timings and a
+  roll-up for root loading, query embedding, target preparation, and traversal.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-INDEXER-SEARCH-TIMING-001 | Add | Include a rooted-search timing breakdown in the CLI report | UR-INDEXER-SEARCH-TIMING-001, UR-INDEXER-SEARCH-TIMING-002 |
+| CM-INDEXER-SEARCH-TIMING-002 | Preserve | Keep rooted-search ranking, storage, embedding-provider selection, and MCP behavior unchanged | UR-INDEXER-SEARCH-TIMING-001 |
+
+### Before / After
+
+#### BA-INDEXER-SEARCH-TIMING-001
+
+- **Before [KNOWN]:** `RootedSearchReport` records query inputs, the resolved
+  embedding specification, and result hits, but no elapsed-time data.
+- **After [INFERRED]:** The human-readable summary and JSON report identify
+  the time spent loading the root, obtaining a query embedding, preparing the
+  target, traversing/scoring the rooted tree, and the total of these phases.
+
+### Requirements
+
+#### RQ-INDEXER-008J - Rooted-search timing breakdown
+
+The CLI-only rooted `search` command SHALL publish an elapsed-time breakdown
+for each successful invocation in both its existing JSON report and
+human-readable summary.
+
+- **Values [KNOWN]:** The report SHALL expose non-negative, whole-millisecond
+  integer fields `root_load_ms`, `embedding_ms`, `target_preparation_ms`,
+  `traversal_ms`, and `total_ms`.
+- **Phase boundaries [KNOWN]:** `root_load_ms` measures configured block-store
+  retrieval of the selected root; `embedding_ms` measures the embedding
+  provider request and response processing; `target_preparation_ms` measures
+  decoding the provider response and LexonGraph target preparation; and
+  `traversal_ms` measures the LexonGraph rooted traversal and scoring call.
+- **Roll-up [KNOWN]:** `total_ms` SHALL measure the complete interval from
+  immediately before root loading through completion of traversal/scoring. It
+  may exceed the sum of the displayed whole-millisecond phase values because
+  each phase is independently rounded to milliseconds and small supporting
+  setup intervals are intentionally not reported as a separate phase.
+- **Failure behavior [INFERRED]:** A failing phase SHALL retain the existing
+  explicit error behavior; a partial or success-shaped timing report SHALL not
+  be written or printed.
+- **Isolation [KNOWN]:** Timing collection SHALL not alter query text, root
+  selection, provider configuration, embedding bytes, target preparation,
+  traversal width, ranking, result projection, report path selection, or MCP
+  behavior.
+- **Traceability:** UR-INDEXER-SEARCH-TIMING-001,
+  UR-INDEXER-SEARCH-TIMING-002, RQ-INDEXER-008E, RQ-INDEXER-008H
+
+### Invariant Impact Assessment
+
+| Invariant | Impact | Assessment |
+|---|---|---|
+| Rooted-search algorithm ownership | Preserved | Timing observes the existing LexonGraph traversal without replacing it |
+| Embedding-provider boundary | Preserved | Provider selection and request semantics remain unchanged |
+| JSON and summary report contract | Extended | Both existing operator outputs gain the same timing evidence |
+| MCP search surface | Preserved | The change applies only to the indexer CLI rooted-search command |
+
+### Coverage Notes
+
+- **Covered sources [KNOWN]:**
+  - `crates/lexonarchivebuilder-indexer/src/search.rs`, which loads the root,
+    requests the query embedding, prepares the target, invokes traversal, and
+    constructs `RootedSearchReport`.
+  - `crates/lexonarchivebuilder-indexer/src/main.rs`, which writes and renders
+    the CLI search report.
+- **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
+  validation artifacts, README changes, and deployment configuration.
