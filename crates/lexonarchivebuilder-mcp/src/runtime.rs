@@ -185,6 +185,10 @@ impl McpRuntime {
         })
     }
 
+    pub(crate) fn tool_description(&self, tool_name: &str) -> &str {
+        self.config.tool_description(tool_name)
+    }
+
     pub async fn search_chunks(
         &self,
         request: SearchChunksRequest,
@@ -482,6 +486,7 @@ mod tests {
     use super::*;
     use crate::config::{
         GatewayHttp3Kind, GatewayHttp3McpEnvironmentConfig, IndexConfig, McpEnvironmentConfig,
+        ToolDescriptionsConfig,
     };
 
     #[tokio::test(flavor = "multi_thread")]
@@ -568,6 +573,7 @@ mod tests {
                 index: IndexConfig::RootId {
                     root_id: root.to_string(),
                 },
+                tool_descriptions: ToolDescriptionsConfig::default(),
                 top_k: 1,
                 traversal_width: 1,
             },
@@ -653,6 +659,7 @@ mod tests {
                 index: IndexConfig::SummaryFile {
                     path: PathBuf::from("summary.json"),
                 },
+                tool_descriptions: ToolDescriptionsConfig::default(),
                 top_k: 5,
                 traversal_width: 3,
             },
@@ -738,6 +745,7 @@ mod tests {
                 index: IndexConfig::SummaryFile {
                     path: PathBuf::from("summary.json"),
                 },
+                tool_descriptions: ToolDescriptionsConfig::default(),
                 top_k: 5,
                 traversal_width: 3,
             },
@@ -831,6 +839,7 @@ mod tests {
                 index: IndexConfig::SummaryFile {
                     path: PathBuf::from("summary.json"),
                 },
+                tool_descriptions: ToolDescriptionsConfig::default(),
                 top_k: 3,
                 traversal_width: 2,
             },
@@ -874,6 +883,7 @@ mod tests {
                     root_id: "4c33a6fc7cac4679c0a1f57d40203a28e997c3a92783abf4dc0f7162d36f856e"
                         .into(),
                 },
+                tool_descriptions: ToolDescriptionsConfig::default(),
                 top_k: 1,
                 traversal_width: 1,
             },
@@ -1027,6 +1037,7 @@ mod tests {
                     root_id: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
                         .into(),
                 },
+                tool_descriptions: ToolDescriptionsConfig::default(),
                 top_k: 1,
                 traversal_width: 1,
             },
@@ -1080,6 +1091,7 @@ mod tests {
                     root_id: "4c33a6fc7cac4679c0a1f57d40203a28e997c3a92783abf4dc0f7162d36f856e"
                         .into(),
                 },
+                tool_descriptions: ToolDescriptionsConfig::default(),
                 top_k: 1,
                 traversal_width: 1,
             },
@@ -1129,6 +1141,7 @@ mod tests {
                 index: IndexConfig::SummaryFile {
                     path: PathBuf::from("summary.json"),
                 },
+                tool_descriptions: ToolDescriptionsConfig::default(),
                 top_k: 1,
                 traversal_width: 1,
             },

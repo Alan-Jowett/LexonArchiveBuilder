@@ -366,6 +366,11 @@ The local MVP server reads a JSON config file that identifies:
 
 See `examples/local/mcp.request.sample.json` for a complete local config.
 
+To tailor tool guidance for a corpus, add `tool_descriptions` to the MCP
+configuration. Each optional field (`search_chunks`, `get_document`,
+`get_email`, or `get_thread`) replaces that tool's advertised description;
+omitted fields retain their defaults.
+
 ### Running locally
 
 First generate the local block store and summary:

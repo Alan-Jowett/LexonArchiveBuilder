@@ -308,3 +308,37 @@ integration, return the same response shape for the same leaf content, and
 make no embedding request.
 
 **Traces to:** RQ-MCP-016, DSG-MCP-EMAIL-003
+
+## Incremental Validation Patch: Corpus-specific MCP tool descriptions
+
+### VAL-MCP-TOOL-DESCRIPTIONS-001
+
+Parse an MCP configuration with an override for `search_chunks` and no
+overrides for the other tools.
+
+**Pass condition:** the `search_chunks` resolver returns the configured text;
+each other resolver returns its documented default description.
+
+**Traces to:** RQ-MCP-017, DSG-MCP-TOOL-DESCRIPTIONS-001,
+DSG-MCP-TOOL-DESCRIPTIONS-002
+
+### VAL-MCP-TOOL-DESCRIPTIONS-002
+
+Parse MCP configurations with an unknown `tool_descriptions` field and with
+whitespace-only description values.
+
+**Pass condition:** each configuration fails parsing or validation; no invalid
+description is advertised to MCP clients.
+
+**Traces to:** RQ-MCP-017, DSG-MCP-TOOL-DESCRIPTIONS-001
+
+### VAL-MCP-TOOL-DESCRIPTIONS-003
+
+Initialize the MCP server using a configuration with a custom
+`search_chunks` description and inspect `tools/list`.
+
+**Pass condition:** the advertised `search_chunks` description is the exact
+configured override, while tool names, schemas, other default descriptions,
+and server-level instructions retain their existing behavior.
+
+**Traces to:** RQ-MCP-017, DSG-MCP-TOOL-DESCRIPTIONS-002

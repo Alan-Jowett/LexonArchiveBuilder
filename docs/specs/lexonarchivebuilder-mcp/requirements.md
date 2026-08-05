@@ -559,3 +559,77 @@ operator-provided gateway authority and root ID
     which rejects leaves containing more than one entry.
 - **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
   validation artifacts, and documentation changes.
+
+## Incremental Requirements Patch: Corpus-specific MCP tool descriptions
+
+### USER-REQUEST
+
+- **UR-MCP-TOOL-DESCRIPTIONS-001 [KNOWN]:** Allow MCP configuration to replace
+  default tool descriptions with corpus-specific instructions.
+- **UR-MCP-TOOL-DESCRIPTIONS-002 [KNOWN]:** In particular, operators need to
+  replace the default `search_chunks` description for their corpus.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-MCP-TOOL-DESCRIPTIONS-001 | Add | Define optional per-tool description overrides in MCP configuration | UR-MCP-TOOL-DESCRIPTIONS-001 |
+| CM-MCP-TOOL-DESCRIPTIONS-002 | Preserve | Retain existing descriptions for tools without configured overrides | UR-MCP-TOOL-DESCRIPTIONS-001 |
+| CM-MCP-TOOL-DESCRIPTIONS-003 | Preserve | Keep tool names, schemas, server instructions, and runtime behavior unchanged | UR-MCP-TOOL-DESCRIPTIONS-001, UR-MCP-TOOL-DESCRIPTIONS-002 |
+
+### Before / After
+
+#### BA-MCP-TOOL-DESCRIPTIONS-001
+
+- **Before [KNOWN]:** Each MCP tool description is a fixed string in
+  `crates/lexonarchivebuilder-mcp/src/server.rs`.
+- **After [INFERRED]:** An operator can configure a corpus-specific
+  description for an individual registered MCP tool without recompiling the
+  server.
+
+### Requirements
+
+#### RQ-MCP-017 - Configurable MCP tool descriptions
+
+`McpConfig` SHALL support an optional `tool_descriptions` object whose fields
+are the registered MCP tool names: `search_chunks`, `get_document`,
+`get_email`, and `get_thread`.
+
+- **Override behavior [KNOWN]:** A non-empty configured value SHALL replace
+  the corresponding default description in the MCP `tools/list` response.
+- **Default behavior [INFERRED]:** When `tool_descriptions` is absent, or an
+  individual field is absent, the existing default description for that tool
+  SHALL remain in effect.
+- **Validation [INFERRED]:** A configured description containing only
+  whitespace SHALL be rejected during MCP configuration validation rather than
+  being advertised to clients.
+- **Contract preservation [KNOWN]:** This option SHALL not change tool names,
+  request or response schemas, tool implementation behavior, the server-level
+  instructions string, or block-store/embedding selection.
+- **Extensibility [INFERRED]:** New registered tools may add a corresponding
+  optional description field without changing the configuration semantics of
+  existing tools.
+- **Traceability:** UR-MCP-TOOL-DESCRIPTIONS-001, UR-MCP-TOOL-DESCRIPTIONS-002,
+  RQ-MCP-001, RQ-MCP-012
+
+### Invariant Impact Assessment
+
+| Invariant | Impact | Assessment |
+|---|---|---|
+| MCP tool contract | Preserved | Only human-facing tool descriptions vary by configuration |
+| Indexing/search separation | Preserved | No indexing, retrieval, or search execution behavior changes |
+| Environment-specific dependency selection | Preserved | Description selection is independent of storage and embedding profiles |
+| Future content-type extensibility | Improved | Corpus operators can explain tool relevance without tool-schema forks |
+
+### Coverage Notes
+
+- **Covered sources [KNOWN]:**
+  - `crates/lexonarchivebuilder-mcp/src/server.rs`, which declares all four
+    fixed tool descriptions.
+  - `crates/lexonarchivebuilder-mcp/src/config.rs`, which parses and validates
+    the MCP configuration.
+  - `examples/local/mcp.request.sample.json` and
+    `examples/gateway-http3/mcp.request.template.json`, which demonstrate
+    corpus-specific MCP configuration.
+- **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
+  validation artifacts, and documentation changes.

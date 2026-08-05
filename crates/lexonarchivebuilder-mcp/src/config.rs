@@ -12,16 +12,35 @@ use thiserror::Error;
 
 const DEFAULT_TOP_K: usize = 5;
 const DEFAULT_TRAVERSAL_WIDTH: usize = 3;
+pub const DEFAULT_SEARCH_CHUNKS_DESCRIPTION: &str =
+    "Search indexed LexonArchiveBuilder chunks in the configured block store";
+pub const DEFAULT_GET_DOCUMENT_DESCRIPTION: &str =
+    "Request a named document from the configured LexonArchiveBuilder index";
+pub const DEFAULT_GET_EMAIL_DESCRIPTION: &str =
+    "Retrieve email entries from a search result leaf_block_id";
+pub const DEFAULT_GET_THREAD_DESCRIPTION: &str =
+    "Request a named thread from the configured LexonArchiveBuilder index";
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct McpConfig {
     pub environment: McpEnvironmentConfig,
     pub embedding_spec: EmbeddingSpecConfig,
     pub index: IndexConfig,
+    #[serde(default)]
+    pub tool_descriptions: ToolDescriptionsConfig,
     #[serde(default = "default_top_k")]
     pub top_k: usize,
     #[serde(default = "default_traversal_width")]
     pub traversal_width: usize,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolDescriptionsConfig {
+    pub search_chunks: Option<String>,
+    pub get_document: Option<String>,
+    pub get_email: Option<String>,
+    pub get_thread: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -67,6 +86,8 @@ pub enum ConfigError {
     InvalidTraversalWidth,
     #[error("gateway_dns_name must not be empty")]
     EmptyGatewayDnsName,
+    #[error("tool description for {tool_name} must not be empty")]
+    EmptyToolDescription { tool_name: &'static str },
     #[error(transparent)]
     IndexerConfig(#[from] IndexerConfigError),
 }
@@ -87,6 +108,22 @@ impl McpConfig {
                 }
             }
         }
+        for (tool_name, description) in [
+            (
+                "search_chunks",
+                self.tool_descriptions.search_chunks.as_deref(),
+            ),
+            (
+                "get_document",
+                self.tool_descriptions.get_document.as_deref(),
+            ),
+            ("get_email", self.tool_descriptions.get_email.as_deref()),
+            ("get_thread", self.tool_descriptions.get_thread.as_deref()),
+        ] {
+            if matches!(description, Some(value) if value.trim().is_empty()) {
+                return Err(ConfigError::EmptyToolDescription { tool_name });
+            }
+        }
         Ok(())
     }
 
@@ -101,6 +138,32 @@ impl McpConfig {
         match &self.index {
             IndexConfig::SummaryFile { .. } => None,
             IndexConfig::RootId { root_id } => Some(root_id.as_str()),
+        }
+    }
+
+    pub fn tool_description(&self, tool_name: &str) -> &str {
+        match tool_name {
+            "search_chunks" => self
+                .tool_descriptions
+                .search_chunks
+                .as_deref()
+                .unwrap_or(DEFAULT_SEARCH_CHUNKS_DESCRIPTION),
+            "get_document" => self
+                .tool_descriptions
+                .get_document
+                .as_deref()
+                .unwrap_or(DEFAULT_GET_DOCUMENT_DESCRIPTION),
+            "get_email" => self
+                .tool_descriptions
+                .get_email
+                .as_deref()
+                .unwrap_or(DEFAULT_GET_EMAIL_DESCRIPTION),
+            "get_thread" => self
+                .tool_descriptions
+                .get_thread
+                .as_deref()
+                .unwrap_or(DEFAULT_GET_THREAD_DESCRIPTION),
+            _ => panic!("unknown registered MCP tool {tool_name}"),
         }
     }
 }
@@ -166,6 +229,7 @@ mod tests {
             index: IndexConfig::SummaryFile {
                 path: PathBuf::from("output").join("summary.json"),
             },
+            tool_descriptions: ToolDescriptionsConfig::default(),
             top_k: default_top_k(),
             traversal_width: default_traversal_width(),
         };
@@ -208,6 +272,7 @@ mod tests {
             index: IndexConfig::RootId {
                 root_id: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".into(),
             },
+            tool_descriptions: ToolDescriptionsConfig::default(),
             top_k: default_top_k(),
             traversal_width: default_traversal_width(),
         };
@@ -292,6 +357,80 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(ConfigError::EmptyGatewayDnsName)
+        ));
+    }
+
+    #[test]
+    fn tool_descriptions_override_configured_tools_only() {
+        let config: McpConfig = serde_json::from_str(
+            r#"{
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": { "base_url": "http://localhost:8080" }
+                },
+                "embedding_spec": { "dims": 384, "encoding": "f32le" },
+                "index": {
+                    "kind": "root-id",
+                    "root_id": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                },
+                "tool_descriptions": {
+                    "search_chunks": "Search this corpus for evidence."
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.tool_description("search_chunks"),
+            "Search this corpus for evidence."
+        );
+        assert_eq!(
+            config.tool_description("get_email"),
+            DEFAULT_GET_EMAIL_DESCRIPTION
+        );
+    }
+
+    #[test]
+    fn tool_descriptions_reject_unknown_and_whitespace_values() {
+        let unknown = serde_json::from_str::<McpConfig>(
+            r#"{
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": { "base_url": "http://localhost:8080" }
+                },
+                "embedding_spec": { "dims": 384, "encoding": "f32le" },
+                "index": {
+                    "kind": "root-id",
+                    "root_id": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                },
+                "tool_descriptions": { "unknown_tool": "description" }
+            }"#,
+        );
+        assert!(unknown.is_err());
+
+        let whitespace: McpConfig = serde_json::from_str(
+            r#"{
+                "environment": {
+                    "kind": "local",
+                    "block_store_root": "blocks",
+                    "embedding": { "base_url": "http://localhost:8080" }
+                },
+                "embedding_spec": { "dims": 384, "encoding": "f32le" },
+                "index": {
+                    "kind": "root-id",
+                    "root_id": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                },
+                "tool_descriptions": { "search_chunks": "  " }
+            }"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            whitespace.validate(),
+            Err(ConfigError::EmptyToolDescription {
+                tool_name: "search_chunks"
+            })
         ));
     }
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 LexonArchiveBuilder contributors
 
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use anyhow::Result;
 use rmcp::{
@@ -25,9 +25,17 @@ pub struct LexonArchiveBuilderMcpServer {
 
 impl LexonArchiveBuilderMcpServer {
     pub fn new(runtime: Arc<McpRuntime>) -> Self {
+        let mut tool_router = Self::tool_router();
+        for tool_name in ["search_chunks", "get_document", "get_email", "get_thread"] {
+            let route = tool_router
+                .map
+                .get_mut(tool_name)
+                .expect("registered MCP tool must have a router entry");
+            route.attr.description = Some(Cow::Owned(runtime.tool_description(tool_name).into()));
+        }
         Self {
             runtime,
-            tool_router: Self::tool_router(),
+            tool_router,
         }
     }
 }
@@ -103,4 +111,69 @@ pub async fn serve_stdio(runtime: Arc<McpRuntime>) -> Result<()> {
         .await?;
     service.waiting().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{path::PathBuf, sync::Arc};
+
+    use lexonarchivebuilder_indexer::config::{
+        EmbeddingSpecConfig, EnvironmentConfig, LocalEmbeddingConfig,
+    };
+
+    use super::*;
+    use crate::config::{IndexConfig, McpConfig, McpEnvironmentConfig, ToolDescriptionsConfig};
+
+    #[test]
+    fn server_advertises_configured_tool_descriptions() {
+        let runtime = Arc::new(
+            McpRuntime::new(
+                PathBuf::from("."),
+                McpConfig {
+                    environment: McpEnvironmentConfig::Shared(EnvironmentConfig::Local {
+                        block_store_root: PathBuf::from("blocks"),
+                        embedding: LocalEmbeddingConfig {
+                            base_url: "http://localhost:8080".into(),
+                            model: "all-MiniLM-L6-v2".into(),
+                            api_key_env: None,
+                            request_timeout_secs: 30,
+                            max_retries: 0,
+                            retry_delay_ms: 1,
+                        },
+                    }),
+                    embedding_spec: EmbeddingSpecConfig {
+                        dims: 384,
+                        encoding: "f32le".into(),
+                    },
+                    index: IndexConfig::RootId {
+                        root_id: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                            .into(),
+                    },
+                    tool_descriptions: ToolDescriptionsConfig {
+                        search_chunks: Some("Search this corpus for evidence.".into()),
+                        ..ToolDescriptionsConfig::default()
+                    },
+                    top_k: 5,
+                    traversal_width: 3,
+                },
+            )
+            .unwrap(),
+        );
+        let server = LexonArchiveBuilderMcpServer::new(runtime);
+
+        assert_eq!(
+            server.tool_router.map["search_chunks"]
+                .attr
+                .description
+                .as_deref(),
+            Some("Search this corpus for evidence.")
+        );
+        assert_eq!(
+            server.tool_router.map["get_email"]
+                .attr
+                .description
+                .as_deref(),
+            Some("Retrieve email entries from a search result leaf_block_id")
+        );
+    }
 }

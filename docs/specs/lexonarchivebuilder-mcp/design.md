@@ -434,3 +434,56 @@ production-v2, and `gateway-http3` use their existing storage integrations.
 No embedding request is made by `get_email`.
 
 **Traces to:** RQ-MCP-016, RQ-MCP-007, RQ-MCP-012
+
+## Incremental Design Patch: Corpus-specific MCP tool descriptions
+
+### DSG-MCP-TOOL-DESCRIPTIONS-001 `Description configuration`
+
+Add an optional `tool_descriptions` field to `McpConfig`:
+
+```json
+{
+  "tool_descriptions": {
+    "search_chunks": "Search this corpus for relevant evidence before answering.",
+    "get_email": "Retrieve the email entry for a leaf block ID returned by search."
+  }
+}
+```
+
+It maps to a `ToolDescriptionsConfig` with optional string fields
+`search_chunks`, `get_document`, `get_email`, and `get_thread`. The field names
+match registered MCP tool names exactly. Unknown fields are rejected.
+
+Validation SHALL reject an override that trims to an empty string. It preserves
+the configured text otherwise, including leading or trailing whitespace, so
+the configured client-facing description is not silently rewritten.
+
+**Traces to:** RQ-MCP-017, RQ-MCP-012
+
+### DSG-MCP-TOOL-DESCRIPTIONS-002 `Resolved per-tool descriptions`
+
+Define stable default constants for each currently registered tool description.
+`McpConfig` exposes a resolver for each tool that returns:
+
+1. the configured override when present; otherwise
+2. the corresponding stable default.
+
+The MCP server receives the parsed `McpConfig` through the existing runtime
+and builds the `ToolRouter` with the resolved descriptions when it is created.
+The `#[tool]` attributes continue to bind tool names, schemas, and handlers;
+their static descriptions are replaced at router construction with the resolved
+values.
+
+`ServerHandler::get_info` retains its existing server-level instructions. No
+runtime operation reads description configuration after server initialization.
+
+**Traces to:** RQ-MCP-017, RQ-MCP-001
+
+### DSG-MCP-TOOL-DESCRIPTIONS-003 `Sample configuration`
+
+The local MCP sample includes a `tool_descriptions.search_chunks` example that
+is specific to the local corpus. The gateway template remains corpus-neutral
+and omits `tool_descriptions`; operators add their own overrides in a copied
+deployment configuration.
+
+**Traces to:** RQ-MCP-017
