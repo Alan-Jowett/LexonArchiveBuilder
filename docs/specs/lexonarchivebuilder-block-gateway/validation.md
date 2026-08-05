@@ -140,3 +140,59 @@ Exercise local-redb gateway configuration and immutable block serving.
 
 **Pass condition:** existing blocks are served through read-only redb access
 and mutation is not permitted.
+
+## Incremental Validation Patch: Debian Docker Compose gateway runtime
+
+### VAL-BGW-COMPOSE-001
+
+Inspect `docker-compose.gateway.yml`, the standalone Debian-host Compose file.
+
+**Pass condition:** it declares exactly `block-gateway` and `stapi` services,
+uses `ghcr.io/alan-jowett/lexonarchivebuilder-block-gateway:main` and
+`ghcr.io/substratusai/stapi:v2.2.2-3` respectively, and does not include build
+instructions or additional application services.
+
+**Traces to:** RQ-BGW-COMPOSE-001, DSG-BGW-COMPOSE-001
+
+### VAL-BGW-COMPOSE-002
+
+Inspect the gateway service command, port, and mounts.
+
+**Pass condition:** the gateway selects `production-v2`, mounts the supplied
+certificate and private-key host paths read-only, passes the mounted paths to
+`--certificate` and `--private-key`, and publishes `443:443/udp`.
+
+**Traces to:** RQ-BGW-COMPOSE-002, RQ-BGW-COMPOSE-003,
+RQ-BGW-COMPOSE-005, DSG-BGW-COMPOSE-002
+
+### VAL-BGW-COMPOSE-003
+
+Inspect the gateway runtime configuration and tracked file contents.
+
+**Pass condition:** the Compose file supplies
+`LEXONARCHIVEBUILDER_BLOCK_GATEWAY_SAS_URL` through required Compose
+interpolation, contains no SAS value or PEM material, and does not add a
+repository-tracked secret file.
+
+**Traces to:** RQ-BGW-COMPOSE-004, DSG-BGW-COMPOSE-003
+
+### VAL-BGW-COMPOSE-004
+
+Inspect the STAPI service and its relationship to the gateway.
+
+**Pass condition:** STAPI has no published host port and the gateway has no
+embedding endpoint configuration, `depends_on`, or other runtime coupling to
+STAPI.
+
+**Traces to:** RQ-BGW-COMPOSE-006, DSG-BGW-COMPOSE-004
+
+### VAL-BGW-COMPOSE-005
+
+Inspect the gateway TLS volume sources.
+
+**Pass condition:** the certificate and private-key bind-mount source paths use
+required `BLOCK_GATEWAY_CERTIFICATE_PATH` and
+`BLOCK_GATEWAY_PRIVATE_KEY_PATH` interpolation, no literal `/etc/letsencrypt`
+path remains in the Compose file, and the container targets remain read-only.
+
+**Traces to:** RQ-BGW-COMPOSE-007, DSG-BGW-COMPOSE-005

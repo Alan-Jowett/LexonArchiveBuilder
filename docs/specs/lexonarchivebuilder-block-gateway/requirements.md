@@ -276,3 +276,141 @@ The gateway SHALL remain block-oriented and content-type-neutral so future conte
 
 The local-redb gateway profile SHALL open its immutable block store read-only
 and SHALL not repair, compact, or persist blocks in the served database.
+
+## Incremental Requirements Patch: Debian Docker Compose gateway runtime
+
+### USER-REQUEST
+
+- **UR-BGW-COMPOSE-1 [KNOWN]:** Provide a Docker Compose deployment for a
+  Debian host that runs only
+  `ghcr.io/alan-jowett/lexonarchivebuilder-block-gateway:main` and
+  `ghcr.io/substratusai/stapi:v2.2.2-3`.
+- **UR-BGW-COMPOSE-2 [KNOWN]:** The gateway TLS certificate is available at
+  `/etc/letsencrypt/live/ietf-block-proxy.westus2.cloudapp.azure.com/fullchain.pem`.
+- **UR-BGW-COMPOSE-3 [KNOWN]:** The corresponding private key is available at
+  `/etc/letsencrypt/live/ietf-block-proxy.westus2.cloudapp.azure.com/privkey.pem`.
+- **UR-BGW-COMPOSE-4 [INFERRED]:** The Compose realization must preserve the
+  published image contract by supplying the Azure Table SAS URL externally at
+  runtime rather than embedding it in the Compose file or image.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-BGW-COMPOSE-001 | Add | Define a Debian-hosted Docker Compose runtime containing exactly the published block-gateway and STAPI images | UR-BGW-COMPOSE-1 |
+| CM-BGW-COMPOSE-002 | Add | Mount the specified certificate and private key read-only into the gateway container without copying either secret into the repository or image | UR-BGW-COMPOSE-2, UR-BGW-COMPOSE-3 |
+| CM-BGW-COMPOSE-003 | Add | Require runtime injection of the Azure Table SAS URL through the gateway's existing environment-variable contract | UR-BGW-COMPOSE-4, RQ-BGW-004, RQ-IMG-004A |
+| CM-BGW-COMPOSE-004 | Add | Preserve the gateway's UDP 443 listener and avoid adding application services, reverse proxies, indexers, or MCP servers | UR-BGW-COMPOSE-1, RQ-BGW-002, RQ-BGW-009 |
+| CM-BGW-COMPOSE-005 | Add | Keep STAPI limited to the requested model service without introducing a gateway-to-STAPI dependency absent from the gateway contract | UR-BGW-COMPOSE-1, RQ-BGW-011 |
+
+### Requirements
+
+#### RQ-BGW-COMPOSE-001 - Minimal Debian Compose service set
+
+The repository SHALL provide one Docker Compose file suitable for Docker Compose
+v2 on a Debian host that declares exactly these application services:
+
+1. a gateway service using
+   `ghcr.io/alan-jowett/lexonarchivebuilder-block-gateway:main`
+2. an embedding service using `ghcr.io/substratusai/stapi:v2.2.2-3`
+
+- **Constraint [KNOWN]:** The file SHALL not build images locally.
+- **Constraint [KNOWN]:** The file SHALL not add an indexer, MCP server,
+  reverse proxy, database, or other application service.
+- **Traceability:** UR-BGW-COMPOSE-1
+
+#### RQ-BGW-COMPOSE-002 - Gateway TLS material
+
+The gateway service SHALL receive an operator-supplied host certificate and
+private key.
+
+- **Constraint [INFERRED]:** Both host paths SHALL be mounted read-only.
+- **Constraint [KNOWN]:** The gateway command SHALL refer to the mounted
+  container paths through its existing `--certificate` and `--private-key`
+  arguments.
+- **Constraint [KNOWN]:** The Compose file does not fix the host paths; it
+  obtains them through `BLOCK_GATEWAY_CERTIFICATE_PATH` and
+  `BLOCK_GATEWAY_PRIVATE_KEY_PATH`.
+- **Traceability:** UR-BGW-COMPOSE-2, UR-BGW-COMPOSE-3
+
+#### RQ-BGW-COMPOSE-003 - Gateway public listener
+
+The Compose gateway service SHALL publish the gateway's existing QUIC listener
+on host UDP port `443` to container UDP port `443`.
+
+- **Rationale [KNOWN]:** The published gateway image exposes only `443/udp`,
+  and the gateway defaults its listener to `0.0.0.0:443`.
+- **Traceability:** UR-BGW-COMPOSE-1, RQ-BGW-003, RQ-BGW-009
+
+#### RQ-BGW-COMPOSE-004 - External SAS configuration
+
+The Compose gateway service SHALL supply
+`LEXONARCHIVEBUILDER_BLOCK_GATEWAY_SAS_URL` from an operator-provided
+runtime environment source.
+
+- **Constraint [KNOWN]:** The SAS URL SHALL not be committed to the Compose
+  file, image, or repository.
+- **Constraint [INFERRED]:** The Compose file should require the value at
+  startup so a missing credential fails configuration rather than creating a
+  runnable-looking gateway with no storage access.
+- **Traceability:** UR-BGW-COMPOSE-4, RQ-BGW-004, RQ-IMG-004A
+
+#### RQ-BGW-COMPOSE-005 - Direct Azure Table v2 profile
+
+The Compose gateway service SHALL select the existing `production-v2` gateway
+storage profile unless a later approved requirement requests an overlay or
+local-redb deployment.
+
+- **Rationale [INFERRED]:** The requested runtime supplies the gateway image
+  and Azure Table SAS configuration but does not request cache-root,
+  cache-capacity, or local-redb configuration.
+- **Traceability:** UR-BGW-COMPOSE-1, RQ-BGW-005, RQ-BGW-005A
+
+#### RQ-BGW-COMPOSE-006 - STAPI isolation
+
+The Compose stack SHALL run the requested STAPI image without configuring the
+gateway to depend on, invoke, or expose an embedding-specific contract.
+
+- **Constraint [KNOWN]:** The current gateway is a block retrieval service and
+  has no embedding-service startup configuration.
+- **Traceability:** UR-BGW-COMPOSE-1, RQ-BGW-011
+
+### Invariant Impact Assessment
+
+| Invariant | Impact | Assessment |
+|---|---|---|
+| Gateway remains retrieval-only | Preserved | The Compose runtime only configures the existing gateway image and does not add routes or behavior |
+| Runtime secrets stay outside images and source | Preserved | The certificate, private key, and SAS URL remain host- or operator-provided runtime inputs |
+| MCP and indexing remain separate | Preserved | Neither the MCP server nor an indexer is included in the service set |
+| No central control plane is introduced | Preserved | The stack contains only the existing gateway and requested embedding model |
+| Future content-type neutrality | Preserved | The Compose runtime configures block serving and does not encode content-family behavior |
+
+## Incremental Requirements Patch: Configurable TLS mount sources
+
+### USER-REQUEST
+
+- **UR-BGW-COMPOSE-5 [KNOWN]:** The Docker Compose file must not hard-code
+  certificate or private-key host paths; operators must supply them through
+  environment variables, including a Compose `.env` file.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-BGW-COMPOSE-006 | Revise | Replace literal certificate and private-key bind-mount sources with required Compose-interpolated environment variables | UR-BGW-COMPOSE-5 |
+
+### Requirements
+
+#### RQ-BGW-COMPOSE-007 - Configurable TLS mount sources
+
+The gateway certificate and private-key bind-mount source paths SHALL be
+provided by required Compose variables named
+`BLOCK_GATEWAY_CERTIFICATE_PATH` and `BLOCK_GATEWAY_PRIVATE_KEY_PATH`.
+
+- **Constraint [KNOWN]:** Docker Compose `.env` files are an approved source
+  for these variables.
+- **Constraint [KNOWN]:** The Compose file SHALL fail configuration when either
+  variable is absent.
+- **Constraint [KNOWN]:** The container-side mount targets remain fixed and
+  read-only so the gateway command is unchanged.
+- **Traceability:** UR-BGW-COMPOSE-5, RQ-BGW-COMPOSE-002

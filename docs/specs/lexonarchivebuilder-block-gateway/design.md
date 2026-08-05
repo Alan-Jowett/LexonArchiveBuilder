@@ -239,3 +239,93 @@ explicit rather than implicit.
 
 The gateway local-redb profile constructs `RedbBlockStore` through the upstream
 read-only constructor while preserving the retrieval-only HTTP contract.
+
+## Incremental Design Patch: Debian Docker Compose gateway runtime
+
+### Impact Map
+
+#### Directly affected artifacts
+
+- `docs/specs/lexonarchivebuilder-block-gateway/requirements.md`
+- `docs/specs/lexonarchivebuilder-block-gateway/design.md`
+- `docs/specs/lexonarchivebuilder-block-gateway/validation.md`
+- one new Docker Compose deployment file
+
+#### Indirectly affected artifacts
+
+- Debian-host operator instructions for Docker Compose v2 and external SAS
+  provisioning
+- the existing published gateway and STAPI image contracts
+
+#### Unaffected artifacts
+
+- gateway HTTP route and block-store semantics
+- MCP, indexer, and archive-sync behavior
+- local development Compose services in `docker-compose.yml`
+- production Azure deployment topology
+
+### DSG-BGW-COMPOSE-001 `Two-service published-image topology`
+
+The deployment file is a standalone Compose v2 topology for a Debian Docker
+host. It defines exactly two services:
+
+1. `block-gateway`, using
+   `ghcr.io/alan-jowett/lexonarchivebuilder-block-gateway:main`
+2. `stapi`, using `ghcr.io/substratusai/stapi:v2.2.2-3`
+
+Neither service has a `build` section. The topology does not include the
+repository's local indexer, scale-test, MCP, reverse-proxy, or database
+services.
+
+**Traces to:** RQ-BGW-COMPOSE-001
+
+### DSG-BGW-COMPOSE-002 `Gateway startup contract realization`
+
+The `block-gateway` container invokes the image's existing `serve` command with:
+
+1. `--storage-profile production-v2`
+2. `--certificate` pointing to the read-only mounted certificate path
+3. `--private-key` pointing to the read-only mounted private-key path
+
+The container publishes `443:443/udp`. This is the image's existing QUIC
+listener; it does not introduce a TCP TLS termination path or reverse proxy.
+
+**Traces to:** RQ-BGW-COMPOSE-002, RQ-BGW-COMPOSE-003, RQ-BGW-COMPOSE-005
+
+### DSG-BGW-COMPOSE-003 `Runtime secret boundary`
+
+The Compose file bind-mounts the operator-supplied
+`BLOCK_GATEWAY_CERTIFICATE_PATH` and `BLOCK_GATEWAY_PRIVATE_KEY_PATH` host
+paths into gateway-private, read-only container paths.
+
+The gateway's
+`LEXONARCHIVEBUILDER_BLOCK_GATEWAY_SAS_URL` environment variable is populated
+through Compose interpolation from an operator-provided environment value. The
+Compose file contains no certificate contents, private-key contents, or SAS
+value.
+
+**Traces to:** RQ-BGW-COMPOSE-002, RQ-BGW-COMPOSE-004, RQ-IMG-004A
+
+### DSG-BGW-COMPOSE-004 `Embedding-service non-coupling`
+
+The `stapi` service runs the requested model image without `depends_on`,
+gateway environment wiring, or published port. Compose provides ordinary
+service-network reachability, but the gateway does not use it because the
+gateway startup contract has no embedding endpoint input.
+
+This preserves the requested two-container operational footprint without
+claiming that STAPI is a gateway dependency.
+
+**Traces to:** RQ-BGW-COMPOSE-006, RQ-BGW-011
+
+### DSG-BGW-COMPOSE-005 `Configurable TLS mount sources`
+
+The gateway volume source paths use required Compose interpolation for
+`BLOCK_GATEWAY_CERTIFICATE_PATH` and `BLOCK_GATEWAY_PRIVATE_KEY_PATH`. Docker
+Compose may load both values from the operator's `.env` file.
+
+The container targets remain `/tls/fullchain.pem` and `/tls/privkey.pem`, and
+both mounts remain read-only. The gateway command therefore continues to refer
+only to stable container paths rather than operator-specific host paths.
+
+**Traces to:** RQ-BGW-COMPOSE-007

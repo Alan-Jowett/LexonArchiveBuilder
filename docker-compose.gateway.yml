@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LexonArchiveBuilder contributors
+
+services:
+  block-gateway:
+    image: ghcr.io/alan-jowett/lexonarchivebuilder-block-gateway:main
+    restart: unless-stopped
+    command:
+      [
+        "serve",
+        "--storage-profile",
+        "production-v2",
+        "--certificate",
+        "/tls/fullchain.pem",
+        "--private-key",
+        "/tls/privkey.pem"
+      ]
+    environment:
+      LEXONARCHIVEBUILDER_BLOCK_GATEWAY_SAS_URL: "${LEXONARCHIVEBUILDER_BLOCK_GATEWAY_SAS_URL:?Set LEXONARCHIVEBUILDER_BLOCK_GATEWAY_SAS_URL in the host environment or .env file.}"
+    ports:
+      - "443:443/udp"
+    volumes:
+      - "${BLOCK_GATEWAY_CERTIFICATE_PATH:?Set BLOCK_GATEWAY_CERTIFICATE_PATH in the host environment or .env file.}:/tls/fullchain.pem:ro"
+      - "${BLOCK_GATEWAY_PRIVATE_KEY_PATH:?Set BLOCK_GATEWAY_PRIVATE_KEY_PATH in the host environment or .env file.}:/tls/privkey.pem:ro"
+
+  stapi:
+    image: ghcr.io/substratusai/stapi:v2.2.2-3
+    restart: unless-stopped
