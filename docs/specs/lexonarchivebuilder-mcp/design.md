@@ -376,3 +376,175 @@ file, local block-store path, Docker network alias, or a local
 embedding-service process.
 
 **Traces to:** RQ-MCP-015, RQ-MCP-014, RQ-MCP-013
+
+## Incremental Design Patch: Leaf-addressed email retrieval
+
+### DSG-MCP-EMAIL-001 `Leaf-addressed email resolution`
+
+`get_email` SHALL parse its existing `name` parameter as a `BlockHash` and use
+the same `configured_block_store` selection path as `search_chunks`. It does
+not load an index summary, root, embedding provider, or searcher.
+
+The runtime SHALL retrieve only the named block:
+
+1. A malformed block ID returns the existing invalid-block-ID runtime failure.
+2. A missing block returns an explicit missing-email-leaf runtime failure.
+3. A branch block returns an explicit non-leaf runtime failure.
+4. A leaf block's sole entry is projected only when
+   `source_kind == "email"`.
+5. A non-email leaf returns an explicit no-email-entries runtime failure.
+
+No root traversal, metadata scan outside the selected leaf, subject comparison,
+or Message-ID comparison is allowed.
+
+**Traces to:** RQ-MCP-016, RQ-MCP-005A, RQ-MCP-006
+
+### DSG-MCP-EMAIL-002 `Email result projection`
+
+`get_email` SHALL return an `EmailRetrievalResponse`:
+
+```text
+{
+  leaf_block_id: String,
+  entry: SearchChunkHit
+}
+```
+
+The entry reuses the existing `SearchChunkHit` projection:
+
+- `position` is `0`, the position of the sole entry within the selected leaf.
+- `leaf_block_id` is the requested leaf ID.
+- `media_type`, `text`, and `metadata` are taken from the stored entry.
+- `source_kind`, `source_path`, and `source_name` are projected by the same
+  helpers used by `search_chunks`.
+
+This type is returned only on successful email retrieval. `get_document` and
+`get_thread` retain `NamedRetrievalResponse` and their explicit
+`unsupported` outcome. MCP tool failures are mapped through the existing
+server error path rather than returned as success-shaped
+`EmailRetrievalResponse` values.
+
+**Traces to:** RQ-MCP-016, RQ-MCP-003, RQ-MCP-004
+
+### DSG-MCP-EMAIL-003 `Read-only environment reuse`
+
+Email retrieval calls the existing read-only block-store selector exactly once
+per request. Therefore local, local-redb, local-overlay, production,
+production-v2, and `gateway-http3` use their existing storage integrations.
+No embedding request is made by `get_email`.
+
+**Traces to:** RQ-MCP-016, RQ-MCP-007, RQ-MCP-012
+
+## Incremental Design Patch: Corpus-specific MCP tool descriptions
+
+### DSG-MCP-TOOL-DESCRIPTIONS-001 `Description configuration`
+
+Add an optional `tool_descriptions` field to `McpConfig`:
+
+```json
+{
+  "tool_descriptions": {
+    "search_chunks": "Search this corpus for relevant evidence before answering.",
+    "get_email": "Retrieve the email entry for a leaf block ID returned by search."
+  }
+}
+```
+
+It maps to a `ToolDescriptionsConfig` with optional string fields
+`search_chunks`, `get_document`, `get_email`, and `get_thread`. The field names
+match registered MCP tool names exactly. Unknown fields are rejected.
+
+Validation SHALL reject an override that trims to an empty string. It preserves
+the configured text otherwise, including leading or trailing whitespace, so
+the configured client-facing description is not silently rewritten.
+
+**Traces to:** RQ-MCP-017, RQ-MCP-012
+
+### DSG-MCP-TOOL-DESCRIPTIONS-002 `Resolved per-tool descriptions`
+
+Define stable default constants for each currently registered tool description.
+`McpConfig` exposes a resolver for each tool that returns:
+
+1. the configured override when present; otherwise
+2. the corresponding stable default.
+
+The MCP server receives the parsed `McpConfig` through the existing runtime
+and builds the `ToolRouter` with the resolved descriptions when it is created.
+The `#[tool]` attributes continue to bind tool names, schemas, and handlers;
+their static descriptions are replaced at router construction with the resolved
+values.
+
+`ServerHandler::get_info` retains its existing server-level instructions. No
+runtime operation reads description configuration after server initialization.
+
+**Traces to:** RQ-MCP-017, RQ-MCP-001
+
+### DSG-MCP-TOOL-DESCRIPTIONS-003 `Sample configuration`
+
+The local MCP sample includes a `tool_descriptions.search_chunks` example that
+is specific to the local corpus. The gateway template remains corpus-neutral
+and omits `tool_descriptions`; operators add their own overrides in a copied
+deployment configuration.
+
+**Traces to:** RQ-MCP-017
+
+## Incremental Design Patch: MCP response timing metadata
+
+### DSG-MCP-RESPONSE-TIMING-001 `Timed structured tool outcomes`
+
+The MCP server SHALL time each handler immediately after rmcp has decoded its
+tool parameters. A shared server helper SHALL retain the start instant while
+executing the runtime operation and convert the final duration to a
+non-negative whole-millisecond `u64` value.
+
+Successful domain results SHALL be serialized as structured MCP content with
+their existing fields flattened alongside a top-level `elapsed_ms` field. The
+same JSON value SHALL be used for the caller-visible text content so clients
+that do not consume structured content retain access to the complete result.
+
+The handler scope ends when it has constructed this MCP result. It therefore
+includes runtime validation, configured storage and embedding work, search,
+retrieval, and response projection, but excludes parameter decoding and stdio
+transport.
+
+**Traces to:** RQ-MCP-018, RQ-MCP-001, RQ-MCP-007, RQ-MCP-010
+
+### DSG-MCP-RESPONSE-TIMING-002 `Timed tool failures`
+
+For a routed invocation whose runtime operation fails, the shared helper SHALL
+return rmcp `CallToolResult::structured_error` rather than propagating the
+runtime error through the JSON-RPC error path. Its structured content SHALL
+be:
+
+```text
+{
+  error: String,
+  elapsed_ms: u64
+}
+```
+
+The result's MCP `isError` flag SHALL be true. The `error` value is the
+existing runtime error text, and the same structured JSON is exposed in the
+text content. This preserves a client-visible MCP tool error while providing
+the requested timing metadata.
+
+Unroutable calls and malformed tool-argument payloads remain rmcp/router
+protocol failures: they do not reach a decoded handler and are outside the
+handler-boundary timing contract.
+
+**Traces to:** RQ-MCP-018, RQ-MCP-016
+
+### DSG-MCP-RESPONSE-TIMING-003 `Uniform handler application`
+
+`search_chunks` and `get_email` SHALL execute through the timed success/error
+helper. `get_document` and `get_thread` SHALL execute through the timed
+success helper, retaining their existing `unsupported` domain response and
+adding only `elapsed_ms`.
+
+No runtime search, retrieval, storage, embedding, configuration, or tool
+description code changes behavior to collect timing. The README SHALL
+describe `elapsed_ms`, its handler-boundary scope, and that a routed tool
+failure is represented by MCP `isError` plus structured `error` and
+`elapsed_ms` content.
+
+**Traces to:** RQ-MCP-018, RQ-MCP-005, RQ-MCP-016, RQ-MCP-017

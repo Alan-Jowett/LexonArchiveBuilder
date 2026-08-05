@@ -366,6 +366,11 @@ The local MVP server reads a JSON config file that identifies:
 
 See `examples/local/mcp.request.sample.json` for a complete local config.
 
+To tailor tool guidance for a corpus, add `tool_descriptions` to the MCP
+configuration. Each optional field (`search_chunks`, `get_document`,
+`get_email`, or `get_thread`) replaces that tool's advertised description;
+omitted fields retain their defaults.
+
 ### Running locally
 
 First generate the local block store and summary:
@@ -392,10 +397,18 @@ The MVP exposes four MCP tools:
 - `get_email`
 - `get_thread`
 
-The search tool is executable end to end in the local profile. The named
-retrieval tools are present in the MVP surface and currently return an explicit
+The search tool is executable end to end in the local profile. `get_email`
+accepts a `leaf_block_id` returned by `search_chunks` and returns that leaf's
+sole email entry. `get_document` and `get_thread` return an explicit
 `unsupported` outcome until LexonGraph exposes a delegated retrieval-by-name
 contract for those item classes.
+
+Every routed tool result includes a top-level integer `elapsed_ms`, measured
+from the decoded MCP handler parameters until it produces the result. It
+includes server-side validation, dependency calls, and response construction,
+but excludes stdio transport and client execution. A routed tool failure is an
+MCP `isError` result whose structured content contains `error` and
+`elapsed_ms`.
 
 ### Running through an HTTP/3 block gateway
 

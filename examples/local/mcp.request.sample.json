@@ -18,6 +18,9 @@
     "kind": "summary-file",
     "path": "output/summary.json"
   },
+  "tool_descriptions": {
+    "search_chunks": "Search the local LexonArchiveBuilder sample corpus for relevant content."
+  },
   "top_k": 5,
   "traversal_width": 3
 }

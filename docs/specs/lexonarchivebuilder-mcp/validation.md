@@ -274,3 +274,109 @@ authority.
 
 **Traces to:** RQ-MCP-014, RQ-MCP-015, DSG-MCP-GATEWAY-002,
 DSG-MCP-GATEWAY-003
+
+## Incremental Validation Patch: Leaf-addressed email retrieval
+
+### VAL-MCP-EMAIL-001
+
+Invoke `get_email` with the `leaf_block_id` returned by a representative
+`search_chunks` result whose sole leaf entry is an email.
+
+**Pass condition:** the response is an `EmailRetrievalResponse` containing the
+requested leaf ID and its sole email entry. The entry preserves the existing
+search chunk projection fields.
+
+**Traces to:** RQ-MCP-016, DSG-MCP-EMAIL-001, DSG-MCP-EMAIL-002
+
+### VAL-MCP-EMAIL-002
+
+Invoke `get_email` with malformed and missing block IDs, a branch block ID,
+and a leaf whose sole entry is not an email.
+
+**Pass condition:** each case returns the documented MCP error path and never
+an `unsupported` response, a successful empty entry list, or a lookup outside
+the requested block.
+
+**Traces to:** RQ-MCP-016, DSG-MCP-EMAIL-001, DSG-MCP-EMAIL-002
+
+### VAL-MCP-EMAIL-003
+
+Invoke `get_email` against local and gateway HTTP/3 MCP configurations.
+
+**Pass condition:** both paths use their selected read-only block-store
+integration, return the same response shape for the same leaf content, and
+make no embedding request.
+
+**Traces to:** RQ-MCP-016, DSG-MCP-EMAIL-003
+
+## Incremental Validation Patch: Corpus-specific MCP tool descriptions
+
+### VAL-MCP-TOOL-DESCRIPTIONS-001
+
+Parse an MCP configuration with an override for `search_chunks` and no
+overrides for the other tools.
+
+**Pass condition:** the `search_chunks` resolver returns the configured text;
+each other resolver returns its documented default description.
+
+**Traces to:** RQ-MCP-017, DSG-MCP-TOOL-DESCRIPTIONS-001,
+DSG-MCP-TOOL-DESCRIPTIONS-002
+
+### VAL-MCP-TOOL-DESCRIPTIONS-002
+
+Parse MCP configurations with an unknown `tool_descriptions` field and with
+whitespace-only description values.
+
+**Pass condition:** each configuration fails parsing or validation; no invalid
+description is advertised to MCP clients.
+
+**Traces to:** RQ-MCP-017, DSG-MCP-TOOL-DESCRIPTIONS-001
+
+### VAL-MCP-TOOL-DESCRIPTIONS-003
+
+Initialize the MCP server using a configuration with a custom
+`search_chunks` description and inspect `tools/list`.
+
+**Pass condition:** the advertised `search_chunks` description is the exact
+configured override, while tool names, schemas, other default descriptions,
+and server-level instructions retain their existing behavior.
+
+**Traces to:** RQ-MCP-017, DSG-MCP-TOOL-DESCRIPTIONS-002
+
+## Incremental Validation Patch: MCP response timing metadata
+
+### VAL-MCP-RESPONSE-TIMING-001
+
+Invoke `search_chunks` with a representative valid request and inspect its MCP
+tool result.
+
+**Pass condition:** the structured content and text content both contain the
+existing search response fields plus a top-level non-negative integer
+`elapsed_ms`; the MCP result is not an error.
+
+**Traces to:** RQ-MCP-018, DSG-MCP-RESPONSE-TIMING-001
+
+### VAL-MCP-RESPONSE-TIMING-002
+
+Invoke successful `get_email`, `get_document`, and `get_thread` operations and
+inspect their MCP tool results.
+
+**Pass condition:** each response retains its existing operation-specific
+fields and has a top-level non-negative integer `elapsed_ms`. The document and
+thread results retain their explicit `unsupported` status.
+
+**Traces to:** RQ-MCP-018, DSG-MCP-RESPONSE-TIMING-001,
+DSG-MCP-RESPONSE-TIMING-003
+
+### VAL-MCP-RESPONSE-TIMING-003
+
+Invoke `search_chunks` and `get_email` with inputs that produce existing
+runtime failures, such as a zero search parameter and a malformed email leaf
+block ID.
+
+**Pass condition:** each routed invocation returns an MCP tool result whose
+`isError` flag is true and whose structured and text content both contain the
+existing error text plus a top-level non-negative integer `elapsed_ms`. It is
+not converted to a successful domain result or a JSON-RPC protocol failure.
+
+**Traces to:** RQ-MCP-018, DSG-MCP-RESPONSE-TIMING-002

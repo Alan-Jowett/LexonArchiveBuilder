@@ -459,3 +459,262 @@ operator-provided gateway authority and root ID
     existing gateway embedding-provider implementation.
 - **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
   validation artifacts, and README/config-example changes.
+
+## Incremental Requirements Patch: Leaf-addressed email retrieval
+
+### USER-REQUEST
+
+- **UR-MCP-EMAIL-001 [KNOWN]:** Implement the `get_email` MCP tool.
+- **UR-MCP-EMAIL-002 [KNOWN]:** `get_email.name` is the `leaf_block_id`
+  returned by `search_chunks`.
+- **UR-MCP-EMAIL-003 [KNOWN, superseded]:** When that leaf contains multiple
+  email entries, return all of them. This cannot occur because of the
+  subsequently discovered LexonGraph leaf-block invariant.
+- **UR-MCP-EMAIL-004 [KNOWN]:** LexonGraph leaf blocks contain exactly one
+  entry; `get_email` returns that sole entry when it is an email and rejects a
+  non-email leaf.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-MCP-EMAIL-001 | Revise | Give `get_email` a deterministic, leaf-addressed retrieval contract | UR-MCP-EMAIL-001, UR-MCP-EMAIL-002 |
+| CM-MCP-EMAIL-002 | Revise | Permit direct block lookup for `get_email` while retaining the ban on metadata-scanning fallback retrieval | UR-MCP-EMAIL-001, UR-MCP-EMAIL-002 |
+| CM-MCP-EMAIL-003 | Revise | Return the selected leaf's sole email entry, consistent with the LexonGraph leaf-block invariant | UR-MCP-EMAIL-003, UR-MCP-EMAIL-004 |
+
+### Before / After
+
+#### BA-MCP-EMAIL-001
+
+- **Before [KNOWN]:** `get_email` accepts an ambiguous `name` string and
+  always returns an explicit `unsupported` response.
+- **After [KNOWN]:** `get_email.name` accepts a `leaf_block_id` previously
+  returned by `search_chunks` and retrieves that leaf's sole email entry when
+  it is an email.
+
+#### BA-MCP-EMAIL-002
+
+- **Before [KNOWN]:** The named-retrieval boundary prohibits all
+  repository-local retrieval fallback behavior because no delegated
+  name-based lookup contract exists.
+- **After [INFERRED]:** `get_email` performs a direct, content-addressed block
+  lookup rather than metadata scanning or fuzzy matching. This narrow lookup is
+  an explicit exception to RQ-MCP-005A and does not define email-name matching
+  semantics.
+
+### Requirements
+
+#### RQ-MCP-016 - Leaf-addressed email retrieval
+
+`get_email` SHALL interpret `NamedRetrievalRequest.name` as the exact
+`leaf_block_id` emitted by `search_chunks`.
+
+- **Lookup boundary [KNOWN]:** The tool SHALL parse the supplied identifier as
+  a block hash and use the configured read-only block store to retrieve that
+  one block. It SHALL not run semantic search, scan unrelated leaves, or
+  perform subject, Message-ID, or metadata matching.
+- **Entry selection [KNOWN]:** The tool SHALL require a leaf block containing
+  exactly one entry. It SHALL return that entry only when its `source_kind`
+  metadata value is `email`; otherwise it SHALL reject the leaf.
+- **Result projection [INFERRED]:** The returned email entry SHALL preserve
+  the leaf entry's content, media type, metadata, source path, and source name
+  using the same projection rules as `search_chunks`.
+- **Failure behavior [INFERRED]:** Invalid block IDs, missing blocks,
+  non-leaf blocks, and leaves with no email entries SHALL produce explicit MCP
+  tool failures or explicit not-found outcomes. They SHALL not be represented
+  as successful empty email retrieval or as an `unsupported` response.
+- **Environment boundary [KNOWN]:** The lookup SHALL use the same configured
+  read-only block-store profile as `search_chunks`, including `gateway-http3`,
+  and SHALL not require query embeddings.
+- **Compatibility [KNOWN]:** The existing MCP tool name and `name` request
+  field remain unchanged. `get_document` and `get_thread` remain unsupported
+  in this increment.
+- **Traceability:** UR-MCP-EMAIL-001, UR-MCP-EMAIL-002, UR-MCP-EMAIL-003,
+  UR-MCP-EMAIL-004,
+  RQ-MCP-005, RQ-MCP-005A, RQ-MCP-006, RQ-MCP-007, RQ-MCP-011
+
+### Invariant Impact Assessment
+
+| Invariant | Impact | Assessment |
+|---|---|---|
+| Indexing remains separate from search serving | Preserved | `get_email` reads an existing content-addressed leaf and does not alter indexing |
+| Actual search semantics remain owned by LexonGraph | Preserved | Retrieval neither invokes nor redefines search or ranking semantics |
+| No repository-local metadata-scanning fallback | Preserved with narrow exception | Retrieval directly addresses one caller-supplied leaf and filters only its entries |
+| Environment-specific dependencies stay behind stable interfaces | Preserved | The existing configured read-only block-store selection is reused |
+| Future content-type extensibility | Preserved | Email-specific leaf validation is isolated to `get_email`; no shared search contract changes |
+
+### Coverage Notes
+
+- **Covered sources [KNOWN]:**
+  - `crates/lexonarchivebuilder-mcp/src/server.rs`, which registers
+    `get_email` with `NamedRetrievalRequest`.
+  - `crates/lexonarchivebuilder-mcp/src/runtime.rs`, where `get_email`
+    performs leaf-addressed retrieval and `search_chunks` resolves and reads
+    leaves through the configured block store.
+  - `crates/lexonarchivebuilder-indexer/src/mailbox.rs`, which writes
+    `source_kind`, `email_name`, and `email_message_id` metadata.
+  - `crates/lexonarchivebuilder-indexer/src/tree_tools.rs`, which preserves
+    `email_name` as a source-name metadata value.
+  - the LexonGraph `LeafBlock` validation reached through the workspace pin,
+    which rejects leaves containing more than one entry.
+- **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
+  validation artifacts, and documentation changes.
+
+## Incremental Requirements Patch: MCP response timing metadata
+
+### USER-REQUEST
+
+- **UR-MCP-RESPONSE-TIMING-001 [KNOWN]:** Add metadata to MCP tool responses,
+  specifically response time.
+- **UR-MCP-RESPONSE-TIMING-002 [KNOWN]:** Return timing for every implemented
+  MCP tool outcome, including failures.
+- **UR-MCP-RESPONSE-TIMING-003 [KNOWN]:** Expose timing as a top-level integer
+  `elapsed_ms` measured at the MCP handler boundary.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-MCP-RESPONSE-TIMING-001 | Add | Return top-level elapsed time for each MCP tool outcome | UR-MCP-RESPONSE-TIMING-001, UR-MCP-RESPONSE-TIMING-003 |
+| CM-MCP-RESPONSE-TIMING-002 | Add | Preserve timing metadata when a tool execution fails | UR-MCP-RESPONSE-TIMING-002 |
+| CM-MCP-RESPONSE-TIMING-003 | Preserve | Keep timing scope independent of indexing, storage, embedding, and transport | UR-MCP-RESPONSE-TIMING-003 |
+
+### Before / After
+
+#### BA-MCP-RESPONSE-TIMING-001
+
+- **Before [KNOWN]:** `search_chunks`, `get_email`, and named retrieval
+  responses expose only operation-specific fields. Failures are emitted
+  through the existing MCP server error path without elapsed-time data.
+- **After [INFERRED]:** Each MCP tool outcome exposes a top-level
+  `elapsed_ms` field, including an outcome representing a tool failure.
+
+### Requirements
+
+#### RQ-MCP-018 - MCP response timing metadata
+
+Every registered MCP tool invocation that reaches a decoded tool handler SHALL
+expose a top-level `elapsed_ms` field in the client-visible outcome, whether
+its operation succeeds, returns an explicit unsupported result, or fails.
+
+- **Value [KNOWN]:** `elapsed_ms` SHALL be a non-negative integer count of
+  whole milliseconds.
+- **Measurement boundary [KNOWN]:** The elapsed interval SHALL begin when the
+  MCP tool handler receives its decoded request parameters and end when that
+  handler has produced its success or failure outcome. It SHALL exclude stdio
+  transport, client-side execution, and client-side rendering time.
+- **Coverage [KNOWN]:** The requirement applies to `search_chunks`,
+  `get_document`, `get_email`, and `get_thread`, including validation,
+  block-store, embedding, and retrieval failures that arise while executing
+  those tools. Invalid payloads rejected before a handler receives decoded
+  parameters remain MCP protocol errors outside this timing contract.
+- **Failure semantics [INFERRED]:** A failure outcome SHALL retain an
+  unambiguous MCP error indication while also making `elapsed_ms` available;
+  it SHALL not be converted into a successful domain result merely to carry
+  timing data.
+- **Contract evolution [INFERRED]:** Successful tool response schemas gain
+  only `elapsed_ms`; their existing operation-specific fields and values
+  retain their current meanings. This requirement supersedes the
+  RQ-MCP-016 assumption that email retrieval failures must use an error path
+  incapable of returning response metadata.
+- **Isolation [KNOWN]:** Timing collection SHALL not select, configure, or
+  alter an indexing pipeline, block store, embedding provider, or search
+  traversal parameter.
+- **Traceability:** UR-MCP-RESPONSE-TIMING-001,
+  UR-MCP-RESPONSE-TIMING-002, UR-MCP-RESPONSE-TIMING-003, RQ-MCP-001,
+  RQ-MCP-007, RQ-MCP-010, RQ-MCP-012, RQ-MCP-016
+
+### Invariant Impact Assessment
+
+| Invariant | Impact | Assessment |
+|---|---|---|
+| MCP error signaling | Modified | Tool failures must remain errors while becoming observable with timing metadata |
+| Indexing/search separation | Preserved | Measurement observes handler duration and does not participate in indexing or ranking |
+| Environment-specific adapter selection | Preserved | The selected storage and embedding dependencies are unchanged |
+| Tool contract extensibility | Improved | A common timing field makes tool outcomes consistently observable |
+
+### Coverage Notes
+
+- **Covered sources [KNOWN]:**
+  - `crates/lexonarchivebuilder-mcp/src/server.rs`, which defines the MCP
+    handler success and error boundary for all registered tools.
+  - `crates/lexonarchivebuilder-mcp/src/runtime.rs`, which defines the three
+    current successful response types and tool runtime failures.
+  - `docs/specs/lexonarchivebuilder-mcp/requirements.md`, whose
+    RQ-MCP-016 currently specifies the email-failure error path.
+- **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
+  validation artifacts, and documentation changes.
+
+## Incremental Requirements Patch: Corpus-specific MCP tool descriptions
+
+### USER-REQUEST
+
+- **UR-MCP-TOOL-DESCRIPTIONS-001 [KNOWN]:** Allow MCP configuration to replace
+  default tool descriptions with corpus-specific instructions.
+- **UR-MCP-TOOL-DESCRIPTIONS-002 [KNOWN]:** In particular, operators need to
+  replace the default `search_chunks` description for their corpus.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-MCP-TOOL-DESCRIPTIONS-001 | Add | Define optional per-tool description overrides in MCP configuration | UR-MCP-TOOL-DESCRIPTIONS-001 |
+| CM-MCP-TOOL-DESCRIPTIONS-002 | Preserve | Retain existing descriptions for tools without configured overrides | UR-MCP-TOOL-DESCRIPTIONS-001 |
+| CM-MCP-TOOL-DESCRIPTIONS-003 | Preserve | Keep tool names, schemas, server instructions, and runtime behavior unchanged | UR-MCP-TOOL-DESCRIPTIONS-001, UR-MCP-TOOL-DESCRIPTIONS-002 |
+
+### Before / After
+
+#### BA-MCP-TOOL-DESCRIPTIONS-001
+
+- **Before [KNOWN]:** Each MCP tool description is a fixed string in
+  `crates/lexonarchivebuilder-mcp/src/server.rs`.
+- **After [INFERRED]:** An operator can configure a corpus-specific
+  description for an individual registered MCP tool without recompiling the
+  server.
+
+### Requirements
+
+#### RQ-MCP-017 - Configurable MCP tool descriptions
+
+`McpConfig` SHALL support an optional `tool_descriptions` object whose fields
+are the registered MCP tool names: `search_chunks`, `get_document`,
+`get_email`, and `get_thread`.
+
+- **Override behavior [KNOWN]:** A non-empty configured value SHALL replace
+  the corresponding default description in the MCP `tools/list` response.
+- **Default behavior [INFERRED]:** When `tool_descriptions` is absent, or an
+  individual field is absent, the existing default description for that tool
+  SHALL remain in effect.
+- **Validation [INFERRED]:** A configured description containing only
+  whitespace SHALL be rejected during MCP configuration validation rather than
+  being advertised to clients.
+- **Contract preservation [KNOWN]:** This option SHALL not change tool names,
+  request or response schemas, tool implementation behavior, the server-level
+  instructions string, or block-store/embedding selection.
+- **Extensibility [INFERRED]:** New registered tools may add a corresponding
+  optional description field without changing the configuration semantics of
+  existing tools.
+- **Traceability:** UR-MCP-TOOL-DESCRIPTIONS-001, UR-MCP-TOOL-DESCRIPTIONS-002,
+  RQ-MCP-001, RQ-MCP-012
+
+### Invariant Impact Assessment
+
+| Invariant | Impact | Assessment |
+|---|---|---|
+| MCP tool contract | Preserved | Only human-facing tool descriptions vary by configuration |
+| Indexing/search separation | Preserved | No indexing, retrieval, or search execution behavior changes |
+| Environment-specific dependency selection | Preserved | Description selection is independent of storage and embedding profiles |
+| Future content-type extensibility | Improved | Corpus operators can explain tool relevance without tool-schema forks |
+
+### Coverage Notes
+
+- **Covered sources [KNOWN]:**
+  - `crates/lexonarchivebuilder-mcp/src/server.rs`, which declares all four
+    fixed tool descriptions.
+  - `crates/lexonarchivebuilder-mcp/src/config.rs`, which parses and validates
+    the MCP configuration.
+  - `examples/local/mcp.request.sample.json` and
+    `examples/gateway-http3/mcp.request.template.json`, which demonstrate
+    corpus-specific MCP configuration.
+- **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
+  validation artifacts, and documentation changes.
