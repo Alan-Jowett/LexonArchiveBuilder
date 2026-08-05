@@ -397,6 +397,20 @@ retrieval tools are present in the MVP surface and currently return an explicit
 `unsupported` outcome until LexonGraph exposes a delegated retrieval-by-name
 contract for those item classes.
 
+### Running through an HTTP/3 block gateway
+
+Copy `examples\gateway-http3\mcp.request.template.json` outside the repository,
+replace `<operator-provided-gateway-dns-name>` with the deployment's gateway DNS
+name, then run:
+
+```powershell
+cargo run -p lexonarchivebuilder-mcp -- serve --config C:\path\to\mcp.gateway.request.json
+```
+
+The `gateway-http3` profile reads index blocks and obtains query embeddings
+through that one gateway. It does not use a local block store, local embedding
+service, separate embedding endpoint, or embedding API key.
+
 ### Running with Docker Compose
 
 Use the local integration stack in three steps so STAPI stays available in the

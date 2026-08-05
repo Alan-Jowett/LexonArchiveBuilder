@@ -4,7 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use lexonarchivebuilder_indexer::config::{
-    ConfigError as IndexerConfigError, EmbeddingSpecConfig, EnvironmentConfig,
+    ConfigError as IndexerConfigError, DEFAULT_LOCAL_EMBEDDING_MODEL, DEFAULT_MAX_RETRIES,
+    DEFAULT_REQUEST_TIMEOUT_SECS, DEFAULT_RETRY_DELAY_MS, EmbeddingSpecConfig, EnvironmentConfig,
 };
 use serde::Deserialize;
 use thiserror::Error;
@@ -14,13 +15,41 @@ const DEFAULT_TRAVERSAL_WIDTH: usize = 3;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct McpConfig {
-    pub environment: EnvironmentConfig,
+    pub environment: McpEnvironmentConfig,
     pub embedding_spec: EmbeddingSpecConfig,
     pub index: IndexConfig,
     #[serde(default = "default_top_k")]
     pub top_k: usize,
     #[serde(default = "default_traversal_width")]
     pub traversal_width: usize,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum McpEnvironmentConfig {
+    Shared(EnvironmentConfig),
+    GatewayHttp3(GatewayHttp3McpEnvironmentConfig),
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GatewayHttp3McpEnvironmentConfig {
+    pub kind: GatewayHttp3Kind,
+    pub gateway_dns_name: String,
+    #[serde(default = "default_gateway_model")]
+    pub model: String,
+    #[serde(default = "default_gateway_request_timeout_secs")]
+    pub request_timeout_secs: u64,
+    #[serde(default = "default_gateway_max_retries")]
+    pub max_retries: u32,
+    #[serde(default = "default_gateway_retry_delay_ms")]
+    pub retry_delay_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GatewayHttp3Kind {
+    GatewayHttp3,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -36,6 +65,8 @@ pub enum ConfigError {
     InvalidTopK,
     #[error("traversal_width must be at least 1")]
     InvalidTraversalWidth,
+    #[error("gateway_dns_name must not be empty")]
+    EmptyGatewayDnsName,
     #[error(transparent)]
     IndexerConfig(#[from] IndexerConfigError),
 }
@@ -48,7 +79,14 @@ impl McpConfig {
         if self.traversal_width == 0 {
             return Err(ConfigError::InvalidTraversalWidth);
         }
-        self.environment.validate()?;
+        match &self.environment {
+            McpEnvironmentConfig::Shared(environment) => environment.validate()?,
+            McpEnvironmentConfig::GatewayHttp3(gateway) => {
+                if gateway.gateway_dns_name.trim().is_empty() {
+                    return Err(ConfigError::EmptyGatewayDnsName);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -83,6 +121,22 @@ fn default_traversal_width() -> usize {
     DEFAULT_TRAVERSAL_WIDTH
 }
 
+fn default_gateway_model() -> String {
+    DEFAULT_LOCAL_EMBEDDING_MODEL.to_string()
+}
+
+fn default_gateway_request_timeout_secs() -> u64 {
+    DEFAULT_REQUEST_TIMEOUT_SECS
+}
+
+fn default_gateway_max_retries() -> u32 {
+    DEFAULT_MAX_RETRIES
+}
+
+fn default_gateway_retry_delay_ms() -> u64 {
+    DEFAULT_RETRY_DELAY_MS
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -94,7 +148,7 @@ mod tests {
     #[test]
     fn relative_summary_paths_are_resolved_against_config_directory() {
         let config = McpConfig {
-            environment: EnvironmentConfig::Local {
+            environment: McpEnvironmentConfig::Shared(EnvironmentConfig::Local {
                 block_store_root: PathBuf::from("blocks"),
                 embedding: LocalEmbeddingConfig {
                     base_url: "http://localhost:8080".into(),
@@ -104,7 +158,7 @@ mod tests {
                     max_retries: 1,
                     retry_delay_ms: 1,
                 },
-            },
+            }),
             embedding_spec: EmbeddingSpecConfig {
                 dims: 384,
                 encoding: "f32le".into(),
@@ -132,7 +186,7 @@ mod tests {
     #[test]
     fn production_config_requires_overlay_block_store_fields() {
         let config = McpConfig {
-            environment: EnvironmentConfig::Production {
+            environment: McpEnvironmentConfig::Shared(EnvironmentConfig::Production {
                 block_store: lexonarchivebuilder_indexer::config::ProductionBlockStoreConfig {
                     container_sas_url:
                         "https://example.blob.core.windows.net/archive-sync?sig=test".into(),
@@ -146,7 +200,7 @@ mod tests {
                     api_version: "2024-02-01".into(),
                     api_key_env: None,
                 },
-            },
+            }),
             embedding_spec: EmbeddingSpecConfig {
                 dims: 384,
                 encoding: "f32le".into(),
@@ -160,5 +214,84 @@ mod tests {
 
         let error = config.validate().unwrap_err().to_string();
         assert!(error.contains("filesystem_cache_root"));
+    }
+
+    #[test]
+    fn gateway_config_uses_shared_embedding_defaults() {
+        let config: McpConfig = serde_json::from_str(
+            r#"{
+                "environment": {
+                    "kind": "gateway-http3",
+                    "gateway_dns_name": "gateway.example.test"
+                },
+                "embedding_spec": { "dims": 384, "encoding": "f32le" },
+                "index": {
+                    "kind": "root-id",
+                    "root_id": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let McpEnvironmentConfig::GatewayHttp3(gateway) = config.environment else {
+            panic!("expected gateway-http3 environment");
+        };
+        assert_eq!(gateway.model, DEFAULT_LOCAL_EMBEDDING_MODEL);
+        assert_eq!(gateway.request_timeout_secs, DEFAULT_REQUEST_TIMEOUT_SECS);
+        assert_eq!(gateway.max_retries, DEFAULT_MAX_RETRIES);
+        assert_eq!(gateway.retry_delay_ms, DEFAULT_RETRY_DELAY_MS);
+    }
+
+    #[test]
+    fn gateway_config_rejects_independent_embedding_settings() {
+        for (field, value) in [
+            ("base_url", "http://localhost:8080"),
+            ("endpoint", "https://example.test/embeddings"),
+            ("api_key_env", "EMBEDDING_API_KEY"),
+        ] {
+            let mut environment = serde_json::json!({
+                "kind": "gateway-http3",
+                "gateway_dns_name": "gateway.example.test"
+            });
+            environment
+                .as_object_mut()
+                .unwrap()
+                .insert(field.to_string(), serde_json::Value::String(value.into()));
+            let request = serde_json::json!({
+                "environment": environment,
+                "embedding_spec": { "dims": 384, "encoding": "f32le" },
+                "index": {
+                    "kind": "root-id",
+                    "root_id": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                }
+            });
+            assert!(
+                serde_json::from_value::<McpConfig>(request).is_err(),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn gateway_config_rejects_empty_dns_name() {
+        let config: McpConfig = serde_json::from_str(
+            r#"{
+                "environment": {
+                    "kind": "gateway-http3",
+                    "gateway_dns_name": " "
+                },
+                "embedding_spec": { "dims": 384, "encoding": "f32le" },
+                "index": {
+                    "kind": "root-id",
+                    "root_id": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::EmptyGatewayDnsName)
+        ));
     }
 }
