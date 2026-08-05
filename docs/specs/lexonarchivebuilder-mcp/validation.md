@@ -342,3 +342,41 @@ configured override, while tool names, schemas, other default descriptions,
 and server-level instructions retain their existing behavior.
 
 **Traces to:** RQ-MCP-017, DSG-MCP-TOOL-DESCRIPTIONS-002
+
+## Incremental Validation Patch: MCP response timing metadata
+
+### VAL-MCP-RESPONSE-TIMING-001
+
+Invoke `search_chunks` with a representative valid request and inspect its MCP
+tool result.
+
+**Pass condition:** the structured content and text content both contain the
+existing search response fields plus a top-level non-negative integer
+`elapsed_ms`; the MCP result is not an error.
+
+**Traces to:** RQ-MCP-018, DSG-MCP-RESPONSE-TIMING-001
+
+### VAL-MCP-RESPONSE-TIMING-002
+
+Invoke successful `get_email`, `get_document`, and `get_thread` operations and
+inspect their MCP tool results.
+
+**Pass condition:** each response retains its existing operation-specific
+fields and has a top-level non-negative integer `elapsed_ms`. The document and
+thread results retain their explicit `unsupported` status.
+
+**Traces to:** RQ-MCP-018, DSG-MCP-RESPONSE-TIMING-001,
+DSG-MCP-RESPONSE-TIMING-003
+
+### VAL-MCP-RESPONSE-TIMING-003
+
+Invoke `search_chunks` and `get_email` with inputs that produce existing
+runtime failures, such as a zero search parameter and a malformed email leaf
+block ID.
+
+**Pass condition:** each routed invocation returns an MCP tool result whose
+`isError` flag is true and whose structured and text content both contain the
+existing error text plus a top-level non-negative integer `elapsed_ms`. It is
+not converted to a successful domain result or a JSON-RPC protocol failure.
+
+**Traces to:** RQ-MCP-018, DSG-MCP-RESPONSE-TIMING-002

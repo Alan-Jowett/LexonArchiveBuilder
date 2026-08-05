@@ -403,6 +403,13 @@ sole email entry. `get_document` and `get_thread` return an explicit
 `unsupported` outcome until LexonGraph exposes a delegated retrieval-by-name
 contract for those item classes.
 
+Every routed tool result includes a top-level integer `elapsed_ms`, measured
+from the decoded MCP handler parameters until it produces the result. It
+includes server-side validation, dependency calls, and response construction,
+but excludes stdio transport and client execution. A routed tool failure is an
+MCP `isError` result whose structured content contains `error` and
+`elapsed_ms`.
+
 ### Running through an HTTP/3 block gateway
 
 Copy `examples\gateway-http3\mcp.request.template.json` outside the repository,

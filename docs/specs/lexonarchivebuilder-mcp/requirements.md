@@ -560,6 +560,91 @@ operator-provided gateway authority and root ID
 - **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
   validation artifacts, and documentation changes.
 
+## Incremental Requirements Patch: MCP response timing metadata
+
+### USER-REQUEST
+
+- **UR-MCP-RESPONSE-TIMING-001 [KNOWN]:** Add metadata to MCP tool responses,
+  specifically response time.
+- **UR-MCP-RESPONSE-TIMING-002 [KNOWN]:** Return timing for every implemented
+  MCP tool outcome, including failures.
+- **UR-MCP-RESPONSE-TIMING-003 [KNOWN]:** Expose timing as a top-level integer
+  `elapsed_ms` measured at the MCP handler boundary.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-MCP-RESPONSE-TIMING-001 | Add | Return top-level elapsed time for each MCP tool outcome | UR-MCP-RESPONSE-TIMING-001, UR-MCP-RESPONSE-TIMING-003 |
+| CM-MCP-RESPONSE-TIMING-002 | Add | Preserve timing metadata when a tool execution fails | UR-MCP-RESPONSE-TIMING-002 |
+| CM-MCP-RESPONSE-TIMING-003 | Preserve | Keep timing scope independent of indexing, storage, embedding, and transport | UR-MCP-RESPONSE-TIMING-003 |
+
+### Before / After
+
+#### BA-MCP-RESPONSE-TIMING-001
+
+- **Before [KNOWN]:** `search_chunks`, `get_email`, and named retrieval
+  responses expose only operation-specific fields. Failures are emitted
+  through the existing MCP server error path without elapsed-time data.
+- **After [INFERRED]:** Each MCP tool outcome exposes a top-level
+  `elapsed_ms` field, including an outcome representing a tool failure.
+
+### Requirements
+
+#### RQ-MCP-018 - MCP response timing metadata
+
+Every registered MCP tool invocation that reaches a decoded tool handler SHALL
+expose a top-level `elapsed_ms` field in the client-visible outcome, whether
+its operation succeeds, returns an explicit unsupported result, or fails.
+
+- **Value [KNOWN]:** `elapsed_ms` SHALL be a non-negative integer count of
+  whole milliseconds.
+- **Measurement boundary [KNOWN]:** The elapsed interval SHALL begin when the
+  MCP tool handler receives its decoded request parameters and end when that
+  handler has produced its success or failure outcome. It SHALL exclude stdio
+  transport, client-side execution, and client-side rendering time.
+- **Coverage [KNOWN]:** The requirement applies to `search_chunks`,
+  `get_document`, `get_email`, and `get_thread`, including validation,
+  block-store, embedding, and retrieval failures that arise while executing
+  those tools. Invalid payloads rejected before a handler receives decoded
+  parameters remain MCP protocol errors outside this timing contract.
+- **Failure semantics [INFERRED]:** A failure outcome SHALL retain an
+  unambiguous MCP error indication while also making `elapsed_ms` available;
+  it SHALL not be converted into a successful domain result merely to carry
+  timing data.
+- **Contract evolution [INFERRED]:** Successful tool response schemas gain
+  only `elapsed_ms`; their existing operation-specific fields and values
+  retain their current meanings. This requirement supersedes the
+  RQ-MCP-016 assumption that email retrieval failures must use an error path
+  incapable of returning response metadata.
+- **Isolation [KNOWN]:** Timing collection SHALL not select, configure, or
+  alter an indexing pipeline, block store, embedding provider, or search
+  traversal parameter.
+- **Traceability:** UR-MCP-RESPONSE-TIMING-001,
+  UR-MCP-RESPONSE-TIMING-002, UR-MCP-RESPONSE-TIMING-003, RQ-MCP-001,
+  RQ-MCP-007, RQ-MCP-010, RQ-MCP-012, RQ-MCP-016
+
+### Invariant Impact Assessment
+
+| Invariant | Impact | Assessment |
+|---|---|---|
+| MCP error signaling | Modified | Tool failures must remain errors while becoming observable with timing metadata |
+| Indexing/search separation | Preserved | Measurement observes handler duration and does not participate in indexing or ranking |
+| Environment-specific adapter selection | Preserved | The selected storage and embedding dependencies are unchanged |
+| Tool contract extensibility | Improved | A common timing field makes tool outcomes consistently observable |
+
+### Coverage Notes
+
+- **Covered sources [KNOWN]:**
+  - `crates/lexonarchivebuilder-mcp/src/server.rs`, which defines the MCP
+    handler success and error boundary for all registered tools.
+  - `crates/lexonarchivebuilder-mcp/src/runtime.rs`, which defines the three
+    current successful response types and tool runtime failures.
+  - `docs/specs/lexonarchivebuilder-mcp/requirements.md`, whose
+    RQ-MCP-016 currently specifies the email-failure error path.
+- **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
+  validation artifacts, and documentation changes.
+
 ## Incremental Requirements Patch: Corpus-specific MCP tool descriptions
 
 ### USER-REQUEST

@@ -487,3 +487,64 @@ and omits `tool_descriptions`; operators add their own overrides in a copied
 deployment configuration.
 
 **Traces to:** RQ-MCP-017
+
+## Incremental Design Patch: MCP response timing metadata
+
+### DSG-MCP-RESPONSE-TIMING-001 `Timed structured tool outcomes`
+
+The MCP server SHALL time each handler immediately after rmcp has decoded its
+tool parameters. A shared server helper SHALL retain the start instant while
+executing the runtime operation and convert the final duration to a
+non-negative whole-millisecond `u64` value.
+
+Successful domain results SHALL be serialized as structured MCP content with
+their existing fields flattened alongside a top-level `elapsed_ms` field. The
+same JSON value SHALL be used for the caller-visible text content so clients
+that do not consume structured content retain access to the complete result.
+
+The handler scope ends when it has constructed this MCP result. It therefore
+includes runtime validation, configured storage and embedding work, search,
+retrieval, and response projection, but excludes parameter decoding and stdio
+transport.
+
+**Traces to:** RQ-MCP-018, RQ-MCP-001, RQ-MCP-007, RQ-MCP-010
+
+### DSG-MCP-RESPONSE-TIMING-002 `Timed tool failures`
+
+For a routed invocation whose runtime operation fails, the shared helper SHALL
+return rmcp `CallToolResult::structured_error` rather than propagating the
+runtime error through the JSON-RPC error path. Its structured content SHALL
+be:
+
+```text
+{
+  error: String,
+  elapsed_ms: u64
+}
+```
+
+The result's MCP `isError` flag SHALL be true. The `error` value is the
+existing runtime error text, and the same structured JSON is exposed in the
+text content. This preserves a client-visible MCP tool error while providing
+the requested timing metadata.
+
+Unroutable calls and malformed tool-argument payloads remain rmcp/router
+protocol failures: they do not reach a decoded handler and are outside the
+handler-boundary timing contract.
+
+**Traces to:** RQ-MCP-018, RQ-MCP-016
+
+### DSG-MCP-RESPONSE-TIMING-003 `Uniform handler application`
+
+`search_chunks` and `get_email` SHALL execute through the timed success/error
+helper. `get_document` and `get_thread` SHALL execute through the timed
+success helper, retaining their existing `unsupported` domain response and
+adding only `elapsed_ms`.
+
+No runtime search, retrieval, storage, embedding, configuration, or tool
+description code changes behavior to collect timing. The README SHALL
+describe `elapsed_ms`, its handler-boundary scope, and that a routed tool
+failure is represented by MCP `isError` plus structured `error` and
+`elapsed_ms` content.
+
+**Traces to:** RQ-MCP-018, RQ-MCP-005, RQ-MCP-016, RQ-MCP-017
