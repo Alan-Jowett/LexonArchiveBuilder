@@ -1875,3 +1875,37 @@ encoded target from an indexer-owned embedding-format switch.
 
 **Traces to:** RQ-INDEXER-008I, RQ-INDEXER-008H,
 DSG-LFI-UPSTREAM-FORMAT-001
+
+## Incremental Validation Patch: Rooted-search timing breakdown
+
+### VAL-LFI-SEARCH-TIMING-001
+
+Run a representative successful rooted search with the existing fake embedding
+provider and inspect the returned `RootedSearchReport`.
+
+**Pass condition:** its `timing` object has non-negative integer
+`root_load_ms`, `embedding_ms`, `target_preparation_ms`, `traversal_ms`, and
+`total_ms` fields. `total_ms` is at least the sum of the four phase durations.
+
+**Traces to:** RQ-INDEXER-008J, DSG-LFI-SEARCH-TIMING-001,
+DSG-LFI-SEARCH-TIMING-002
+
+### VAL-LFI-SEARCH-TIMING-002
+
+Write a successful rooted-search report and render its human-readable summary.
+
+**Pass condition:** the JSON report contains the complete `timing` object and
+the summary names each timing measurement in milliseconds while preserving the
+existing query and hit output.
+
+**Traces to:** RQ-INDEXER-008J, DSG-LFI-SEARCH-TIMING-002
+
+### VAL-LFI-SEARCH-TIMING-003
+
+Exercise an existing rooted-search failure, such as an invalid `top_k` value
+or a missing root block.
+
+**Pass condition:** the command returns its existing explicit error and no
+partial timing report is returned, written, or rendered.
+
+**Traces to:** RQ-INDEXER-008J, DSG-LFI-SEARCH-TIMING-003

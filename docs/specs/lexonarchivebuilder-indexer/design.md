@@ -2902,3 +2902,63 @@ capability. Read-only consumers use `RedbBlockStore::new_read_only`; writable
 consumers retain the existing durable or fast writable constructors. Archive-sync
 keeps source access read-only and destination access writable through its
 existing `BlockStore` boundary.
+
+## Incremental Design Patch: Rooted-search timing breakdown
+
+### DSG-LFI-SEARCH-TIMING-001 `Timed rooted-search phases`
+
+`search_rooted_tree` SHALL create a monotonic total timer immediately before
+the configured block-store root lookup. It SHALL time the following existing
+phases independently:
+
+1. `root_load_ms`: `store.get(root_id)` through its successful completion.
+2. `embedding_ms`: the embedding provider's `embed` call through receipt of
+   its encoded response.
+3. `target_preparation_ms`: logical-vector decoding and
+   `prepare_target_embedding`.
+4. `traversal_ms`: `search_with_partial_retry`, including its existing retry
+   behavior and result receipt.
+
+After traversal completes, the function SHALL record `total_ms` from the
+total timer. Each duration is converted independently from a monotonic
+`Duration` to a saturating whole-millisecond `u64`. The total also includes
+small setup operations between timed phases, such as provider-specification
+and searcher construction, which are not a separately reported category.
+
+**Traces to:** RQ-INDEXER-008J, RQ-INDEXER-008E, RQ-INDEXER-008H
+
+### DSG-LFI-SEARCH-TIMING-002 `Report and summary projection`
+
+`RootedSearchReport` SHALL add a `timing` object of type
+`RootedSearchTimingReport`:
+
+```text
+{
+  root_load_ms: u64,
+  embedding_ms: u64,
+  target_preparation_ms: u64,
+  traversal_ms: u64,
+  total_ms: u64
+}
+```
+
+The existing JSON writer serializes this object with the rest of the report.
+The human-readable summary SHALL include one timing line naming the same five
+measurements in milliseconds. Existing input, embedding-spec, hit, report-path,
+and ranking fields retain their current shape and meanings.
+
+**Traces to:** RQ-INDEXER-008J
+
+### DSG-LFI-SEARCH-TIMING-003 `Failure and dependency boundaries`
+
+Timing is observational only. The existing validation and error propagation
+occur before a report is constructed; any failed root lookup, embedding call,
+target preparation, or traversal produces the existing error and no partial
+report. Timing does not wrap provider construction, CLI parsing, JSON writing,
+or human-summary rendering.
+
+No timing code changes the configured block store, embedding provider,
+embedding input, prepared target, `Searcher`, traversal width, top-k, retry
+behavior, or MCP implementation.
+
+**Traces to:** RQ-INDEXER-008J, RQ-INDEXER-008E, RQ-INDEXER-008H
