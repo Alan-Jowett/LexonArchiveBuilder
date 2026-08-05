@@ -284,3 +284,95 @@ A leaf root is returned as the same explicit runtime failure. The runtime does
 not introduce a leaf-specific encoding or search path.
 
 **Traces to:** RQ-MCP-013, RQ-MCP-003, RQ-MCP-004
+
+## Incremental Design Patch: Gateway-backed MCP search
+
+### DSG-MCP-GATEWAY-001 `MCP-specific gateway configuration`
+
+`McpConfig.environment` SHALL accept either the existing shared
+`EnvironmentConfig` shapes or an MCP-specific `gateway-http3` shape. The
+gateway shape SHALL not be added to the shared indexer environment enum because
+it represents a read-only search-serving transport rather than an indexer
+execution environment.
+
+The gateway configuration SHALL contain:
+
+```json
+{
+  "kind": "gateway-http3",
+  "gateway_dns_name": "<operator-provided-gateway-dns-name>",
+  "model": "all-MiniLM-L6-v2",
+  "request_timeout_secs": 30,
+  "max_retries": 5,
+  "retry_delay_ms": 1000
+}
+```
+
+`model`, `request_timeout_secs`, `max_retries`, and `retry_delay_ms` use the
+same defaults as the local embedding configuration when omitted. The gateway
+shape SHALL reject unknown fields, including a local `base_url`, an embedding
+endpoint, or an embedding API-key environment variable, so it cannot appear to
+support a separate provider.
+
+The gateway authority is deployment configuration. No Rust default,
+repository-tracked configuration template, or documentation example embeds the
+tested gateway address.
+
+**Traces to:** RQ-MCP-014, RQ-MCP-015, RQ-MCP-012
+
+### DSG-MCP-GATEWAY-002 `Coupled gateway dependency selection`
+
+The runtime SHALL select the block store and embedding provider from one MCP
+environment value:
+
+| Environment shape | Block-store construction | Embedding-provider construction |
+|---|---|---|
+| Existing shared environment shape | Existing read-only shared-environment constructor | Existing shared-environment constructor |
+| `gateway-http3` | `ConfiguredBlockStore::gateway_http3_store(gateway_dns_name)` | `ConfiguredEmbeddingProvider::gateway_http3(gateway_dns_name, model, max_retries, retry_delay_ms, request_timeout_secs)` |
+
+The runtime SHALL use the selected block store to load the root and search
+descendants, then use the selected provider to obtain the logical `f32` query
+vector. It SHALL keep the existing
+`prepare_target_embedding(root, logical_embedding)` flow and existing
+`search_with_partial_retry` invocation.
+
+No storage or embedding fallback is permitted when either gateway constructor,
+read, or embedding request fails.
+
+**Traces to:** RQ-MCP-014, RQ-MCP-013, RQ-MCP-002
+
+### DSG-MCP-GATEWAY-003 `Gateway example and stdio hosting`
+
+Add a gateway MCP configuration example with:
+
+```json
+{
+  "environment": {
+    "kind": "gateway-http3",
+    "gateway_dns_name": "<operator-provided-gateway-dns-name>"
+  },
+  "embedding_spec": {
+    "dims": 384,
+    "encoding": "f32le"
+  },
+  "index": {
+    "kind": "root-id",
+    "root_id": "adbc431aed97ab541ce73d65ce735552821c6c31f9434a4864333013a278fa78"
+  },
+  "top_k": 5,
+  "traversal_width": 3
+}
+```
+
+The configured embedding specification remains for compatibility with the
+MCP configuration shape. The gateway search path derives the requested logical
+vector dimensions from the loaded branch root, as already specified by
+DSG-MCP-FORMAT-001.
+
+The existing `serve --config <absolute-config-path>` stdio invocation remains
+the Copilot CLI hosting integration. The gateway configuration is supplied by
+the deployment operator from the template. It SHALL not require a local summary
+file, local block-store path, Docker network alias, or a local
+embedding-service process.
+
+**Traces to:** RQ-MCP-015, RQ-MCP-014, RQ-MCP-013

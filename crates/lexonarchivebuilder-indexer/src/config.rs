@@ -20,9 +20,10 @@ use crate::resolver::ContentRef;
 use crate::tree_tools::metadata_values_to_text_map;
 
 const DEFAULT_BLOCK_SIZE_TARGET: usize = 65_536;
-const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
-const DEFAULT_MAX_RETRIES: u32 = 5;
-const DEFAULT_RETRY_DELAY_MS: u64 = 1_000;
+pub const DEFAULT_LOCAL_EMBEDDING_MODEL: &str = "all-MiniLM-L6-v2";
+pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
+pub const DEFAULT_MAX_RETRIES: u32 = 5;
+pub const DEFAULT_RETRY_DELAY_MS: u64 = 1_000;
 const MIN_MAX_CONCURRENCY: usize = 1;
 pub const MUTABLE_REF_ROOT_DIR: &str = "refs";
 
@@ -619,7 +620,7 @@ fn default_profile_version() -> PublishedProfileVersion {
 }
 
 fn default_local_model() -> String {
-    "all-MiniLM-L6-v2".to_string()
+    DEFAULT_LOCAL_EMBEDDING_MODEL.to_string()
 }
 
 fn default_request_timeout_secs() -> u64 {

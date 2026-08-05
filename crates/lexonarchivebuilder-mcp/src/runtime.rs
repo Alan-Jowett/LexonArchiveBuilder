@@ -28,7 +28,7 @@ use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::config::{ConfigError, McpConfig};
+use crate::config::{ConfigError, McpConfig, McpEnvironmentConfig};
 
 #[derive(Clone, Debug)]
 pub struct McpRuntime {
@@ -205,11 +205,18 @@ impl McpRuntime {
         }
 
         let root_id = resolve_root_id_async(&request_dir, &config).await?;
-        let block_store = ConfiguredBlockStore::from_environment_with_redb_read_only(
-            &request_dir,
-            &config.environment,
-            None,
-        )?;
+        let block_store = match &config.environment {
+            McpEnvironmentConfig::Shared(environment) => {
+                ConfiguredBlockStore::from_environment_with_redb_read_only(
+                    &request_dir,
+                    environment,
+                    None,
+                )?
+            }
+            McpEnvironmentConfig::GatewayHttp3(gateway) => {
+                ConfiguredBlockStore::gateway_http3_store(&gateway.gateway_dns_name)?
+            }
+        };
         let Some(root) = block_store.get(&root_id).await? else {
             return Err(RuntimeError::MissingRootBlock {
                 root_id: root_id.to_string(),
@@ -220,8 +227,20 @@ impl McpRuntime {
                 root_id: root_id.to_string(),
             });
         };
-        let embedding_provider =
-            ConfiguredEmbeddingProvider::from_environment(&config.environment)?;
+        let embedding_provider = match &config.environment {
+            McpEnvironmentConfig::Shared(environment) => {
+                ConfiguredEmbeddingProvider::from_environment(environment)?
+            }
+            McpEnvironmentConfig::GatewayHttp3(gateway) => {
+                ConfiguredEmbeddingProvider::gateway_http3(
+                    &gateway.gateway_dns_name,
+                    gateway.model.clone(),
+                    gateway.max_retries,
+                    gateway.retry_delay_ms,
+                    gateway.request_timeout_secs,
+                )?
+            }
+        };
         let provider_spec = logical_f32_embedding_spec(branch.embedding_spec.dims);
         let target_embedding = embedding_provider
             .embed(
@@ -391,7 +410,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::config::IndexConfig;
+    use crate::config::{IndexConfig, McpEnvironmentConfig};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn search_chunks_uses_upstream_target_preparation_for_branch_roots() {
@@ -448,7 +467,7 @@ mod tests {
         let runtime = McpRuntime::new(
             temp.path().to_path_buf(),
             McpConfig {
-                environment,
+                environment: McpEnvironmentConfig::Shared(environment),
                 embedding_spec: EmbeddingSpecConfig {
                     dims: 2,
                     encoding: "f32le".into(),
@@ -523,7 +542,7 @@ mod tests {
         let runtime = McpRuntime::new(
             temp.path().to_path_buf(),
             McpConfig {
-                environment: EnvironmentConfig::Local {
+                environment: McpEnvironmentConfig::Shared(EnvironmentConfig::Local {
                     block_store_root: PathBuf::from("block-store"),
                     embedding: LocalEmbeddingConfig {
                         base_url: server.base_url.clone(),
@@ -533,7 +552,7 @@ mod tests {
                         max_retries: 5,
                         retry_delay_ms: 1,
                     },
-                },
+                }),
                 embedding_spec: EmbeddingSpecConfig {
                     dims: 2,
                     encoding: "f32le".into(),
@@ -608,7 +627,7 @@ mod tests {
         let runtime = McpRuntime::new(
             temp.path().to_path_buf(),
             McpConfig {
-                environment: EnvironmentConfig::LocalRedb {
+                environment: McpEnvironmentConfig::Shared(EnvironmentConfig::LocalRedb {
                     block_store_root: PathBuf::from("block-store"),
                     embedding: LocalEmbeddingConfig {
                         base_url: server.base_url.clone(),
@@ -618,7 +637,7 @@ mod tests {
                         max_retries: 5,
                         retry_delay_ms: 1,
                     },
-                },
+                }),
                 embedding_spec: EmbeddingSpecConfig {
                     dims: 2,
                     encoding: "f32le".into(),
@@ -701,7 +720,7 @@ mod tests {
         let runtime = McpRuntime::new(
             temp.path().to_path_buf(),
             McpConfig {
-                environment: EnvironmentConfig::Local {
+                environment: McpEnvironmentConfig::Shared(EnvironmentConfig::Local {
                     block_store_root: PathBuf::from("block-store"),
                     embedding: LocalEmbeddingConfig {
                         base_url: server.base_url.clone(),
@@ -711,7 +730,7 @@ mod tests {
                         max_retries: 5,
                         retry_delay_ms: 1,
                     },
-                },
+                }),
                 embedding_spec: EmbeddingSpecConfig {
                     dims: 2,
                     encoding: "f32le".into(),
@@ -743,7 +762,7 @@ mod tests {
         let runtime = McpRuntime::new(
             PathBuf::from("C:\\request-root"),
             McpConfig {
-                environment: EnvironmentConfig::Local {
+                environment: McpEnvironmentConfig::Shared(EnvironmentConfig::Local {
                     block_store_root: PathBuf::from("block-store"),
                     embedding: LocalEmbeddingConfig {
                         base_url: "http://localhost:8080".into(),
@@ -753,7 +772,7 @@ mod tests {
                         max_retries: 0,
                         retry_delay_ms: 1,
                     },
-                },
+                }),
                 embedding_spec: EmbeddingSpecConfig {
                     dims: 2,
                     encoding: "f32le".into(),
@@ -795,7 +814,7 @@ mod tests {
         let error = McpRuntime::new(
             PathBuf::from("C:\\request-root"),
             McpConfig {
-                environment: EnvironmentConfig::Local {
+                environment: McpEnvironmentConfig::Shared(EnvironmentConfig::Local {
                     block_store_root: PathBuf::from("block-store"),
                     embedding: LocalEmbeddingConfig {
                         base_url: String::new(),
@@ -805,7 +824,7 @@ mod tests {
                         max_retries: 0,
                         retry_delay_ms: 1,
                     },
-                },
+                }),
                 embedding_spec: EmbeddingSpecConfig {
                     dims: 2,
                     encoding: "f32le".into(),
@@ -845,7 +864,7 @@ mod tests {
         let runtime = McpRuntime::new(
             temp.path().to_path_buf(),
             McpConfig {
-                environment: EnvironmentConfig::Local {
+                environment: McpEnvironmentConfig::Shared(EnvironmentConfig::Local {
                     block_store_root: PathBuf::from("block-store"),
                     embedding: LocalEmbeddingConfig {
                         base_url: "http://localhost:8080".into(),
@@ -855,7 +874,7 @@ mod tests {
                         max_retries: 0,
                         retry_delay_ms: 1,
                     },
-                },
+                }),
                 embedding_spec: EmbeddingSpecConfig {
                     dims: 2,
                     encoding: "f32le".into(),

@@ -222,3 +222,55 @@ Run `search_chunks` with an index root that resolves to a leaf block.
 not use a leaf-specific local encoding or search fallback.
 
 **Traces to:** RQ-MCP-013, DSG-MCP-FORMAT-002
+
+## Incremental Validation Patch: Gateway-backed MCP search
+
+### VAL-MCP-GATEWAY-001
+
+Parse the gateway MCP configuration example.
+
+**Pass condition:** it selects the MCP-only `gateway-http3` environment,
+preserves the configured gateway authority and root ID, and accepts the
+documented optional provider defaults.
+
+**Traces to:** RQ-MCP-014, RQ-MCP-015, DSG-MCP-GATEWAY-001,
+DSG-MCP-GATEWAY-003
+
+### VAL-MCP-GATEWAY-002
+
+Parse gateway configuration with each disallowed independent embedding field:
+`base_url`, an embedding endpoint, and an embedding API-key environment
+variable.
+
+**Pass condition:** each configuration fails validation or deserialization;
+no field is silently ignored and no alternate provider is constructed.
+
+**Traces to:** RQ-MCP-014, DSG-MCP-GATEWAY-001
+
+### VAL-MCP-GATEWAY-003
+
+Exercise `search_chunks` using a gateway environment with a captured or
+test-double HTTP/3 gateway transport.
+
+**Pass condition:** root and descendant reads use the configured gateway
+authority; the query embedding request is a `POST /v1/embeddings` to the same
+authority; the provider uses its configured model and retry settings; and the
+existing result projection is unchanged.
+
+**Traces to:** RQ-MCP-014, RQ-MCP-013, DSG-MCP-GATEWAY-002
+
+### VAL-MCP-GATEWAY-004
+
+Run the stdio MCP server through an MCP client using an operator-supplied
+gateway authority and root ID
+`adbc431aed97ab541ce73d65ce735552821c6c31f9434a4864333013a278fa78`.
+
+**Pass condition:** `search_chunks` returns the existing chunk-result schema
+without requiring a local block store, local summary file, separate embedding
+endpoint, or local embedding service. Gateway connectivity or service errors
+are returned as MCP operation failures rather than triggering a local fallback.
+The server, template, and documentation do not embed the deployed gateway
+authority.
+
+**Traces to:** RQ-MCP-014, RQ-MCP-015, DSG-MCP-GATEWAY-002,
+DSG-MCP-GATEWAY-003

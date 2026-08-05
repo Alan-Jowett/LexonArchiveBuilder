@@ -1,0 +1,16 @@
+{
+  "environment": {
+    "kind": "gateway-http3",
+    "gateway_dns_name": "<operator-provided-gateway-dns-name>"
+  },
+  "embedding_spec": {
+    "dims": 384,
+    "encoding": "f32le"
+  },
+  "index": {
+    "kind": "root-id",
+    "root_id": "adbc431aed97ab541ce73d65ce735552821c6c31f9434a4864333013a278fa78"
+  },
+  "top_k": 5,
+  "traversal_width": 3
+}

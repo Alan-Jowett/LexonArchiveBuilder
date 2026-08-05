@@ -352,3 +352,110 @@ The MCP `search_chunks` operation SHALL use the format-neutral
     workspace's LexonGraph `90ab28948e6c2c5825311b6a3fbc9b2ec34c84e9` pin.
 - **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
   validation artifacts, gateway configuration, and MCP tool-schema changes.
+
+## Incremental Requirements Patch: Gateway-backed MCP search
+
+### USER-REQUEST
+
+- **UR-MCP-GATEWAY-001 [KNOWN]:** Configure `lexonarchivebuilder-mcp` to use
+  the operator-provided block proxy previously tested in this session.
+- **UR-MCP-GATEWAY-002 [KNOWN]:** Use the selected root block
+  `adbc431aed97ab541ce73d65ce735552821c6c31f9434a4864333013a278fa78`.
+- **UR-MCP-GATEWAY-003 [INFERRED]:** The MCP runtime must obtain both rooted
+  blocks and query embeddings from the gateway rather than a local block store
+  or separately configured embedding service.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-MCP-GATEWAY-001 | Add | Define a read-only `gateway-http3` MCP environment profile for gateway block reads and gateway-proxied embeddings | UR-MCP-GATEWAY-001, UR-MCP-GATEWAY-003 |
+| CM-MCP-GATEWAY-002 | Add | Define a gateway MCP configuration example targeting the selected root block | UR-MCP-GATEWAY-001, UR-MCP-GATEWAY-002 |
+| CM-MCP-GATEWAY-003 | Preserve | Keep MCP tool schemas, format-neutral target preparation, and delegated LexonGraph search semantics unchanged | UR-MCP-GATEWAY-003 |
+
+### Before / After
+
+#### BA-MCP-GATEWAY-001
+
+- **Before [KNOWN]:** `McpConfig.environment` delegates only to the shared
+  local, local-redb, local-overlay, production, or production-v2 indexer
+  environments. It cannot construct the indexer's read-only HTTP/3 gateway
+  block store.
+- **After [INFERRED]:** MCP configuration can select a read-only
+  `gateway-http3` environment with a gateway DNS authority and use the gateway
+  for both block retrieval and query embedding.
+
+#### BA-MCP-GATEWAY-002
+
+- **Before [KNOWN]:** The local MCP sample targets a local summary file and
+  local block-store root.
+- **After [INFERRED]:** A gateway MCP sample selects the configured root ID
+  directly and does not require a local summary file, local block store, or
+  separately configured embedding endpoint.
+
+### Requirements
+
+#### RQ-MCP-014 - Gateway HTTP/3 environment profile
+
+`lexonarchivebuilder-mcp` SHALL support a read-only `gateway-http3`
+environment profile for `search_chunks`.
+
+- **Block access [KNOWN]:** The profile SHALL construct the shared
+  HTTP/3 gateway block-store client from a required gateway DNS authority and
+  use it for all root and descendant block reads.
+- **Query embedding [KNOWN]:** The profile SHALL obtain query embeddings from
+  the gateway's OpenAI-compatible embeddings endpoint through the shared
+  gateway embedding-provider path. It SHALL NOT require or accept a separate
+  embedding endpoint or embedding API-key environment variable.
+- **Search boundary [KNOWN]:** The profile SHALL continue to obtain a logical
+  query vector and pass it with the loaded root to
+  `lexongraph_search::prepare_target_embedding`; the MCP crate SHALL not
+  become aware of the root's physical embedding format.
+- **Write boundary [KNOWN]:** The profile is read-only. MCP operations SHALL
+  not attempt to write blocks through the gateway.
+- **Failure behavior [INFERRED]:** Missing or invalid gateway configuration,
+  block-read failures, embedding failures, and upstream target-preparation
+  failures SHALL surface through the existing MCP runtime failure path without
+  fallback to local storage or an alternate embedding provider.
+- **Traceability:** UR-MCP-GATEWAY-001, UR-MCP-GATEWAY-003, RQ-MCP-002,
+  RQ-MCP-006, RQ-MCP-011, RQ-MCP-013
+
+#### RQ-MCP-015 - Gateway configuration example
+
+The repository SHALL provide a documented MCP configuration template for an
+operator-provided gateway authority and root ID
+`adbc431aed97ab541ce73d65ce735552821c6c31f9434a4864333013a278fa78`.
+
+- **Configuration shape [INFERRED]:** The example SHALL select
+  `gateway-http3`, require an operator-provided gateway DNS authority, and use
+  `index.kind: "root-id"` with the selected root ID.
+- **No hardcoded gateway authority [KNOWN]:** The implementation,
+  configuration template, and documentation SHALL NOT embed the tested gateway
+  authority. Deployment configuration supplies the authority.
+- **Deployment boundary [KNOWN]:** The example SHALL be usable by a stdio MCP
+  host without Docker network aliases or a local block-store directory.
+- **Traceability:** UR-MCP-GATEWAY-001, UR-MCP-GATEWAY-002
+
+### Invariant Impact Assessment
+
+| Invariant | Impact | Assessment |
+|---|---|---|
+| Indexing remains separate from search serving | Preserved | The profile only reads an existing rooted index and embeds search queries |
+| Actual search semantics remain owned by LexonGraph | Preserved | Gateway selection changes dependency transport, not search or ranking behavior |
+| MCP tool contract | Preserved | `search_chunks` request and response schemas remain unchanged |
+| Environment-specific dependencies stay behind stable interfaces | Preserved | Gateway block and embedding providers are selected as one configuration profile |
+| Format-neutral rooted search | Preserved | Gateway vectors continue through the existing logical-vector target-preparation path |
+
+### Coverage Notes
+
+- **Covered sources [KNOWN]:**
+  - `crates/lexonarchivebuilder-mcp/src/config.rs`, whose shared
+    `EnvironmentConfig` currently lacks a gateway profile.
+  - `crates/lexonarchivebuilder-mcp/src/runtime.rs`, which obtains both the
+    block store and embedding provider through the configured environment.
+  - `crates/lexonarchivebuilder-indexer/src/block_store.rs`, which provides
+    the existing read-only HTTP/3 gateway block-store implementation.
+  - `crates/lexonarchivebuilder-indexer/src/embedding.rs`, which provides the
+    existing gateway embedding-provider implementation.
+- **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
+  validation artifacts, and README/config-example changes.
