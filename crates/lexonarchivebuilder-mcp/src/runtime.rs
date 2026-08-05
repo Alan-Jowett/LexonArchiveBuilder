@@ -150,6 +150,11 @@ pub enum RuntimeError {
     MissingEmailLeafBlock { leaf_block_id: String },
     #[error("email block {block_id} is not a leaf")]
     EmailBlockIsNotLeaf { block_id: String },
+    #[error("email leaf block {leaf_block_id} must contain exactly one entry, found {entry_count}")]
+    EmailLeafEntryCount {
+        leaf_block_id: String,
+        entry_count: usize,
+    },
     #[error("email leaf block {leaf_block_id} contains no email entries")]
     EmailLeafContainsNoEmailEntries { leaf_block_id: String },
     #[error("failed to prepare rooted search target: {message}")]
@@ -336,20 +341,17 @@ impl McpRuntime {
                 block_id: leaf_block_id.to_string(),
             });
         };
-        let Some(entry) = leaf.entries.first() else {
-            return Err(RuntimeError::EmailLeafContainsNoEmailEntries {
-                leaf_block_id: leaf_block_id.to_string(),
-            });
-        };
+        let leaf_block_id_text = leaf_block_id.to_string();
+        let entry = sole_email_leaf_entry(&leaf_block_id_text, &leaf.entries)?;
         let metadata = metadata_values_to_text_map(&entry.metadata);
         if metadata.get("source_kind").map(String::as_str) != Some("email") {
             return Err(RuntimeError::EmailLeafContainsNoEmailEntries {
-                leaf_block_id: leaf_block_id.to_string(),
+                leaf_block_id: leaf_block_id_text,
             });
         }
 
         Ok(EmailRetrievalResponse {
-            leaf_block_id: leaf_block_id.to_string(),
+            leaf_block_id: leaf_block_id_text,
             entry: project_leaf_entry(&leaf_block_id, 0, entry, metadata),
         })
     }
@@ -357,6 +359,19 @@ impl McpRuntime {
     pub fn get_thread(&self, request: NamedRetrievalRequest) -> NamedRetrievalResponse {
         unsupported_named_retrieval(NamedItemKind::Thread, request.name)
     }
+}
+
+fn sole_email_leaf_entry<'a>(
+    leaf_block_id: &str,
+    entries: &'a [LeafEntry],
+) -> Result<&'a LeafEntry, RuntimeError> {
+    let [entry] = entries else {
+        return Err(RuntimeError::EmailLeafEntryCount {
+            leaf_block_id: leaf_block_id.into(),
+            entry_count: entries.len(),
+        });
+    };
+    Ok(entry)
 }
 
 fn project_leaf_entry(
@@ -1007,6 +1022,21 @@ mod tests {
         assert!(matches!(
             no_email_entries,
             RuntimeError::EmailLeafContainsNoEmailEntries { .. }
+        ));
+    }
+
+    #[test]
+    fn email_leaf_requires_exactly_one_entry() {
+        let entries = vec![
+            test_leaf_entry("email", b"first"),
+            test_leaf_entry("email", b"second"),
+        ];
+
+        let error = sole_email_leaf_entry("leaf", &entries).unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeError::EmailLeafEntryCount { entry_count: 2, .. }
         ));
     }
 

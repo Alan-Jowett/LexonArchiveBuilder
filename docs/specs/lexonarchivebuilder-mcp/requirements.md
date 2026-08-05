@@ -549,8 +549,8 @@ operator-provided gateway authority and root ID
   - `crates/lexonarchivebuilder-mcp/src/server.rs`, which registers
     `get_email` with `NamedRetrievalRequest`.
   - `crates/lexonarchivebuilder-mcp/src/runtime.rs`, where `get_email`
-    currently returns `unsupported` and `search_chunks` already resolves and
-    reads leaves through the configured block store.
+    performs leaf-addressed retrieval and `search_chunks` resolves and reads
+    leaves through the configured block store.
   - `crates/lexonarchivebuilder-indexer/src/mailbox.rs`, which writes
     `source_kind`, `email_name`, and `email_message_id` metadata.
   - `crates/lexonarchivebuilder-indexer/src/tree_tools.rs`, which preserves

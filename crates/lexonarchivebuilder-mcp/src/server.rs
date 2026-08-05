@@ -112,7 +112,7 @@ impl LexonArchiveBuilderMcpServer {
 
     #[tool(
         name = "get_email",
-        description = "Retrieve email entries from a search result leaf_block_id",
+        description = "Retrieve an email entry from a search result leaf_block_id",
         output_schema = rmcp::handler::server::tool::schema_for_output::<TimedResponse<EmailRetrievalResponse>>()
             .expect("timed email retrieval response schema must be valid")
     )]
@@ -257,7 +257,7 @@ mod tests {
                 .attr
                 .description
                 .as_deref(),
-            Some("Retrieve email entries from a search result leaf_block_id")
+            Some("Retrieve an email entry from a search result leaf_block_id")
         );
         for tool_name in ["search_chunks", "get_document", "get_email", "get_thread"] {
             assert_timed_output_schema(&server, tool_name);

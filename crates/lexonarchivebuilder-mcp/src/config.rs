@@ -17,7 +17,7 @@ pub const DEFAULT_SEARCH_CHUNKS_DESCRIPTION: &str =
 pub const DEFAULT_GET_DOCUMENT_DESCRIPTION: &str =
     "Request a named document from the configured LexonArchiveBuilder index";
 pub const DEFAULT_GET_EMAIL_DESCRIPTION: &str =
-    "Retrieve email entries from a search result leaf_block_id";
+    "Retrieve an email entry from a search result leaf_block_id";
 pub const DEFAULT_GET_THREAD_DESCRIPTION: &str =
     "Request a named thread from the configured LexonArchiveBuilder index";
 
