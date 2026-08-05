@@ -1782,3 +1782,42 @@ implementation and verification artifacts, or any incompatibility is
 explicitly classified as an adapter requirement or upstream regression.
 
 **Traces to:** RQ-REFRESH-010, RQ-REFRESH-011, DSG-REFRESH-008
+
+## Incremental Validation Patch: Gateway-backed rooted-search embeddings
+
+### VAL-LFI-GW-EMBED-001
+
+Inspect the rooted `search` CLI configuration rules.
+
+**Pass condition:** `gateway-http3` requires
+`--block-store-gateway-dns-name`, selects gateway-backed query embeddings
+without `--embedding-endpoint`, and rejects an explicitly supplied
+`--embedding-endpoint`. Every non-gateway readable profile continues to require
+`--embedding-endpoint`.
+
+**Traces to:** RQ-INDEXER-008F, RQ-INDEXER-008G, DSG-LFI-GW-EMBED-003
+
+### VAL-LFI-GW-EMBED-002
+
+Execute or inspect a representative rooted search with the `gateway-http3`
+profile.
+
+**Pass condition:** the same configured DNS name supplies both immutable block
+fetches and a `POST /v1/embeddings` query-embedding request over the shared
+HTTP/3 gateway connection seam. The request retains the existing
+OpenAI-compatible schema and selected model.
+
+**Traces to:** RQ-INDEXER-008F, DSG-LFI-GW-EMBED-001, DSG-LFI-GW-EMBED-002
+
+### VAL-LFI-GW-EMBED-003
+
+Run representative gateway-backed and non-gateway rooted searches over the
+same stored tree.
+
+**Pass condition:** each provider path preserves the existing query,
+embedding-spec validation, retry controls, rooted traversal, top-k result
+selection, human-readable result summary, and JSON report shape. The increment
+does not change MCP search behavior or indexer batch behavior.
+
+**Traces to:** RQ-INDEXER-008F, RQ-INDEXER-008G,
+DSG-LFI-GW-EMBED-002, DSG-LFI-GW-EMBED-004

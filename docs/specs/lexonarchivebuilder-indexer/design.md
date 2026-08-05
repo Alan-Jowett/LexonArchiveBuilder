@@ -1565,7 +1565,8 @@ cache-hit behavior, retry effects, CPU cost, or wall-clock latency.
 LexonArchiveBuilder realizes rooted operator search as one CLI-only flow that:
 
 1. accepts one caller-provided text query
-2. generates one query embedding through a caller-provided embedding endpoint
+2. generates one query embedding through the provider selected by the approved
+   block-store profile
 3. searches one caller-supplied rooted tree through `lexongraph-search`
 4. returns the top `k` matching leaf nodes
 5. renders one human-readable result summary plus one machine-readable JSON
@@ -1584,7 +1585,8 @@ Any repository-owned stored-embedding readback needed by this rooted operator
 surface remains subordinate to the same upstream LexonGraph embedding readback
 API rather than to a second repository-local decoder path.
 
-**Traces to:** RQ-INDEXER-008E, RQ-INDEXER-009, RQ-INDEXER-010A
+**Traces to:** RQ-INDEXER-008E, RQ-INDEXER-008F, RQ-INDEXER-008G,
+RQ-INDEXER-009, RQ-INDEXER-010A
 
 ### DSG-LFI-002F `Upstream stored-embedding readback seam`
 
@@ -1672,6 +1674,86 @@ for this increment.
 
 **Traces to:** RQ-INDEXER-002, RQ-INDEXER-004, RQ-INDEXER-004A,
 RQ-INDEXER-004B, RQ-INDEXER-004D, RQ-INDEXER-005
+
+## Incremental Design Patch: Gateway-backed rooted-search embeddings
+
+### Impact Map
+
+#### Directly affected artifacts
+
+- `docs/specs/lexonarchivebuilder-indexer/requirements.md`
+- `docs/specs/lexonarchivebuilder-indexer/design.md`
+- `docs/specs/lexonarchivebuilder-indexer/validation.md`
+- `crates/lexonarchivebuilder-indexer/src/main.rs`
+- `crates/lexonarchivebuilder-indexer/src/embedding.rs`
+- `crates/lexonarchivebuilder-block-store-http3/src/lib.rs`
+
+#### Indirectly affected artifacts
+
+- indexer CLI help and rooted-search operator documentation
+- HTTP/3 gateway and embedding-provider integration tests
+
+#### Unaffected artifacts
+
+- gateway `/block/<block_id>` and `/v1/embeddings` route contracts
+- MCP search surface and named retrieval
+- indexer batch indexing, replay, clustering, and publication
+- non-gateway rooted-search embedding endpoint behavior
+
+### DSG-LFI-GW-EMBED-001 `Shared HTTP/3 gateway request seam`
+
+`lexonarchivebuilder-block-store-http3` SHALL generalize its existing
+QUIC/TLS/HTTP/3 connection lifecycle into a reusable gateway-request seam.
+The seam accepts an HTTP method, path, end-to-end request headers, and request
+body, and returns the gateway response status, end-to-end response headers, and
+body.
+
+`Http3BlockStore` SHALL continue to use this seam only for `GET
+/block/<block_id>`. The generalized seam does not alter immutable-block
+addressing, read-only behavior, block error mapping, or the authority derived
+from the supplied bare DNS name.
+
+**Traces to:** RQ-INDEXER-008F, RQ-INDEXER-008G
+
+### DSG-LFI-GW-EMBED-002 `Gateway HTTP/3 embedding provider`
+
+The indexer SHALL provide a gateway-backed implementation of the existing
+`EmbeddingProvider` boundary for rooted CLI search. When
+`block_store_profile` is `gateway-http3`, this provider derives the HTTPS-over-
+QUIC authority from `block_store_gateway_dns_name` and sends the existing
+OpenAI-compatible request body to `POST /v1/embeddings` through the shared
+HTTP/3 gateway request seam.
+
+The provider consumes the existing model, timeout, retry-delay, retry-count,
+embedding-spec validation, and response-decoding rules. It does not define a
+second embedding request schema, stored-vector encoding, or rooted-search
+algorithm.
+
+**Traces to:** RQ-INDEXER-008F, RQ-INDEXER-008G
+
+### DSG-LFI-GW-EMBED-003 `Exclusive rooted-search embedding selection`
+
+CLI parsing selects exactly one query-embedding provider:
+
+1. `gateway-http3` selects the gateway HTTP/3 embedding provider and requires
+   `block_store_gateway_dns_name`.
+2. every other approved readable profile selects the existing
+   OpenAI-compatible endpoint provider and requires `embedding_endpoint`.
+
+The CLI rejects `embedding_endpoint` in the first case. This prevents a search
+invocation from reading blocks from one authority while embedding through an
+unrelated second authority.
+
+**Traces to:** RQ-INDEXER-008G
+
+### DSG-LFI-GW-EMBED-004 `Search-contract preservation`
+
+The gateway-backed provider is substituted only at the query-embedding adapter
+boundary. The existing caller-provided query, model selection, retry controls,
+rooted tree, traversal width, top-k behavior, delegated `lexongraph-search`
+execution, human-readable summary, and JSON report remain unchanged.
+
+**Traces to:** RQ-INDEXER-008F, RQ-INDEXER-008G, RQ-INDEXER-009
 
 ## Adapter Design
 

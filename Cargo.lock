@@ -1864,6 +1864,7 @@ dependencies = [
  "env_logger",
  "futures",
  "half",
+ "http 1.4.2",
  "lexonarchivebuilder-block-store-http3",
  "lexongraph-block",
  "lexongraph-block-store",

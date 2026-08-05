@@ -5,6 +5,7 @@ use std::env;
 use std::time::Duration;
 
 use half::f16;
+use lexonarchivebuilder_block_store_http3::{Http3GatewayClient, Http3GatewayRequest};
 use lexongraph_block::EmbeddingSpec;
 use lexongraph_embeddings_trait::{EmbeddingInput, EmbeddingProvider};
 use reqwest::{Client, StatusCode};
@@ -28,8 +29,18 @@ pub struct LocalOpenAiEmbeddingProvider {
 pub struct AzureOpenAiEmbeddingProviderStub;
 
 #[derive(Clone, Debug)]
+pub struct GatewayHttp3EmbeddingProvider {
+    client: Http3GatewayClient,
+    model: String,
+    max_retries: u32,
+    retry_delay: Duration,
+    request_timeout: Duration,
+}
+
+#[derive(Clone, Debug)]
 pub enum ConfiguredEmbeddingProvider {
     Local(LocalOpenAiEmbeddingProvider),
+    GatewayHttp3(GatewayHttp3EmbeddingProvider),
     AzureOpenAi(AzureOpenAiEmbeddingProviderStub),
 }
 
@@ -68,6 +79,28 @@ struct EmbeddingResponseItem {
 }
 
 impl ConfiguredEmbeddingProvider {
+    pub fn gateway_http3(
+        dns_name: &str,
+        model: String,
+        max_retries: u32,
+        retry_delay_ms: u64,
+        request_timeout_secs: u64,
+    ) -> Result<Self, ConfiguredEmbeddingProviderError> {
+        let client = Http3GatewayClient::new(dns_name).map_err(|message| {
+            ConfiguredEmbeddingProviderError::RequestFailed {
+                attempts: 0,
+                message,
+            }
+        })?;
+        Ok(Self::GatewayHttp3(GatewayHttp3EmbeddingProvider {
+            client,
+            model,
+            max_retries,
+            retry_delay: Duration::from_millis(retry_delay_ms),
+            request_timeout: Duration::from_secs(request_timeout_secs),
+        }))
+    }
+
     pub fn from_environment(
         environment: &EnvironmentConfig,
     ) -> Result<Self, ConfiguredEmbeddingProviderError> {
@@ -81,6 +114,83 @@ impl ConfiguredEmbeddingProvider {
                 Ok(Self::AzureOpenAi(AzureOpenAiEmbeddingProviderStub))
             }
         }
+    }
+}
+
+impl GatewayHttp3EmbeddingProvider {
+    async fn embed_impl(
+        &self,
+        input: &EmbeddingInput,
+        spec: &EmbeddingSpec,
+    ) -> Result<Vec<u8>, ConfiguredEmbeddingProviderError> {
+        let text = String::from_utf8_lossy(&input.body);
+        let request_body = serde_json::to_vec(&EmbeddingRequestBody {
+            input: &text,
+            model: &self.model,
+        })
+        .map_err(|error| ConfiguredEmbeddingProviderError::RequestFailed {
+            attempts: 0,
+            message: error.to_string(),
+        })?;
+        let max_attempts = self.max_retries + 1;
+        let mut last_error = String::new();
+
+        for attempt in 1..=max_attempts {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(
+                reqwest::header::CONTENT_TYPE,
+                reqwest::header::HeaderValue::from_static("application/json"),
+            );
+            match self
+                .client
+                .request(Http3GatewayRequest {
+                    method: http::Method::POST,
+                    path: "/v1/embeddings".into(),
+                    headers,
+                    body: request_body.clone(),
+                    timeout: self.request_timeout,
+                })
+                .await
+            {
+                Ok(response) if response.status_code == 200 => {
+                    let parsed: EmbeddingResponseBody = serde_json::from_slice(&response.body)
+                        .map_err(|error| ConfiguredEmbeddingProviderError::RequestFailed {
+                            attempts: attempt,
+                            message: error.to_string(),
+                        })?;
+                    let vector = parsed
+                        .data
+                        .into_iter()
+                        .next()
+                        .ok_or(ConfiguredEmbeddingProviderError::MissingVector)?
+                        .embedding;
+                    return encode_embedding(&vector, spec);
+                }
+                Ok(response) => {
+                    last_error =
+                        format!("embedding gateway returned HTTP {}", response.status_code);
+                    if !should_retry(
+                        reqwest::StatusCode::from_u16(response.status_code).ok(),
+                        attempt,
+                        max_attempts,
+                    ) {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    last_error = error;
+                    if attempt >= max_attempts {
+                        break;
+                    }
+                }
+            }
+            tokio::time::sleep(self.retry_delay).await;
+        }
+
+        Err(ConfiguredEmbeddingProviderError::RequestFailed {
+            attempts: max_attempts,
+            message: last_error,
+        })
     }
 }
 
@@ -185,6 +295,7 @@ impl EmbeddingProvider for ConfiguredEmbeddingProvider {
     ) -> Result<Vec<u8>, Self::Error> {
         match self {
             Self::Local(provider) => provider.embed_impl(input, spec).await,
+            Self::GatewayHttp3(provider) => provider.embed_impl(input, spec).await,
             Self::AzureOpenAi(_) => Err(ConfiguredEmbeddingProviderError::UnsupportedProduction),
         }
     }
@@ -205,7 +316,6 @@ impl EmbeddingProvider for ConfiguredEmbeddingProvider {
                         (index, embedding)
                     });
                 }
-
                 let mut results = vec![None; inputs.len()];
                 while let Some(result) = join_set.join_next().await {
                     let (index, embedding) = result.map_err(|error| {
@@ -217,6 +327,34 @@ impl EmbeddingProvider for ConfiguredEmbeddingProvider {
                     results[index] = Some(embedding?);
                 }
 
+                results
+                    .into_iter()
+                    .map(|embedding| {
+                        embedding.ok_or_else(|| ConfiguredEmbeddingProviderError::RequestFailed {
+                            attempts: 1,
+                            message: "embedding batch worker did not return a result".into(),
+                        })
+                    })
+                    .collect()
+            }
+            Self::GatewayHttp3(provider) => {
+                let mut join_set = JoinSet::new();
+                for (index, input) in inputs.iter().cloned().enumerate() {
+                    let provider = provider.clone();
+                    let spec = spec.clone();
+                    join_set
+                        .spawn(async move { (index, provider.embed_impl(&input, &spec).await) });
+                }
+                let mut results = vec![None; inputs.len()];
+                while let Some(result) = join_set.join_next().await {
+                    let (index, embedding) = result.map_err(|error| {
+                        ConfiguredEmbeddingProviderError::RequestFailed {
+                            attempts: 1,
+                            message: error.to_string(),
+                        }
+                    })?;
+                    results[index] = Some(embedding?);
+                }
                 results
                     .into_iter()
                     .map(|embedding| {

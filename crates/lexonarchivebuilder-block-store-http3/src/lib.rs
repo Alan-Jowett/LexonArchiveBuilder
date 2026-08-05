@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use bytes::Buf;
 use h3::error::{ConnectionError, StreamError};
 use h3_quinn::quinn;
-use http::{Request, Uri};
+use http::{HeaderMap, Method, Request, Uri};
 use lexongraph_block::BlockHash;
 use lexongraph_block_store::{BlockIdStream, BlockStore, BlockStoreError};
 use rustls::RootCertStore;
@@ -23,14 +23,28 @@ const DEFAULT_GATEWAY_TIMEOUT: Duration = Duration::from_secs(30);
 static RUSTLS_PROVIDER: OnceLock<()> = OnceLock::new();
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct GatewayResponse {
-    status_code: u16,
-    body: Vec<u8>,
+pub struct Http3GatewayRequest {
+    pub method: Method,
+    pub path: String,
+    pub headers: HeaderMap,
+    pub body: Vec<u8>,
+    pub timeout: Duration,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Http3GatewayResponse {
+    pub status_code: u16,
+    pub headers: HeaderMap,
+    pub body: Vec<u8>,
 }
 
 #[async_trait]
 trait GatewayTransport: Send + Sync {
-    async fn fetch(&self, dns_name: &str, path: &str) -> Result<GatewayResponse, String>;
+    async fn request(
+        &self,
+        dns_name: &str,
+        request: &Http3GatewayRequest,
+    ) -> Result<Http3GatewayResponse, String>;
 }
 
 type Http3SendRequest = h3::client::SendRequest<h3_quinn::OpenStreams, bytes::Bytes>;
@@ -57,14 +71,13 @@ struct Http3GatewayTransport {
 }
 
 pub struct Http3BlockStore {
-    dns_name: String,
-    transport: Arc<dyn GatewayTransport>,
+    client: Http3GatewayClient,
 }
 
 impl fmt::Debug for Http3BlockStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Http3BlockStore")
-            .field("dns_name", &self.dns_name)
+            .field("dns_name", &self.client.dns_name)
             .finish()
     }
 }
@@ -72,28 +85,70 @@ impl fmt::Debug for Http3BlockStore {
 impl Clone for Http3BlockStore {
     fn clone(&self) -> Self {
         Self {
-            dns_name: self.dns_name.clone(),
-            transport: Arc::clone(&self.transport),
+            client: self.client.clone(),
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct Http3GatewayClient {
+    dns_name: String,
+    transport: Arc<dyn GatewayTransport>,
+}
+
+impl fmt::Debug for Http3GatewayClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Http3GatewayClient")
+            .field("dns_name", &self.dns_name)
+            .finish()
+    }
+}
+
+impl Http3GatewayClient {
+    pub fn new(dns_name: &str) -> Result<Self, String> {
+        let dns_name = validate_dns_name(dns_name).map_err(|error| error.to_string())?;
+        Ok(Self {
+            dns_name,
+            transport: Arc::new(Http3GatewayTransport::new()?),
+        })
+    }
+
+    pub async fn request(
+        &self,
+        request: Http3GatewayRequest,
+    ) -> Result<Http3GatewayResponse, String> {
+        self.transport.request(&self.dns_name, &request).await
+    }
+
+    #[cfg(test)]
+    fn with_transport(
+        dns_name: &str,
+        transport: Arc<dyn GatewayTransport>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            dns_name: validate_dns_name(dns_name).map_err(|error| error.to_string())?,
+            transport,
+        })
     }
 }
 
 impl Http3BlockStore {
     pub fn new(dns_name: &str) -> Result<Self, BlockStoreError> {
-        Self::with_transport(
-            dns_name,
-            Arc::new(Http3GatewayTransport::new().map_err(BlockStoreError::BackendFailure)?),
-        )
+        Http3GatewayClient::new(dns_name)
+            .map(|client| Self { client })
+            .map_err(BlockStoreError::BackendFailure)
     }
 
+    #[cfg(test)]
     fn with_transport(
         dns_name: &str,
         transport: Arc<dyn GatewayTransport>,
     ) -> Result<Self, BlockStoreError> {
-        let dns_name = validate_dns_name(dns_name)?;
         Ok(Self {
-            dns_name,
-            transport,
+            client: Http3GatewayClient {
+                dns_name: validate_dns_name(dns_name)?,
+                transport,
+            },
         })
     }
 
@@ -253,19 +308,31 @@ impl Http3GatewayTransport {
         })
     }
 
-    async fn fetch_once(&self, dns_name: &str, path: &str) -> Result<GatewayResponse, String> {
-        let uri = Http3BlockStore::build_block_uri(dns_name, path)?;
+    async fn request_once(
+        &self,
+        dns_name: &str,
+        gateway_request: &Http3GatewayRequest,
+    ) -> Result<Http3GatewayResponse, String> {
+        let uri = Http3BlockStore::build_block_uri(dns_name, &gateway_request.path)?;
         let mut send_request = self.get_or_connect(dns_name).await?;
 
-        let request = Request::builder()
-            .method("GET")
-            .uri(uri)
+        let mut request_builder = Request::builder().method(&gateway_request.method).uri(uri);
+        for (name, value) in &gateway_request.headers {
+            request_builder = request_builder.header(name, value);
+        }
+        let request = request_builder
             .body(())
             .map_err(|error| format!("failed to build gateway request: {error}"))?;
         let mut request_stream = send_request
             .send_request(request)
             .await
             .map_err(map_stream_error)?;
+        if !gateway_request.body.is_empty() {
+            request_stream
+                .send_data(bytes::Bytes::copy_from_slice(&gateway_request.body))
+                .await
+                .map_err(map_stream_error)?;
+        }
         request_stream.finish().await.map_err(map_stream_error)?;
 
         let response = request_stream
@@ -283,7 +350,11 @@ impl Http3GatewayTransport {
             }
         }
 
-        Ok(GatewayResponse { status_code, body })
+        Ok(Http3GatewayResponse {
+            status_code,
+            headers: response.headers().clone(),
+            body,
+        })
     }
 
     async fn get_or_connect(&self, dns_name: &str) -> Result<Http3SendRequest, String> {
@@ -336,17 +407,17 @@ impl Http3GatewayTransport {
         state.send_request = None;
     }
 
-    async fn fetch_with_timeout(
+    async fn request_with_timeout(
         &self,
         dns_name: &str,
-        path: &str,
-    ) -> Result<GatewayResponse, String> {
-        timeout(DEFAULT_GATEWAY_TIMEOUT, self.fetch_once(dns_name, path))
+        request: &Http3GatewayRequest,
+    ) -> Result<Http3GatewayResponse, String> {
+        timeout(request.timeout, self.request_once(dns_name, request))
             .await
             .map_err(|_| {
                 format!(
                     "gateway request exceeded {}s timeout for host {dns_name}",
-                    DEFAULT_GATEWAY_TIMEOUT.as_secs()
+                    request.timeout.as_secs()
                 )
             })?
     }
@@ -354,12 +425,16 @@ impl Http3GatewayTransport {
 
 #[async_trait]
 impl GatewayTransport for Http3GatewayTransport {
-    async fn fetch(&self, dns_name: &str, path: &str) -> Result<GatewayResponse, String> {
-        match self.fetch_with_timeout(dns_name, path).await {
+    async fn request(
+        &self,
+        dns_name: &str,
+        request: &Http3GatewayRequest,
+    ) -> Result<Http3GatewayResponse, String> {
+        match self.request_with_timeout(dns_name, request).await {
             Ok(response) => Ok(response),
             Err(error) => {
                 self.reset_connection().await;
-                self.fetch_with_timeout(dns_name, path)
+                self.request_with_timeout(dns_name, request)
                     .await
                     .map_err(|retry_error| format!("{error}; retry failed: {retry_error}"))
             }
@@ -385,8 +460,14 @@ impl BlockStore for Http3BlockStore {
     ) -> Result<Option<Vec<u8>>, BlockStoreError> {
         let path = Self::build_block_path(block_id);
         let response = self
-            .transport
-            .fetch(&self.dns_name, &path)
+            .client
+            .request(Http3GatewayRequest {
+                method: Method::GET,
+                path,
+                headers: HeaderMap::new(),
+                body: Vec::new(),
+                timeout: DEFAULT_GATEWAY_TIMEOUT,
+            })
             .await
             .map_err(BlockStoreError::BackendFailure)?;
         match response.status_code {
@@ -412,12 +493,18 @@ mod tests {
 
     #[derive(Debug)]
     struct FakeTransport {
-        response: Result<GatewayResponse, String>,
+        response: Result<Http3GatewayResponse, String>,
+        request: std::sync::Mutex<Option<Http3GatewayRequest>>,
     }
 
     #[async_trait]
     impl GatewayTransport for FakeTransport {
-        async fn fetch(&self, _dns_name: &str, _path: &str) -> Result<GatewayResponse, String> {
+        async fn request(
+            &self,
+            _dns_name: &str,
+            request: &Http3GatewayRequest,
+        ) -> Result<Http3GatewayResponse, String> {
+            *self.request.lock().unwrap() = Some(request.clone());
             self.response.clone()
         }
     }
@@ -430,15 +517,56 @@ mod tests {
         ])
     }
 
-    fn store_with_response(response: Result<GatewayResponse, String>) -> Http3BlockStore {
-        Http3BlockStore::with_transport("gateway.example.com", Arc::new(FakeTransport { response }))
-            .unwrap()
+    fn store_with_response(response: Result<Http3GatewayResponse, String>) -> Http3BlockStore {
+        Http3BlockStore::with_transport(
+            "gateway.example.com",
+            Arc::new(FakeTransport {
+                response,
+                request: std::sync::Mutex::new(None),
+            }),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn gateway_client_forwards_method_path_headers_and_body() {
+        let transport = Arc::new(FakeTransport {
+            response: Ok(Http3GatewayResponse {
+                status_code: 200,
+                headers: HeaderMap::new(),
+                body: vec![1],
+            }),
+            request: std::sync::Mutex::new(None),
+        });
+        let client =
+            Http3GatewayClient::with_transport("gateway.example.com", transport.clone()).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", "application/json".parse().unwrap());
+
+        let response = client
+            .request(Http3GatewayRequest {
+                method: Method::POST,
+                path: "/v1/embeddings".into(),
+                headers,
+                body: br#"{"input":"hello"}"#.to_vec(),
+                timeout: Duration::from_secs(10),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(response.status_code, 200);
+        let request = transport.request.lock().unwrap().clone().unwrap();
+        assert_eq!(request.method, Method::POST);
+        assert_eq!(request.path, "/v1/embeddings");
+        assert_eq!(request.headers["content-type"], "application/json");
+        assert_eq!(request.body, br#"{"input":"hello"}"#);
     }
 
     #[tokio::test]
     async fn get_block_bytes_returns_body_on_success() {
-        let store = store_with_response(Ok(GatewayResponse {
+        let store = store_with_response(Ok(Http3GatewayResponse {
             status_code: 200,
+            headers: HeaderMap::new(),
             body: vec![1, 2, 3],
         }));
 
@@ -449,8 +577,9 @@ mod tests {
 
     #[tokio::test]
     async fn get_block_bytes_maps_404_to_missing() {
-        let store = store_with_response(Ok(GatewayResponse {
+        let store = store_with_response(Ok(Http3GatewayResponse {
             status_code: 404,
+            headers: HeaderMap::new(),
             body: Vec::new(),
         }));
 
@@ -471,8 +600,9 @@ mod tests {
 
     #[tokio::test]
     async fn get_block_bytes_rejects_unexpected_http_status() {
-        let store = store_with_response(Ok(GatewayResponse {
+        let store = store_with_response(Ok(Http3GatewayResponse {
             status_code: 500,
+            headers: HeaderMap::new(),
             body: Vec::new(),
         }));
 
@@ -505,8 +635,9 @@ mod tests {
 
     #[tokio::test]
     async fn write_operations_fail_explicitly() {
-        let store = store_with_response(Ok(GatewayResponse {
+        let store = store_with_response(Ok(Http3GatewayResponse {
             status_code: 200,
+            headers: HeaderMap::new(),
             body: Vec::new(),
         }));
 
@@ -565,8 +696,9 @@ mod tests {
 
     #[test]
     fn iter_block_ids_fails_explicitly() {
-        let store = store_with_response(Ok(GatewayResponse {
+        let store = store_with_response(Ok(Http3GatewayResponse {
             status_code: 200,
+            headers: HeaderMap::new(),
             body: Vec::new(),
         }));
 
