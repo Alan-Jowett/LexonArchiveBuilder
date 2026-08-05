@@ -218,6 +218,8 @@ Execute or inspect a representative configured embedding request.
 **Pass condition:** `POST /v1/embeddings` forwards the received
 OpenAI-compatible request body to the configured STAPI embeddings endpoint and
 returns the upstream response without a gateway-specific embedding envelope.
+Only end-to-end headers are forwarded in either direction; standard and
+`Connection`-nominated hop-by-hop headers are excluded.
 
 **Traces to:** RQ-BGW-015, RQ-BGW-017, DSG-BGW-010
 
@@ -246,7 +248,8 @@ configured.
 Execute or inspect an embedding request when the configured STAPI endpoint is
 unreachable.
 
-**Pass condition:** the gateway returns HTTP `502 Bad Gateway`.
+**Pass condition:** the gateway returns HTTP `502 Bad Gateway` after its
+bounded upstream connection or request timeout.
 
 **Traces to:** RQ-BGW-017, DSG-BGW-011
 
@@ -259,3 +262,12 @@ indexer behavior, block mutation, embedding persistence, storage-profile
 coupling, central control-plane behavior, or content-type-specific handling.
 
 **Traces to:** RQ-BGW-015, RQ-BGW-019, DSG-BGW-012
+
+### VAL-BGW-EMBED-007
+
+Execute or inspect an embedding request whose body exceeds 1 MiB.
+
+**Pass condition:** `POST /v1/embeddings` returns HTTP `413 Payload Too Large`
+without forwarding the oversized body upstream.
+
+**Traces to:** RQ-BGW-017, DSG-BGW-010

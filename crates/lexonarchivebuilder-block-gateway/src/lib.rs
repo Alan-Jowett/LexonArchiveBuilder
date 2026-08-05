@@ -13,9 +13,7 @@ use anyhow::{Context, anyhow, bail};
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::{Path as AxumPath, Request, State};
-use axum::http::header::{
-    CACHE_CONTROL, CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, HOST, TRANSFER_ENCODING,
-};
+use axum::http::header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderValue, Response, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -37,6 +35,9 @@ pub const CACHE_CONTROL_VALUE: &str = "public, max-age=31536000, immutable";
 pub const NO_STORE_CACHE_CONTROL_VALUE: &str = "no-store";
 const MAX_CONCURRENT_CONNECTION_TASKS: usize = 256;
 const MAX_CONCURRENT_REQUEST_TASKS_PER_CONNECTION: usize = 32;
+const MAX_EMBEDDING_REQUEST_BODY_BYTES: usize = 1024 * 1024;
+const EMBEDDING_UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const EMBEDDING_UPSTREAM_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 static CACHE_CONTROL_HEADER: HeaderValue = HeaderValue::from_static(CACHE_CONTROL_VALUE);
 static NO_STORE_CACHE_CONTROL_HEADER: HeaderValue =
     HeaderValue::from_static(NO_STORE_CACHE_CONTROL_VALUE);
@@ -111,10 +112,12 @@ impl EmbeddingProxy {
         let normalized_base_url = base_url.trim_end_matches('/');
         let endpoint = reqwest::Url::parse(&format!("{normalized_base_url}/v1/embeddings"))
             .context("embedding_base_url must be a valid absolute URL")?;
-        Ok(Self {
-            client: reqwest::Client::new(),
-            endpoint,
-        })
+        let client = reqwest::Client::builder()
+            .connect_timeout(EMBEDDING_UPSTREAM_CONNECT_TIMEOUT)
+            .timeout(EMBEDDING_UPSTREAM_REQUEST_TIMEOUT)
+            .build()
+            .context("failed to build embedding upstream HTTP client")?;
+        Ok(Self { client, endpoint })
     }
 }
 
@@ -432,20 +435,21 @@ async fn proxy_embeddings(State(state): State<GatewayState>, request: Request) -
     };
 
     let request_headers = request.headers().clone();
-    let request_body = match to_bytes(request.into_body(), usize::MAX).await {
+    let request_body = match to_bytes(request.into_body(), MAX_EMBEDDING_REQUEST_BODY_BYTES).await {
         Ok(body) => body,
         Err(error) => {
-            warn!(?error, "failed to read embedding request body");
-            return StatusCode::BAD_REQUEST.into_response();
+            warn!(
+                ?error,
+                "embedding request body exceeded the configured size limit"
+            );
+            return StatusCode::PAYLOAD_TOO_LARGE.into_response();
         }
     };
 
-    let mut upstream_request = proxy.client.post(proxy.endpoint);
-    for (name, value) in request_headers.iter() {
-        if !is_hop_by_hop_or_framing_header(name) {
-            upstream_request = upstream_request.header(name, value);
-        }
-    }
+    let upstream_request = proxy
+        .client
+        .post(proxy.endpoint)
+        .headers(copy_end_to_end_headers(&request_headers));
 
     let upstream_response = match upstream_request.body(request_body).send().await {
         Ok(response) => response,
@@ -467,23 +471,51 @@ async fn proxy_embeddings(State(state): State<GatewayState>, request: Request) -
 
     let mut response = Response::new(Body::from(response_body));
     *response.status_mut() = status;
-    copy_response_headers(response.headers_mut(), &response_headers);
+    copy_end_to_end_headers_into(response.headers_mut(), &response_headers);
     response
 }
 
 fn is_hop_by_hop_or_framing_header(name: &axum::http::header::HeaderName) -> bool {
     matches!(
-        name,
-        &CONNECTION | &CONTENT_LENGTH | &HOST | &TRANSFER_ENCODING
+        name.as_str(),
+        "connection"
+            | "content-length"
+            | "host"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
     )
 }
 
-fn copy_response_headers(destination: &mut HeaderMap, source: &HeaderMap) {
+fn copy_end_to_end_headers(source: &HeaderMap) -> HeaderMap {
+    let mut destination = HeaderMap::new();
+    copy_end_to_end_headers_into(&mut destination, source);
+    destination
+}
+
+fn copy_end_to_end_headers_into(destination: &mut HeaderMap, source: &HeaderMap) {
     for (name, value) in source {
-        if !matches!(name, &CONNECTION | &TRANSFER_ENCODING) {
+        if !is_hop_by_hop_or_framing_header(name) && !is_connection_nominated_header(source, name) {
             destination.append(name, value.clone());
         }
     }
+}
+
+fn is_connection_nominated_header(
+    headers: &HeaderMap,
+    candidate: &axum::http::header::HeaderName,
+) -> bool {
+    headers
+        .get_all(CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .filter_map(|name| axum::http::header::HeaderName::from_bytes(name.trim().as_bytes()).ok())
+        .any(|name| name == *candidate)
 }
 
 fn not_found_response() -> Response<Body> {
@@ -940,5 +972,52 @@ mod tests {
             .expect("router request should succeed");
 
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn embedding_route_rejects_request_bodies_larger_than_the_limit() {
+        let app = build_router_with_embedding(
+            Arc::new(MockStore::default()),
+            Some("http://127.0.0.1:0/"),
+        )
+        .expect("router should build");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/embeddings")
+                    .body(Body::from(vec![0_u8; MAX_EMBEDDING_REQUEST_BODY_BYTES + 1]))
+                    .expect("request build should succeed"),
+            )
+            .await
+            .expect("router request should succeed");
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[test]
+    fn proxy_header_filter_removes_hop_by_hop_and_connection_nominated_headers() {
+        let mut source = HeaderMap::new();
+        source.insert(CONNECTION, HeaderValue::from_static("x-request-hop"));
+        source.insert("x-request-hop", HeaderValue::from_static("remove"));
+        source.insert("keep-alive", HeaderValue::from_static("timeout=5"));
+        source.insert("upgrade", HeaderValue::from_static("h2c"));
+        source.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        source.insert("x-request-id", HeaderValue::from_static("preserve"));
+
+        let headers = copy_end_to_end_headers(&source);
+
+        assert!(headers.get("x-request-hop").is_none());
+        assert!(headers.get("keep-alive").is_none());
+        assert!(headers.get("upgrade").is_none());
+        assert_eq!(
+            headers.get(CONTENT_TYPE),
+            Some(&HeaderValue::from_static("application/json"))
+        );
+        assert_eq!(
+            headers.get("x-request-id"),
+            Some(&HeaderValue::from_static("preserve"))
+        );
     }
 }

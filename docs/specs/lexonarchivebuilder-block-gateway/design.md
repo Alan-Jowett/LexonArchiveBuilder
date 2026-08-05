@@ -376,15 +376,20 @@ introducing a LexonArchiveBuilder-specific embedding schema or envelope.
 
 When no embedding upstream is configured, the handler returns `404`. The
 block-fetch route continues to be served independently of this selection.
+The handler accepts at most 1 MiB of request-body bytes and returns `413 Payload
+Too Large` for a larger request. In both directions, it forwards only
+end-to-end headers, omitting standard hop-by-hop headers and any header named
+by a `Connection` header.
 
 **Traces to:** RQ-BGW-015, RQ-BGW-017, RQ-BGW-018
 
 ### DSG-BGW-011 `Upstream connection-failure projection`
 
-If the configured STAPI endpoint cannot be reached, the embedding handler
-returns `502 Bad Gateway`. An HTTP response received from STAPI, including a
-non-success response, is projected transparently rather than normalized by the
-gateway.
+The embedding HTTP client uses a 5-second connection timeout and a 60-second
+overall request timeout. If the configured STAPI endpoint cannot be reached
+within those bounds, the embedding handler returns `502 Bad Gateway`. An HTTP
+response received from STAPI, including a non-success response, is projected
+transparently rather than normalized by the gateway.
 
 **Traces to:** RQ-BGW-017
 

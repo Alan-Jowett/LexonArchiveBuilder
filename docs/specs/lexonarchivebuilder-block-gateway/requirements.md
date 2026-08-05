@@ -499,6 +499,15 @@ the OpenAI-compatible request and response protocol.
   not a new repository-owned embedding implementation.
 - **Constraint [KNOWN]:** If the gateway cannot reach the configured upstream,
   it SHALL return HTTP `502 Bad Gateway`.
+- **Constraint [KNOWN]:** The gateway SHALL use bounded upstream connection
+  and request timeouts so an unavailable upstream is projected as `502`
+  without indefinitely occupying gateway request capacity.
+- **Constraint [KNOWN]:** The gateway SHALL accept at most 1 MiB of embedding
+  request-body bytes and return HTTP `413 Payload Too Large` when that limit
+  is exceeded.
+- **Constraint [INFERRED]:** The gateway SHALL forward only end-to-end HTTP
+  headers and remove standard and `Connection`-nominated hop-by-hop headers
+  in both proxy directions.
 - **Traceability:** UR-BGW-EMBED-1, UR-BGW-EMBED-2, UR-BGW-EMBED-3
 
 #### RQ-BGW-018 - Disabled embedding-proxy behavior
@@ -536,8 +545,7 @@ not require that configuration for block retrieval.
 ### Open Questions / Discovery Gaps
 
 - **Q-BGW-EMBED-002 [UNKNOWN]:** Does the public gateway require client
-  authentication, request-size limits, or rate limiting for the new
-  embedding route?
+  authentication or rate limiting for the new embedding route?
 
 ### Coverage Notes
 
