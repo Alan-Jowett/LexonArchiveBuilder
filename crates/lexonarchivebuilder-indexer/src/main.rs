@@ -929,11 +929,16 @@ fn configured_search_embedding_provider(
                     "--embedding-api-key-env is not supported with --block-store-profile gateway-http3"
                 );
             }
+            let dns_name = block_store
+                .block_store_gateway_dns_name
+                .as_deref()
+                .ok_or_else(|| {
+                    anyhow!(
+                        "--block-store-gateway-dns-name is required with --block-store-profile gateway-http3"
+                    )
+                })?;
             ConfiguredEmbeddingProvider::gateway_http3(
-                block_store
-                    .block_store_gateway_dns_name
-                    .as_deref()
-                    .expect("gateway-http3 dns name is required by clap"),
+                dns_name,
                 embedding_model,
                 embedding_max_retries,
                 embedding_retry_delay_ms,
