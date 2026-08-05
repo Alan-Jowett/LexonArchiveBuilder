@@ -205,18 +205,7 @@ impl McpRuntime {
         }
 
         let root_id = resolve_root_id_async(&request_dir, &config).await?;
-        let block_store = match &config.environment {
-            McpEnvironmentConfig::Shared(environment) => {
-                ConfiguredBlockStore::from_environment_with_redb_read_only(
-                    &request_dir,
-                    environment,
-                    None,
-                )?
-            }
-            McpEnvironmentConfig::GatewayHttp3(gateway) => {
-                ConfiguredBlockStore::gateway_http3_store(&gateway.gateway_dns_name)?
-            }
-        };
+        let block_store = configured_block_store(&request_dir, &config.environment)?;
         let Some(root) = block_store.get(&root_id).await? else {
             return Err(RuntimeError::MissingRootBlock {
                 root_id: root_id.to_string(),
@@ -227,20 +216,7 @@ impl McpRuntime {
                 root_id: root_id.to_string(),
             });
         };
-        let embedding_provider = match &config.environment {
-            McpEnvironmentConfig::Shared(environment) => {
-                ConfiguredEmbeddingProvider::from_environment(environment)?
-            }
-            McpEnvironmentConfig::GatewayHttp3(gateway) => {
-                ConfiguredEmbeddingProvider::gateway_http3(
-                    &gateway.gateway_dns_name,
-                    gateway.model.clone(),
-                    gateway.max_retries,
-                    gateway.retry_delay_ms,
-                    gateway.request_timeout_secs,
-                )?
-            }
-        };
+        let embedding_provider = configured_embedding_provider(&config.environment)?;
         let provider_spec = logical_f32_embedding_spec(branch.embedding_spec.dims);
         let target_embedding = embedding_provider
             .embed(
@@ -341,6 +317,43 @@ impl McpRuntime {
     }
 }
 
+fn configured_block_store(
+    request_dir: &Path,
+    environment: &McpEnvironmentConfig,
+) -> Result<ConfiguredBlockStore, RuntimeError> {
+    match environment {
+        McpEnvironmentConfig::Shared(environment) => {
+            Ok(ConfiguredBlockStore::from_environment_with_redb_read_only(
+                request_dir,
+                environment,
+                None,
+            )?)
+        }
+        McpEnvironmentConfig::GatewayHttp3(gateway) => Ok(
+            ConfiguredBlockStore::gateway_http3_store(&gateway.gateway_dns_name)?,
+        ),
+    }
+}
+
+fn configured_embedding_provider(
+    environment: &McpEnvironmentConfig,
+) -> Result<ConfiguredEmbeddingProvider, RuntimeError> {
+    match environment {
+        McpEnvironmentConfig::Shared(environment) => {
+            Ok(ConfiguredEmbeddingProvider::from_environment(environment)?)
+        }
+        McpEnvironmentConfig::GatewayHttp3(gateway) => {
+            Ok(ConfiguredEmbeddingProvider::gateway_http3(
+                &gateway.gateway_dns_name,
+                gateway.model.clone(),
+                gateway.max_retries,
+                gateway.retry_delay_ms,
+                gateway.request_timeout_secs,
+            )?)
+        }
+    }
+}
+
 async fn resolve_root_id_async(
     request_dir: &Path,
     config: &McpConfig,
@@ -410,7 +423,30 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::config::{IndexConfig, McpEnvironmentConfig};
+    use crate::config::{
+        GatewayHttp3Kind, GatewayHttp3McpEnvironmentConfig, IndexConfig, McpEnvironmentConfig,
+    };
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn gateway_environment_selects_gateway_dependencies() {
+        let environment = McpEnvironmentConfig::GatewayHttp3(GatewayHttp3McpEnvironmentConfig {
+            kind: GatewayHttp3Kind::GatewayHttp3,
+            gateway_dns_name: "gateway.example.test".into(),
+            model: "gateway-model".into(),
+            request_timeout_secs: 1,
+            max_retries: 0,
+            retry_delay_ms: 1,
+        });
+
+        let block_store = configured_block_store(Path::new("."), &environment).unwrap();
+        let embedding_provider = configured_embedding_provider(&environment).unwrap();
+
+        assert!(matches!(block_store, ConfiguredBlockStore::GatewayHttp3(_)));
+        assert!(matches!(
+            embedding_provider,
+            ConfiguredEmbeddingProvider::GatewayHttp3(_)
+        ));
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn search_chunks_uses_upstream_target_preparation_for_branch_roots() {
