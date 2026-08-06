@@ -28,12 +28,15 @@ use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::config::{ConfigError, McpConfig, McpEnvironmentConfig};
+use crate::config::{
+    ConfigError, DEFAULT_GATEWAY_HTTP3_FS_CACHE_ROOT, McpConfig, McpEnvironmentConfig,
+};
 
 #[derive(Clone, Debug)]
 pub struct McpRuntime {
     request_dir: PathBuf,
     config: McpConfig,
+    block_store: ConfiguredBlockStore,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
@@ -184,9 +187,11 @@ impl McpRuntime {
 
     pub fn new(request_dir: PathBuf, config: McpConfig) -> Result<Self, RuntimeError> {
         config.validate()?;
+        let block_store = configured_block_store(&request_dir, &config.environment)?;
         Ok(Self {
             request_dir,
             config,
+            block_store,
         })
     }
 
@@ -198,8 +203,13 @@ impl McpRuntime {
         &self,
         request: SearchChunksRequest,
     ) -> Result<SearchChunksResponse, RuntimeError> {
-        Self::search_chunks_with_context(self.request_dir.clone(), self.config.clone(), request)
-            .await
+        Self::search_chunks_with_context(
+            self.request_dir.clone(),
+            self.config.clone(),
+            self.block_store.clone(),
+            request,
+        )
+        .await
     }
 
     pub(crate) fn search_chunks_blocking(
@@ -208,14 +218,16 @@ impl McpRuntime {
     ) -> Result<SearchChunksResponse, RuntimeError> {
         let request_dir = self.request_dir.clone();
         let config = self.config.clone();
+        let block_store = self.block_store.clone();
         Self::block_on_search_future(move || {
-            Self::search_chunks_with_context(request_dir, config, request)
+            Self::search_chunks_with_context(request_dir, config, block_store, request)
         })
     }
 
     async fn search_chunks_with_context(
         request_dir: PathBuf,
         config: McpConfig,
+        block_store: ConfiguredBlockStore,
         request: SearchChunksRequest,
     ) -> Result<SearchChunksResponse, RuntimeError> {
         let top_k = request.top_k.unwrap_or(config.top_k);
@@ -228,7 +240,6 @@ impl McpRuntime {
         }
 
         let root_id = resolve_root_id_async(&request_dir, &config).await?;
-        let block_store = configured_block_store(&request_dir, &config.environment)?;
         let Some(root) = block_store.get(&root_id).await? else {
             return Err(RuntimeError::MissingRootBlock {
                 root_id: root_id.to_string(),
@@ -330,8 +341,7 @@ impl McpRuntime {
             parse_block_hash(&request.name).map_err(|_| RuntimeError::InvalidEmailLeafBlockId {
                 value: request.name.clone(),
             })?;
-        let block_store = configured_block_store(&self.request_dir, &self.config.environment)?;
-        let Some(block) = block_store.get(&leaf_block_id).await? else {
+        let Some(block) = self.block_store.get(&leaf_block_id).await? else {
             return Err(RuntimeError::MissingEmailLeafBlock {
                 leaf_block_id: leaf_block_id.to_string(),
             });
@@ -407,6 +417,20 @@ fn configured_block_store(
         McpEnvironmentConfig::GatewayHttp3(gateway) => Ok(
             ConfiguredBlockStore::gateway_http3_store(&gateway.gateway_dns_name)?,
         ),
+        McpEnvironmentConfig::GatewayHttp3FilesystemCache(gateway) => {
+            let cache_root = gateway
+                .block_cache_root
+                .as_deref()
+                .unwrap_or_else(|| Path::new(DEFAULT_GATEWAY_HTTP3_FS_CACHE_ROOT));
+            Ok(
+                ConfiguredBlockStore::gateway_http3_filesystem_overlay_store(
+                    request_dir,
+                    cache_root,
+                    gateway.memory_cache_max_resident_blocks,
+                    &gateway.gateway_dns_name,
+                )?,
+            )
+        }
     }
 }
 
@@ -418,6 +442,15 @@ fn configured_embedding_provider(
             Ok(ConfiguredEmbeddingProvider::from_environment(environment)?)
         }
         McpEnvironmentConfig::GatewayHttp3(gateway) => {
+            Ok(ConfiguredEmbeddingProvider::gateway_http3(
+                &gateway.gateway_dns_name,
+                gateway.model.clone(),
+                gateway.max_retries,
+                gateway.retry_delay_ms,
+                gateway.request_timeout_secs,
+            )?)
+        }
+        McpEnvironmentConfig::GatewayHttp3FilesystemCache(gateway) => {
             Ok(ConfiguredEmbeddingProvider::gateway_http3(
                 &gateway.gateway_dns_name,
                 gateway.model.clone(),
@@ -500,6 +533,7 @@ mod tests {
 
     use super::*;
     use crate::config::{
+        GatewayHttp3FilesystemCacheKind, GatewayHttp3FilesystemCacheMcpEnvironmentConfig,
         GatewayHttp3Kind, GatewayHttp3McpEnvironmentConfig, IndexConfig, McpEnvironmentConfig,
         ToolDescriptionsConfig,
     };
@@ -523,6 +557,70 @@ mod tests {
             embedding_provider,
             ConfiguredEmbeddingProvider::GatewayHttp3(_)
         ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn filesystem_cache_gateway_selects_overlay_and_gateway_embedding() {
+        let temp = tempdir().unwrap();
+        let environment = McpEnvironmentConfig::GatewayHttp3FilesystemCache(
+            GatewayHttp3FilesystemCacheMcpEnvironmentConfig {
+                kind: GatewayHttp3FilesystemCacheKind::GatewayHttp3FsCache,
+                gateway_dns_name: "gateway.example.test".into(),
+                block_cache_root: Some(PathBuf::from("cache")),
+                memory_cache_max_resident_blocks: 256,
+                model: "gateway-model".into(),
+                request_timeout_secs: 1,
+                max_retries: 0,
+                retry_delay_ms: 1,
+            },
+        );
+
+        let block_store = configured_block_store(temp.path(), &environment).unwrap();
+        let embedding_provider = configured_embedding_provider(&environment).unwrap();
+
+        assert!(matches!(block_store, ConfiguredBlockStore::Overlay(_)));
+        assert!(matches!(
+            embedding_provider,
+            ConfiguredEmbeddingProvider::GatewayHttp3(_)
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn runtime_constructs_filesystem_cache_overlay_once() {
+        let temp = tempdir().unwrap();
+        let config = McpConfig {
+            environment: McpEnvironmentConfig::GatewayHttp3FilesystemCache(
+                GatewayHttp3FilesystemCacheMcpEnvironmentConfig {
+                    kind: GatewayHttp3FilesystemCacheKind::GatewayHttp3FsCache,
+                    gateway_dns_name: "gateway.example.test".into(),
+                    block_cache_root: Some(PathBuf::from("cache")),
+                    memory_cache_max_resident_blocks: 256,
+                    model: "gateway-model".into(),
+                    request_timeout_secs: 1,
+                    max_retries: 0,
+                    retry_delay_ms: 1,
+                },
+            ),
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 384,
+                encoding: "f32le".into(),
+            },
+            index: IndexConfig::RootId {
+                root_id: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".into(),
+            },
+            tool_descriptions: ToolDescriptionsConfig::default(),
+            top_k: 5,
+            traversal_width: 3,
+        };
+
+        let runtime = McpRuntime::new(temp.path().to_path_buf(), config).unwrap();
+        let ConfiguredBlockStore::Overlay(first) = &runtime.block_store else {
+            panic!("expected runtime-owned overlay");
+        };
+        let ConfiguredBlockStore::Overlay(second) = runtime.block_store.clone() else {
+            panic!("expected cloned runtime overlay");
+        };
+        assert!(Arc::ptr_eq(first, &second));
     }
 
     #[tokio::test(flavor = "multi_thread")]

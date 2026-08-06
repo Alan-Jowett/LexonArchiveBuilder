@@ -47,6 +47,26 @@ impl ConfiguredBlockStore {
         Http3BlockStore::new(gateway_dns_name).map(Self::GatewayHttp3)
     }
 
+    pub fn gateway_http3_filesystem_overlay_store(
+        request_dir: &Path,
+        cache_root: &Path,
+        memory_capacity: usize,
+        gateway_dns_name: &str,
+    ) -> Result<Self, BlockStoreError> {
+        let memory = MemoryBlockStore::new(memory_capacity)
+            .map_err(|error| BlockStoreError::BackendFailure(error.to_string()))?;
+        let filesystem = FilesystemBlockStore::new(resolve_path(request_dir, cache_root))?;
+        let gateway = Http3BlockStore::new(gateway_dns_name)?;
+        let layers: Vec<Box<dyn OverlayStoreLayer>> = vec![
+            Box::new(PassiveLayer::cache(memory)),
+            Box::new(PassiveLayer::cache(filesystem)),
+            Box::new(PassiveLayer::read_only(gateway)),
+        ];
+        let overlay = OverlayBlockStore::new(layers)
+            .map_err(|error| BlockStoreError::BackendFailure(error.to_string()))?;
+        Ok(Self::Overlay(Arc::new(overlay)))
+    }
+
     pub fn from_environment(
         request_dir: &Path,
         environment: &EnvironmentConfig,
