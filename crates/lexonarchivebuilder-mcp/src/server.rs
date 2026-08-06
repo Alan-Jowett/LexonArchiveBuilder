@@ -17,8 +17,8 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::runtime::{
-    CacheStats, CacheStatsLayer, EmailRetrievalResponse, McpRuntime, NamedRetrievalRequest,
-    NamedRetrievalResponse, RuntimeError, SearchChunksRequest, SearchChunksResponse,
+    CacheStats, EmailRetrievalResponse, McpRuntime, NamedRetrievalRequest, NamedRetrievalResponse,
+    RuntimeError, SearchChunksRequest, SearchChunksResponse,
 };
 
 #[derive(Clone)]
@@ -249,7 +249,10 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::config::{IndexConfig, McpConfig, McpEnvironmentConfig, ToolDescriptionsConfig};
+    use crate::{
+        config::{IndexConfig, McpConfig, McpEnvironmentConfig, ToolDescriptionsConfig},
+        runtime::CacheStatsLayer,
+    };
 
     fn test_runtime() -> Arc<McpRuntime> {
         Arc::new(
