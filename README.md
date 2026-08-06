@@ -423,9 +423,9 @@ cargo run -p lexonarchivebuilder-mcp -- serve --config C:\path\to\mcp.gateway.re
 The `gateway-http3-fs-cache` profile reads index blocks and obtains query
 embeddings through one gateway. Blocks fetched from the gateway are cached in
 memory (256 resident blocks by default) and in `mcp-block-cache` relative to
-the MCP config file. Set `memory_cache_max_resident_blocks` or
-`block_cache_root` in the environment to override those defaults. It does not
-use a separate embedding endpoint or embedding API key.
+the MCP config file. Set `environment.memory_cache_max_resident_blocks` or
+`environment.block_cache_root` in the MCP JSON configuration to override those
+defaults. It does not use a separate embedding endpoint or embedding API key.
 
 ### Running with Docker Compose
 

@@ -450,6 +450,26 @@ mod tests {
             invalid.validate(),
             Err(ConfigError::InvalidMemoryCacheCapacity)
         ));
+
+        let empty_path: McpConfig = serde_json::from_str(
+            r#"{
+                "environment": {
+                    "kind": "gateway-http3-fs-cache",
+                    "gateway_dns_name": "gateway.example.test",
+                    "block_cache_root": ""
+                },
+                "embedding_spec": { "dims": 384, "encoding": "f32le" },
+                "index": {
+                    "kind": "root-id",
+                    "root_id": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                }
+            }"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            empty_path.validate(),
+            Err(ConfigError::EmptyBlockCacheRoot)
+        ));
     }
 
     #[test]

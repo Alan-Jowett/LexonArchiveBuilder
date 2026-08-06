@@ -1,9 +1,7 @@
 {
   "environment": {
     "kind": "gateway-http3-fs-cache",
-    "gateway_dns_name": "<operator-provided-gateway-dns-name>",
-    "block_cache_root": "mcp-block-cache",
-    "memory_cache_max_resident_blocks": 256
+    "gateway_dns_name": "<operator-provided-gateway-dns-name>"
   },
   "embedding_spec": {
     "dims": 384,
