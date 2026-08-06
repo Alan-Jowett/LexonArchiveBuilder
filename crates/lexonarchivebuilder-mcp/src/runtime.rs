@@ -36,6 +36,7 @@ use crate::config::{
 pub struct McpRuntime {
     request_dir: PathBuf,
     config: McpConfig,
+    gateway_redb_block_store: Option<ConfiguredBlockStore>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
@@ -186,9 +187,16 @@ impl McpRuntime {
 
     pub fn new(request_dir: PathBuf, config: McpConfig) -> Result<Self, RuntimeError> {
         config.validate()?;
+        let gateway_redb_block_store = match &config.environment {
+            McpEnvironmentConfig::GatewayHttp3Redb(_) => {
+                Some(configured_block_store(&request_dir, &config.environment)?)
+            }
+            _ => None,
+        };
         Ok(Self {
             request_dir,
             config,
+            gateway_redb_block_store,
         })
     }
 
@@ -200,8 +208,13 @@ impl McpRuntime {
         &self,
         request: SearchChunksRequest,
     ) -> Result<SearchChunksResponse, RuntimeError> {
-        Self::search_chunks_with_context(self.request_dir.clone(), self.config.clone(), request)
-            .await
+        Self::search_chunks_with_context(
+            self.request_dir.clone(),
+            self.config.clone(),
+            self.gateway_redb_block_store.clone(),
+            request,
+        )
+        .await
     }
 
     pub(crate) fn search_chunks_blocking(
@@ -210,14 +223,16 @@ impl McpRuntime {
     ) -> Result<SearchChunksResponse, RuntimeError> {
         let request_dir = self.request_dir.clone();
         let config = self.config.clone();
+        let gateway_redb_block_store = self.gateway_redb_block_store.clone();
         Self::block_on_search_future(move || {
-            Self::search_chunks_with_context(request_dir, config, request)
+            Self::search_chunks_with_context(request_dir, config, gateway_redb_block_store, request)
         })
     }
 
     async fn search_chunks_with_context(
         request_dir: PathBuf,
         config: McpConfig,
+        gateway_redb_block_store: Option<ConfiguredBlockStore>,
         request: SearchChunksRequest,
     ) -> Result<SearchChunksResponse, RuntimeError> {
         let top_k = request.top_k.unwrap_or(config.top_k);
@@ -230,7 +245,8 @@ impl McpRuntime {
         }
 
         let root_id = resolve_root_id_async(&request_dir, &config).await?;
-        let block_store = configured_block_store(&request_dir, &config.environment)?;
+        let block_store = gateway_redb_block_store
+            .unwrap_or(configured_block_store(&request_dir, &config.environment)?);
         let Some(root) = block_store.get(&root_id).await? else {
             return Err(RuntimeError::MissingRootBlock {
                 root_id: root_id.to_string(),
@@ -332,7 +348,13 @@ impl McpRuntime {
             parse_block_hash(&request.name).map_err(|_| RuntimeError::InvalidEmailLeafBlockId {
                 value: request.name.clone(),
             })?;
-        let block_store = configured_block_store(&self.request_dir, &self.config.environment)?;
+        let block_store = self
+            .gateway_redb_block_store
+            .clone()
+            .unwrap_or(configured_block_store(
+                &self.request_dir,
+                &self.config.environment,
+            )?);
         let Some(block) = block_store.get(&leaf_block_id).await? else {
             return Err(RuntimeError::MissingEmailLeafBlock {
                 leaf_block_id: leaf_block_id.to_string(),
