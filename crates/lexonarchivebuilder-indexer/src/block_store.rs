@@ -47,6 +47,22 @@ impl ConfiguredBlockStore {
         Http3BlockStore::new(gateway_dns_name).map(Self::GatewayHttp3)
     }
 
+    pub fn gateway_http3_redb_overlay_store(
+        request_dir: &Path,
+        redb_cache_root: &Path,
+        gateway_dns_name: &str,
+    ) -> Result<Self, BlockStoreError> {
+        let redb_cache = RedbBlockStore::new(resolve_path(request_dir, redb_cache_root))?;
+        let gateway = Http3BlockStore::new(gateway_dns_name)?;
+        let layers: Vec<Box<dyn OverlayStoreLayer>> = vec![
+            Box::new(PassiveLayer::cache(redb_cache)),
+            Box::new(PassiveLayer::read_only(gateway)),
+        ];
+        let overlay = OverlayBlockStore::new(layers)
+            .map_err(|error| BlockStoreError::BackendFailure(error.to_string()))?;
+        Ok(Self::Overlay(Arc::new(overlay)))
+    }
+
     pub fn from_environment(
         request_dir: &Path,
         environment: &EnvironmentConfig,

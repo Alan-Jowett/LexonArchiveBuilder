@@ -560,6 +560,97 @@ operator-provided gateway authority and root ID
 - **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
   validation artifacts, and documentation changes.
 
+## Incremental Requirements Patch: Gateway-backed Redb MCP cache
+
+### USER-REQUEST
+
+- **UR-MCP-GATEWAY-REDB-001 [KNOWN]:** Add an MCP environment profile that
+  layers local Redb storage over the HTTP/3 block gateway.
+- **UR-MCP-GATEWAY-REDB-002 [KNOWN]:** Select the profile with
+  `environment.kind`.
+- **UR-MCP-GATEWAY-REDB-003 [KNOWN]:** Permit JSON configuration to override
+  where the Redb database is created; default it to `mcp-redb-cache`.
+- **UR-MCP-GATEWAY-REDB-004 [KNOWN]:** Do not add a memory-cache layer because
+  Redb already provides memory-mapped access.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-MCP-GATEWAY-REDB-001 | Add | Define the `gateway-http3-redb` MCP environment kind | UR-MCP-GATEWAY-REDB-001, UR-MCP-GATEWAY-REDB-002 |
+| CM-MCP-GATEWAY-REDB-002 | Add | Use a persistent Redb cache before the HTTP/3 gateway source | UR-MCP-GATEWAY-REDB-001, UR-MCP-GATEWAY-REDB-004 |
+| CM-MCP-GATEWAY-REDB-003 | Add | Default and validate an operator-overridable Redb cache root | UR-MCP-GATEWAY-REDB-003 |
+| CM-MCP-GATEWAY-REDB-004 | Preserve | Keep gateway embedding selection and existing MCP tool contracts unchanged | UR-MCP-GATEWAY-REDB-001 |
+
+### Before / After
+
+#### BA-MCP-GATEWAY-REDB-001
+
+- **Before [KNOWN]:** The MCP-specific `gateway-http3` profile reads every
+  block through a newly configured HTTP/3 gateway adapter and has no
+  MCP-managed persistent cache layer.
+- **After [INFERRED]:** `gateway-http3-redb` reads cached blocks from a local
+  Redb database and delegates misses to the configured HTTP/3 gateway, making
+  fetched blocks available to subsequent MCP searches through the persistent
+  Redb cache.
+
+### Requirements
+
+#### RQ-MCP-019 - Gateway-backed Redb MCP cache profile
+
+`McpConfig.environment` SHALL accept a new MCP-specific
+`kind: "gateway-http3-redb"` profile. It SHALL reuse the existing gateway
+embedding-provider configuration fields and add an optional
+`redb_cache_root` path.
+
+- **Layering [KNOWN]:** The profile SHALL construct an overlay whose first
+  layer is a writable local Redb cache and whose gateway HTTP/3 block store is
+  the backing source. It SHALL not construct a `MemoryBlockStore`.
+- **Cache behavior [INFERRED]:** A block read through the backing gateway
+  SHALL follow the overlay cache semantics so subsequent reads can be served
+  from the Redb layer without requiring another gateway fetch.
+- **Path defaulting [KNOWN]:** When `redb_cache_root` is omitted, it SHALL
+  default to `mcp-redb-cache` relative to the MCP configuration file's
+  directory. The Redb database is created under that root using the existing
+  Redb block-store layout.
+- **Path override [KNOWN]:** When present, `redb_cache_root` SHALL replace the
+  default root and resolve relative to the MCP configuration file's directory.
+  An explicitly empty path SHALL be rejected during configuration validation.
+- **Gateway contract [KNOWN]:** The profile SHALL validate
+  `gateway_dns_name`, use it for both the gateway-backed block source and
+  gateway-backed embedding provider, and retain existing model, timeout, and
+  retry defaults.
+- **Isolation [KNOWN]:** The profile SHALL not alter index-root resolution,
+  embedding dimensions or encoding, query construction, traversal defaults,
+  result projection, tool names, tool schemas, or server instructions.
+- **Traceability:** UR-MCP-GATEWAY-REDB-001, UR-MCP-GATEWAY-REDB-002,
+  UR-MCP-GATEWAY-REDB-003, UR-MCP-GATEWAY-REDB-004, RQ-MCP-014, RQ-MCP-015,
+  RQ-MCP-007, RQ-MCP-012
+
+### Invariant Impact Assessment
+
+| Invariant | Impact | Assessment |
+|---|---|---|
+| Indexing/search separation | Preserved | The profile caches immutable reads for MCP serving and does not index content |
+| Environment-specific dependency selection | Extended | The MCP-only profile composes existing Redb and gateway adapters |
+| Gateway block/embedding coupling | Preserved | Both gateway dependencies use the configured gateway authority |
+| MCP tool contract | Preserved | Caching remains behind the configured block-store boundary |
+| Memory ownership | Preserved | No competing in-memory cache is added |
+
+### Coverage Notes
+
+- **Covered sources [KNOWN]:**
+  - `crates/lexonarchivebuilder-mcp/src/config.rs`, which owns MCP-specific
+    environment parsing and validation.
+  - `crates/lexonarchivebuilder-mcp/src/runtime.rs`, which selects MCP block
+    stores and embedding providers.
+  - `crates/lexonarchivebuilder-indexer/src/block_store.rs`, which exposes
+    Redb, gateway HTTP/3, and overlay adapter primitives.
+  - `examples/gateway-http3/mcp.request.template.json`, which documents the
+    existing MCP-only gateway profile.
+- **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
+  validation artifacts, README changes, and deployment configuration.
+
 ## Incremental Requirements Patch: MCP response timing metadata
 
 ### USER-REQUEST

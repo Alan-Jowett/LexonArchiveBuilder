@@ -12,6 +12,7 @@ use thiserror::Error;
 
 const DEFAULT_TOP_K: usize = 5;
 const DEFAULT_TRAVERSAL_WIDTH: usize = 3;
+pub const DEFAULT_GATEWAY_HTTP3_REDB_CACHE_ROOT: &str = "mcp-redb-cache";
 pub const DEFAULT_SEARCH_CHUNKS_DESCRIPTION: &str =
     "Search indexed LexonArchiveBuilder chunks in the configured block store";
 pub const DEFAULT_GET_DOCUMENT_DESCRIPTION: &str =
@@ -48,6 +49,7 @@ pub struct ToolDescriptionsConfig {
 pub enum McpEnvironmentConfig {
     Shared(EnvironmentConfig),
     GatewayHttp3(GatewayHttp3McpEnvironmentConfig),
+    GatewayHttp3Redb(GatewayHttp3RedbMcpEnvironmentConfig),
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -66,9 +68,32 @@ pub struct GatewayHttp3McpEnvironmentConfig {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GatewayHttp3RedbMcpEnvironmentConfig {
+    pub kind: GatewayHttp3RedbKind,
+    pub gateway_dns_name: String,
+    #[serde(default)]
+    pub redb_cache_root: Option<PathBuf>,
+    #[serde(default = "default_gateway_model")]
+    pub model: String,
+    #[serde(default = "default_gateway_request_timeout_secs")]
+    pub request_timeout_secs: u64,
+    #[serde(default = "default_gateway_max_retries")]
+    pub max_retries: u32,
+    #[serde(default = "default_gateway_retry_delay_ms")]
+    pub retry_delay_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum GatewayHttp3Kind {
     GatewayHttp3,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GatewayHttp3RedbKind {
+    GatewayHttp3Redb,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -86,6 +111,8 @@ pub enum ConfigError {
     InvalidTraversalWidth,
     #[error("gateway_dns_name must not be empty")]
     EmptyGatewayDnsName,
+    #[error("redb_cache_root must not be empty")]
+    EmptyRedbCacheRoot,
     #[error("tool description for {tool_name} must not be empty")]
     EmptyToolDescription { tool_name: &'static str },
     #[error(transparent)]
@@ -105,6 +132,15 @@ impl McpConfig {
             McpEnvironmentConfig::GatewayHttp3(gateway) => {
                 if gateway.gateway_dns_name.trim().is_empty() {
                     return Err(ConfigError::EmptyGatewayDnsName);
+                }
+            }
+            McpEnvironmentConfig::GatewayHttp3Redb(gateway) => {
+                if gateway.gateway_dns_name.trim().is_empty() {
+                    return Err(ConfigError::EmptyGatewayDnsName);
+                }
+                if matches!(gateway.redb_cache_root.as_deref(), Some(path) if path.as_os_str().is_empty())
+                {
+                    return Err(ConfigError::EmptyRedbCacheRoot);
                 }
             }
         }
@@ -305,6 +341,50 @@ mod tests {
         assert_eq!(gateway.request_timeout_secs, DEFAULT_REQUEST_TIMEOUT_SECS);
         assert_eq!(gateway.max_retries, DEFAULT_MAX_RETRIES);
         assert_eq!(gateway.retry_delay_ms, DEFAULT_RETRY_DELAY_MS);
+    }
+
+    #[test]
+    fn gateway_redb_config_defaults_and_validates_cache_root() {
+        let config: McpConfig = serde_json::from_str(
+            r#"{
+                "environment": {
+                    "kind": "gateway-http3-redb",
+                    "gateway_dns_name": "gateway.example.test"
+                },
+                "embedding_spec": { "dims": 384, "encoding": "f32le" },
+                "index": {
+                    "kind": "root-id",
+                    "root_id": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                }
+            }"#,
+        )
+        .unwrap();
+        let McpEnvironmentConfig::GatewayHttp3Redb(gateway) = config.environment else {
+            panic!("expected gateway-http3-redb environment");
+        };
+        assert_eq!(gateway.redb_cache_root, None);
+        assert_eq!(DEFAULT_GATEWAY_HTTP3_REDB_CACHE_ROOT, "mcp-redb-cache");
+
+        let mut config = McpConfig {
+            environment: McpEnvironmentConfig::GatewayHttp3Redb(gateway),
+            embedding_spec: EmbeddingSpecConfig {
+                dims: 384,
+                encoding: "f32le".into(),
+            },
+            index: IndexConfig::RootId {
+                root_id: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".into(),
+            },
+            tool_descriptions: ToolDescriptionsConfig::default(),
+            top_k: 5,
+            traversal_width: 3,
+        };
+        if let McpEnvironmentConfig::GatewayHttp3Redb(gateway) = &mut config.environment {
+            gateway.redb_cache_root = Some(PathBuf::new());
+        }
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::EmptyRedbCacheRoot)
+        ));
     }
 
     #[test]

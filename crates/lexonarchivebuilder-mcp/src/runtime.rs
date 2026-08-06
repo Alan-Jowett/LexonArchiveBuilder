@@ -28,7 +28,9 @@ use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::config::{ConfigError, McpConfig, McpEnvironmentConfig};
+use crate::config::{
+    ConfigError, DEFAULT_GATEWAY_HTTP3_REDB_CACHE_ROOT, McpConfig, McpEnvironmentConfig,
+};
 
 #[derive(Clone, Debug)]
 pub struct McpRuntime {
@@ -407,6 +409,17 @@ fn configured_block_store(
         McpEnvironmentConfig::GatewayHttp3(gateway) => Ok(
             ConfiguredBlockStore::gateway_http3_store(&gateway.gateway_dns_name)?,
         ),
+        McpEnvironmentConfig::GatewayHttp3Redb(gateway) => {
+            let cache_root = gateway
+                .redb_cache_root
+                .as_deref()
+                .unwrap_or_else(|| Path::new(DEFAULT_GATEWAY_HTTP3_REDB_CACHE_ROOT));
+            Ok(ConfiguredBlockStore::gateway_http3_redb_overlay_store(
+                request_dir,
+                cache_root,
+                &gateway.gateway_dns_name,
+            )?)
+        }
     }
 }
 
@@ -418,6 +431,15 @@ fn configured_embedding_provider(
             Ok(ConfiguredEmbeddingProvider::from_environment(environment)?)
         }
         McpEnvironmentConfig::GatewayHttp3(gateway) => {
+            Ok(ConfiguredEmbeddingProvider::gateway_http3(
+                &gateway.gateway_dns_name,
+                gateway.model.clone(),
+                gateway.max_retries,
+                gateway.retry_delay_ms,
+                gateway.request_timeout_secs,
+            )?)
+        }
+        McpEnvironmentConfig::GatewayHttp3Redb(gateway) => {
             Ok(ConfiguredEmbeddingProvider::gateway_http3(
                 &gateway.gateway_dns_name,
                 gateway.model.clone(),
@@ -500,7 +522,8 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        GatewayHttp3Kind, GatewayHttp3McpEnvironmentConfig, IndexConfig, McpEnvironmentConfig,
+        GatewayHttp3Kind, GatewayHttp3McpEnvironmentConfig, GatewayHttp3RedbKind,
+        GatewayHttp3RedbMcpEnvironmentConfig, IndexConfig, McpEnvironmentConfig,
         ToolDescriptionsConfig,
     };
 
@@ -519,6 +542,30 @@ mod tests {
         let embedding_provider = configured_embedding_provider(&environment).unwrap();
 
         assert!(matches!(block_store, ConfiguredBlockStore::GatewayHttp3(_)));
+        assert!(matches!(
+            embedding_provider,
+            ConfiguredEmbeddingProvider::GatewayHttp3(_)
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn gateway_redb_environment_selects_cached_gateway_dependencies() {
+        let temp = tempdir().unwrap();
+        let environment =
+            McpEnvironmentConfig::GatewayHttp3Redb(GatewayHttp3RedbMcpEnvironmentConfig {
+                kind: GatewayHttp3RedbKind::GatewayHttp3Redb,
+                gateway_dns_name: "gateway.example.test".into(),
+                redb_cache_root: Some("cache".into()),
+                model: "gateway-model".into(),
+                request_timeout_secs: 1,
+                max_retries: 0,
+                retry_delay_ms: 1,
+            });
+
+        let block_store = configured_block_store(temp.path(), &environment).unwrap();
+        let embedding_provider = configured_embedding_provider(&environment).unwrap();
+
+        assert!(matches!(block_store, ConfiguredBlockStore::Overlay(_)));
         assert!(matches!(
             embedding_provider,
             ConfiguredEmbeddingProvider::GatewayHttp3(_)

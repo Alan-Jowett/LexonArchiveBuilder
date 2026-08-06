@@ -380,3 +380,51 @@ existing error text plus a top-level non-negative integer `elapsed_ms`. It is
 not converted to a successful domain result or a JSON-RPC protocol failure.
 
 **Traces to:** RQ-MCP-018, DSG-MCP-RESPONSE-TIMING-002
+
+## Incremental Validation Patch: Gateway-backed Redb MCP cache
+
+### VAL-MCP-GATEWAY-REDB-001
+
+Parse a `gateway-http3-redb` MCP configuration with omitted and explicit
+`redb_cache_root` values, and with invalid empty gateway DNS and cache-root
+values.
+
+**Pass condition:** the omitted root resolves to `mcp-redb-cache` relative to
+the configuration directory; the explicit root resolves relative to the same
+directory; invalid values fail MCP configuration validation.
+
+**Traces to:** RQ-MCP-019, DSG-MCP-GATEWAY-REDB-001
+
+### VAL-MCP-GATEWAY-REDB-002
+
+Construct the block-store dependencies for a valid
+`gateway-http3-redb` environment and inspect the configured store and
+embedding-provider variants.
+
+**Pass condition:** the block store is an overlay comprising the Redb cache
+and HTTP/3 gateway source with no memory store, and the embedding provider is
+the existing gateway HTTP/3 provider using the configured authority.
+
+**Traces to:** RQ-MCP-019, DSG-MCP-GATEWAY-REDB-002,
+DSG-MCP-GATEWAY-REDB-003
+
+### VAL-MCP-GATEWAY-REDB-003
+
+Use a controlled lower block-store layer and a temporary Redb root to read the
+same block twice through the overlay.
+
+**Pass condition:** the first read reaches the lower layer and populates
+Redb; the second read returns the same block without another lower-layer
+fetch. A direct overlay write does not target the gateway layer.
+
+**Traces to:** RQ-MCP-019, DSG-MCP-GATEWAY-REDB-002
+
+### VAL-MCP-GATEWAY-REDB-004
+
+Inspect the gateway MCP request template.
+
+**Pass condition:** it selects `gateway-http3-redb`, retains only
+operator-provided placeholders, and documents the optional Redb cache-root
+override without adding memory-cache settings.
+
+**Traces to:** RQ-MCP-019, DSG-MCP-GATEWAY-REDB-004

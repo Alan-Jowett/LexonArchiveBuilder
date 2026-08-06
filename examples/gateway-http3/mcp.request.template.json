@@ -1,6 +1,6 @@
 {
   "environment": {
-    "kind": "gateway-http3",
+    "kind": "gateway-http3-redb",
     "gateway_dns_name": "<operator-provided-gateway-dns-name>"
   },
   "embedding_spec": {

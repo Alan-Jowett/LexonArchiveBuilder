@@ -548,3 +548,70 @@ failure is represented by MCP `isError` plus structured `error` and
 `elapsed_ms` content.
 
 **Traces to:** RQ-MCP-018, RQ-MCP-005, RQ-MCP-016, RQ-MCP-017
+
+## Incremental Design Patch: Gateway-backed Redb MCP cache
+
+### DSG-MCP-GATEWAY-REDB-001 `MCP-specific configuration`
+
+Add a `GatewayHttp3RedbMcpEnvironmentConfig` variant to the existing
+MCP-specific environment union. It is selected only by:
+
+```json
+{
+  "kind": "gateway-http3-redb",
+  "gateway_dns_name": "gateway.example.test",
+  "redb_cache_root": "cache"
+}
+```
+
+It reuses the `model`, `request_timeout_secs`, `max_retries`, and
+`retry_delay_ms` defaults and validation rules of `gateway-http3`. Its optional
+`redb_cache_root` defaults to `mcp-redb-cache`; it is validated as nonempty
+when explicitly configured. Relative roots resolve against the request
+configuration directory. The resolved root is passed to the Redb constructor,
+which retains the existing `blocks.redb` database-file layout.
+
+**Traces to:** RQ-MCP-019, RQ-MCP-014
+
+### DSG-MCP-GATEWAY-REDB-002 `Redb cache and gateway overlay`
+
+`ConfiguredBlockStore` SHALL expose an MCP-usable constructor that receives
+the request directory, the resolved Redb cache root, and the gateway DNS name.
+It constructs:
+
+1. a writable `RedbBlockStore` at the resolved cache root;
+2. an `Http3BlockStore` for the configured gateway; and
+3. an `OverlayBlockStore` ordered as
+   `PassiveLayer::cache(redb)` followed by
+   `PassiveLayer::read_only(gateway)`.
+
+The overlay's existing lower-layer-read refill behavior persists a gateway
+miss in Redb. Direct overlay writes never target the read-only gateway layer.
+The composition contains exactly these two layers and does not instantiate a
+`MemoryBlockStore`.
+
+**Traces to:** RQ-MCP-019, RQ-MCP-006, RQ-MCP-012
+
+### DSG-MCP-GATEWAY-REDB-003 `Coupled dependency selection`
+
+The MCP runtime selects the new overlay constructor only for
+`gateway-http3-redb`; `gateway-http3` continues to create a direct gateway
+block store. Both gateway-specific variants select the existing
+gateway-backed embedding provider using their configured DNS name and existing
+model/retry/timeout settings. Shared indexer environment selection remains
+unchanged.
+
+The local Redb cache is a serving-side read cache: it does not influence root
+resolution, index construction, embedding generation, result projection, or
+MCP tool behavior.
+
+**Traces to:** RQ-MCP-019, RQ-MCP-014, RQ-MCP-007
+
+### DSG-MCP-GATEWAY-REDB-004 `Operator example`
+
+The gateway MCP template includes a `gateway-http3-redb` example with the
+default cache root omitted and a commented or documented optional
+`redb_cache_root` override. It retains placeholder gateway authority and root
+ID values; no deployed address or cache path is committed.
+
+**Traces to:** RQ-MCP-019, RQ-MCP-015

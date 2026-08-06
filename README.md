@@ -371,6 +371,11 @@ configuration. Each optional field (`search_chunks`, `get_document`,
 `get_email`, or `get_thread`) replaces that tool's advertised description;
 omitted fields retain their defaults.
 
+For a persistent local cache over a gateway-backed corpus, use
+`"kind": "gateway-http3-redb"`. It stores fetched blocks under
+`mcp-redb-cache` beside the MCP configuration by default; set
+`environment.redb_cache_root` to override that location.
+
 ### Running locally
 
 First generate the local block store and summary:
