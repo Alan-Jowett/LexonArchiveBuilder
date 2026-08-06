@@ -560,6 +560,89 @@ operator-provided gateway authority and root ID
 - **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
   validation artifacts, and documentation changes.
 
+## Incremental Requirements Patch: MCP filesystem-cache statistics
+
+### USER-REQUEST
+
+- **UR-MCP-CACHE-STATS-001 [KNOWN]:** Update LexonGraph to revision
+  `7bacb91c0c814a47eb4a2e34f914f6577bb8847a`.
+- **UR-MCP-CACHE-STATS-002 [KNOWN]:** Use the newly exported LexonGraph cache
+  statistics API to gather cache-hit and cache-miss statistics.
+- **UR-MCP-CACHE-STATS-003 [KNOWN]:** Report the statistics in MCP tool
+  response metadata for block-backed tools.
+- **UR-MCP-CACHE-STATS-004 [KNOWN]:** Report statistics as counts attributable
+  to the individual tool request, not as runtime-cumulative totals.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-MCP-CACHE-STATS-001 | Revise | Pin all workspace LexonGraph dependencies to the requested revision | UR-MCP-CACHE-STATS-001 |
+| CM-MCP-CACHE-STATS-002 | Add | Measure per-request overlay cache-statistics deltas around block-backed MCP operations | UR-MCP-CACHE-STATS-002, UR-MCP-CACHE-STATS-004 |
+| CM-MCP-CACHE-STATS-003 | Revise | Add cache-hit and cache-miss metadata to block-backed MCP tool responses | UR-MCP-CACHE-STATS-003 |
+
+### Before / After
+
+#### BA-MCP-CACHE-STATS-001
+
+- **Before [KNOWN]:** MCP tool metadata reports handler `elapsed_ms` but does
+  not report overlay cache behavior.
+- **After [INFERRED]:** Each completed block-backed MCP operation reports the
+  cache hits and misses incurred while that operation executed.
+
+### Requirements
+
+#### RQ-MCP-020 - Per-request filesystem-cache statistics
+
+The workspace SHALL use LexonGraph revision
+`7bacb91c0c814a47eb4a2e34f914f6577bb8847a`. For the
+`gateway-http3-fs-cache` profile, block-backed MCP operations SHALL use the
+exported overlay-cache statistics API to report request-local cache hits and
+misses.
+
+- **Measurement boundary [KNOWN]:** The reported values SHALL be the delta
+  between cache-statistics snapshots taken immediately before and after the
+  operation's block-store activity. They SHALL not expose runtime-cumulative
+  totals.
+- **Response metadata [KNOWN]:** Successful block-backed MCP tool responses
+  SHALL include non-negative integer cache-hit and cache-miss fields alongside
+  `elapsed_ms`. Existing result fields and tool schemas SHALL remain
+  compatible.
+- **Profile boundary [KNOWN]:** The statistics fields apply to the
+  `gateway-http3-fs-cache` overlay. Other environment profiles SHALL preserve
+  their existing response behavior unless they expose compatible cache
+  statistics through the same stable adapter boundary.
+- **Concurrency [INFERRED]:** Because the overlay is runtime-shared,
+  concurrent requests can affect global counters between snapshots. The
+  reported per-request values SHALL therefore be documented as observability
+  deltas, not exclusive attribution or single-flight measurements.
+- **Failure behavior [INFERRED]:** A block-backed tool failure that reaches
+  the MCP handler boundary SHALL include the cache-statistics delta accumulated
+  before failure when statistics are available; protocol-level parameter
+  failures remain unchanged.
+- **Traceability:** UR-MCP-CACHE-STATS-001, UR-MCP-CACHE-STATS-002,
+  UR-MCP-CACHE-STATS-003, UR-MCP-CACHE-STATS-004, RQ-MCP-018, RQ-MCP-019
+
+### Invariant Impact Assessment
+
+| Invariant | Impact | Assessment |
+|---|---|---|
+| MCP tool contract | Extended | Block-backed result metadata gains observability fields while domain results remain unchanged |
+| Search semantics | Preserved | Statistics observe block-store activity without affecting retrieval or ranking |
+| Runtime-shared overlay | Preserved | Snapshots read existing shared counters and do not alter cache behavior |
+| Environment adapter boundaries | Preserved | Profile-specific statistics remain behind the configured block-store adapter |
+
+### Coverage Notes
+
+- **Covered sources [KNOWN]:**
+  - `Cargo.toml` and `Cargo.lock`, which pin the workspace LexonGraph revision.
+  - `crates/lexonarchivebuilder-indexer/src/block_store.rs`, which owns the
+    configured overlay-store adapter.
+  - `crates/lexonarchivebuilder-mcp/src/runtime.rs` and `src/server.rs`, which
+    execute block-backed tools and serialize tool metadata.
+- **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
+  validation artifacts, and documentation changes.
+
 ## Incremental Requirements Patch: Gateway-backed filesystem MCP cache
 
 ### USER-REQUEST

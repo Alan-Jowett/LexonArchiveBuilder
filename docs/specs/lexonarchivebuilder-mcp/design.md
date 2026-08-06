@@ -595,3 +595,41 @@ mutex. Concurrent misses may still issue duplicate lower-layer reads because
 the overlay does not provide single-flight coordination.
 
 **Traces to:** RQ-MCP-019
+
+## Incremental Design Patch: MCP filesystem-cache statistics
+
+### DSG-MCP-CACHE-STATS-001 `Overlay statistics adapter`
+
+After the workspace update to LexonGraph
+`7bacb91c0c814a47eb4a2e34f914f6577bb8847a`, `ConfiguredBlockStore` SHALL
+expose a read-only optional overlay-statistics snapshot. It returns `None` for
+non-overlay stores and delegates to `OverlayBlockStore::stats()` for the
+overlay variant. The MCP runtime uses this adapter rather than depending on
+the overlay implementation directly.
+
+**Traces to:** RQ-MCP-020
+
+### DSG-MCP-CACHE-STATS-002 `Request-local snapshot deltas`
+
+For `gateway-http3-fs-cache`, the MCP runtime SHALL snapshot the configured
+overlay statistics immediately before and after a block-backed operation. It
+shall subtract matching fixed layer indexes to form a request-local delta. The
+delta preserves `layer_index` and `role` and contains `hits`, `misses`, and
+`errors` for each layer. Counter decreases or incompatible snapshots are
+runtime failures because the retained overlay must provide a stable layer
+shape. Error counts remain runtime-internal because the requested MCP
+observability surface is cache hits and misses.
+
+**Traces to:** RQ-MCP-020
+
+### DSG-MCP-CACHE-STATS-003 `MCP response metadata`
+
+`search_chunks` and `get_email` SHALL add a top-level `cache_stats` object to
+their successful structured and text JSON response representations when the
+configured store supplies statistics. `cache_stats.layers` is an ordered array
+of `{ layer_index, role, hits, misses }` request-local deltas.
+`elapsed_ms` remains unchanged. The advertised output schemas shall include
+the optional object. Handler-boundary runtime failures from these operations
+shall include the same object when a post-operation snapshot can be obtained.
+
+**Traces to:** RQ-MCP-020, RQ-MCP-018

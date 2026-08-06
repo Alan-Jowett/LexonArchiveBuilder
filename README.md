@@ -410,6 +410,14 @@ but excludes stdio transport and client execution. A routed tool failure is an
 MCP `isError` result whose structured content contains `error` and
 `elapsed_ms`.
 
+When `gateway-http3-fs-cache` is selected, `search_chunks` and `get_email`
+also report a top-level `cache_stats.layers` array. Each layer reports its
+request-local `hits` and `misses`, together with its priority
+`layer_index` and `role`; the values are deltas over the tool operation, not
+runtime totals. Concurrent tool requests can contribute to the shared overlay
+counters during that interval, so the values are observability metrics rather
+than exclusive attribution.
+
 ### Running through an HTTP/3 block gateway
 
 Copy `examples\gateway-http3\mcp.request.template.json` outside the repository,
