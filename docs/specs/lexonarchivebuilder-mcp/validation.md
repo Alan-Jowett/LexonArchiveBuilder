@@ -380,3 +380,39 @@ existing error text plus a top-level non-negative integer `elapsed_ms`. It is
 not converted to a successful domain result or a JSON-RPC protocol failure.
 
 **Traces to:** RQ-MCP-018, DSG-MCP-RESPONSE-TIMING-002
+
+## Incremental Validation Patch: Gateway-backed filesystem MCP cache
+
+### VAL-MCP-GATEWAY-FS-CACHE-001
+
+Parse omitted, explicit, empty-path, and zero-capacity
+`gateway-http3-fs-cache` configurations.
+
+**Pass condition:** defaults are `mcp-block-cache` and 256 blocks; explicit
+values resolve relative to the request configuration directory; invalid values
+are rejected.
+
+**Traces to:** RQ-MCP-019, DSG-MCP-GATEWAY-FS-CACHE-001
+
+### VAL-MCP-GATEWAY-FS-CACHE-002
+
+Construct the profile and read a controlled gateway block twice.
+
+**Pass condition:** the first read refills filesystem and memory caches, the
+second avoids another gateway read, no gateway write occurs, and the existing
+gateway embedding provider is selected.
+
+**Traces to:** RQ-MCP-019, DSG-MCP-GATEWAY-FS-CACHE-002,
+DSG-MCP-GATEWAY-FS-CACHE-003
+
+### VAL-MCP-GATEWAY-FS-CACHE-003
+
+Construct one MCP runtime using `gateway-http3-fs-cache` and execute multiple
+block-backed operations through it.
+
+**Pass condition:** every operation uses the runtime-owned configured store;
+the configuration path does not reconstruct the overlay, memory cache,
+filesystem cache, or HTTP/3 gateway client per request. Concurrent operations
+complete without unsynchronized memory-cache mutation.
+
+**Traces to:** RQ-MCP-019, DSG-MCP-GATEWAY-FS-CACHE-004

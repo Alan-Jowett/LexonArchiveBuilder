@@ -560,6 +560,106 @@ operator-provided gateway authority and root ID
 - **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
   validation artifacts, and documentation changes.
 
+## Incremental Requirements Patch: Gateway-backed filesystem MCP cache
+
+### USER-REQUEST
+
+- **UR-MCP-GATEWAY-FS-CACHE-001 [KNOWN]:** Add an MCP environment profile that
+  layers memory, local filesystem block storage, and the HTTP/3 block gateway.
+- **UR-MCP-GATEWAY-FS-CACHE-002 [KNOWN]:** Select the profile with
+  `environment.kind: "gateway-http3-fs-cache"`.
+- **UR-MCP-GATEWAY-FS-CACHE-003 [KNOWN]:** Permit JSON configuration to
+  override where cached blocks are stored; default it to `mcp-block-cache`.
+- **UR-MCP-GATEWAY-FS-CACHE-004 [KNOWN]:** Default the memory cache to 256
+  resident blocks and permit an optional override.
+- **UR-MCP-GATEWAY-FS-CACHE-005 [KNOWN]:** Share the complete configured
+  overlay block store across all MCP search requests so cache residency and
+  gateway connection setup are retained for the lifetime of the MCP runtime.
+
+### Change Manifest
+
+| ID | Type | Summary | Traceability |
+|---|---|---|---|
+| CM-MCP-GATEWAY-FS-CACHE-001 | Add | Define the `gateway-http3-fs-cache` MCP environment kind | UR-MCP-GATEWAY-FS-CACHE-001, UR-MCP-GATEWAY-FS-CACHE-002 |
+| CM-MCP-GATEWAY-FS-CACHE-002 | Add | Layer memory and filesystem caches before the HTTP/3 gateway source | UR-MCP-GATEWAY-FS-CACHE-001 |
+| CM-MCP-GATEWAY-FS-CACHE-003 | Add | Default and validate operator-overridable filesystem-cache settings | UR-MCP-GATEWAY-FS-CACHE-003, UR-MCP-GATEWAY-FS-CACHE-004 |
+| CM-MCP-GATEWAY-FS-CACHE-004 | Preserve | Retain gateway embedding selection and MCP tool contracts | UR-MCP-GATEWAY-FS-CACHE-001 |
+| CM-MCP-GATEWAY-FS-CACHE-005 | Add | Retain one configured overlay store for the MCP runtime lifetime | UR-MCP-GATEWAY-FS-CACHE-005 |
+
+### Before / After
+
+#### BA-MCP-GATEWAY-FS-CACHE-001
+
+- **Before [KNOWN]:** `gateway-http3` reads blocks directly from the HTTP/3
+  gateway and keeps no MCP-managed memory or filesystem cache layers.
+- **After [INFERRED]:** `gateway-http3-fs-cache` reads memory-cached blocks
+  first, then locally persisted cached blocks, and delegates misses to the
+  HTTP/3 gateway while refilling the cache layers; the complete overlay
+  instance is retained across requests.
+
+### Requirements
+
+#### RQ-MCP-019 - Gateway-backed filesystem MCP cache profile
+
+`McpConfig.environment` SHALL accept
+`kind: "gateway-http3-fs-cache"`. It SHALL reuse the existing gateway
+embedding-provider configuration fields and add optional `block_cache_root`
+and `memory_cache_max_resident_blocks` settings.
+
+- **Layering [KNOWN]:** The profile SHALL construct an overlay ordered as
+  memory cache, writable filesystem cache, then read-only HTTP/3 gateway
+  source.
+- **Cache behavior [INFERRED]:** A gateway block read SHALL follow overlay
+  cache semantics so subsequent reads may be served by the filesystem or
+  memory layer without another gateway fetch.
+- **Filesystem defaulting [KNOWN]:** Omitted `block_cache_root` SHALL default
+  to `mcp-block-cache` relative to the MCP configuration file directory.
+  Explicit roots SHALL resolve relative to that directory; an explicitly empty
+  path SHALL be rejected.
+- **Memory defaulting [KNOWN]:** Omitted
+  `memory_cache_max_resident_blocks` SHALL default to 256. Explicit values
+  SHALL be at least 1.
+- **Runtime lifetime [KNOWN]:** The MCP runtime SHALL construct the configured
+  block store once and share that instance across all search requests. It SHALL
+  retain the complete overlay, including its memory cache, filesystem cache,
+  and HTTP/3 gateway client, rather than reconstructing any layer per request.
+  This lifetime is process-local; separate MCP processes need not share cache
+  residency or coordinate cache misses.
+- **Gateway contract [KNOWN]:** The profile SHALL validate
+  `gateway_dns_name`, use it for both the HTTP/3 block source and existing
+  gateway embedding provider, and retain existing model, timeout, and retry
+  defaults.
+- **Isolation [KNOWN]:** The profile SHALL not alter root resolution,
+  embedding dimensions or encoding, query construction, traversal defaults,
+  result projection, tool names, schemas, or server instructions.
+- **Traceability:** UR-MCP-GATEWAY-FS-CACHE-001,
+  UR-MCP-GATEWAY-FS-CACHE-002, UR-MCP-GATEWAY-FS-CACHE-003,
+  UR-MCP-GATEWAY-FS-CACHE-004, UR-MCP-GATEWAY-FS-CACHE-005,
+  RQ-MCP-014, RQ-MCP-015, RQ-MCP-007, RQ-MCP-012
+
+### Invariant Impact Assessment
+
+| Invariant | Impact | Assessment |
+|---|---|---|
+| Indexing/search separation | Preserved | The profile caches immutable serving reads and does not index content |
+| Environment-specific dependency selection | Extended | The MCP-only profile composes existing memory, filesystem, and gateway adapters |
+| Gateway block/embedding coupling | Preserved | Both gateway dependencies use the configured authority |
+| MCP tool contract | Preserved | Caching remains behind the block-store boundary |
+
+### Coverage Notes
+
+- **Covered sources [KNOWN]:**
+  - `crates/lexonarchivebuilder-mcp/src/config.rs`, which owns MCP-specific
+    environment parsing and validation.
+  - `crates/lexonarchivebuilder-mcp/src/runtime.rs`, which selects MCP block
+    stores and embedding providers.
+  - `crates/lexonarchivebuilder-indexer/src/block_store.rs`, which exposes
+    memory, filesystem, gateway HTTP/3, and overlay adapter primitives.
+  - `examples/gateway-http3/mcp.request.template.json`, which documents the
+    existing MCP-only gateway profile.
+- **Excluded from this phase [KNOWN]:** Rust implementation, tests, design and
+  validation artifacts, README changes, and deployment configuration.
+
 ## Incremental Requirements Patch: MCP response timing metadata
 
 ### USER-REQUEST

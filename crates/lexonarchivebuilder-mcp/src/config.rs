@@ -20,6 +20,8 @@ pub const DEFAULT_GET_EMAIL_DESCRIPTION: &str =
     "Retrieve an email entry from a search result leaf_block_id";
 pub const DEFAULT_GET_THREAD_DESCRIPTION: &str =
     "Request a named thread from the configured LexonArchiveBuilder index";
+pub const DEFAULT_GATEWAY_HTTP3_FS_CACHE_ROOT: &str = "mcp-block-cache";
+const DEFAULT_GATEWAY_HTTP3_FS_MEMORY_BLOCKS: usize = 256;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct McpConfig {
@@ -48,6 +50,34 @@ pub struct ToolDescriptionsConfig {
 pub enum McpEnvironmentConfig {
     Shared(EnvironmentConfig),
     GatewayHttp3(GatewayHttp3McpEnvironmentConfig),
+    GatewayHttp3FilesystemCache(GatewayHttp3FilesystemCacheMcpEnvironmentConfig),
+}
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GatewayHttp3FilesystemCacheMcpEnvironmentConfig {
+    pub kind: GatewayHttp3FilesystemCacheKind,
+    pub gateway_dns_name: String,
+    #[serde(default)]
+    pub block_cache_root: Option<PathBuf>,
+    #[serde(default = "default_gateway_fs_memory_blocks")]
+    pub memory_cache_max_resident_blocks: usize,
+    #[serde(default = "default_gateway_model")]
+    pub model: String,
+    #[serde(default = "default_gateway_request_timeout_secs")]
+    pub request_timeout_secs: u64,
+    #[serde(default = "default_gateway_max_retries")]
+    pub max_retries: u32,
+    #[serde(default = "default_gateway_retry_delay_ms")]
+    pub retry_delay_ms: u64,
+}
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GatewayHttp3FilesystemCacheKind {
+    GatewayHttp3FsCache,
+}
+
+fn default_gateway_fs_memory_blocks() -> usize {
+    DEFAULT_GATEWAY_HTTP3_FS_MEMORY_BLOCKS
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -86,6 +116,10 @@ pub enum ConfigError {
     InvalidTraversalWidth,
     #[error("gateway_dns_name must not be empty")]
     EmptyGatewayDnsName,
+    #[error("block_cache_root must not be empty")]
+    EmptyBlockCacheRoot,
+    #[error("memory_cache_max_resident_blocks must be at least 1")]
+    InvalidMemoryCacheCapacity,
     #[error("tool description for {tool_name} must not be empty")]
     EmptyToolDescription { tool_name: &'static str },
     #[error(transparent)]
@@ -105,6 +139,18 @@ impl McpConfig {
             McpEnvironmentConfig::GatewayHttp3(gateway) => {
                 if gateway.gateway_dns_name.trim().is_empty() {
                     return Err(ConfigError::EmptyGatewayDnsName);
+                }
+            }
+            McpEnvironmentConfig::GatewayHttp3FilesystemCache(gateway) => {
+                if gateway.gateway_dns_name.trim().is_empty() {
+                    return Err(ConfigError::EmptyGatewayDnsName);
+                }
+                if gateway.memory_cache_max_resident_blocks == 0 {
+                    return Err(ConfigError::InvalidMemoryCacheCapacity);
+                }
+                if matches!(gateway.block_cache_root.as_deref(), Some(path) if path.as_os_str().is_empty())
+                {
+                    return Err(ConfigError::EmptyBlockCacheRoot);
                 }
             }
         }
@@ -357,6 +403,72 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(ConfigError::EmptyGatewayDnsName)
+        ));
+    }
+
+    #[test]
+    fn filesystem_cache_gateway_uses_defaults_and_validates_overrides() {
+        let config: McpConfig = serde_json::from_str(
+            r#"{
+                "environment": {
+                    "kind": "gateway-http3-fs-cache",
+                    "gateway_dns_name": "gateway.example.test"
+                },
+                "embedding_spec": { "dims": 384, "encoding": "f32le" },
+                "index": {
+                    "kind": "root-id",
+                    "root_id": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                }
+            }"#,
+        )
+        .unwrap();
+        let McpEnvironmentConfig::GatewayHttp3FilesystemCache(gateway) = config.environment else {
+            panic!("expected gateway-http3-fs-cache environment");
+        };
+        assert_eq!(gateway.block_cache_root, None);
+        assert_eq!(
+            gateway.memory_cache_max_resident_blocks,
+            DEFAULT_GATEWAY_HTTP3_FS_MEMORY_BLOCKS
+        );
+
+        let invalid: McpConfig = serde_json::from_str(
+            r#"{
+                "environment": {
+                    "kind": "gateway-http3-fs-cache",
+                    "gateway_dns_name": "gateway.example.test",
+                    "memory_cache_max_resident_blocks": 0
+                },
+                "embedding_spec": { "dims": 384, "encoding": "f32le" },
+                "index": {
+                    "kind": "root-id",
+                    "root_id": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                }
+            }"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            invalid.validate(),
+            Err(ConfigError::InvalidMemoryCacheCapacity)
+        ));
+
+        let empty_path: McpConfig = serde_json::from_str(
+            r#"{
+                "environment": {
+                    "kind": "gateway-http3-fs-cache",
+                    "gateway_dns_name": "gateway.example.test",
+                    "block_cache_root": ""
+                },
+                "embedding_spec": { "dims": 384, "encoding": "f32le" },
+                "index": {
+                    "kind": "root-id",
+                    "root_id": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                }
+            }"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            empty_path.validate(),
+            Err(ConfigError::EmptyBlockCacheRoot)
         ));
     }
 

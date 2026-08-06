@@ -548,3 +548,50 @@ failure is represented by MCP `isError` plus structured `error` and
 `elapsed_ms` content.
 
 **Traces to:** RQ-MCP-018, RQ-MCP-005, RQ-MCP-016, RQ-MCP-017
+
+## Incremental Design Patch: Gateway-backed filesystem MCP cache
+
+### DSG-MCP-GATEWAY-FS-CACHE-001 `MCP-specific configuration`
+
+Add a `GatewayHttp3FilesystemCacheMcpEnvironmentConfig` variant selected by
+`kind: "gateway-http3-fs-cache"`. It reuses the existing gateway model,
+timeout, and retry fields and adds optional `block_cache_root` and
+`memory_cache_max_resident_blocks`. Omitted values resolve to
+`mcp-block-cache` relative to the request configuration directory and 256
+resident blocks. Explicit empty paths and zero capacities are rejected.
+
+**Traces to:** RQ-MCP-019, RQ-MCP-014
+
+### DSG-MCP-GATEWAY-FS-CACHE-002 `Three-layer cache overlay`
+
+`ConfiguredBlockStore` SHALL construct an `OverlayBlockStore` in this order:
+`PassiveLayer::cache(MemoryBlockStore)`,
+`PassiveLayer::cache(FilesystemBlockStore)`, and
+`PassiveLayer::read_only(Http3BlockStore)`. Existing overlay refill behavior
+populates higher cache layers after a gateway hit; direct writes do not target
+the gateway.
+
+**Traces to:** RQ-MCP-019, RQ-MCP-006, RQ-MCP-012
+
+### DSG-MCP-GATEWAY-FS-CACHE-003 `Coupled runtime selection`
+
+Only `gateway-http3-fs-cache` selects this overlay. It uses the same configured
+gateway authority for the existing HTTP/3 embedding provider; direct
+`gateway-http3` and shared indexer environments remain unchanged. The gateway
+template demonstrates this kind and documents optional cache overrides without
+committing deployment-specific values.
+
+**Traces to:** RQ-MCP-019, RQ-MCP-014, RQ-MCP-015
+
+### DSG-MCP-GATEWAY-FS-CACHE-004 `Runtime-owned shared store`
+
+`McpRuntime::new` SHALL construct the selected `ConfiguredBlockStore` once and
+retain it as runtime state. Each search and block-backed retrieval operation
+SHALL clone or borrow that same configured store instead of selecting and
+constructing a store from configuration per request. The overlay store already
+uses shared-reference block-store operations; no `BlockStore` trait change is
+required. The memory store serializes its in-process state with its internal
+mutex. Concurrent misses may still issue duplicate lower-layer reads because
+the overlay does not provide single-flight coordination.
+
+**Traces to:** RQ-MCP-019
