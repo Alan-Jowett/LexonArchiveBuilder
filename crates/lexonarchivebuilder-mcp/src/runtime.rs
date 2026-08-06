@@ -101,6 +101,19 @@ pub struct EmailRetrievalResponse {
     pub entry: SearchChunkHit,
 }
 
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+pub(crate) struct CacheStats {
+    pub layers: Vec<CacheStatsLayer>,
+}
+
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+pub(crate) struct CacheStatsLayer {
+    pub layer_index: usize,
+    pub role: String,
+    pub hits: u64,
+    pub misses: u64,
+}
+
 #[derive(Debug, Error)]
 pub enum RuntimeError {
     #[error("failed to read MCP config {path}: {source}")]
@@ -162,6 +175,8 @@ pub enum RuntimeError {
     EmailLeafContainsNoEmailEntries { leaf_block_id: String },
     #[error("failed to prepare rooted search target: {message}")]
     TargetPreparation { message: String },
+    #[error("cache statistics layer layout changed during an MCP operation")]
+    CacheStatisticsLayoutChanged,
     #[error(transparent)]
     Search(#[from] SearchError),
 }
@@ -197,6 +212,58 @@ impl McpRuntime {
 
     pub(crate) fn tool_description(&self, tool_name: &str) -> &str {
         self.config.tool_description(tool_name)
+    }
+
+    pub(crate) fn cache_stats(&self) -> Option<CacheStats> {
+        self.block_store.cache_stats().map(|stats| CacheStats {
+            layers: stats
+                .layers
+                .into_iter()
+                .map(|layer| CacheStatsLayer {
+                    layer_index: layer.layer_index,
+                    role: layer.role,
+                    hits: layer.hits,
+                    misses: layer.misses,
+                })
+                .collect(),
+        })
+    }
+
+    pub(crate) fn cache_stats_delta(
+        &self,
+        before: Option<CacheStats>,
+    ) -> Result<Option<CacheStats>, RuntimeError> {
+        let Some(before) = before else {
+            return Ok(None);
+        };
+        let Some(after) = self.cache_stats() else {
+            return Err(RuntimeError::CacheStatisticsLayoutChanged);
+        };
+        if before.layers.len() != after.layers.len() {
+            return Err(RuntimeError::CacheStatisticsLayoutChanged);
+        }
+
+        let mut layers = Vec::with_capacity(after.layers.len());
+        for (before_layer, after_layer) in before.layers.into_iter().zip(after.layers) {
+            if before_layer.layer_index != after_layer.layer_index
+                || before_layer.role != after_layer.role
+            {
+                return Err(RuntimeError::CacheStatisticsLayoutChanged);
+            }
+            let Some(hits) = after_layer.hits.checked_sub(before_layer.hits) else {
+                return Err(RuntimeError::CacheStatisticsLayoutChanged);
+            };
+            let Some(misses) = after_layer.misses.checked_sub(before_layer.misses) else {
+                return Err(RuntimeError::CacheStatisticsLayoutChanged);
+            };
+            layers.push(CacheStatsLayer {
+                layer_index: after_layer.layer_index,
+                role: after_layer.role,
+                hits,
+                misses,
+            });
+        }
+        Ok(Some(CacheStats { layers }))
     }
 
     pub async fn search_chunks(
@@ -621,6 +688,60 @@ mod tests {
             panic!("expected cloned runtime overlay");
         };
         assert!(Arc::ptr_eq(first, &second));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn filesystem_cache_runtime_exposes_request_local_stats_deltas() {
+        let temp = tempdir().unwrap();
+        let runtime = McpRuntime::new(
+            temp.path().to_path_buf(),
+            McpConfig {
+                environment: McpEnvironmentConfig::GatewayHttp3FilesystemCache(
+                    GatewayHttp3FilesystemCacheMcpEnvironmentConfig {
+                        kind: GatewayHttp3FilesystemCacheKind::GatewayHttp3FsCache,
+                        gateway_dns_name: "gateway.example.test".into(),
+                        block_cache_root: Some(PathBuf::from("cache")),
+                        memory_cache_max_resident_blocks: 256,
+                        model: "gateway-model".into(),
+                        request_timeout_secs: 1,
+                        max_retries: 0,
+                        retry_delay_ms: 1,
+                    },
+                ),
+                embedding_spec: EmbeddingSpecConfig {
+                    dims: 384,
+                    encoding: "f32le".into(),
+                },
+                index: IndexConfig::RootId {
+                    root_id: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                        .into(),
+                },
+                tool_descriptions: ToolDescriptionsConfig::default(),
+                top_k: 5,
+                traversal_width: 3,
+            },
+        )
+        .unwrap();
+
+        let before = runtime.cache_stats().expect("expected overlay stats");
+        let delta = runtime
+            .cache_stats_delta(Some(before))
+            .unwrap()
+            .expect("expected overlay stats delta");
+        assert_eq!(
+            delta
+                .layers
+                .iter()
+                .map(|layer| layer.role.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cache", "cache", "read-only"]
+        );
+        assert!(
+            delta
+                .layers
+                .iter()
+                .all(|layer| layer.hits == 0 && layer.misses == 0)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

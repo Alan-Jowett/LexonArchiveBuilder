@@ -416,3 +416,40 @@ filesystem cache, or HTTP/3 gateway client per request. Concurrent operations
 complete without unsynchronized memory-cache mutation.
 
 **Traces to:** RQ-MCP-019, DSG-MCP-GATEWAY-FS-CACHE-004
+
+## Incremental Validation Patch: MCP filesystem-cache statistics
+
+### VAL-MCP-CACHE-STATS-001
+
+Resolve workspace dependencies at LexonGraph revision
+`7bacb91c0c814a47eb4a2e34f914f6577bb8847a` and construct both an overlay and
+a non-overlay configured block store.
+
+**Pass condition:** the adapter returns the exported per-layer snapshot for
+the overlay and no statistics for the non-overlay store.
+
+**Traces to:** RQ-MCP-020, DSG-MCP-CACHE-STATS-001
+
+### VAL-MCP-CACHE-STATS-002
+
+Perform controlled block lookups through the three-layer gateway filesystem
+overlay while snapshotting before and after each operation.
+
+**Pass condition:** the reported delta preserves layer order and roles,
+reports only hit and miss increments observed during the operation, and does
+not reset lifetime totals.
+
+**Traces to:** RQ-MCP-020, DSG-MCP-CACHE-STATS-002
+
+### VAL-MCP-CACHE-STATS-003
+
+Invoke `search_chunks` and `get_email` through the MCP server with the
+filesystem-cache profile, including a runtime failure after block-store
+activity.
+
+**Pass condition:** successful structured/text payloads and their advertised
+schemas contain `cache_stats.layers`; handler-boundary failures contain the
+available delta; unsupported named tools and non-overlay profiles retain their
+existing response shapes.
+
+**Traces to:** RQ-MCP-020, DSG-MCP-CACHE-STATS-003

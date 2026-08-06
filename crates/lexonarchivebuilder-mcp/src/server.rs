@@ -17,8 +17,8 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::runtime::{
-    EmailRetrievalResponse, McpRuntime, NamedRetrievalRequest, NamedRetrievalResponse,
-    RuntimeError, SearchChunksRequest, SearchChunksResponse,
+    CacheStats, CacheStatsLayer, EmailRetrievalResponse, McpRuntime, NamedRetrievalRequest,
+    NamedRetrievalResponse, RuntimeError, SearchChunksRequest, SearchChunksResponse,
 };
 
 #[derive(Clone)]
@@ -36,6 +36,18 @@ struct TimedResponse<T> {
     #[serde(flatten)]
     response: T,
     elapsed_ms: u64,
+}
+
+#[expect(
+    dead_code,
+    reason = "used only to generate the advertised output schema"
+)]
+#[derive(JsonSchema)]
+struct TimedCacheResponse<T> {
+    #[serde(flatten)]
+    response: T,
+    elapsed_ms: u64,
+    cache_stats: Option<CacheStats>,
 }
 
 impl LexonArchiveBuilderMcpServer {
@@ -66,6 +78,25 @@ fn timed_error(started: Instant, error: impl ToString) -> CallToolResult {
     }))
 }
 
+fn timed_cache_error(
+    started: Instant,
+    error: impl ToString,
+    cache_stats: Option<CacheStats>,
+) -> CallToolResult {
+    let mut response = serde_json::Map::from_iter([
+        ("error".into(), Value::String(error.to_string())),
+        ("elapsed_ms".into(), Value::from(elapsed_ms(started))),
+    ]);
+    if let Some(cache_stats) = cache_stats {
+        response.insert(
+            "cache_stats".into(),
+            serde_json::to_value(cache_stats)
+                .expect("cache statistics must serialize to a JSON object"),
+        );
+    }
+    CallToolResult::structured_error(Value::Object(response))
+}
+
 fn timed_result<T>(started: Instant, result: Result<T, RuntimeError>) -> CallToolResult
 where
     T: Serialize,
@@ -86,17 +117,63 @@ where
     }
 }
 
+fn timed_cache_result<T>(
+    started: Instant,
+    result: Result<T, RuntimeError>,
+    cache_stats: Result<Option<CacheStats>, RuntimeError>,
+) -> CallToolResult
+where
+    T: Serialize,
+{
+    let cache_stats = match cache_stats {
+        Ok(cache_stats) => cache_stats,
+        Err(error) => return timed_error(started, error),
+    };
+    match result {
+        Ok(response) => match serde_json::to_value(response) {
+            Ok(Value::Object(mut response)) => {
+                response.insert("elapsed_ms".into(), Value::from(elapsed_ms(started)));
+                if let Some(cache_stats) = cache_stats {
+                    response.insert(
+                        "cache_stats".into(),
+                        serde_json::to_value(cache_stats)
+                            .expect("cache statistics must serialize to a JSON object"),
+                    );
+                }
+                CallToolResult::structured(Value::Object(response))
+            }
+            Ok(_) => timed_cache_error(
+                started,
+                "MCP tool response must serialize as an object",
+                cache_stats,
+            ),
+            Err(error) => timed_cache_error(
+                started,
+                format!("failed to serialize MCP tool response: {error}"),
+                cache_stats,
+            ),
+        },
+        Err(error) => timed_cache_error(started, error, cache_stats),
+    }
+}
+
 #[tool_router(router = tool_router)]
 impl LexonArchiveBuilderMcpServer {
     #[tool(
         name = "search_chunks",
         description = "Search indexed LexonArchiveBuilder chunks in the configured block store",
-        output_schema = rmcp::handler::server::tool::schema_for_output::<TimedResponse<SearchChunksResponse>>()
+        output_schema = rmcp::handler::server::tool::schema_for_output::<TimedCacheResponse<SearchChunksResponse>>()
             .expect("timed search response schema must be valid")
     )]
     pub async fn search_chunks(&self, params: Parameters<SearchChunksRequest>) -> CallToolResult {
         let started = Instant::now();
-        timed_result(started, self.runtime.search_chunks_blocking(params.0))
+        let cache_stats_before = self.runtime.cache_stats();
+        let result = self.runtime.search_chunks_blocking(params.0);
+        timed_cache_result(
+            started,
+            result,
+            self.runtime.cache_stats_delta(cache_stats_before),
+        )
     }
 
     #[tool(
@@ -113,12 +190,18 @@ impl LexonArchiveBuilderMcpServer {
     #[tool(
         name = "get_email",
         description = "Retrieve an email entry from a search result leaf_block_id",
-        output_schema = rmcp::handler::server::tool::schema_for_output::<TimedResponse<EmailRetrievalResponse>>()
+        output_schema = rmcp::handler::server::tool::schema_for_output::<TimedCacheResponse<EmailRetrievalResponse>>()
             .expect("timed email retrieval response schema must be valid")
     )]
     pub async fn get_email(&self, params: Parameters<NamedRetrievalRequest>) -> CallToolResult {
         let started = Instant::now();
-        timed_result(started, self.runtime.get_email(params.0).await)
+        let cache_stats_before = self.runtime.cache_stats();
+        let result = self.runtime.get_email(params.0).await;
+        timed_cache_result(
+            started,
+            result,
+            self.runtime.cache_stats_delta(cache_stats_before),
+        )
     }
 
     #[tool(
@@ -240,6 +323,17 @@ mod tests {
         );
     }
 
+    fn sample_cache_stats() -> CacheStats {
+        CacheStats {
+            layers: vec![CacheStatsLayer {
+                layer_index: 0,
+                role: "cache".into(),
+                hits: 2,
+                misses: 1,
+            }],
+        }
+    }
+
     #[test]
     fn server_advertises_configured_tool_descriptions() {
         let runtime = test_runtime();
@@ -261,6 +355,20 @@ mod tests {
         );
         for tool_name in ["search_chunks", "get_document", "get_email", "get_thread"] {
             assert_timed_output_schema(&server, tool_name);
+        }
+        for tool_name in ["search_chunks", "get_email"] {
+            let schema = server.tool_router.map[tool_name]
+                .attr
+                .output_schema
+                .as_ref()
+                .expect("expected output schema");
+            assert!(
+                schema
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .is_some_and(|properties| properties.contains_key("cache_stats")),
+                "expected {tool_name} output schema to contain cache_stats"
+            );
         }
     }
 
@@ -384,5 +492,31 @@ mod tests {
             assert_timed_result(&email, false)["leaf_block_id"],
             leaf_block_id.to_string()
         );
+    }
+
+    #[test]
+    fn cache_timed_results_include_request_delta_for_successes_and_failures() {
+        let success = timed_cache_result(
+            Instant::now(),
+            Ok(SearchChunksResponse {
+                root_id: "root".into(),
+                top_k: 5,
+                traversal_width: 3,
+                results: Vec::new(),
+            }),
+            Ok(Some(sample_cache_stats())),
+        );
+        let success_content = assert_timed_result(&success, false);
+        assert_eq!(success_content["cache_stats"]["layers"][0]["hits"], 2);
+        assert_eq!(success_content["cache_stats"]["layers"][0]["misses"], 1);
+
+        let failure = timed_cache_result::<SearchChunksResponse>(
+            Instant::now(),
+            Err(RuntimeError::InvalidTopK),
+            Ok(Some(sample_cache_stats())),
+        );
+        let failure_content = assert_timed_result(&failure, true);
+        assert_eq!(failure_content["cache_stats"]["layers"][0]["hits"], 2);
+        assert_eq!(failure_content["cache_stats"]["layers"][0]["misses"], 1);
     }
 }

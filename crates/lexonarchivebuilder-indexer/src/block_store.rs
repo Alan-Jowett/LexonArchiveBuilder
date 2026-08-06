@@ -19,7 +19,9 @@ use lexongraph_block_store_azure_sdk::AzureBlobBlockStore;
 use lexongraph_block_store_azure_table_v2::AzureTableBlockStoreV2;
 use lexongraph_block_store_fs::FilesystemBlockStore;
 use lexongraph_block_store_memory::MemoryBlockStore;
-use lexongraph_block_store_overlay::{OverlayBlockStore, OverlayStoreLayer, PassiveLayer};
+use lexongraph_block_store_overlay::{
+    OverlayBlockStore, OverlayStats, OverlayStoreLayer, PassiveLayer,
+};
 use lexongraph_block_store_redb::{RedbBlockStore, RedbBlockStoreDurabilityMode};
 
 use crate::config::{EnvironmentConfig, ProductionBlockStoreConfig};
@@ -29,6 +31,19 @@ const REDB_DATABASE_FILE_NAME: &str = "blocks.redb";
 const REDB_PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 pub type OperatorProgressReporter = Arc<dyn Fn(String) + Send + Sync + 'static>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockStoreCacheStats {
+    pub layers: Vec<BlockStoreCacheLayerStats>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockStoreCacheLayerStats {
+    pub layer_index: usize,
+    pub role: String,
+    pub hits: u64,
+    pub misses: u64,
+}
 
 #[derive(Clone, Debug)]
 pub enum ConfiguredBlockStore {
@@ -43,8 +58,30 @@ pub enum ConfiguredBlockStore {
 }
 
 impl ConfiguredBlockStore {
+    pub fn cache_stats(&self) -> Option<BlockStoreCacheStats> {
+        match self {
+            Self::Overlay(store) => Some(Self::cache_stats_from_overlay(store.stats())),
+            _ => None,
+        }
+    }
+
     pub fn gateway_http3_store(gateway_dns_name: &str) -> Result<Self, BlockStoreError> {
         Http3BlockStore::new(gateway_dns_name).map(Self::GatewayHttp3)
+    }
+
+    fn cache_stats_from_overlay(stats: OverlayStats) -> BlockStoreCacheStats {
+        BlockStoreCacheStats {
+            layers: stats
+                .layers
+                .into_iter()
+                .map(|layer| BlockStoreCacheLayerStats {
+                    layer_index: layer.layer_index,
+                    role: layer.role.to_string(),
+                    hits: layer.hits,
+                    misses: layer.misses,
+                })
+                .collect(),
+        }
     }
 
     pub fn gateway_http3_filesystem_overlay_store(
@@ -640,6 +677,47 @@ mod tests {
             store: RedbBlockStore::new(&store_root).unwrap(),
             database_path: store_root.join(REDB_DATABASE_FILE_NAME),
         }
+    }
+
+    #[test]
+    fn overlay_cache_stats_expose_per_layer_hits_and_misses() {
+        let cache = MemoryBlockStore::new(4).unwrap();
+        let source = MemoryBlockStore::new(4).unwrap();
+        let block = sample_block();
+        let block_id = put_block(&source, &block);
+        let store = ConfiguredBlockStore::Overlay(Arc::new(
+            OverlayBlockStore::new(vec![
+                Box::new(PassiveLayer::cache(cache)),
+                Box::new(PassiveLayer::read_only(source)),
+            ])
+            .unwrap(),
+        ));
+
+        assert!(
+            block_on_block_store_future(store.get(&block_id))
+                .unwrap()
+                .is_some()
+        );
+
+        assert_eq!(
+            store.cache_stats(),
+            Some(BlockStoreCacheStats {
+                layers: vec![
+                    BlockStoreCacheLayerStats {
+                        layer_index: 0,
+                        role: "cache".into(),
+                        hits: 0,
+                        misses: 1,
+                    },
+                    BlockStoreCacheLayerStats {
+                        layer_index: 1,
+                        role: "read-only".into(),
+                        hits: 1,
+                        misses: 0,
+                    },
+                ],
+            })
+        );
     }
 
     #[test]
